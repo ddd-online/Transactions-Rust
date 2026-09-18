@@ -115,6 +115,11 @@ pwsh -File fixtures/ui-diary-io.ps1 [-Workspace <ws>] [-OutDir <dir>]
 # 关键事件"点色板改颜色 / 写 Markdown 描述 / 删除事件"、设置页"新建模板→删除"。
 pwsh -File fixtures/ui-crud.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
+# 同步到其他账本端到端（此前**零覆盖**：IPC 里没有 sync 命令，界面是"复制 DTO + 换账本 + 清 id"）：
+# 记一笔 → 点行内「同步到其他账本」→ 选目标账本 → 断言 目标账本多一份**新 id** 的副本、
+# 金额/类型/分类/记录时间一致、**源记录保留**（复制而非移动）→ 切账本后界面里能看到副本。
+pwsh -File fixtures/ui-sync-ledger.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
 # 消费记录页：记三笔 → **编辑一笔**（断言"先建后删"：换 transaction_id、旧记录消失、行数不变）
 # → **排序**（重置 → 加「金额 降序」→ 应用 → 断言表格区金额序列非递增、最大值排第一）。
 pwsh -File fixtures/ui-transactions.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
