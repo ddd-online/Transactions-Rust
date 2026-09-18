@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tr-domain",
+    "crates/tr-store",
+    "crates/tr-service",
+    "crates/tr-ipc",
+    "crates/tr-ui",
+    "src-tauri",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.28.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+repository = "https://github.com/ddd-online/Transactions"
+
+[workspace.dependencies]
+tr-domain = { path = "crates/tr-domain" }
+tr-store = { path = "crates/tr-store" }
+tr-service = { path = "crates/tr-service" }
+tr-ipc = { path = "crates/tr-ipc" }
+
+# 桌面发行版：体积与速度优先（Tauri 官方推荐配置）
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

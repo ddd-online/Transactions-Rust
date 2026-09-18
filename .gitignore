@@ -1,0 +1,28 @@
+# Rust
+/target
+**/*.rs.bk
+
+# 前端构建产物（trunk 输出，由 crates/tr-ui/index.html + 源码重建）
+/crates/tr-ui/dist
+!/crates/tr-ui/dist/.gitkeep
+/crates/tr-ui/.trunk
+
+# Tauri 打包产物
+/src-tauri/target
+/build/target
+
+# tauri-build 每次构建自动生成的权限 schema
+/src-tauri/gen/schemas
+
+# 本地验证用的真实工作空间数据（绝不入库）
+/fixtures/private/
+*.db
+*.db-wal
+*.db-shm
+transactions.log
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+Thumbs.db

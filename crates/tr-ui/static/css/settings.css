@@ -1,0 +1,787 @@
+/* ============================================
+ * 应用设置页专属样式（5 个分栏）
+ *
+ * 对照原项目：
+ *   - settings_view/SettingsView.vue（左侧导航 + 内容区）
+ *   - settings_view/SettingsPageWrapper.vue（分栏标题 + 卡片列表）
+ *   - settings_view/{GeneralSetting,TransactionsTemplateSetting,DiarySetting,
+ *     StockTradingSetting,AboutSetting}.vue
+ *   - stock_view/StockAccountView.vue 的「交易费用设置」
+ *
+ * 约定：
+ *   - 类名一律 st- 前缀；
+ *   - 取值只用 --transactions-* 令牌（禁止裸 hex / rgb）；
+ *   - 原实现的左侧 200px 竖向导航在本实现里换成顶部 Tabs（见 settings.rs 顶部注释）。
+ * ============================================ */
+
+/* ---------------------------------------------------------------- 分栏骨架 */
+
+.st-tabs {
+  flex-shrink: 0;
+}
+
+.st-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding-top: var(--transactions-space-lg);
+  padding-bottom: var(--transactions-space-xl);
+}
+
+.st-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-md);
+  min-height: 0;
+}
+
+.st-pane-title {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-title-sm);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.st-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-md);
+}
+
+/* ---------------------------------------------------------------- 卡片列表 */
+
+.st-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-sm);
+}
+
+.st-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--transactions-space-md) var(--transactions-space-lg);
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-divider);
+  border-radius: var(--transactions-radius-md);
+  transition: background-color var(--transactions-transition-fast);
+}
+
+.st-card:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+/* 纵向排布的卡片（交易标签 / 费用设置） */
+.st-card--block {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--transactions-space-md);
+}
+
+.st-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+  min-width: 0;
+}
+
+.st-card-title {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-major);
+}
+
+.st-card-desc {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  line-height: var(--transactions-height-snug);
+  max-width: 620px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 工作空间路径用等宽字体（原 `.setting-desc` 的 `--transactions-font-mono`） */
+.st-card-desc--mono {
+  font-family: var(--transactions-font-mono);
+}
+
+.st-card-desc--empty {
+  font-family: var(--transactions-font-body);
+  font-style: italic;
+  color: var(--transactions-color-text-disabled);
+}
+
+.st-card-action {
+  flex-shrink: 0;
+  margin-left: var(--transactions-space-lg);
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.st-hint {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+/* ---------------------------------------------------------------- 消费模板表格 */
+
+.st-table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--transactions-color-divider);
+  border-radius: var(--transactions-radius-md);
+}
+
+.st-thead,
+.st-tr {
+  display: grid;
+  grid-template-columns:
+    36px
+    minmax(120px, 1.4fr)
+    100px
+    minmax(90px, 1fr)
+    minmax(110px, 1.2fr)
+    minmax(70px, 0.8fr)
+    minmax(140px, 1.6fr)
+    60px;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.st-thead {
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  background-color: var(--transactions-color-minor-background);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.st-th {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.st-th--center {
+  text-align: center;
+}
+
+/* 拖拽列（列宽由表头网格决定，这里只做居中） */
+.st-th--drag {
+  text-align: center;
+}
+
+.st-tbody {
+  display: flex;
+  flex-direction: column;
+}
+
+.st-tr {
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-major);
+  transition: background-color var(--transactions-transition-fast);
+}
+
+.st-tr:last-child {
+  border-bottom: none;
+}
+
+.st-tr:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.st-td {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.st-td--center {
+  display: flex;
+  justify-content: center;
+}
+
+.st-td--tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-2xs);
+}
+
+.st-td--drag {
+  display: flex;
+  justify-content: center;
+}
+
+.st-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--transactions-color-text-secondary);
+  cursor: grab;
+  transition: color var(--transactions-transition-fast);
+  touch-action: none;
+}
+
+.st-drag-handle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.st-drag-handle:hover {
+  color: var(--transactions-color-primary);
+}
+
+.st-tr:active .st-drag-handle {
+  cursor: grabbing;
+}
+
+.st-cell-ellipsis {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.st-dash {
+  color: var(--transactions-color-text-disabled);
+}
+
+.st-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-2xl);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+}
+
+/* ---------------------------------------------------------------- 日记配置 */
+
+.st-scope-row {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-xs);
+}
+
+.st-scope-input {
+  width: 140px;
+}
+
+.st-progress-card {
+  margin-top: var(--transactions-space-md);
+  padding: var(--transactions-space-md);
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-divider);
+  border-radius: var(--transactions-radius-md);
+}
+
+.st-summary-title {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-major);
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.st-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.st-summary-text {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-major);
+}
+
+.st-summary-percent {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.st-bar-track {
+  width: 100%;
+  height: 4px;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-minor-background);
+  overflow: hidden;
+}
+
+.st-bar-fill {
+  height: 100%;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-primary);
+  transform-origin: left center;
+  transition: transform var(--transactions-transition-normal);
+}
+
+.st-bar-fill--done {
+  background-color: var(--transactions-color-success);
+}
+
+.st-bar-fill--error {
+  background-color: var(--transactions-color-expense);
+}
+
+.st-file-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--transactions-space-sm);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.st-file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-xs);
+  border-radius: var(--transactions-radius-sm);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-major);
+}
+
+.st-file-row:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.st-file-row--importing {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.st-file-row--done {
+  background-color: var(--transactions-color-primary-tint);
+}
+
+.st-file-row--error {
+  background-color: var(--transactions-color-danger-hover-bg);
+}
+
+.st-file-dot {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.st-dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-text-disabled);
+}
+
+.st-file-date {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.st-file-status {
+  flex-shrink: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.st-file-status--done {
+  color: var(--transactions-color-success);
+}
+
+.st-file-status--importing {
+  color: var(--transactions-color-primary);
+}
+
+.st-file-status--error {
+  color: var(--transactions-color-expense);
+}
+
+.st-icon-done {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-success);
+}
+
+.st-icon-error {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-expense);
+}
+
+/* ---------------------------------------------------------------- 股票交易 */
+
+.st-tag-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-sm) var(--transactions-space-xl);
+  width: 100%;
+}
+
+.st-tag-head .st-card-info {
+  flex: 1;
+  min-width: min(320px, 100%);
+}
+
+.st-tag-action {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.st-tag-input {
+  width: 190px;
+}
+
+.st-tag-list {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-xs) var(--transactions-space-sm);
+}
+
+.st-tag-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-2xs);
+  padding: 2px var(--transactions-space-xs) 2px var(--transactions-space-sm);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  background-color: var(--transactions-color-minor-background);
+  border-radius: var(--transactions-radius-sm);
+}
+
+.st-tag-item--default {
+  color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-primary-tint);
+}
+
+.st-tag-item-name {
+  line-height: var(--transactions-height-snug);
+}
+
+.st-tag-item-default {
+  flex-shrink: 0;
+  padding-left: var(--transactions-space-xs);
+  border-left: 1px solid currentColor;
+  font-size: var(--transactions-size-text-small);
+  line-height: var(--transactions-height-snug);
+  opacity: 0.85;
+}
+
+.st-tag-item-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--transactions-color-text-tertiary);
+  cursor: pointer;
+  transition: color var(--transactions-transition-fast);
+}
+
+.st-tag-item-remove:hover:not(:disabled) {
+  color: var(--transactions-color-expense);
+}
+
+.st-tag-item-remove:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 1px;
+  border-radius: var(--transactions-radius-sm);
+}
+
+.st-tag-item-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.st-tag-empty {
+  width: 100%;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+/* 费用设置 */
+.st-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-md);
+}
+
+.st-panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+}
+
+.st-panel-title {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-major);
+}
+
+.st-panel-tip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-text-tertiary);
+  cursor: help;
+}
+
+/* 费用说明是多行文案：`data-tooltip` 里带换行，按原样折行显示 */
+.st-fee-tip::after {
+  white-space: pre-line;
+  max-width: 320px;
+  line-height: var(--transactions-height-snug);
+}
+
+.st-fee-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--transactions-space-md) var(--transactions-space-lg);
+}
+
+.st-fee-field {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+}
+
+.st-fee-field .ui-input {
+  flex: 1;
+}
+
+.st-fee-addon {
+  flex-shrink: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.st-modal-text {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-major);
+  line-height: var(--transactions-height-relaxed);
+}
+
+/* ---------------------------------------------------------------- 关于软件 */
+
+.st-about {
+  align-items: center;
+  padding: var(--transactions-space-2xl) var(--transactions-space-lg);
+}
+
+.st-about-main {
+  margin: auto;
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--transactions-space-xl);
+}
+
+.st-about-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--transactions-space-md);
+}
+
+.st-app-logo {
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.st-app-logo svg {
+  width: 96px;
+  height: 96px;
+}
+
+.st-app-name {
+  margin: 0;
+  font-family: var(--transactions-font-display);
+  font-size: var(--transactions-size-text-display-sm);
+  font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-tight);
+  color: var(--transactions-color-text-major);
+}
+
+.st-app-version {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-secondary);
+}
+
+.st-app-build {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.st-about-update {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+}
+
+.st-update-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-md);
+  width: 100%;
+}
+
+.st-update-icon {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--transactions-size-text-section);
+}
+
+.st-update-text {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+  text-align: center;
+}
+
+/* 下载速度：原实现不渲染，按任务单增补的小字 */
+.st-update-speed {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.st-update-success .st-update-text,
+.st-update-success .st-update-icon {
+  color: var(--transactions-color-primary);
+}
+
+.st-update-available .st-update-text {
+  color: var(--transactions-color-text-major);
+}
+
+.st-update-error .st-update-text,
+.st-update-error .st-update-icon {
+  color: var(--transactions-color-expense);
+}
+
+.st-update-progress {
+  width: 200px;
+}
+
+/* 更新说明：纯文本 + 保留换行（原文是 MarkdownViewer，本仓库无 Markdown 解析器） */
+.st-release-body {
+  width: 100%;
+  max-height: 168px;
+  overflow-y: auto;
+  padding: var(--transactions-space-md) var(--transactions-space-lg);
+  background-color: var(--transactions-color-hover-bg);
+  border: 1px solid var(--transactions-color-divider);
+  border-radius: var(--transactions-radius-md);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  line-height: var(--transactions-height-normal);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.st-about-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+}
+
+.st-about-link {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-primary);
+  text-decoration: none;
+}
+
+.st-about-link:hover {
+  text-decoration: underline;
+}
+
+.st-about-copyright {
+  margin: 0;
+  text-align: center;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .st-card,
+  .st-tr,
+  .st-drag-handle,
+  .st-tag-item-remove,
+  .st-bar-fill {
+    transition: none;
+  }
+}

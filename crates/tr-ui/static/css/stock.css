@@ -1,0 +1,1256 @@
+/* ============================================
+ * 股票交易页（`/stock_view`）—— 四个分栏
+ * 对照原 `stock_view/*.vue` 的 scoped 样式；取值全部走 `--transactions-*` 令牌。
+ *
+ * **A 股红涨绿跌**：原实现在本页作用域内把 `.amount-income` / `.amount-expense`
+ * 反向映射（盈 → 红、亏 → 绿）。这里照抄同一覆盖，仅限 `.stock-page` 内部。
+ * ============================================ */
+
+.stock-page .amount-income {
+  color: var(--transactions-color-expense);
+}
+
+.stock-page .amount-expense {
+  color: var(--transactions-color-income);
+}
+
+.stock-tab-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: var(--transactions-space-md);
+}
+
+/* ---------------- 通用块 ---------------- */
+
+.stock-panel {
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-lg);
+  background: var(--transactions-color-major-background);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.stock-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+.stock-panel__title {
+  margin: 0;
+  font-size: var(--transactions-size-text-section);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.stock-panel__hint {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-panel__footer {
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border-top: 1px solid var(--transactions-color-divider);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-panel__total {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: var(--transactions-space-lg);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+  text-align: center;
+}
+
+.stock-loading-hint {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-mono {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-amount {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--transactions-weight-medium);
+}
+
+.stock-amount--large {
+  font-size: var(--transactions-size-text-display);
+  font-weight: var(--transactions-weight-semibold);
+}
+
+.stock-ellipsis {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.is-muted {
+  color: var(--transactions-color-text-disabled);
+}
+
+/* 骨架 */
+.stock-skeleton {
+  display: inline-block;
+  border-radius: var(--transactions-radius-sm);
+  background: var(--transactions-color-minor-background);
+  animation: stock-pulse 1.4s ease-in-out infinite;
+}
+
+.stock-skeleton--lead {
+  width: 160px;
+  height: 28px;
+}
+
+.stock-skeleton--md {
+  width: 96px;
+  height: 20px;
+}
+
+@keyframes stock-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ---------------- 表格 ---------------- */
+
+.stock-table-wrap {
+  overflow: auto;
+}
+
+.stock-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--transactions-size-text-body-sm);
+}
+
+.stock-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-secondary);
+  font-weight: var(--transactions-weight-medium);
+  text-align: left;
+  padding: var(--transactions-space-sm);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  white-space: nowrap;
+}
+
+.stock-table td {
+  padding: var(--transactions-space-sm);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  color: var(--transactions-color-text-major);
+}
+
+.stock-table tbody tr:hover td {
+  background: var(--transactions-color-hover-bg);
+}
+
+.stock-table .is-center {
+  text-align: center;
+}
+
+.stock-table .is-right {
+  text-align: right;
+}
+
+.stock-table--trades {
+  min-width: 880px;
+}
+
+.stock-table--stats {
+  min-width: 1220px;
+}
+
+.stock-table tbody tr.is-latest td {
+  background: var(--transactions-color-primary-tint);
+}
+
+.stock-trade-row.is-child td {
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-trade-row.is-child td:first-child {
+  padding-left: calc(var(--transactions-space-lg) + var(--transactions-space-md));
+}
+
+.stock-lots-note {
+  margin-left: 6px;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-fee-cell {
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.stock-trade-type {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--transactions-space-sm);
+  border-radius: var(--transactions-radius-sm);
+  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.stock-trade-type.type-buy {
+  background: var(--transactions-color-income-tint);
+  color: var(--transactions-color-income);
+}
+
+.stock-trade-type.type-sell {
+  background: var(--transactions-color-expense-tint);
+  color: var(--transactions-color-expense);
+}
+
+.stock-cell-tag {
+  display: inline-flex;
+  padding: 0 var(--transactions-space-sm);
+  border-radius: var(--transactions-radius-sm);
+  background: var(--transactions-color-hover-bg);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-stats-point {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.4;
+}
+
+.stock-stats-point__sub {
+  font-size: var(--transactions-size-text-small);
+  color: var(--transactions-color-text-tertiary);
+}
+
+/* ---------------- 分栏一：账户 ---------------- */
+
+.stock-overview {
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-lg);
+  background: var(--transactions-color-major-background);
+  padding: var(--transactions-space-lg);
+}
+
+.stock-overview__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-overview__title {
+  margin: 0;
+  font-size: var(--transactions-size-text-section);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.stock-overview__actions {
+  display: flex;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-overview__lead {
+  margin: var(--transactions-space-md) 0;
+  color: var(--transactions-color-text-major);
+}
+
+.stock-overview__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--transactions-space-md);
+}
+
+.stock-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+}
+
+.stock-stat__label {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-stat__value {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-title-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--transactions-color-text-major);
+}
+
+.stock-overview__notice {
+  margin-top: var(--transactions-space-md);
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-accent);
+}
+
+.stock-overview__hint {
+  margin-top: var(--transactions-space-md);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-account__grid {
+  margin-top: var(--transactions-space-lg);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: var(--transactions-space-lg);
+  align-items: start;
+}
+
+.stock-panel--records {
+  min-height: 320px;
+}
+
+.stock-fee-form {
+  padding: var(--transactions-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-md);
+}
+
+.stock-fee-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-xs);
+}
+
+.stock-fee-field__label {
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-fee-field__control {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-fee-field__control > :first-child {
+  flex: 1;
+}
+
+.stock-fee-field__unit {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+  white-space: nowrap;
+}
+
+.stock-fee-form__hint {
+  margin: 0;
+  padding: 0 var(--transactions-space-md) var(--transactions-space-md);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+  line-height: var(--transactions-height-snug);
+}
+
+/* ---------------- 分栏二：持仓 ---------------- */
+
+.stock-position__grid {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: var(--transactions-space-lg);
+  align-items: start;
+}
+
+.stock-position__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-sm);
+  overflow-y: auto;
+}
+
+.stock-position-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+  width: 100%;
+  padding: var(--transactions-space-sm);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background: var(--transactions-color-major-background);
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow var(--transactions-transition-fast),
+    border-color var(--transactions-transition-fast);
+}
+
+.stock-position-card:hover {
+  box-shadow: var(--transactions-shadow-sm);
+}
+
+.stock-position-card.is-active {
+  border-color: var(--transactions-color-primary);
+  background: var(--transactions-color-active-bg);
+}
+
+.stock-position-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-position-card__name {
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-major);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stock-position-card__meta {
+  display: flex;
+  gap: var(--transactions-space-2xs);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  white-space: nowrap;
+}
+
+.stock-position-card__row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--transactions-space-xs);
+  font-size: var(--transactions-size-text-caption);
+}
+
+.stock-position-card__row.is-muted {
+  grid-template-columns: 36px minmax(0, 1fr) 36px minmax(0, 1fr);
+  color: var(--transactions-color-text-disabled);
+}
+
+.stock-position-card__label {
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-position-card__value {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--transactions-color-text-major);
+}
+
+.stock-position-card__rate {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-detail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+.stock-detail__identity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-detail__name {
+  font-size: var(--transactions-size-text-title-sm);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.stock-detail__code {
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-detail__actions {
+  display: flex;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-quote {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--transactions-space-md);
+  padding: var(--transactions-space-md);
+}
+
+.stock-quote--missing {
+  display: block;
+  color: var(--transactions-color-text-disabled);
+  font-size: var(--transactions-size-text-body-sm);
+}
+
+.stock-quote__cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+}
+
+.stock-quote__label {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-quote__value {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--transactions-color-text-major);
+}
+
+.stock-detail__toolbar {
+  justify-content: flex-end;
+}
+
+/* 本轮复盘（持仓 + 轮次共用） */
+.stock-review {
+  border-top: 1px solid var(--transactions-color-divider);
+  padding: var(--transactions-space-md);
+}
+
+.stock-review__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-review__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--transactions-color-text-major);
+}
+
+.stock-review__toggle:disabled {
+  cursor: default;
+}
+
+.stock-review__title {
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.stock-review__summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-review__text {
+  margin: var(--transactions-space-sm) 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-major);
+}
+
+.stock-review__hint {
+  margin: var(--transactions-space-sm) 0 0;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-review__textarea {
+  margin-top: var(--transactions-space-sm);
+}
+
+.stock-review__textarea .ui-textarea__control {
+  min-height: 72px;
+}
+
+.stock-review__actions {
+  margin-top: var(--transactions-space-sm);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-trades {
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+/* ---------------- 下单 / 编辑弹窗 ---------------- */
+
+.stock-trade-form__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--transactions-space-md);
+}
+
+.stock-trade-form__code-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.stock-trade-form__fills {
+  border: 1px solid var(--transactions-color-divider);
+  border-radius: var(--transactions-radius-md);
+  padding: var(--transactions-space-sm);
+  margin-bottom: var(--transactions-space-md);
+}
+
+.stock-trade-form__fills-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.stock-fill-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 110px 56px;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  margin-bottom: var(--transactions-space-xs);
+}
+
+.stock-fill-row__amount {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-body-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--transactions-color-text-major);
+}
+
+.stock-fill-row__spacer {
+  display: block;
+  width: 56px;
+}
+
+.stock-trade-form__summary {
+  border: 1px solid var(--transactions-color-divider);
+  border-radius: var(--transactions-radius-md);
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  margin-bottom: var(--transactions-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-xs);
+}
+
+.stock-summary-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  font-size: var(--transactions-size-text-body-sm);
+}
+
+.stock-summary-row.is-total .stock-summary-row__value {
+  font-weight: var(--transactions-weight-semibold);
+}
+
+.stock-summary-row__label {
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-summary-row__value {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--transactions-color-text-major);
+  text-align: right;
+}
+
+.stock-summary-hint {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-trade-form__hint {
+  margin: var(--transactions-space-xs) 0 0;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-trade-edit__head {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.stock-trade-edit__name {
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.stock-trade-edit__count {
+  margin-left: auto;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-trade-edit__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--transactions-space-md);
+}
+
+.stock-trade-edit__row {
+  display: grid;
+  grid-template-columns: 72px 1fr 1fr 1fr;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-xs) var(--transactions-space-sm);
+  border-radius: var(--transactions-radius-sm);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-trade-edit__row.is-current {
+  background: var(--transactions-color-primary-tint);
+  color: var(--transactions-color-text-major);
+}
+
+.stock-trade-edit__tag {
+  font-size: var(--transactions-size-text-caption);
+}
+
+.stock-trade-edit__hint {
+  margin: var(--transactions-space-sm) 0 0;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-impact__text {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: var(--transactions-height-relaxed);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-major);
+}
+
+/* ---------------- 分栏三：交易历史 ---------------- */
+
+.stock-summary-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-lg);
+  flex-wrap: wrap;
+  padding: var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+.stock-summary-bar__title {
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.stock-summary-bar__cells {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--transactions-space-md);
+  flex: 1;
+  min-width: 0;
+}
+
+.stock-summary-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+}
+
+.stock-summary-cell__label {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-summary-cell__value {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--transactions-color-text-major);
+}
+
+.stock-history__grid {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: var(--transactions-space-lg);
+  align-items: start;
+  padding: var(--transactions-space-md);
+}
+
+.stock-history__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-sm);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.stock-history-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+  width: 100%;
+  padding: var(--transactions-space-sm);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background: var(--transactions-color-major-background);
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow var(--transactions-transition-fast),
+    border-color var(--transactions-transition-fast);
+}
+
+.stock-history-card:hover {
+  box-shadow: var(--transactions-shadow-sm);
+  transform: translateX(2px);
+}
+
+.stock-history-card.is-active {
+  border-color: var(--transactions-color-primary);
+  background: var(--transactions-color-active-bg);
+}
+
+.stock-history-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-history-card__name {
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-major);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stock-history-card__code {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-history-card__quote {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-xs);
+  font-size: var(--transactions-size-text-caption);
+}
+
+.stock-history-card__label {
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-history-card__value {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--transactions-color-text-disabled);
+}
+
+.stock-history-card__foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-rounds {
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.stock-round + .stock-round {
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+.stock-round__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+}
+
+.stock-round__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--transactions-color-text-major);
+}
+
+.stock-round__no {
+  font-weight: var(--transactions-weight-medium);
+}
+
+.stock-round__range {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-round__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-round__tag {
+  width: 128px;
+}
+
+.stock-round__result {
+  display: inline-flex;
+  padding: 0 var(--transactions-space-sm);
+  border-radius: var(--transactions-radius-sm);
+  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.stock-round__result.result-win {
+  background: var(--transactions-color-expense-tint);
+  color: var(--transactions-color-expense);
+}
+
+.stock-round__result.result-loss {
+  background: var(--transactions-color-income-tint);
+  color: var(--transactions-color-income);
+}
+
+.stock-round__result.result-even {
+  background: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-round__rate {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------- 分栏四：交易统计 ---------------- */
+
+.stock-statistics__filters {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  flex-wrap: wrap;
+}
+
+.stock-statistics__range {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  width: 260px;
+}
+
+.stock-statistics__range-sep {
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-statistics__recent,
+.stock-statistics__tag {
+  width: 136px;
+}
+
+.stock-stats-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+  gap: var(--transactions-space-lg);
+  padding: var(--transactions-space-lg);
+  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+.stock-stats-overview__lead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+}
+
+.stock-stats-overview__label {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-stats-overview__value {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-display-sm);
+  font-weight: var(--transactions-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-stats-overview__sub {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-stats-overview__kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--transactions-space-md);
+}
+
+.stock-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+  padding-left: var(--transactions-space-md);
+  border-left: 1px solid var(--transactions-color-divider);
+}
+
+.stock-kpi__label {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-kpi__value {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-title-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--transactions-color-text-major);
+}
+
+.stock-kpi__sub {
+  font-size: var(--transactions-size-text-small);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-chart-block {
+  padding: var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+/* ---------------- 自绘 SVG 图表 ---------------- */
+
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-sm);
+  width: 100%;
+}
+
+.chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-md);
+}
+
+.chart__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.chart__legend-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.chart__canvas {
+  position: relative;
+  width: 100%;
+}
+
+.chart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+}
+
+.chart__grid {
+  stroke: var(--transactions-color-divider);
+  stroke-width: 1;
+}
+
+.chart__axis {
+  stroke: var(--transactions-color-window-border);
+  stroke-width: 1;
+}
+
+.chart__reference {
+  stroke: var(--transactions-color-window-border);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.chart__cursor {
+  stroke: var(--transactions-color-border-l3);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.chart__ytick,
+.chart__xtick {
+  fill: var(--transactions-color-text-secondary);
+  font-size: 11px;
+  font-family: var(--transactions-font-mono);
+}
+
+.chart__line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart__dot {
+  stroke: var(--transactions-color-major-background);
+  stroke-width: 1.5;
+}
+
+.chart__tooltip {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  min-width: 160px;
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background: var(--transactions-color-major-background);
+  box-shadow: var(--transactions-shadow-lg);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.chart__tooltip-title {
+  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+  margin-bottom: var(--transactions-space-xs);
+}
+
+.chart__tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  line-height: var(--transactions-height-snug);
+}
+
+.chart__tooltip-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart__tooltip-value {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--transactions-color-text-major);
+}
+
+.chart__empty {
+  text-align: center;
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+  padding: var(--transactions-space-lg);
+}
+
+/* ---------------- 响应式 ---------------- */
+
+@media (max-width: 1280px) {
+  .stock-stats-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stock-stats-overview__kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1080px) {
+  .stock-account__grid,
+  .stock-position__grid,
+  .stock-history__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stock-overview__stats,
+  .stock-quote {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stock-summary-bar__cells {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stock-history__cards {
+    max-height: 240px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stock-position-card,
+  .stock-history-card,
+  .stock-skeleton {
+    transition: none;
+    animation: none;
+  }
+
+  .stock-history-card:hover {
+    transform: none;
+  }
+}

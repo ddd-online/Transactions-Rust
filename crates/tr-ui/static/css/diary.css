@@ -1,0 +1,364 @@
+/* ============================================
+ * 日记页（`/diary_view`）
+ * 对照原 `diary_view/*.vue` 的 scoped 样式：工具栏 + 两栏（260px 日期树 / 自适应编辑器）。
+ * ============================================ */
+
+.diary-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-md);
+}
+
+.diary-jump {
+  width: 160px;
+}
+
+.diary-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: var(--transactions-space-md);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.diary-panel {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.diary-panel--left {
+  border-right: 1px solid var(--transactions-color-divider);
+  padding-right: var(--transactions-space-sm);
+}
+
+/* ---------------- 日期树 ---------------- */
+
+.diary-tree {
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--transactions-space-xs) var(--transactions-space-sm) var(--transactions-space-xs)
+    0;
+  user-select: none;
+}
+
+.diary-tree__empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-xs);
+  padding: var(--transactions-space-xl);
+}
+
+.diary-tree__empty-title {
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-secondary);
+}
+
+.diary-tree__empty-hint {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-disabled);
+}
+
+.diary-tree__year + .diary-tree__year {
+  margin-top: var(--transactions-space-sm);
+}
+
+.diary-tree__node {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-2xs);
+  width: 100%;
+  padding: var(--transactions-space-xs);
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transactions-transition-fast),
+    color var(--transactions-transition-fast);
+}
+
+.diary-tree__node:hover {
+  background: var(--transactions-color-hover-bg);
+}
+
+.diary-tree__node:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: -2px;
+}
+
+.diary-tree__year-node {
+  padding: var(--transactions-space-sm) var(--transactions-space-xs);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.diary-tree__month-node {
+  padding-left: calc(var(--transactions-space-lg) + var(--transactions-space-xs) + 12px);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.diary-tree__day-node {
+  padding-left: calc(3 * var(--transactions-space-lg) + 12px);
+}
+
+.diary-tree__day-node.is-active {
+  background: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.diary-tree__caret {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--transactions-color-text-tertiary);
+  transition: transform var(--transactions-transition-fast);
+}
+
+.diary-tree__caret.is-open {
+  transform: rotate(90deg);
+}
+
+.diary-tree__caret--sm {
+  width: 8px;
+  height: 8px;
+}
+
+.diary-tree__label {
+  flex-shrink: 0;
+}
+
+.diary-tree__count {
+  margin-left: auto;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-disabled);
+  font-variant-numeric: tabular-nums;
+}
+
+.diary-tree__day {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.diary-tree__mood {
+  line-height: 1;
+}
+
+.diary-tree__words {
+  font-size: var(--transactions-size-text-small);
+  color: var(--transactions-color-text-disabled);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------- 编辑器 ---------------- */
+
+.diary-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.diary-editor__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-xs);
+  height: 100%;
+}
+
+.diary-editor__empty-icon {
+  font-size: 32px;
+  opacity: 0.6;
+}
+
+.diary-editor__empty-text {
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-secondary);
+}
+
+.diary-editor__empty-hint {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-disabled);
+}
+
+.diary-editor__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: var(--transactions-space-lg);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  flex-shrink: 0;
+}
+
+.diary-editor__date-group {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-sm);
+  min-width: 0;
+}
+
+.diary-editor__date {
+  font-family: var(--transactions-font-display);
+  font-size: var(--transactions-size-text-display-sm);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+  line-height: var(--transactions-height-tight);
+  white-space: nowrap;
+}
+
+.diary-editor__weekday {
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+  white-space: nowrap;
+}
+
+.diary-editor__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-md);
+  flex-shrink: 0;
+}
+
+.diary-mood {
+  display: flex;
+  gap: 0;
+  background: var(--transactions-color-minor-background);
+  border-radius: var(--transactions-radius-md);
+  padding: var(--transactions-space-2xs);
+}
+
+.diary-mood__btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  cursor: pointer;
+  font-size: var(--transactions-size-text-body);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  opacity: 0.35;
+  transition: transform var(--transactions-transition-fast),
+    opacity var(--transactions-transition-fast),
+    background var(--transactions-transition-fast);
+}
+
+.diary-mood__btn:hover {
+  opacity: 0.65;
+  background: var(--transactions-color-hover-bg);
+}
+
+.diary-mood__btn.is-active {
+  opacity: 1;
+  background: var(--transactions-color-active-bg);
+  transform: scale(1.1);
+}
+
+.diary-mood__btn.is-none {
+  font-size: var(--transactions-size-text-small);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-disabled);
+  opacity: 0.5;
+}
+
+.diary-mood__btn:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: -1px;
+}
+
+.diary-editor__words {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-disabled);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.diary-editor__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: var(--transactions-space-md) 0;
+}
+
+.diary-editor__textarea-wrap {
+  height: 100%;
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-border-l1);
+  border-radius: var(--transactions-radius-md);
+}
+
+.diary-textarea {
+  height: 100%;
+}
+
+.diary-textarea .ui-textarea__control {
+  height: 100%;
+  font-family: var(--transactions-font-mono);
+  border: none;
+  background: none;
+  line-height: var(--transactions-height-relaxed);
+  tab-size: 4;
+}
+
+.diary-editor__preview {
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--transactions-space-md);
+}
+
+.diary-editor__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--transactions-space-sm);
+  border-top: 1px solid var(--transactions-color-divider);
+  flex-shrink: 0;
+  min-height: var(--transactions-btn-height-md);
+}
+
+.diary-editor__footer-left,
+.diary-editor__footer-right {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.diary-save-status {
+  font-size: var(--transactions-size-text-caption);
+}
+
+.diary-save-status.is-saving {
+  color: var(--transactions-color-text-disabled);
+}
+
+.diary-save-status.is-saved {
+  color: var(--transactions-color-primary);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.diary-save-status.is-error {
+  color: var(--transactions-color-expense);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.diary-save-status.is-idle {
+  color: var(--transactions-color-text-disabled);
+}
+
+/* 预览区里的 Markdown 元素样式复用 `.md-body`（见 key_event.css） */
+.diary-markdown {
+  min-width: 0;
+}

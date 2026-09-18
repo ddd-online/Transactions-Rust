@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Transactions",
+  "version": "0.28.0",
+  "identifier": "com.github.Transactions",
+  "build": {
+    "frontendDist": "../crates/tr-ui/dist",
+    "devUrl": "http://127.0.0.1:1520",
+    "beforeDevCommand": {
+      "cwd": "..",
+      "script": "trunk serve --config crates/tr-ui/Trunk.toml"
+    },
+    "beforeBuildCommand": {
+      "cwd": "..",
+      "script": "powershell -NoProfile -ExecutionPolicy Bypass -File build/build-ui.ps1"
+    }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "licenseFile": "../LICENSE",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {}
+}

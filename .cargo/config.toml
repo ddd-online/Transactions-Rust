@@ -1,0 +1,9 @@
+# cargo 别名：把仓库级验证工具接进 cargo（与 AGENTS.md 的命令一致）
+[alias]
+xtask = "run --package xtask --"
+
+# 注意：本机 crates.io 直连不稳定，cargo 不读取 Windows 系统代理，
+# 需要时通过环境变量显式指定（build/*.ps1 里也是这样做的）：
+#   $env:HTTPS_PROXY='http://127.0.0.1:7890'; $env:HTTP_PROXY='http://127.0.0.1:7890'
+# 同样值得设置的还有：
+#   $env:CARGO_HTTP_TIMEOUT='120'; $env:CARGO_NET_RETRY='10'

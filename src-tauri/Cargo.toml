@@ -1,0 +1,36 @@
+[package]
+name = "transactions"
+version = "0.28.0"
+edition = "2021"
+license = "MIT"
+description = "Transactions —— 本地优先的桌面个人记账工作台"
+default-run = "transactions"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tr-domain = { workspace = true }
+tr-store = { workspace = true }
+tr-service = { workspace = true }
+tr-ipc = { workspace = true }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# devtools：生产构建同样允许开关 DevTools（与原 Electron 版「设置 → 通用 → 开发者工具」一致）。
+# tray-icon：系统托盘。image-png/image-ico：图标解码。
+tauri = { version = "2", features = ["devtools", "tray-icon", "image-png", "image-ico"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
+
+# 自动更新：自研实现（见 src/updater.rs 的说明），沿用 GitHub Releases + sha256 校验的既有发布管线
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip"] }
+sha2 = "0.10"
+
+tracing = "0.1"
+# chrono：让日志按本地时间格式化（贴近原 logrus 自定义格式）
+tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }

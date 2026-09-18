@@ -1,0 +1,19 @@
+[package]
+name = "tr-ipc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# IPC 命令面：全部 #[tauri::command] 与统一错误信封。
+# 只在这一层依赖 tauri；业务规则仍在 tr-service，便于 headless 测试。
+[dependencies]
+tr-domain = { workspace = true }
+tr-store = { workspace = true }
+tr-service = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2" }
+# 命令层日志（排障"界面点了没反应"：先看命令有没有被调用）
+tracing = "0.1"
+
+[dev-dependencies]
+serde_json = "1"

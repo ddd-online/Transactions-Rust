@@ -1,0 +1,28 @@
+# trunk 配置：界面层（Leptos CSR → WASM）的构建与开发服务。
+#
+# 开发：`trunk serve --config crates/tr-ui/Trunk.toml`（由 src-tauri 的 beforeDevCommand 拉起）
+# 发布：`powershell -NoProfile -ExecutionPolicy Bypass -File build/build-ui.ps1`
+#       （**不要**直接跑 `trunk build --release`：见下面 wasm-opt 的说明，那条路在本机会失败）
+
+[build]
+target = "index.html"
+dist = "dist"
+release = false
+# 与原项目一致：界面无外部 CDN 依赖，全部离线可用
+#
+# 关闭 wasm-opt 压缩：trunk 0.21 随附的 wasm-opt 123 无法校验 Rust 1.96 生成的
+# bulk-memory 指令（`memory.copy ... requires --enable-bulk-memory-opt`），
+# 而更新版本的 wasm-opt 需要从 GitHub 下载（本机网络不可达）。
+# 代价只是少了一道二次压缩：我们用 `build/build-ui.ps1` 以 opt-level=3 构建，实测产物 7.3 MiB
+# （未优化、带调试信息的 debug 构建约 15 MB）。功能与性能不受影响。
+minify = "never"
+
+[serve]
+# 端口刻意避开 1420：本机 Windows 的保留端口段（Hyper-V/WSL）覆盖 1332-1431，
+# 在 1420 上绑定会直接失败（os error 10013）。1520 已实测可绑定。
+port = 1520
+addresses = ["127.0.0.1"]
+open = false
+
+[watch]
+watch = ["src", "static", "index.html", "Trunk.toml"]

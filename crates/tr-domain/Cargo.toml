@@ -1,0 +1,15 @@
+[package]
+name = "tr-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 纯领域层：模型、DTO、金额换算、费用与分摊等纯算法。
+# 必须在 native 与 wasm32 两种目标下都能编译（界面层直接复用），禁止引入任何 I/O 依赖
+# （rusqlite / reqwest / tauri 均不可出现）。
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"

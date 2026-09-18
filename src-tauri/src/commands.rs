@@ -1,0 +1,584 @@
+//! 桌面外壳命令：窗口控制、配置读写、文件夹/保存对话框、DevTools，以及工作空间打开编排。
+//!
+//! 与业务命令（`tr-ipc`）的分工：凡是需要窗口、配置、日志、对话框的编排动作放在这里；
+//! 纯数据操作（账本/交易/股票…）放在 `tr-ipc`。两者都由 `main.rs` 的
+//! `generate_handler![]` 统一注册，命令清单因此集中在一处。
+//!
+//! 命名与入参形状对齐原 `electron/src/preload.js` 暴露的 `electronAPI`：
+//! * `window_control`   ← `window-control`
+//! * `dialog_open`      ← `dialog:open`
+//! * `file_save_image`  ← `file:save`
+//! * `app_info`         ← `app`（field: name / version / isDev）
+//! * `config_*`         ← `config:get-*` / `config:set-*`
+//! * `devtools_*`       ← `devtools:get-state` / `devtools:toggle`
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
+
+use tr_domain::error::AppError;
+use tr_ipc::{ApiError, ApiResult, AppState};
+
+use crate::assets;
+use crate::config::{ConfigStore, APPEARANCE_SYSTEM, CLOSE_BEHAVIOR_QUIT, CLOSE_BEHAVIOR_TRAY};
+use crate::logging::LogSinks;
+use crate::shell;
+
+/// 桌面外壳自己的托管状态（窗口/配置/日志）。
+pub struct DesktopState {
+    pub config: ConfigStore,
+    pub logs: LogSinks,
+    /// 是否开发构建（等价 Electron 的 `!app.isPackaged`）
+    pub is_dev: bool,
+}
+
+impl DesktopState {
+    pub fn new(is_dev: bool) -> Self {
+        let config = ConfigStore::load(is_dev);
+        let app_dir = shell::app_directory();
+        Self {
+            config,
+            logs: LogSinks::new(&app_dir),
+            is_dev,
+        }
+    }
+}
+
+/// 事件名：工作空间切换成功后广播，界面据此重新挂载当前页面。
+pub const EVENT_WORKSPACE_CHANGED: &str = "workspace-changed";
+/// 事件名：DevTools 开合状态变化。
+pub const EVENT_DEVTOOLS_STATE_CHANGED: &str = "devtools:state-changed";
+
+fn internal(error: impl std::fmt::Display) -> ApiError {
+    ApiError::from(AppError::internal(error.to_string()))
+}
+
+// ---------------------------------------------------------------- 窗口控制
+
+#[derive(Debug, Deserialize)]
+pub struct WindowControlRequest {
+    pub action: String,
+}
+
+/// 自绘标题栏的三个按钮。关闭走 [`shell::request_close`]（含"关闭行为"处理）。
+#[tauri::command]
+pub fn window_control(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+    req: WindowControlRequest,
+) -> ApiResult<()> {
+    match req.action.as_str() {
+        "minimize" => {
+            window.minimize().map_err(internal)?;
+        }
+        "maximize" => {
+            if window.is_maximized().unwrap_or(false) {
+                window.unmaximize().map_err(internal)?;
+            } else {
+                window.maximize().map_err(internal)?;
+            }
+        }
+        "close" => shell::request_close(&app, &window, &state),
+        other => {
+            return Err(ApiError::from(AppError::bad_request(format!(
+                "未知的窗口控制命令: {other}"
+            ))))
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ 应用信息
+
+#[derive(Debug, Deserialize)]
+pub struct AppInfoRequest {
+    pub field: String,
+}
+
+#[tauri::command]
+pub fn app_info(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    req: AppInfoRequest,
+) -> ApiResult<String> {
+    let value = match req.field.as_str() {
+        "name" => app.package_info().name.clone(),
+        "version" => app.package_info().version.to_string(),
+        "isDev" => state.is_dev.to_string(),
+        _ => String::new(),
+    };
+    Ok(value)
+}
+
+// ------------------------------------------------------------ 资产 URL
+
+#[derive(Debug, Deserialize)]
+pub struct AssetUrlRequest {
+    /// 界面（`tr-ui/src/api/desktop.rs`）按 camelCase 发送 `filePath`。
+    /// 这曾经是个**静默失效**的契约错位：这里只认 `file_path`，serde 直接报
+    /// "missing field `file_path`"，于是 `asset_url` 必然失败、关键事件图片全都显示不出来。
+    /// 与同族的 `file_save_image.relativePath` / `DialogOpenResponse.filePaths` 保持一致用 camelCase。
+    #[serde(rename = "filePath", alias = "file_path")]
+    pub file_path: String,
+}
+
+/// 把数据库里的相对路径转成 `<img src>` 可用 URL（等价原 `imageUrl.ts`）。
+#[tauri::command]
+pub fn asset_url(req: AssetUrlRequest) -> ApiResult<String> {
+    Ok(assets::asset_url(&req.file_path))
+}
+
+// ------------------------------------------------------------ 配置读写
+
+#[derive(Debug, Serialize)]
+pub struct ConfigSnapshot {
+    #[serde(rename = "workspaceDir")]
+    pub workspace_dir: String,
+    #[serde(rename = "closeBehavior")]
+    pub close_behavior: String,
+    #[serde(rename = "appearance")]
+    pub appearance: String,
+    #[serde(rename = "configPath")]
+    pub config_path: String,
+    #[serde(rename = "isDev")]
+    pub is_dev: bool,
+}
+
+#[tauri::command]
+pub fn config_get(state: State<'_, DesktopState>) -> ApiResult<ConfigSnapshot> {
+    // 界面启动的第一个调用；打一条 info 便于排障（"窗口空白/PII 没反应"时先看这里有没有出现）
+    let config = state.config.snapshot();
+    tracing::info!(
+        "IPC config_get: workspaceDir={:?} appearance={:?}",
+        config.workspace_dir,
+        config.appearance
+    );
+    Ok(ConfigSnapshot {
+        workspace_dir: config.workspace_dir,
+        close_behavior: config.close_behavior,
+        appearance: if config.appearance.is_empty() {
+            APPEARANCE_SYSTEM.to_string()
+        } else {
+            config.appearance
+        },
+        config_path: state.config.path().to_string_lossy().to_string(),
+        is_dev: state.is_dev,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetCloseBehaviorRequest {
+    pub behavior: String,
+}
+
+/// 关闭行为只接受 quit / tray / 空（空表示首次询问）。
+#[tauri::command]
+pub fn config_set_close_behavior(
+    state: State<'_, DesktopState>,
+    req: SetCloseBehaviorRequest,
+) -> ApiResult<()> {
+    if !matches!(
+        req.behavior.as_str(),
+        CLOSE_BEHAVIOR_QUIT | CLOSE_BEHAVIOR_TRAY | ""
+    ) {
+        return Err(ApiError::from(AppError::bad_request("无效的关闭行为")));
+    }
+    state
+        .config
+        .update(|config| config.close_behavior = req.behavior);
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetAppearanceRequest {
+    pub appearance: String,
+}
+
+/// 外观：持久化 + 应用到所有窗口（驱动 `prefers-color-scheme`，与原 nativeTheme 行为一致）。
+#[tauri::command]
+pub fn config_set_appearance(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+    req: SetAppearanceRequest,
+) -> ApiResult<()> {
+    let theme = match req.appearance.as_str() {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        "system" => None,
+        _ => return Err(ApiError::from(AppError::bad_request("无效的外观设置"))),
+    };
+
+    state
+        .config
+        .update(|config| config.appearance = req.appearance.clone());
+
+    for (_, window) in app.webview_windows() {
+        let _ = window.set_theme(theme);
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ 工作空间
+
+#[tauri::command]
+pub fn workspace_get(state: State<'_, DesktopState>) -> ApiResult<String> {
+    Ok(state.config.snapshot().workspace_dir)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceDirRequest {
+    #[serde(rename = "workspaceDir")]
+    pub workspace_dir: String,
+}
+
+/// 只记录目录（等价 `workspace:set`），不打开数据库。
+#[tauri::command]
+pub fn workspace_set(state: State<'_, DesktopState>, req: WorkspaceDirRequest) -> ApiResult<()> {
+    state
+        .config
+        .update(|config| config.workspace_dir = req.workspace_dir);
+    Ok(())
+}
+
+/// 打开工作空间（原 `POST /api/v1/workspace`）。
+///
+/// 一次完成三件事：打开数据库（含格式校验）、把日志切到工作空间目录、记住目录。
+/// 失败时返回原实现的错误文案（含"该工作空间不是最新格式…"的升级提示）。
+///
+/// 首次启动时这个命令是**从初始化窗口**发出的：成功后必须立刻切到主窗口
+/// （原实现由渲染进程再发一次 `workspace:init`，见 `electron/src/main.js:396`）。
+/// 这里由外壳自己完成切换，界面不需要额外调用——初始化窗口只加载与主窗口相同的
+/// `index.html`，"还没配置工作空间"时它展示选择目录的引导，因此切换是外壳的职责。
+#[tauri::command]
+pub fn workspace_open(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+    ipc_state: State<'_, AppState>,
+    req: WorkspaceDirRequest,
+) -> ApiResult<()> {
+    let raw = req.workspace_dir.trim();
+    if raw.is_empty() {
+        return Err(ApiError::from(AppError::bad_request(
+            "工作目录路径不能为空",
+        )));
+    }
+
+    let directory = PathBuf::from(raw);
+    let opened = match ipc_state.ws.open_workspace(&directory) {
+        Ok(opened) => opened,
+        Err(error) => {
+            tracing::warn!("打开工作空间失败: {} —— {}", raw, error);
+            return Err(internal(error.to_string()));
+        }
+    };
+
+    state.logs.set_workspace(Some(opened.directory()));
+    state
+        .config
+        .update(|config| config.workspace_dir = raw.to_string());
+    tracing::info!("工作空间已打开: {}", raw);
+
+    let _ = app.emit(EVENT_WORKSPACE_CHANGED, raw.to_string());
+
+    // 从初始化窗口发起的"选目录"：打开成功后立刻换成主窗口。
+    if window.label() == shell::INIT_WINDOW {
+        transition_from_init(&app, &window);
+    }
+    Ok(())
+}
+
+/// 初始化窗口 → 主窗口的切换：创建并显示主窗口，然后销毁初始化窗口。
+///
+/// 对应原实现 `electron/src/main.js:396` 的 `workspace:init`：
+/// `initWindow.close()` + `createMainWindow()`。
+/// 用 `destroy()` 而不是 `close()`：初始化窗口不该走"关闭行为（最小化到托盘）"那套逻辑。
+/// 幂等：当前窗口不是初始化窗口、或初始化窗口已销毁时是空操作。
+fn transition_from_init(app: &AppHandle, window: &WebviewWindow) {
+    if window.label() != shell::INIT_WINDOW {
+        return;
+    }
+    tracing::info!("初始化窗口已选定工作空间，切换主窗口并销毁初始化窗口");
+    shell::show_main_window(app);
+    let _ = window.destroy();
+}
+
+/// 初始化窗口选定工作目录后的切换（保留原 `workspace:init` 命令面）。
+///
+/// 原 Electron 版由渲染进程显式调用；Rust 版已由 [`workspace_open`] 自动完成切换，
+/// 因此这个命令现在是**幂等的补充入口**：主窗口已显示时调用它不会有副作用。
+#[tauri::command]
+pub fn workspace_init(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, DesktopState>,
+    req: WorkspaceDirRequest,
+) -> ApiResult<()> {
+    let raw = req.workspace_dir.trim().to_string();
+    if raw.is_empty() {
+        return Err(ApiError::from(AppError::bad_request(
+            "工作目录路径不能为空",
+        )));
+    }
+    state
+        .config
+        .update(|config| config.workspace_dir = raw.clone());
+
+    transition_from_init(&app, &window);
+    Ok(())
+}
+
+// ------------------------------------------------------------ 对话框
+
+#[derive(Debug, Default, Deserialize)]
+pub struct DialogOpenRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+    /// 界面发的是 `defaultPath`（camelCase）。之前只认 `default_path`，因为字段带
+    /// `#[serde(default)]`，错误不会冒出来——只是"打开对话框时不会定位到当前工作空间"，
+    /// 属于最难发现的那种静默降级。保留 snake_case 作为别名。
+    #[serde(default, rename = "defaultPath", alias = "default_path")]
+    pub default_path: Option<String>,
+}
+
+/// 返回形状与原 `dialog:open` 一致：`{ canceled, filePaths, error? }`。
+#[derive(Debug, Serialize)]
+pub struct DialogOpenResponse {
+    pub canceled: bool,
+    #[serde(rename = "filePaths")]
+    pub file_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// 选择目录（工作空间、日记导入/导出目录）。
+///
+/// 用回调 + 阻塞等待而不是对话框插件的阻塞 API：阻塞 API 在主线程会死锁，
+/// 这里把等待放到异步运行时的工作线程上。
+#[tauri::command]
+pub async fn dialog_open(app: AppHandle, req: DialogOpenRequest) -> ApiResult<DialogOpenResponse> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut builder = app.dialog().file();
+    if let Some(title) = req.title.as_deref() {
+        builder = builder.set_title(title);
+    }
+    if let Some(path) = req.default_path.as_deref() {
+        builder = builder.set_directory(path);
+    }
+    builder.pick_folder(move |folder| {
+        let _ = tx.send(folder);
+    });
+
+    let picked = tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
+        .await
+        .map_err(internal)?
+        .and_then(|file_path| file_path.into_path().ok());
+
+    Ok(match picked {
+        Some(path) => DialogOpenResponse {
+            canceled: false,
+            file_paths: vec![path.to_string_lossy().to_string()],
+            error: None,
+        },
+        None => DialogOpenResponse {
+            canceled: true,
+            file_paths: Vec::new(),
+            error: None,
+        },
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileSaveRequest {
+    #[serde(rename = "relativePath")]
+    pub relative_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileSaveResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canceled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// 把工作空间资产里的图片另存到用户选择的位置（原 `file:save`）。
+#[tauri::command]
+pub async fn file_save_image(
+    app: AppHandle,
+    ipc_state: State<'_, AppState>,
+    req: FileSaveRequest,
+) -> ApiResult<FileSaveResponse> {
+    let Ok(workspace) = ipc_state.workspace() else {
+        return Ok(FileSaveResponse {
+            success: false,
+            canceled: None,
+            error: Some("未打开工作空间".to_string()),
+        });
+    };
+
+    let assets_root = workspace.assets_directory();
+    let Ok(root) = assets_root.canonicalize() else {
+        return Ok(FileSaveResponse {
+            success: false,
+            canceled: None,
+            error: Some("源文件不存在".to_string()),
+        });
+    };
+    // 防路径遍历：解析后必须仍位于 assets 目录内
+    let Ok(source) = assets_root.join(&req.relative_path).canonicalize() else {
+        return Ok(FileSaveResponse {
+            success: false,
+            canceled: None,
+            error: Some("源文件不存在".to_string()),
+        });
+    };
+    if !source.starts_with(&root) {
+        return Ok(FileSaveResponse {
+            success: false,
+            canceled: None,
+            error: Some("非法文件路径".to_string()),
+        });
+    }
+
+    let default_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("image")
+        .to_string();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_file_name(default_name)
+        .add_filter(
+            "图片文件",
+            &["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic"],
+        )
+        .save_file(move |target| {
+            let _ = tx.send(target);
+        });
+
+    let picked = tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
+        .await
+        .map_err(internal)?
+        .and_then(|file_path| file_path.into_path().ok());
+
+    let Some(target) = picked else {
+        return Ok(FileSaveResponse {
+            success: false,
+            canceled: Some(true),
+            error: None,
+        });
+    };
+
+    match std::fs::copy(&source, &target) {
+        Ok(_) => Ok(FileSaveResponse {
+            success: true,
+            canceled: None,
+            error: None,
+        }),
+        Err(error) => Ok(FileSaveResponse {
+            success: false,
+            canceled: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+// ------------------------------------------------------------ DevTools
+
+#[tauri::command]
+pub fn devtools_get_state(window: WebviewWindow) -> ApiResult<bool> {
+    Ok(window.is_devtools_open())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DevToolsToggleRequest {
+    pub enabled: bool,
+}
+
+/// 返回操作后的真实状态，并广播给渲染进程校正开关（与原实现一致）。
+#[tauri::command]
+pub fn devtools_toggle(
+    app: AppHandle,
+    window: WebviewWindow,
+    req: DevToolsToggleRequest,
+) -> ApiResult<bool> {
+    if req.enabled {
+        window.open_devtools();
+    } else {
+        window.close_devtools();
+    }
+    let opened = window.is_devtools_open();
+    let _ = app.emit_to(window.label(), EVENT_DEVTOOLS_STATE_CHANGED, opened);
+    Ok(opened)
+}
+
+// ------------------------------------------------------------ 配置文件路径
+
+/// 设置页「配置文件」一栏展示用：返回当前平台的配置文件真实路径。
+/// 更新相关命令（`update_check` / `update_download` / `update_cancel` / `update_install`）
+/// 是自研实现，见 `src/updater.rs`；**不使用** `tauri-plugin-updater`（理由见 AGENTS.md）。
+#[tauri::command]
+pub fn config_file_path(state: State<'_, DesktopState>) -> ApiResult<String> {
+    Ok(state.config.path().to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 锁住外壳命令的**入参字段名**：界面是按字面量手写 JSON 的，改名不会编译报错。
+    /// 这两条对应真实踩过的坑（见 `AssetUrlRequest` / `DialogOpenRequest` 的注释）：
+    /// `asset_url` 曾因只认 `file_path` 而必然失败；`dialog_open` 曾静默忽略 `defaultPath`。
+    #[test]
+    fn asset_url_request_accepts_the_camel_case_body_sent_by_the_ui() {
+        let request: AssetUrlRequest =
+            serde_json::from_str(r#"{"filePath":"key_events/2026-01-01/a.jpg"}"#).unwrap();
+        assert_eq!(request.file_path, "key_events/2026-01-01/a.jpg");
+
+        // 兼容旧写法，避免已有调用方回归
+        let legacy: AssetUrlRequest =
+            serde_json::from_str(r#"{"file_path":"key_events/2026-01-01/a.jpg"}"#).unwrap();
+        assert_eq!(legacy.file_path, "key_events/2026-01-01/a.jpg");
+
+        // 字段缺失必须是**硬错误**，不能再退化成"空路径"这种静默行为
+        assert!(serde_json::from_str::<AssetUrlRequest>("{}").is_err());
+    }
+
+    #[test]
+    fn dialog_open_request_reads_camel_case_and_legacy_snake_case() {
+        let request: DialogOpenRequest =
+            serde_json::from_str(r#"{"title":"选择工作目录","defaultPath":"E:\\ljwfile"}"#)
+                .unwrap();
+        assert_eq!(request.title.as_deref(), Some("选择工作目录"));
+        assert_eq!(
+            request.default_path.as_deref(),
+            Some(r"E:\ljwfile"),
+            "defaultPath 必须被读到，否则对话框不会定位到当前工作空间"
+        );
+
+        let legacy: DialogOpenRequest =
+            serde_json::from_str(r#"{"default_path":"E:\\ljwfile"}"#).unwrap();
+        assert_eq!(legacy.default_path.as_deref(), Some(r"E:\ljwfile"));
+
+        // 两个字段都可省略（界面可能只传 title）
+        let minimal: DialogOpenRequest = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
+        assert!(minimal.default_path.is_none());
+    }
+
+    #[test]
+    fn window_control_actions_match_the_ui_contract() {
+        // 界面只会发这三个动作；未知动作必须是错误而不是静默成功
+        for action in ["minimize", "maximize", "close"] {
+            let request: WindowControlRequest =
+                serde_json::from_str(&format!(r#"{{"action":"{action}"}}"#)).unwrap();
+            assert_eq!(request.action, action);
+        }
+    }
+}

@@ -1,0 +1,422 @@
+/* ============================================
+ * 分类标签页专属样式（三栏联动 + 拖拽排序）
+ *
+ * 对照原 Vue 组件的 scoped 样式：
+ *   - TransactionsCategoryTagSetting.vue 的 .type-nav / .type-card / .setting-main / .modal-form
+ *   - CategoryColumn.vue 的 .column / .column-header / .list-item / .drag-handle / .empty-init
+ *   - TagColumn.vue 同构（右栏圆角在右侧）
+ * 类名前缀统一为 `ct-`；取值只用 `--transactions-*` 令牌（类型色用
+ * --transactions-color-{expense,income,transfer}），不出现裸 hex / rgb。
+ * ============================================ */
+
+/* ========== 工具栏：类型卡片 + 账本 + 初始化 ========== */
+
+.ct-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--transactions-space-md);
+}
+
+.ct-toolbar-left,
+.ct-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+/* 交易类型导航（原 .type-nav）：三张卡片，激活色随类型语义色 */
+.ct-type-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+}
+
+.ct-type-card {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 var(--transactions-space-md);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: 500;
+  color: var(--transactions-color-text-secondary);
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-divider);
+  border-radius: var(--transactions-radius-md);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--transactions-transition-smooth),
+    box-shadow var(--transactions-transition-smooth),
+    color var(--transactions-transition-fast);
+}
+
+/* 每个类型各自的 --ct-type-color（令牌，非裸色值） */
+.ct-type-card--expense {
+  --ct-type-color: var(--transactions-color-expense);
+}
+
+.ct-type-card--income {
+  --ct-type-color: var(--transactions-color-income);
+}
+
+.ct-type-card--transfer {
+  --ct-type-color: var(--transactions-color-transfer);
+}
+
+.ct-type-card:hover:not(.is-active) {
+  color: var(--transactions-color-text-major);
+  box-shadow: var(--transactions-shadow-sm);
+}
+
+/* 原实现用子选择器限定直接子节点，避免子级元素被整体染色 */
+.ct-type-card.is-active {
+  color: var(--ct-type-color);
+  background-color: color-mix(
+    in srgb,
+    var(--ct-type-color) 8%,
+    var(--transactions-color-major-background)
+  );
+  border-color: color-mix(in srgb, var(--ct-type-color) 30%, transparent);
+  box-shadow: var(--transactions-shadow-sm);
+}
+
+.ct-type-card.is-active > .ct-type-card-label {
+  color: inherit;
+}
+
+.ct-type-card:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.ct-type-card-label {
+  white-space: nowrap;
+}
+
+/* 账本胶囊 */
+.ct-ledger-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  height: 28px;
+  padding: 0 var(--transactions-space-sm);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+  background-color: var(--transactions-color-minor-background);
+  border-radius: var(--transactions-radius-full);
+}
+
+.ct-ledger-chip-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: var(--transactions-color-icon);
+}
+
+.ct-ledger-chip-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* ========== 主体：240px 分类栏 + 1fr 标签栏 ========== */
+
+.ct-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  overflow: hidden;
+  min-height: 0;
+  gap: 0;
+}
+
+.ct-column {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-divider);
+}
+
+.ct-column--categories {
+  border-radius: var(--transactions-radius-lg) 0 0 var(--transactions-radius-lg);
+  border-right: none;
+}
+
+.ct-column--tags {
+  border-radius: 0 var(--transactions-radius-lg) var(--transactions-radius-lg) 0;
+}
+
+.ct-column-header {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  flex-shrink: 0;
+}
+
+.ct-column-header .ct-add-btn {
+  margin-left: auto;
+}
+
+.ct-column-title {
+  font-size: var(--transactions-size-text-body);
+  font-weight: 600;
+  color: var(--transactions-color-text-major);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-column-count {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  background-color: var(--transactions-color-minor-background);
+  border-radius: var(--transactions-radius-full);
+}
+
+/* 栏头按钮：图标 + 文案 */
+.ct-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ct-add-btn-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.ct-add-btn-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* 栏体：可滚动区域（空态也占满剩余高度） */
+.ct-column-body-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ct-column-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--transactions-space-xs);
+}
+
+/* ========== 列表项 ========== */
+
+.ct-list-item {
+  display: flex;
+  align-items: center;
+  padding: var(--transactions-space-sm);
+  border-radius: var(--transactions-radius-md);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--transactions-transition-fast);
+}
+
+.ct-list-item:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.ct-list-item.is-active {
+  background-color: var(--transactions-color-active-bg);
+  font-weight: 500;
+}
+
+/* 拖拽手柄（Title「拖动排序」）；`.ui-drag-item` 自带 grab 光标，
+   这里把实际手柄收窄到 16px 宽的圆点列，避免整行都可拖。 */
+.ct-drag-item {
+  border-radius: var(--transactions-radius-md);
+}
+
+.ct-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-right: 2px;
+  color: var(--transactions-color-text-secondary);
+  cursor: grab;
+  touch-action: none;
+  transition: color var(--transactions-transition-fast);
+}
+
+.ct-drag-handle:hover {
+  color: var(--transactions-color-primary);
+}
+
+.ct-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* 6 个圆点：用 radial-gradient 画点阵，纯令牌上色 */
+.ct-drag-handle-dots {
+  display: block;
+  width: 12px;
+  height: 14px;
+  background-image: radial-gradient(
+    circle at 3px 3px,
+    currentColor 1.3px,
+    transparent 1.5px
+  );
+  background-size: 6px 4px;
+  opacity: 0.85;
+}
+
+.ct-item-main {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  min-width: 0;
+  flex: 1;
+}
+
+.ct-item-name {
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-major);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 记录数徽标（原 `.item-badge`，`v-if="recordCount"`） */
+.ct-item-badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  background-color: var(--transactions-color-minor-background);
+  border-radius: var(--transactions-radius-full);
+}
+
+/* 行内操作：默认隐藏，hover / 选中时出现（原 `.item-actions`） */
+.ct-item-actions {
+  display: none;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.ct-list-item:hover .ct-item-actions,
+.ct-list-item.is-active .ct-item-actions {
+  display: flex;
+}
+
+.ct-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--transactions-color-text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--transactions-radius-sm);
+  cursor: pointer;
+  transition: all var(--transactions-transition-fast);
+}
+
+.ct-action-icon-svg {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.ct-action-icon-svg svg {
+  width: 100%;
+  height: 100%;
+}
+
+.ct-action-icon:hover:not(:disabled) {
+  color: var(--transactions-color-negative);
+  background-color: var(--transactions-color-danger-hover-bg);
+}
+
+.ct-action-icon:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.ct-action-icon:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+/* ========== 空态 ========== */
+
+.ct-column-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: var(--transactions-space-xl);
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-secondary);
+  text-align: center;
+}
+
+/* 初始化引导（原 `.empty-init`） */
+.ct-empty-init {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-md);
+  text-align: center;
+}
+
+.ct-empty-init-icon {
+  width: 64px;
+  height: 64px;
+  color: var(--transactions-color-text-secondary);
+  opacity: 0.4;
+}
+
+.ct-empty-init-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.ct-empty-init-text {
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-secondary);
+}
+
+/* ========== 弹窗 ========== */
+
+.ct-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-xs);
+}
+
+.ct-delete-message {
+  margin: 0;
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-major);
+  line-height: 1.6;
+}
+
+/* ========== 动效降级 ========== */
+
+@media (prefers-reduced-motion: reduce) {
+  .ct-type-card,
+  .ct-list-item,
+  .ct-drag-handle,
+  .ct-action-icon {
+    transition: none;
+  }
+}

@@ -1,0 +1,1758 @@
+/* ============================================
+ * 自有组件套件样式（P5 首批 8 个）
+ *   button / input / select / modal / tag / tooltip / empty / spin
+ *
+ * 外观裁决标准：DESIGN.md + 原 `_components.scss` / `index.scss` 的对应规则。
+ * 全部取值来自 `--transactions-*` 令牌，不写裸 hex。
+ * ============================================ */
+
+/* ============================================
+ * Button —— 统一按钮系统
+ * 变体：primary → secondary → text → text-danger → primary-danger → dashed → link
+ * 尺寸：sm(28px) / md(36px) / lg(44px)
+ * ============================================ */
+
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-sm);
+  font-family: var(--transactions-font-body);
+  font-weight: 500;
+  border-radius: var(--transactions-radius-md);
+  box-shadow: none;
+  transition: all var(--transactions-transition-fast);
+  height: var(--transactions-btn-height-md);
+  min-width: var(--transactions-btn-min-width);
+  padding: 0 var(--transactions-btn-padding-h-md);
+  font-size: var(--transactions-btn-font-size-md);
+  line-height: 1;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: none;
+  white-space: nowrap;
+}
+
+.ui-btn:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+/* 按下反馈：极短的触感下沉，不让用户等动画 */
+.ui-btn:not(:disabled):active {
+  transform: translateY(1px) scale(0.99);
+}
+
+.ui-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* ---- 尺寸 ---- */
+.ui-btn--sm {
+  height: var(--transactions-btn-height-sm);
+  padding: 0 var(--transactions-btn-padding-h-sm);
+  font-size: var(--transactions-btn-font-size-sm);
+  min-width: auto;
+}
+
+.ui-btn--lg {
+  height: var(--transactions-btn-height-lg);
+  padding: 0 var(--transactions-btn-padding-h-lg);
+  font-size: var(--transactions-btn-font-size-lg);
+}
+
+.ui-btn--block {
+  width: 100%;
+}
+
+/* ---- primary：实心主按钮（DeepSeek blue） ---- */
+.ui-btn--primary {
+  background-color: var(--transactions-color-primary);
+  border-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+}
+
+.ui-btn--primary:hover:not(:disabled) {
+  background-color: var(--transactions-color-primary-hover);
+  border-color: var(--transactions-color-primary-hover);
+  color: var(--transactions-color-text-inverse);
+}
+
+.ui-btn--primary:active:not(:disabled) {
+  background-color: var(--transactions-color-primary-active);
+  border-color: var(--transactions-color-primary-active);
+}
+
+/* ---- secondary：描边次要按钮 ----
+ * 不透明表面色（而非透明）：避免悬浮卡片/内容区时透出卡片灰背景。 */
+.ui-btn--secondary {
+  border-color: var(--transactions-color-window-border);
+  color: var(--transactions-color-text-major);
+  background-color: var(--transactions-color-major-background);
+}
+
+.ui-btn--secondary:hover:not(:disabled) {
+  border-color: var(--transactions-color-border-l2);
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-text-major);
+}
+
+.ui-btn--secondary:active:not(:disabled) {
+  border-color: var(--transactions-color-border-l2);
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-text-major);
+}
+
+/* ---- text：纯文字按钮 ---- */
+.ui-btn--text {
+  min-width: auto;
+  color: var(--transactions-color-text-secondary);
+}
+
+.ui-btn--text:hover:not(:disabled) {
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-text-major);
+}
+
+/* ---- text-danger：文字危险按钮（行内删除） ---- */
+.ui-btn--text-danger {
+  min-width: auto;
+  color: var(--transactions-color-expense);
+}
+
+.ui-btn--text-danger:hover:not(:disabled) {
+  background-color: var(--transactions-color-danger-hover-bg);
+  color: var(--transactions-color-expense);
+}
+
+/* ---- primary-danger：实心危险按钮 ---- */
+.ui-btn--primary-danger {
+  background-color: var(--transactions-color-expense);
+  border-color: var(--transactions-color-expense);
+  color: var(--transactions-color-text-inverse);
+}
+
+.ui-btn--primary-danger:hover:not(:disabled) {
+  background-color: var(--transactions-color-expense);
+  border-color: var(--transactions-color-expense);
+  color: var(--transactions-color-text-inverse);
+  opacity: 0.85;
+}
+
+/* ---- dashed：虚线按钮，映射到次要样式 ---- */
+.ui-btn--dashed {
+  border-style: dashed;
+  border-color: var(--transactions-color-window-border);
+  color: var(--transactions-color-text-secondary);
+  background-color: var(--transactions-color-major-background);
+}
+
+.ui-btn--dashed:hover:not(:disabled) {
+  border-color: var(--transactions-color-primary);
+  color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-primary-tint);
+}
+
+/* ---- link：链接按钮，按文字变体处理 ---- */
+.ui-btn--link {
+  min-width: auto;
+  color: var(--transactions-color-primary);
+  padding: 0;
+}
+
+.ui-btn--link:hover:not(:disabled) {
+  color: var(--transactions-color-primary-hover);
+}
+
+/* ---- icon-only：图标按钮 ---- */
+.ui-btn--icon-only {
+  min-width: auto;
+  padding: 0;
+  width: var(--transactions-btn-height-md);
+}
+
+.ui-btn--icon-only.ui-btn--sm {
+  width: var(--transactions-btn-height-sm);
+  min-width: auto;
+}
+
+.ui-btn--icon-only.ui-btn--lg {
+  width: var(--transactions-btn-height-lg);
+}
+
+.ui-btn__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+}
+
+/* ============================================
+ * Input —— 36px 高 / 8px 圆角 / 1px 发丝边框
+ * ============================================ */
+
+.ui-input {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  height: var(--transactions-btn-height-md);
+  padding: 0 var(--transactions-space-md);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-major-background);
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  transition: border-color var(--transactions-transition-fast),
+    box-shadow var(--transactions-transition-fast);
+  width: 100%;
+}
+
+.ui-input:hover {
+  border-color: var(--transactions-color-border-l2);
+}
+
+/* @mixin input-focus 的等价物 */
+.ui-input:focus-within {
+  border-color: var(--transactions-color-primary);
+  box-shadow: var(--transactions-shadow-focus);
+}
+
+.ui-input--disabled {
+  background-color: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.ui-input__control {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0;
+  height: 100%;
+}
+
+.ui-input__control::placeholder {
+  color: var(--transactions-color-text-disabled);
+}
+
+.ui-input__prefix,
+.ui-input__suffix {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.ui-input__clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--transactions-color-text-tertiary);
+  transition: color var(--transactions-transition-fast);
+}
+
+.ui-input__clear:hover {
+  color: var(--transactions-color-text-major);
+}
+
+/* ============================================
+ * Textarea —— 多行文本域（对应原 `a-textarea`）
+ * ============================================ */
+
+.ui-textarea {
+  display: flex;
+  width: 100%;
+  border: 1px solid var(--transactions-color-border-l2);
+  border-radius: var(--transactions-radius-md);
+  background: var(--transactions-color-major-background);
+  transition: border-color var(--transactions-transition-fast),
+    box-shadow var(--transactions-transition-fast);
+}
+
+.ui-textarea:hover {
+  border-color: var(--transactions-color-border-l3);
+}
+
+.ui-textarea:focus-within {
+  border-color: var(--transactions-color-primary);
+  box-shadow: var(--transactions-shadow-focus);
+}
+
+.ui-textarea--disabled {
+  background: var(--transactions-color-minor-background);
+  cursor: not-allowed;
+}
+
+.ui-textarea__control {
+  width: 100%;
+  min-height: 72px;
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border: none;
+  outline: none;
+  background: none;
+  resize: vertical;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  line-height: var(--transactions-height-normal);
+  color: var(--transactions-color-text-major);
+}
+
+.ui-textarea--fixed .ui-textarea__control {
+  resize: none;
+}
+
+.ui-textarea__control::placeholder {
+  color: var(--transactions-color-text-disabled);
+}
+
+.ui-textarea__control:disabled {
+  cursor: not-allowed;
+  color: var(--transactions-color-text-disabled);
+}
+
+/* ============================================
+ * Select —— 可搜索 / 可清空的下拉选择
+ * ============================================ */
+
+.ui-select {
+  position: relative;
+  width: 100%;
+}
+
+.ui-select__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  width: 100%;
+  height: var(--transactions-btn-height-md);
+  padding: 0 var(--transactions-space-md);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-major-background);
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--transactions-transition-fast),
+    box-shadow var(--transactions-transition-fast);
+}
+
+.ui-select__trigger:hover {
+  border-color: var(--transactions-color-border-l2);
+}
+
+.ui-select__trigger:focus-visible,
+.ui-select.is-open .ui-select__trigger {
+  outline: none;
+  border-color: var(--transactions-color-primary);
+  box-shadow: var(--transactions-shadow-focus);
+}
+
+.ui-select__value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-select__placeholder {
+  color: var(--transactions-color-text-disabled);
+}
+
+.ui-select__arrow {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-text-tertiary);
+  flex-shrink: 0;
+  transition: transform var(--transactions-transition-fast);
+}
+
+.ui-select.is-open .ui-select__arrow {
+  transform: rotate(180deg);
+}
+
+.ui-select__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1040;
+}
+
+.ui-select__panel {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--transactions-space-xs);
+  background-color: var(--transactions-color-elevated);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  box-shadow: var(--transactions-shadow-lg);
+}
+
+.ui-select__search {
+  padding: var(--transactions-space-2xs) var(--transactions-space-2xs) var(--transactions-space-xs);
+}
+
+.ui-select__option {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border-radius: var(--transactions-radius-sm);
+  cursor: pointer;
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-major);
+  transition: background var(--transactions-transition-fast);
+}
+
+.ui-select__option:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.ui-select__option.is-selected {
+  background-color: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
+  font-weight: 500;
+}
+
+.ui-select__empty {
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+/* ============================================
+ * Modal —— 16px 圆角 + 大阴影
+ * ============================================ */
+
+.ui-modal__mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 96px var(--transactions-space-lg) var(--transactions-space-3xl);
+  overflow-y: auto;
+  background-color: var(--transactions-color-hover-bg);
+  animation: tr-fade-in var(--transactions-transition-fast);
+}
+
+.ui-modal__content {
+  width: 520px;
+  max-width: 100%;
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-xl);
+  overflow: hidden;
+  box-shadow: var(--transactions-shadow-xl);
+}
+
+.ui-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  padding: var(--transactions-space-lg) var(--transactions-space-xl);
+}
+
+.ui-modal__title {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-title-sm);
+  font-weight: 600;
+  color: var(--transactions-color-text-major);
+  margin: 0;
+}
+
+.ui-modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  cursor: pointer;
+  color: var(--transactions-color-icon);
+  transition: all var(--transactions-transition-fast);
+}
+
+.ui-modal__close:hover {
+  background-color: var(--transactions-color-danger-hover-bg);
+  color: var(--transactions-color-expense);
+}
+
+.ui-modal__body {
+  padding: var(--transactions-space-xl);
+}
+
+.ui-modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--transactions-space-sm);
+  border-top: 1px solid var(--transactions-color-divider);
+  padding: var(--transactions-space-lg) var(--transactions-space-xl);
+}
+
+.ui-modal__footer.is-hidden {
+  display: none;
+}
+
+/* ============================================
+ * Tag —— 语义色 10% 底 + 语义色文字
+ * ============================================ */
+
+.ui-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  line-height: var(--transactions-height-tight);
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-secondary);
+  white-space: nowrap;
+}
+
+.ui-tag--income {
+  background-color: var(--transactions-color-income-tint);
+  color: var(--transactions-color-income);
+  font-weight: 500;
+}
+
+.ui-tag--expense {
+  background-color: var(--transactions-color-expense-tint);
+  color: var(--transactions-color-expense);
+  font-weight: 500;
+}
+
+.ui-tag--transfer {
+  background-color: var(--transactions-color-transfer-tint);
+  color: var(--transactions-color-transfer);
+  font-weight: 500;
+}
+
+.ui-tag--outlier {
+  background-color: var(--transactions-color-outlier-tint);
+  color: var(--transactions-color-outlier);
+  font-weight: 500;
+}
+
+.ui-tag--primary {
+  background-color: var(--transactions-color-primary-tint);
+  color: var(--transactions-color-primary);
+  font-weight: 500;
+}
+
+/* ============================================
+ * Tooltip —— 纯 CSS 气泡（无 JS 依赖）
+ * 用法：<span class="ui-tooltip" data-tooltip="编辑">…</span>
+ * ============================================ */
+
+.ui-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ui-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 1100;
+  bottom: calc(100% + var(--transactions-space-xs));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--transactions-space-2xs) var(--transactions-space-sm);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-text-major);
+  color: var(--transactions-color-major-background);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  line-height: var(--transactions-height-snug);
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--transactions-transition-fast),
+    visibility var(--transactions-transition-fast);
+}
+
+.ui-tooltip:hover::after,
+.ui-tooltip:focus-within::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* ============================================
+ * Empty —— 空态
+ * ============================================ */
+
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-md);
+  padding: var(--transactions-space-3xl);
+  text-align: center;
+}
+
+.ui-empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--transactions-color-primary);
+  opacity: 0.4;
+  margin-bottom: var(--transactions-space-md);
+}
+
+.ui-empty__icon svg {
+  width: 48px;
+  height: 48px;
+}
+
+.ui-empty__title {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-section);
+  font-weight: 500;
+  color: var(--transactions-color-text-major);
+  margin: 0;
+}
+
+.ui-empty__description {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-secondary);
+  margin: 0;
+  max-width: 420px;
+}
+
+.ui-empty__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-sm);
+}
+
+/* ============================================
+ * Spin —— 加载指示
+ * ============================================ */
+
+.ui-spin {
+  display: block;
+}
+
+.ui-spin__indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--transactions-color-primary);
+  animation: ui-spin-rotate 900ms linear infinite;
+}
+
+.ui-spin__indicator svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+.ui-spin--sm .ui-spin__indicator svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ui-spin--lg .ui-spin__indicator svg {
+  width: 32px;
+  height: 32px;
+}
+
+.ui-spin--wrapping {
+  position: relative;
+  display: block;
+}
+
+.ui-spin__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--transactions-color-major-background);
+  opacity: 0.6;
+  border-radius: var(--transactions-radius-md);
+}
+
+.ui-spin__mask {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--transactions-space-3xl);
+  color: var(--transactions-color-primary);
+}
+
+@keyframes ui-spin-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-spin__indicator {
+    animation-duration: 2.5s;
+  }
+}
+
+/* ============================================
+ * P6-a 增补组件（16 个）
+ *   table / pagination / form / tabs / segmented / switch / popconfirm /
+ *   date-picker / dropdown / popover / float-button / drawer / divider /
+ *   checkbox(-group) / progress / drag-sort
+ *
+ * 与首批同一套取值来源：只用 --transactions-* 令牌，不写裸 hex。
+ * 表格底样式沿用 base.css 的 `.table-wrapper`（这是原 `_components.scss` 的表格基座）。
+ * ============================================ */
+
+/* ============================================
+ * Table —— 表头 / 对齐 / 选中行 / 空态
+ * ============================================ */
+
+.ui-table__head-cell {
+  white-space: nowrap;
+}
+
+.ui-table__cell--center,
+.ui-table__head-cell--center {
+  text-align: center;
+}
+
+.ui-table__cell--right,
+.ui-table__head-cell--right {
+  text-align: right;
+}
+
+/* 选中行：主色 10% 底（与 `.ui-select__option.is-selected` 同一语义色） */
+.table-wrapper tbody > tr.is-selected > td {
+  background-color: var(--transactions-color-active-bg);
+}
+
+.table-wrapper tbody > tr.is-selected > td:first-child {
+  box-shadow: inset 2px 0 0 0 var(--transactions-color-primary);
+}
+
+.ui-table-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--transactions-space-3xl);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-secondary);
+}
+
+/* ============================================
+ * Form / FormItem
+ * ============================================ */
+
+.ui-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-lg);
+  width: 100%;
+}
+
+.ui-form--horizontal .ui-form-item {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  gap: var(--transactions-space-md);
+}
+
+.ui-form--horizontal .ui-form-item__hint,
+.ui-form--horizontal .ui-form-item__error {
+  grid-column: 2;
+}
+
+.ui-form-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-xs);
+  min-width: 0;
+}
+
+.ui-form-item__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-2xs);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: 500;
+  color: var(--transactions-color-text-major);
+}
+
+.ui-form-item__required {
+  color: var(--transactions-color-expense);
+  line-height: 1;
+}
+
+.ui-form-item__control {
+  min-width: 0;
+}
+
+.ui-form-item__hint {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.ui-form-item__error {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-expense);
+}
+
+/* 校验失败时把控件边框染红（等价 a-form-item has-error） */
+.ui-form-item.is-error .ui-input,
+.ui-form-item.is-error .ui-select__trigger,
+.ui-form-item.is-error .ui-date-picker__trigger {
+  border-color: var(--transactions-color-expense);
+}
+
+/* ============================================
+ * Tabs / TabPane
+ * ============================================ */
+
+.ui-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  padding-bottom: var(--transactions-space-2xs);
+  flex-wrap: wrap;
+}
+
+.ui-tabs__tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 var(--transactions-space-md);
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  color: var(--transactions-color-text-secondary);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  cursor: pointer;
+  transition: all var(--transactions-transition-fast);
+}
+
+.ui-tabs__tab:hover {
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-text-major);
+}
+
+.ui-tabs__tab.is-active {
+  color: var(--transactions-color-primary);
+  font-weight: 600;
+}
+
+.ui-tabs__tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: var(--transactions-space-md);
+  right: var(--transactions-space-md);
+  bottom: calc(-1 * var(--transactions-space-2xs) - 1px);
+  height: 2px;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-primary);
+}
+
+.ui-tabs__tab:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.ui-tab-pane {
+  padding-top: var(--transactions-space-lg);
+}
+
+/* ============================================
+ * Segmented
+ * ============================================ */
+
+.ui-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-minor-background);
+}
+
+.ui-segmented--block {
+  display: flex;
+  width: 100%;
+}
+
+.ui-segmented--block .ui-segmented__item {
+  flex: 1;
+}
+
+.ui-segmented__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-xs);
+  height: 30px;
+  padding: 0 var(--transactions-space-md);
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  color: var(--transactions-color-text-secondary);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transactions-transition-fast);
+}
+
+.ui-segmented__item:hover:not(:disabled) {
+  color: var(--transactions-color-text-major);
+}
+
+.ui-segmented__item.is-active {
+  background-color: var(--transactions-color-major-background);
+  color: var(--transactions-color-primary);
+  font-weight: 500;
+  box-shadow: var(--transactions-shadow-sm);
+}
+
+.ui-segmented__item:disabled {
+  cursor: not-allowed;
+  color: var(--transactions-color-text-disabled);
+}
+
+.ui-segmented__item:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 1px;
+}
+
+/* ============================================
+ * Switch
+ * ============================================ */
+
+.ui-switch-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.ui-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 40px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-border-l3);
+  cursor: pointer;
+  transition: background-color var(--transactions-transition-normal);
+}
+
+.ui-switch.is-checked {
+  background-color: var(--transactions-color-primary);
+}
+
+.ui-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ui-switch:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.ui-switch__handle {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-major-background);
+  box-shadow: var(--transactions-shadow-sm);
+  transition: transform var(--transactions-transition-normal);
+}
+
+.ui-switch.is-checked .ui-switch__handle {
+  transform: translateX(18px);
+}
+
+.ui-switch-field__label {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-major);
+}
+
+/* ============================================
+ * Popconfirm
+ * ============================================ */
+
+.ui-popconfirm {
+  position: relative;
+  display: inline-flex;
+}
+
+.ui-popconfirm__trigger {
+  display: inline-flex;
+}
+
+.ui-popconfirm__panel {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  left: 0;
+  min-width: 220px;
+  max-width: 300px;
+  padding: var(--transactions-space-md);
+  background-color: var(--transactions-color-elevated);
+  border: 1px solid var(--transactions-color-window-border);
+  /* DESIGN.md「Shapes」：popover / message 用 12px 圆角（菜单类仍是 8px） */
+  border-radius: var(--transactions-radius-lg);
+  box-shadow: var(--transactions-shadow-lg);
+}
+
+.ui-popconfirm--end .ui-popconfirm__panel {
+  left: auto;
+  right: 0;
+}
+
+.ui-popconfirm__header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--transactions-space-sm);
+  color: var(--transactions-color-warning);
+}
+
+.ui-popconfirm__title {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  font-weight: 500;
+  color: var(--transactions-color-text-major);
+  line-height: var(--transactions-height-snug);
+}
+
+.ui-popconfirm__description {
+  margin: var(--transactions-space-sm) 0 0 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  line-height: var(--transactions-height-snug);
+}
+
+.ui-popconfirm__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-md);
+}
+
+/* ============================================
+ * Dropdown
+ * ============================================ */
+
+.ui-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+.ui-dropdown__trigger {
+  display: inline-flex;
+}
+
+.ui-dropdown__panel {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  left: 0;
+  min-width: 140px;
+  padding: var(--transactions-space-xs);
+  background-color: var(--transactions-color-elevated);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  box-shadow: var(--transactions-shadow-lg);
+}
+
+.ui-dropdown--end .ui-dropdown__panel {
+  left: auto;
+  right: 0;
+}
+
+.ui-dropdown__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transactions-transition-fast);
+}
+
+.ui-dropdown__item:hover:not(:disabled) {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.ui-dropdown__item.is-danger {
+  color: var(--transactions-color-expense);
+}
+
+.ui-dropdown__item.is-danger:hover:not(:disabled) {
+  background-color: var(--transactions-color-danger-hover-bg);
+}
+
+.ui-dropdown__item:disabled {
+  color: var(--transactions-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.ui-dropdown__divider {
+  height: 1px;
+  margin: var(--transactions-space-xs) 0;
+  background-color: var(--transactions-color-divider);
+}
+
+/* ============================================
+ * Popover
+ * ============================================ */
+
+.ui-popover {
+  position: relative;
+  display: inline-flex;
+}
+
+.ui-popover__trigger {
+  display: inline-flex;
+}
+
+.ui-popover__panel {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  left: 0;
+  min-width: 200px;
+  max-width: 360px;
+  padding: var(--transactions-space-md);
+  background-color: var(--transactions-color-elevated);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-lg);
+  box-shadow: var(--transactions-shadow-lg);
+}
+
+.ui-popover--end .ui-popover__panel {
+  left: auto;
+  right: 0;
+}
+
+.ui-popover__title {
+  margin: 0 0 var(--transactions-space-sm) 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  font-weight: 500;
+  color: var(--transactions-color-text-major);
+}
+
+.ui-popover__content {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+}
+
+/* ============================================
+ * FloatButton
+ * ============================================ */
+
+.ui-float-button {
+  position: fixed;
+  right: var(--transactions-space-xl);
+  bottom: calc(var(--transactions-size-footer-height) + var(--transactions-space-xl));
+  z-index: 900;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: none;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+  box-shadow: var(--transactions-shadow-lg);
+  cursor: pointer;
+  transition: all var(--transactions-transition-normal);
+}
+
+.ui-float-button:hover {
+  background-color: var(--transactions-color-primary-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--transactions-shadow-xl);
+}
+
+.ui-float-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.ui-float-button:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+/* ============================================
+ * Drawer
+ * ============================================ */
+
+.ui-drawer__mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: flex-end;
+  background-color: var(--transactions-color-hover-bg);
+  animation: tr-fade-in var(--transactions-transition-fast);
+}
+
+.ui-drawer__content {
+  display: flex;
+  flex-direction: column;
+  width: 420px;
+  max-width: 100%;
+  height: 100%;
+  background-color: var(--transactions-color-major-background);
+  border-left: 1px solid var(--transactions-color-window-border);
+  box-shadow: var(--transactions-shadow-xl);
+  animation: ui-drawer-in var(--transactions-transition-normal);
+}
+
+.ui-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-md);
+  padding: var(--transactions-space-lg) var(--transactions-space-xl);
+  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+.ui-drawer__title {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-title-sm);
+  font-weight: 600;
+  color: var(--transactions-color-text-major);
+}
+
+.ui-drawer__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--transactions-space-xl);
+}
+
+.ui-drawer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-lg) var(--transactions-space-xl);
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+.ui-drawer__footer.is-hidden {
+  display: none;
+}
+
+@keyframes ui-drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* ============================================
+ * Divider
+ * ============================================ */
+
+.ui-divider--horizontal {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-md);
+  width: 100%;
+  margin: var(--transactions-space-lg) 0;
+}
+
+.ui-divider--horizontal .ui-divider__line {
+  flex: 1;
+  height: 1px;
+  background-color: var(--transactions-color-divider);
+}
+
+.ui-divider--vertical {
+  display: inline-flex;
+  width: 1px;
+  height: 1em;
+  margin: 0 var(--transactions-space-sm);
+  background-color: var(--transactions-color-divider);
+}
+
+.ui-divider--vertical .ui-divider__line {
+  display: none;
+}
+
+.ui-divider__text {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* ============================================
+ * Checkbox / CheckboxGroup
+ * ============================================ */
+
+.ui-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  cursor: pointer;
+}
+
+.ui-checkbox__box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--transactions-color-border-l3);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-major-background);
+  cursor: pointer;
+  transition: all var(--transactions-transition-fast);
+  flex-shrink: 0;
+}
+
+.ui-checkbox__box.is-checked {
+  border-color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+}
+
+.ui-checkbox__box:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ui-checkbox__box:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.ui-checkbox__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ui-checkbox__mark svg {
+  width: 10px;
+  height: 10px;
+}
+
+.ui-checkbox__label {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-major);
+  user-select: none;
+}
+
+.ui-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-xs) var(--transactions-space-lg);
+}
+
+.ui-checkbox-group__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  cursor: pointer;
+}
+
+.ui-checkbox-group__item:disabled {
+  cursor: not-allowed;
+  color: var(--transactions-color-text-disabled);
+}
+
+.ui-checkbox-group__item:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+  border-radius: var(--transactions-radius-sm);
+}
+
+/* ============================================
+ * Progress
+ * ============================================ */
+
+.ui-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-md);
+  width: 100%;
+}
+
+.ui-progress__track {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-minor-background);
+  overflow: hidden;
+}
+
+.ui-progress__bar {
+  height: 100%;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-primary);
+  transition: width var(--transactions-transition-normal);
+}
+
+.ui-progress__text {
+  min-width: 40px;
+  text-align: right;
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+/* ============================================
+ * DatePicker / DateRangePicker
+ * ============================================ */
+
+.ui-date-picker {
+  position: relative;
+  width: 100%;
+}
+
+.ui-date-picker__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  width: 100%;
+  height: var(--transactions-btn-height-md);
+  padding: 0 var(--transactions-space-md);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-major-background);
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--transactions-transition-fast),
+    box-shadow var(--transactions-transition-fast);
+}
+
+.ui-date-picker__trigger:hover {
+  border-color: var(--transactions-color-border-l2);
+}
+
+.ui-date-picker__trigger:focus-visible,
+.ui-date-picker.is-open .ui-date-picker__trigger {
+  outline: none;
+  border-color: var(--transactions-color-primary);
+  box-shadow: var(--transactions-shadow-focus);
+}
+
+.ui-date-picker__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.ui-date-picker__value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-body-sm);
+}
+
+.ui-date-picker__value.is-placeholder {
+  font-family: var(--transactions-font-body);
+  color: var(--transactions-color-text-disabled);
+}
+
+.ui-date-picker__dropdown {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  left: 0;
+  padding: var(--transactions-space-md);
+  background-color: var(--transactions-color-elevated);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-lg);
+  box-shadow: var(--transactions-shadow-lg);
+}
+
+.ui-date-picker__panel {
+  width: 252px;
+}
+
+.ui-date-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.ui-date-picker__nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  color: var(--transactions-color-icon);
+  cursor: pointer;
+  transition: all var(--transactions-transition-fast);
+}
+
+.ui-date-picker__nav:hover {
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-text-major);
+}
+
+.ui-date-picker__nav svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ui-date-picker__title {
+  flex: 1;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.ui-date-picker__weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: var(--transactions-space-xs);
+}
+
+.ui-date-picker__weekdays span {
+  text-align: center;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-small);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.ui-date-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.ui-date-picker__cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  cursor: pointer;
+  transition: all var(--transactions-transition-fast);
+}
+
+.ui-date-picker__cell:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.ui-date-picker__cell.is-outside {
+  color: var(--transactions-color-text-disabled);
+}
+
+.ui-date-picker__cell.is-today {
+  box-shadow: inset 0 0 0 1px var(--transactions-color-primary-200);
+}
+
+.ui-date-picker__cell.is-in-range {
+  background-color: var(--transactions-color-primary-tint);
+  border-radius: 0;
+}
+
+.ui-date-picker__cell.is-selected {
+  background-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+  font-weight: 500;
+}
+
+.ui-date-picker__cell:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 1px;
+}
+
+.ui-date-picker__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-md);
+  margin-top: var(--transactions-space-sm);
+  padding-top: var(--transactions-space-sm);
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+.ui-date-picker__hint {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+/* ============================================
+ * DragSort —— 列表拖拽排序
+ * ============================================ */
+
+.ui-drag-item {
+  position: relative;
+}
+
+.ui-drag-item[draggable='true'] {
+  cursor: grab;
+}
+
+.ui-drag-item[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.ui-drag-item.is-dragging {
+  opacity: 0.45;
+}
+
+/* 落点指示线：主色 2px，贴在项的上沿 */
+.ui-drag-item.is-over::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 2px;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-primary);
+}
+
+.ui-popover__panel.is-hidden {
+  display: none;
+}
+
+/* 通用隐藏类：给"常驻 DOM + 显隐切换"的浮层用（避免 `Show` 造成的 FnOnce 约束）*/
+.ui-btn.is-hidden,
+.ui-popover__panel.is-hidden,
+.ui-popconfirm__panel.is-hidden {
+  display: none;
+}
+
+/* ============================================
+ * DESIGN.md「Do」：尊重 prefers-reduced-motion
+ * 统一关掉 P6-a 组件的过渡与进场动画（旋转指示器已有独立规则）
+ * ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  .ui-tabs__tab,
+  .ui-segmented__item,
+  .ui-switch,
+  .ui-switch__handle,
+  .ui-checkbox__box,
+  .ui-progress__bar,
+  .ui-float-button,
+  .ui-date-picker__trigger,
+  .ui-date-picker__cell,
+  .ui-date-picker__nav,
+  .ui-dropdown__item {
+    transition: none;
+  }
+
+  .ui-drawer__mask,
+  .ui-drawer__content {
+    animation: none;
+  }
+}

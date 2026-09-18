@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Transactions</title>
+    <!--
+      界面为 Rust/Leptos 编译的 WASM，由 trunk 打进 dist/。
+
+      主题：<html> 上**不写死** data-theme。外观设置（config_get 的 appearance）由外壳在
+      挂载后写入 data-theme="light|dark"；在写入之前，tokens.css 里的
+      `@media (prefers-color-scheme: dark) { html:not([data-theme]) { ... } }`
+      会跟随系统偏好 —— 与原 `_variables.scss` 的兜底规则一致。
+
+      样式按原 SCSS 的职责拆分：
+        tokens.css —— `_variables.scss` 的全部 --transactions-* 令牌
+        fonts.css  —— `_typography.scss` 顶部的 6 个 @fontsource 引入（改为本地 woff2）
+        base.css   —— index.scss / _typography / _mixins / _layout / _components
+        ui.css     —— 自有组件套件（button/input/select/modal/tag/tooltip/empty/spin
+                      + P6-a 的 table/form/tabs/segmented/switch/popconfirm/date-picker/
+                      dropdown/popover/float-button/drawer/divider/checkbox/progress/drag-sort
+                      + P6-b 的 textarea/markdown/chart/image-picker/upload-progress）
+        app.css    —— 外壳（Layout/AppLeftBar/AppTopBar/AppBottomBar）与页面通用骨架
+        页面级样式 —— transactions.css / category_tag.css / settings.css
+                      / key_event.css / diary.css / stock.css / data_analysis.css（一页一文件）
+    -->
+    <link data-trunk rel="rust" />
+    <link data-trunk rel="css" href="static/css/tokens.css" />
+    <link data-trunk rel="css" href="static/css/fonts.css" />
+    <link data-trunk rel="css" href="static/css/base.css" />
+    <link data-trunk rel="css" href="static/css/ui.css" />
+    <link data-trunk rel="css" href="static/css/app.css" />
+    <link data-trunk rel="css" href="static/css/transactions.css" />
+    <link data-trunk rel="css" href="static/css/category_tag.css" />
+    <link data-trunk rel="css" href="static/css/settings.css" />
+    <link data-trunk rel="css" href="static/css/key_event.css" />
+    <link data-trunk rel="css" href="static/css/diary.css" />
+    <link data-trunk rel="css" href="static/css/stock.css" />
+    <link data-trunk rel="css" href="static/css/data_analysis.css" />
+    <!--
+      字体与图标按原样拷进 dist（不参与 hash 重命名）：
+      样式表被 trunk 放在 dist 根目录，因此 fonts.css / app.css 里的相对路径写作 ./fonts/...
+      原项目自绘的 app/src/assets/icons/*.svg 已原样复制到 static/icons/，
+      供后续阶段（图片查看器、工具栏）直接以 URL 引用；导航图标是内联 SVG（见 src/icons.rs）。
+    -->
+    <link data-trunk rel="copy-dir" href="static/fonts" />
+    <link data-trunk rel="copy-dir" href="static/icons" />
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>

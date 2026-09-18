@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "主窗口与初始化窗口的能力：窗口自绘控制、对话框、外链打开、更新与重启。",
+  "windows": ["main", "init"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-theme",
+    "core:window:allow-set-focus",
+    "core:event:default",
+    "dialog:default",
+    "opener:default",
+    "process:default"
+  ]
+}

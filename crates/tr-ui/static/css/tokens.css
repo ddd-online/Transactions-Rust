@@ -1,0 +1,367 @@
+/* ============================================
+ * Transactions 设计令牌（Design Tokens）
+ * 原项目 `app/src/styles/_variables.scss` 的纯 CSS 逐条移植。
+ *
+ * 命名规则（对应原 SCSS 的 `@mixin emit-theme($map)`）：
+ *   --transactions-#{$key}: #{$value}
+ * 因此 `$light` / `$dark` 里的每一个键都变成 `--transactions-<key>`，取值一字不改。
+ *
+ * 主题切换：
+ *   * 浅色（默认）→ `:root`
+ *   * 深色        → `<html data-theme="dark">`
+ *   * 兜底        → 未显式设置 data-theme 时跟随系统（`prefers-color-scheme: dark`
+ *                   作用于 `html:not([data-theme])`，与原 SCSS 完全一致）
+ *
+ * 计数（与原 SCSS 对照用）：主题色 67 × 2 = 134，主题无关令牌 54，合计 188。
+ * ============================================ */
+
+/* ============================================
+ * 浅色主题（默认）
+ * ============================================ */
+:root {
+  /* Brand — DeepSeek blue */
+  --transactions-color-primary: #3964fe;
+  --transactions-color-primary-light: #5b7fff;
+  --transactions-color-primary-hover: #5b7fff;
+  --transactions-color-primary-active: #2b52e6;
+  --transactions-color-primary-200: #a9bdff;
+  --transactions-color-primary-tint: rgba(57, 100, 254, 0.08);
+
+  /* Secondary / accent（amber = 警示角色） */
+  --transactions-color-secondary: #61666b;
+  --transactions-color-accent: #d97706;
+  --transactions-color-accent-light: #f59e0b;
+  --transactions-color-accent-hover: #b45309;
+
+  /* Semantic — 仅用于交易数据（Semantic Silo 规则） */
+  --transactions-color-income: #16a34a;
+  --transactions-color-expense: #dc2626;
+  --transactions-color-transfer: #3b82f6;
+  --transactions-color-outlier: #d97706;
+
+  /* Semantic tints — 10% 标签/胶囊底色 */
+  --transactions-color-income-tint: rgba(22, 163, 74, 0.10);
+  --transactions-color-expense-tint: rgba(220, 38, 38, 0.10);
+  --transactions-color-transfer-tint: rgba(59, 130, 246, 0.10);
+  --transactions-color-outlier-tint: rgba(217, 119, 6, 0.10);
+  --transactions-color-outlier-tint-strong: rgba(217, 119, 6, 0.18);
+
+  /* UI state */
+  --transactions-color-success: #16a34a;
+  --transactions-color-warning: #d97706;
+  --transactions-color-positive: #16a34a;
+  --transactions-color-negative: #dc2626;
+
+  /* Backgrounds — 冷灰层级 */
+  --transactions-color-bg-base: #f9fafb;
+  --transactions-color-major-background: #ffffff;
+  --transactions-color-major-warm: #f9fafb;
+  --transactions-color-minor-background: #f3f4f6;
+  --transactions-color-sidebar-fill: #f3f4f6;
+  --transactions-color-elevated: #ffffff;
+
+  /* Borders — 发丝线 l1/l2/l3 */
+  --transactions-color-window-border: #e8eaed;
+  --transactions-color-divider: #eceef1;
+  --transactions-color-border-l1: #e8eaed;
+  --transactions-color-border-l2: #e2e4e8;
+  --transactions-color-border-l3: #d5d8dd;
+
+  /* Text — 四级 */
+  --transactions-color-text-major: #0f1115;
+  --transactions-color-text-secondary: #61666b;
+  --transactions-color-text-tertiary: #81858c;
+  --transactions-color-text-disabled: #9aa0a8;
+  --transactions-color-text-inverse: #ffffff;
+
+  /* Icons */
+  --transactions-color-icon: #61666b;
+  --transactions-color-icon-hover: #0f1115;
+  --transactions-color-icon-active: #3964fe;
+
+  /* Interactive fills */
+  --transactions-color-hover-bg: rgba(15, 17, 21, 0.06);
+  --transactions-color-active-bg: rgba(57, 100, 254, 0.10);
+  --transactions-color-danger-hover-bg: rgba(220, 38, 38, 0.10);
+
+  /* Chat bubble（DSH specific-bubble） */
+  --transactions-color-bubble: #eef0f4;
+
+  /* Code blocks（markdown） */
+  --transactions-color-markdown-code-block: #f4f5f7;
+
+  /* Scrollbar — 冷灰滑块 */
+  --transactions-color-scrollbar-thumb: rgba(15, 17, 21, 0.18);
+  --transactions-color-scrollbar-thumb-hover: rgba(15, 17, 21, 0.40);
+
+  /* Shadows — lv1..lv4 */
+  --transactions-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --transactions-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --transactions-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.10);
+  --transactions-shadow-xl: 0 16px 40px rgba(0, 0, 0, 0.14);
+  --transactions-shadow-focus: 0 0 0 2px rgba(57, 100, 254, 0.25);
+  --transactions-shadow-lv1: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --transactions-shadow-lv2: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --transactions-shadow-lv3: 0 8px 24px rgba(0, 0, 0, 0.10);
+  --transactions-shadow-lv4: 0 16px 40px rgba(0, 0, 0, 0.14);
+
+  /* Ledger identity palette（账本身份色 — 8 个自然色调） */
+  --transactions-ledger-forest: #4a8e70;
+  --transactions-ledger-warm-brown: #8c7b6e;
+  --transactions-ledger-amber: #c6963a;
+  --transactions-ledger-vermillion: #d9705a;
+  --transactions-ledger-slate-blue: #5c8db5;
+  --transactions-ledger-ochre: #9e8c7e;
+  --transactions-ledger-moss: #6b9e7e;
+  --transactions-ledger-camel: #b89a80;
+
+  /* ---------- 字体族（原 _typography.scss 的 :root 块） ---------- */
+  --transactions-font-display: 'Inter', system-ui, -apple-system, sans-serif;
+  --transactions-font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --transactions-font-mono: 'JetBrains Mono', 'SF Mono', Consolas, 'Courier New', monospace;
+
+  /* ---------- Typography（$font-sizes / $font-weights / $line-heights） ---------- */
+  --transactions-size-text-display-xl: 36px;
+  --transactions-size-text-display: 28px;
+  --transactions-size-text-display-sm: 24px;
+  --transactions-size-text-title: 20px;
+  --transactions-size-text-title-sm: 18px;
+  --transactions-size-text-section: 16px;
+  --transactions-size-text-body: 14px;
+  --transactions-size-text-body-sm: 13px;
+  --transactions-size-text-caption: 12px;
+  --transactions-size-text-small: 11px;
+
+  --transactions-weight-regular: 400;
+  --transactions-weight-medium: 500;
+  --transactions-weight-semibold: 600;
+  --transactions-weight-bold: 700;
+
+  --transactions-height-tight: 1.2;
+  --transactions-height-snug: 1.4;
+  --transactions-height-normal: 1.6;
+  --transactions-height-relaxed: 1.8;
+
+  /* ---------- Spacing（$spacing，8px 基准） ---------- */
+  --transactions-space-2xs: 2px;
+  --transactions-space-xs: 4px;
+  --transactions-space-sm: 8px;
+  --transactions-space-md: 12px;
+  --transactions-space-lg: 16px;
+  --transactions-space-xl: 24px;
+  --transactions-space-2xl: 32px;
+  --transactions-space-3xl: 48px;
+
+  /* ---------- Layout（$layout-sizes） ---------- */
+  --transactions-size-header-height: 48px;
+  --transactions-size-sider-width: 56px;
+  --transactions-size-footer-height: 44px;
+  --transactions-size-content-padding: 20px;
+
+  /* ---------- Border radius（$border-radius） ---------- */
+  --transactions-radius-sm: 6px;
+  --transactions-radius-md: 8px;
+  --transactions-radius-lg: 12px;
+  --transactions-radius-xl: 16px;
+  --transactions-radius-full: 9999px;
+  --transactions-radius-chat: 20px;
+
+  /* ---------- Transitions（$transitions） ---------- */
+  --transactions-transition-fast: 150ms ease;
+  --transactions-transition-normal: 200ms ease;
+  --transactions-transition-slow: 300ms ease;
+  --transactions-transition-smooth: 300ms cubic-bezier(0.25, 1, 0.5, 1);
+
+  /* ---------- Button ---------- */
+  --transactions-btn-height-sm: 28px;
+  --transactions-btn-height-md: 36px;
+  --transactions-btn-height-lg: 44px;
+  --transactions-btn-min-width: 72px;
+  --transactions-btn-padding-h-sm: 12px;
+  --transactions-btn-padding-h-md: 16px;
+  --transactions-btn-padding-h-lg: 24px;
+  --transactions-btn-font-size-sm: 13px;
+  --transactions-btn-font-size-md: 14px;
+  --transactions-btn-font-size-lg: 16px;
+
+  /* 动效专用缓动：落地感（exponential ease-out），用于“数据落定”类进场 */
+  --transactions-ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ============================================
+ * 深色主题 —— 变量名相同，取值不同
+ * 由外观设置写入 `<html data-theme="dark">`。
+ * ============================================ */
+[data-theme='dark'] {
+  --transactions-color-primary: #3964fe;
+  --transactions-color-primary-light: #6b8aff;
+  --transactions-color-primary-hover: #6b8aff;
+  --transactions-color-primary-active: #2b52e6;
+  --transactions-color-primary-200: #a9bdff;
+  --transactions-color-primary-tint: rgba(57, 100, 254, 0.16);
+
+  --transactions-color-secondary: #b6bcc6;
+  --transactions-color-accent: #fbbf24;
+  --transactions-color-accent-light: #fcd34d;
+  --transactions-color-accent-hover: #f59e0b;
+
+  --transactions-color-income: #4ade80;
+  --transactions-color-expense: #f87171;
+  --transactions-color-transfer: #60a5fa;
+  --transactions-color-outlier: #fbbf24;
+
+  --transactions-color-income-tint: rgba(74, 222, 128, 0.14);
+  --transactions-color-expense-tint: rgba(248, 113, 113, 0.14);
+  --transactions-color-transfer-tint: rgba(96, 165, 250, 0.14);
+  --transactions-color-outlier-tint: rgba(251, 191, 36, 0.14);
+  --transactions-color-outlier-tint-strong: rgba(251, 191, 36, 0.22);
+
+  --transactions-color-success: #4ade80;
+  --transactions-color-warning: #fbbf24;
+  --transactions-color-positive: #4ade80;
+  --transactions-color-negative: #f87171;
+
+  --transactions-color-bg-base: #0f1115;
+  --transactions-color-major-background: #16181d;
+  --transactions-color-major-warm: #0f1115;
+  --transactions-color-minor-background: #14161a;
+  --transactions-color-sidebar-fill: #14161a;
+  --transactions-color-elevated: #1d2026;
+
+  --transactions-color-window-border: rgba(255, 255, 255, 0.08);
+  --transactions-color-divider: rgba(255, 255, 255, 0.08);
+  --transactions-color-border-l1: rgba(255, 255, 255, 0.08);
+  --transactions-color-border-l2: rgba(255, 255, 255, 0.12);
+  --transactions-color-border-l3: rgba(255, 255, 255, 0.18);
+
+  --transactions-color-text-major: #f2f4f8;
+  --transactions-color-text-secondary: #b6bcc6;
+  --transactions-color-text-tertiary: #8a919c;
+  --transactions-color-text-disabled: #6b7280;
+  --transactions-color-text-inverse: #ffffff;
+
+  --transactions-color-icon: #b6bcc6;
+  --transactions-color-icon-hover: #f2f4f8;
+  --transactions-color-icon-active: #6b8aff;
+
+  --transactions-color-hover-bg: rgba(255, 255, 255, 0.08);
+  --transactions-color-active-bg: rgba(57, 100, 254, 0.22);
+  --transactions-color-danger-hover-bg: rgba(248, 113, 113, 0.14);
+
+  --transactions-color-bubble: #24282f;
+
+  --transactions-color-markdown-code-block: #1d2026;
+
+  --transactions-color-scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --transactions-color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.40);
+
+  --transactions-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --transactions-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --transactions-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --transactions-shadow-xl: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --transactions-shadow-focus: 0 0 0 2px rgba(57, 100, 254, 0.45);
+  --transactions-shadow-lv1: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --transactions-shadow-lv2: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --transactions-shadow-lv3: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --transactions-shadow-lv4: 0 16px 40px rgba(0, 0, 0, 0.55);
+
+  /* Ledger identity — 深色表面提亮以保证可读性 */
+  --transactions-ledger-forest: #5d9e80;
+  --transactions-ledger-warm-brown: #a2907f;
+  --transactions-ledger-amber: #d4ae5e;
+  --transactions-ledger-vermillion: #e08a74;
+  --transactions-ledger-slate-blue: #74a0c8;
+  --transactions-ledger-ochre: #b0a092;
+  --transactions-ledger-moss: #82b096;
+  --transactions-ledger-camel: #c8ae94;
+}
+
+/* ============================================
+ * 系统跟随兜底：还没有显式 data-theme 时（例如初始化窗口），
+ * 直接遵从操作系统偏好。与 `_variables.scss` 的
+ * `@media (prefers-color-scheme: dark) { html:not([data-theme]) { ... } }` 一致。
+ * ============================================ */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    --transactions-color-primary: #3964fe;
+    --transactions-color-primary-light: #6b8aff;
+    --transactions-color-primary-hover: #6b8aff;
+    --transactions-color-primary-active: #2b52e6;
+    --transactions-color-primary-200: #a9bdff;
+    --transactions-color-primary-tint: rgba(57, 100, 254, 0.16);
+
+    --transactions-color-secondary: #b6bcc6;
+    --transactions-color-accent: #fbbf24;
+    --transactions-color-accent-light: #fcd34d;
+    --transactions-color-accent-hover: #f59e0b;
+
+    --transactions-color-income: #4ade80;
+    --transactions-color-expense: #f87171;
+    --transactions-color-transfer: #60a5fa;
+    --transactions-color-outlier: #fbbf24;
+
+    --transactions-color-income-tint: rgba(74, 222, 128, 0.14);
+    --transactions-color-expense-tint: rgba(248, 113, 113, 0.14);
+    --transactions-color-transfer-tint: rgba(96, 165, 250, 0.14);
+    --transactions-color-outlier-tint: rgba(251, 191, 36, 0.14);
+    --transactions-color-outlier-tint-strong: rgba(251, 191, 36, 0.22);
+
+    --transactions-color-success: #4ade80;
+    --transactions-color-warning: #fbbf24;
+    --transactions-color-positive: #4ade80;
+    --transactions-color-negative: #f87171;
+
+    --transactions-color-bg-base: #0f1115;
+    --transactions-color-major-background: #16181d;
+    --transactions-color-major-warm: #0f1115;
+    --transactions-color-minor-background: #14161a;
+    --transactions-color-sidebar-fill: #14161a;
+    --transactions-color-elevated: #1d2026;
+
+    --transactions-color-window-border: rgba(255, 255, 255, 0.08);
+    --transactions-color-divider: rgba(255, 255, 255, 0.08);
+    --transactions-color-border-l1: rgba(255, 255, 255, 0.08);
+    --transactions-color-border-l2: rgba(255, 255, 255, 0.12);
+    --transactions-color-border-l3: rgba(255, 255, 255, 0.18);
+
+    --transactions-color-text-major: #f2f4f8;
+    --transactions-color-text-secondary: #b6bcc6;
+    --transactions-color-text-tertiary: #8a919c;
+    --transactions-color-text-disabled: #6b7280;
+    --transactions-color-text-inverse: #ffffff;
+
+    --transactions-color-icon: #b6bcc6;
+    --transactions-color-icon-hover: #f2f4f8;
+    --transactions-color-icon-active: #6b8aff;
+
+    --transactions-color-hover-bg: rgba(255, 255, 255, 0.08);
+    --transactions-color-active-bg: rgba(57, 100, 254, 0.22);
+    --transactions-color-danger-hover-bg: rgba(248, 113, 113, 0.14);
+
+    --transactions-color-bubble: #24282f;
+
+    --transactions-color-markdown-code-block: #1d2026;
+
+    --transactions-color-scrollbar-thumb: rgba(255, 255, 255, 0.18);
+    --transactions-color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.40);
+
+    --transactions-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+    --transactions-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+    --transactions-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --transactions-shadow-xl: 0 16px 40px rgba(0, 0, 0, 0.55);
+    --transactions-shadow-focus: 0 0 0 2px rgba(57, 100, 254, 0.45);
+    --transactions-shadow-lv1: 0 1px 2px rgba(0, 0, 0, 0.30);
+    --transactions-shadow-lv2: 0 4px 12px rgba(0, 0, 0, 0.35);
+    --transactions-shadow-lv3: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --transactions-shadow-lv4: 0 16px 40px rgba(0, 0, 0, 0.55);
+
+    --transactions-ledger-forest: #5d9e80;
+    --transactions-ledger-warm-brown: #a2907f;
+    --transactions-ledger-amber: #d4ae5e;
+    --transactions-ledger-vermillion: #e08a74;
+    --transactions-ledger-slate-blue: #74a0c8;
+    --transactions-ledger-ochre: #b0a092;
+    --transactions-ledger-moss: #82b096;
+    --transactions-ledger-camel: #c8ae94;
+  }
+}

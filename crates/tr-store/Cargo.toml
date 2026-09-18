@@ -1,0 +1,17 @@
+[package]
+name = "tr-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 存储层：工作空间（SQLite）+ 各 Dao。
+# 只负责"最新 schema"的建库与读写，**不包含任何 schema 迁移逻辑**（见 src/schema.rs 的纪律说明）。
+[dependencies]
+tr-domain = { workspace = true }
+# bundled：自带 SQLite 源码静态编译，不依赖系统 sqlite3（与 Go 版"纯内置 SQLite"的部署特性一致）
+rusqlite = { version = "0.40", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.35"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"

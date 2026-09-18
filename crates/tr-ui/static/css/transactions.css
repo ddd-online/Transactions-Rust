@@ -1,0 +1,776 @@
+/* ============================================
+ * 消费记录页专属样式（P6-a 写操作扩展）
+ *
+ * 底样式在 base.css（`.table-wrapper`）与 app.css（`.tr-*`）；
+ * 这里只放本轮的：时间范围选择器、记录弹窗、筛选弹窗、排序弹窗、
+ * 行内操作列、标签多选、同步气泡、悬浮按钮。
+ *
+ * 类名前缀一律 `tr-`，且避开 app.css 里已有的 `.tr-*`
+ * （toolbar / body / content / footer / pagination / table / cell 系列）。
+ * 取值只用 `--transactions-*` 令牌，禁止裸 hex / rgb。
+ * ============================================ */
+
+/* ============================================
+ * 1. 时间范围选择器（原 TransactionsTimeRangePicker.vue）
+ *    高 32px 的横向 flex，gap 8px
+ * ============================================ */
+
+.tr-time {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  height: 32px;
+}
+
+.tr-time__nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-icon);
+  cursor: pointer;
+  transition: all var(--transactions-transition-fast);
+}
+
+.tr-time__nav:hover {
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-icon-hover);
+}
+
+.tr-time__nav:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.tr-time__field {
+  position: relative;
+  display: inline-flex;
+}
+
+.tr-time__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  height: 32px;
+  min-width: 190px;
+  padding: 0 var(--transactions-space-sm);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-major-background);
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: border-color var(--transactions-transition-fast);
+}
+
+.tr-time__trigger:hover {
+  border-color: var(--transactions-color-primary);
+}
+
+.tr-time__field.is-open .tr-time__trigger {
+  border-color: var(--transactions-color-primary);
+}
+
+.tr-time__value {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tr-time__panel {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  left: 0;
+  min-width: 280px;
+  padding: var(--transactions-space-md);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-elevated);
+  box-shadow: var(--transactions-shadow-lg);
+}
+
+/* 面板内嵌的区间选择器：去掉自带的下拉定位，直接作为面板内容 */
+.tr-time__panel .ui-date-range-picker .ui-date-picker__dropdown {
+  position: static;
+  margin-top: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+.tr-time__panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.tr-time__panel-title {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: 500;
+  color: var(--transactions-color-text-major);
+}
+
+.tr-time__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--transactions-space-xs);
+}
+
+.tr-time__grid--year {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.tr-time__cell {
+  height: 32px;
+  padding: 0 var(--transactions-space-sm);
+  border: 1px solid transparent;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  cursor: pointer;
+  transition: all var(--transactions-transition-fast);
+}
+
+.tr-time__cell:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.tr-time__cell.is-active {
+  border-color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.tr-time__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-xs);
+  margin-top: var(--transactions-space-md);
+  padding-top: var(--transactions-space-sm);
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+.tr-time__preset {
+  padding: var(--transactions-space-2xs) var(--transactions-space-sm);
+  border: none;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-primary);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  cursor: pointer;
+  transition: background-color var(--transactions-transition-fast);
+}
+
+.tr-time__preset:hover {
+  background-color: var(--transactions-color-primary-tint);
+}
+
+/* ============================================
+ * 2. 悬浮按钮（原文 .float-primary / .float-secondary / .float-sort）
+ * ============================================ */
+
+.tr-float-primary {
+  right: 40px;
+  bottom: 72px;
+}
+
+.tr-float-secondary {
+  right: 100px;
+  bottom: 72px;
+  border: 1px solid var(--transactions-color-window-border);
+  background-color: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-major);
+  box-shadow: var(--transactions-shadow-sm);
+}
+
+.tr-float-secondary:hover {
+  border-color: var(--transactions-color-border-l2);
+  background-color: var(--transactions-color-major-background);
+  box-shadow: var(--transactions-shadow-md);
+}
+
+.tr-float-sort {
+  right: 160px;
+  bottom: 72px;
+  border: 1px solid var(--transactions-color-window-border);
+  background-color: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-major);
+  box-shadow: var(--transactions-shadow-sm);
+}
+
+.tr-float-sort:hover {
+  border-color: var(--transactions-color-border-l2);
+  background-color: var(--transactions-color-major-background);
+  box-shadow: var(--transactions-shadow-md);
+}
+
+.tr-float-primary:active,
+.tr-float-secondary:active,
+.tr-float-sort:active {
+  transform: scale(0.94);
+}
+
+.tr-float-sort-icon,
+.tr-float-secondary svg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 已添加筛选条件的计数徽标 */
+.tr-float-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--transactions-space-xs);
+  border: 2px solid var(--transactions-color-major-background);
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-small);
+  font-weight: var(--transactions-weight-semibold);
+  line-height: 1;
+}
+
+/* ============================================
+ * 3. 表格操作列（原 TransactionRecordTable.vue 的 .cell-actions）
+ * ============================================ */
+
+/* 标签单元格里的标签（原 .tag-item：中性底 + 次要文字） */
+.tr-cell-tags .tag-item {
+  border: none;
+  background-color: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-caption);
+}
+
+/* 已关联关键事件的星标（原标记列） */
+.tr-cell-mark {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-outlier);
+  font-size: var(--transactions-size-text-body);
+}
+
+.tr-cell-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-xs);
+}
+
+.tr-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-icon);
+  font-size: var(--transactions-size-text-body);
+  cursor: pointer;
+  transition: all var(--transactions-transition-fast);
+}
+
+.tr-action:hover:not(:disabled) {
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-icon-hover);
+}
+
+.tr-action:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.tr-action:disabled {
+  color: var(--transactions-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.tr-action--danger:hover:not(:disabled) {
+  background-color: var(--transactions-color-danger-hover-bg);
+  color: var(--transactions-color-expense);
+}
+
+.tr-sync {
+  position: relative;
+  display: inline-flex;
+}
+
+.tr-sync-icon {
+  display: inline-flex;
+}
+
+.tr-sync-icon.is-spinning {
+  animation: tr-spin 1s linear infinite;
+}
+
+@keyframes tr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 同步目标账本气泡（原 a-popover 的 .sync-popover-content） */
+.tr-sync-panel {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  right: 0;
+  min-width: 140px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--transactions-space-xs);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-elevated);
+  box-shadow: var(--transactions-shadow-lg);
+}
+
+.tr-sync-panel.is-hidden {
+  display: none;
+}
+
+.tr-sync-item {
+  display: block;
+  width: 100%;
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border: none;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--transactions-transition-fast);
+}
+
+.tr-sync-item:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.tr-sync-empty {
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  color: var(--transactions-color-text-secondary);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  white-space: nowrap;
+}
+
+/* 行内删除确认气泡右对齐，避免在表格右侧溢出 */
+.tr-cell-actions .ui-popconfirm--end .ui-popconfirm__panel {
+  left: auto;
+  right: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tr-sync-icon.is-spinning {
+    animation: none;
+  }
+}
+
+/* ============================================
+ * 4. 记一笔 / 编辑弹窗（原 TransactionRecordModal.vue）
+ * ============================================ */
+
+.tr-modal-form .ui-form-item__control > * {
+  width: 100%;
+}
+
+.tr-modal-template {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.tr-modal-template-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.tr-modal-full {
+  width: 100%;
+}
+
+.tr-modal-hint {
+  margin: var(--transactions-space-xs) 0 0 0;
+  font-size: var(--transactions-size-text-caption);
+  line-height: var(--transactions-height-snug);
+  color: var(--transactions-color-text-tertiary);
+}
+
+/* 金额输入：前缀「￥」+ 输入框 */
+.tr-modal-price {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.tr-modal-price-prefix {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 var(--transactions-space-md);
+  border: 1px solid var(--transactions-color-window-border);
+  border-right: none;
+  border-radius: var(--transactions-radius-md) 0 0 var(--transactions-radius-md);
+  background-color: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-secondary);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+}
+
+.tr-modal-price .ui-input {
+  flex: 1;
+}
+
+.tr-modal-price .ui-input__control {
+  border-radius: 0 var(--transactions-radius-md) var(--transactions-radius-md) 0;
+}
+
+/* 弹窗底栏（`Modal` 的 footer 被关掉，按钮放在内容里） */
+.tr-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-lg);
+  padding-top: var(--transactions-space-lg);
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+/* ============================================
+ * 5. 标签多选（TrCheckList，对应 a-select mode="multiple"）
+ * ============================================ */
+
+.tr-taglist {
+  position: relative;
+  width: 100%;
+}
+
+.tr-taglist__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  width: 100%;
+  min-height: 36px;
+  padding: var(--transactions-space-xs) var(--transactions-space-sm);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-major-background);
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transactions-transition-fast);
+}
+
+.tr-taglist__trigger:hover {
+  border-color: var(--transactions-color-primary);
+}
+
+.tr-taglist.is-open .tr-taglist__trigger {
+  border-color: var(--transactions-color-primary);
+}
+
+.tr-taglist__value {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  min-width: 0;
+}
+
+.tr-taglist__placeholder {
+  color: var(--transactions-color-text-disabled);
+}
+
+.tr-taglist__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-2xs);
+  max-width: 100%;
+  padding: 0 var(--transactions-space-xs);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-major);
+  font-size: var(--transactions-size-text-caption);
+  line-height: 20px;
+}
+
+.tr-taglist__chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tr-taglist__chip-close {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-icon);
+  cursor: pointer;
+}
+
+.tr-taglist__chip-close:hover {
+  color: var(--transactions-color-expense);
+}
+
+.tr-taglist__panel {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--transactions-space-xs);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-elevated);
+  box-shadow: var(--transactions-shadow-lg);
+}
+
+.tr-taglist__option {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  width: 100%;
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border: none;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transactions-transition-fast);
+}
+
+.tr-taglist__option:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.tr-taglist__option.is-selected {
+  color: var(--transactions-color-primary);
+}
+
+/* ============================================
+ * 6. 筛选弹窗（原 TransactionRecordFilter.vue）
+ * ============================================ */
+
+.tr-filter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-lg);
+}
+
+.tr-filter__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-xs);
+}
+
+.tr-filter__row {
+  display: flex;
+  gap: var(--transactions-space-lg);
+}
+
+.tr-filter__half {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-xs);
+  min-width: 0;
+}
+
+.tr-filter__label {
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+}
+
+.tr-filter__select {
+  width: 100%;
+}
+
+.tr-filter__add {
+  margin-top: var(--transactions-space-xs);
+}
+
+.tr-filter__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-sm);
+}
+
+.tr-filter__item {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border: 1px solid var(--transactions-color-divider);
+  border-radius: var(--transactions-radius-md);
+}
+
+.tr-filter__item-body {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  min-width: 0;
+}
+
+.tr-filter__separator {
+  color: var(--transactions-color-text-disabled);
+}
+
+.tr-filter__tags {
+  color: var(--transactions-color-text-major);
+  font-size: var(--transactions-size-text-body-sm);
+}
+
+.tr-filter__desc {
+  color: var(--transactions-color-text-secondary);
+  font-style: italic;
+  font-size: var(--transactions-size-text-body-sm);
+}
+
+.tr-filter__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-xs);
+  padding-top: var(--transactions-space-lg);
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+/* 条件面板里追加按钮独占一行 */
+.tr-filter > .ui-btn--block {
+  width: 100%;
+}
+
+/* ============================================
+ * 7. 排序弹窗（原 TrSortModal.vue）
+ * ============================================ */
+
+.tr-sort {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-md);
+}
+
+.tr-sort__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-md);
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.tr-sort__item {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.tr-sort__priority {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-semibold);
+}
+
+.tr-sort__select {
+  flex: 1;
+  min-width: 0;
+}
+
+.tr-sort__select--field {
+  flex: 1;
+}
+
+.tr-sort__select--order {
+  flex: 0 0 100px;
+}
+
+.tr-sort__add-icon {
+  display: inline-flex;
+  margin-right: var(--transactions-space-xs);
+}
+
+.tr-sort__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--transactions-space-sm);
+  padding-top: var(--transactions-space-lg);
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+/* ============================================
+ * 8. 关联关键事件弹窗
+ * ============================================ */
+
+.tr-link__footer {
+  display: flex;
+  justify-content: flex-start;
+}
+
+/* ============================================
+ * 9. 小屏收敛
+ * ============================================ */
+
+@media (max-width: 720px) {
+  .tr-time {
+    flex-wrap: wrap;
+    height: auto;
+  }
+
+  .tr-time__trigger {
+    min-width: 0;
+  }
+
+  .tr-filter__row {
+    flex-direction: column;
+    gap: var(--transactions-space-md);
+  }
+}

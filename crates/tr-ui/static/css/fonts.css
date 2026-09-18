@@ -1,0 +1,69 @@
+/* ============================================
+ * 字体：离线自托管（无 CDN）
+ *
+ * 对照原项目 `app/src/styles/_typography.scss` 顶部的 6 个 @fontsource 引入：
+ *   @use '@fontsource/inter/latin-400.css'            → Inter 400
+ *   @use '@fontsource/inter/latin-500.css'            → Inter 500
+ *   @use '@fontsource/inter/latin-600.css'            → Inter 600
+ *   @use '@fontsource/inter/latin-700.css'            → Inter 700
+ *   @use '@fontsource/jetbrains-mono/latin-400.css'   → JetBrains Mono 400
+ *   @use '@fontsource/jetbrains-mono/latin-500.css'   → JetBrains Mono 500
+ *
+ * 字重与字体族名逐条保持一致（`font-family: 'Inter'` / `'JetBrains Mono'`）；
+ * 只取 latin 子集（与原实现的 `latin-*.css` 相同），中日韩字形交由系统字体回退。
+ * woff2 文件从 `app/node_modules/@fontsource/*/files/` 复制而来，未做任何裁剪。
+ *
+ * 路径说明：trunk **不会**重写 CSS 里的 `url()`，而 `data-trunk rel="css"` 产出的样式表
+ * 落在 dist 根目录，因此这里的 `./fonts/...` 对应 `index.html` 里
+ * `<link data-trunk rel="copy-dir" href="static/fonts" />` 拷出来的 `dist/fonts/`。
+ * ============================================ */
+
+/* ---- Inter ---- */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('./fonts/inter-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('./fonts/inter-latin-500-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url('./fonts/inter-latin-600-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url('./fonts/inter-latin-700-normal.woff2') format('woff2');
+}
+
+/* ---- JetBrains Mono ---- */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('./fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('./fonts/jetbrains-mono-latin-500-normal.woff2') format('woff2');
+}
