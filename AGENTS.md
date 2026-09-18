@@ -176,6 +176,13 @@ cargo clippy --all-targets -- -D warnings
 
 ## 关键约定与陷阱
 
+- **SQL 只允许拼接常量**：列名/表名用 `const …_COLUMNS` 或常量数组（如 `STOCK_TABLES`），
+  **值一律走 `?` 占位符**（`instr(description, ?)` 也是占位符）；`ORDER BY` 的字段必须过**白名单**
+  （`build_sort_clause` 只认 `transactionAt/transactionType/price/category`，与原 `TrSortModal` 的 4 项一致），
+  排序方向强制 `asc|desc`。改 DAO 时别把请求里的字符串直接拼进 SQL。
+- **生产代码里的 `unwrap/expect/panic!` 必须有据可依**：允许的只有锁中毒
+  （`.expect("…锁中毒")`）、已校验不变式（月份 `1..=12`、`valid_up_to` 前缀、池在生命周期内有效）、
+  以及启动期构建失败（`main.rs`）。新增这类调用前先问"它真的不可失败吗"。
 - **金额恒为整数分**：数据库、IPC、算法全用 `i64` 分；只有展示层做分/元换算
   （`tr_domain::money`）。这两个换算函数的行为是硬契约（含负号、`.5` 输入）。
 - **数据兼容只针对最新 schema（v0.27+）**：`transactions.db` 不存在时用
