@@ -23,6 +23,11 @@
 #
 # 断言：UIA 文案出现「下载图片」；资产目录出现 `<uuid>.png` + `thumb_<uuid>.jpg`；
 #       缩略图宽度 300（原图 600×400 按比例缩放）；数据库 `tbl_billadm_key_event_image` 多一行。
+#       最后**删掉这个事件**并断言：该日期的图片记录清空、原图/缩略图文件被清理、事件行消失，
+#       且别的日期的图片不受影响（`remove_image_files` 只有"文件缺失容错"的单测，这条补集成验证）。
+#
+# 注意：关键事件按 `(ledger_id, date)` upsert，**同一天只有一个事件**；历次跑留下的图片都挂在这一天，
+#       所以删事件会把这天的图片全清掉——断言要按"日期"而不是"总行数回到基线"（我踩过一次）。
 #
 # 用法（pwsh 7；需要 release 产物）：
 #   pwsh -File fixtures/ui-upload.ps1
@@ -111,6 +116,16 @@ function Assert-True {
     param([bool]$Condition, [string]$Message)
     if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
     else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
+}
+
+# 读图片表行（删除事件后要复查行数是否回到基线）
+function Read-ImageRows {
+    $dump = Join-Path $OutDir 'image-rows.json'
+    Push-Location $repo
+    & cargo -q xtask dump $ws --table tbl_billadm_key_event_image *> $dump
+    Pop-Location
+    if (-not (Test-Path $dump)) { return @() }
+    return @((Get-Content $dump -Raw | ConvertFrom-Json).'tbl_billadm_key_event_image')
 }
 
 # 失败时留一张全屏截图，方便判断"卡在哪一步"（人工验收离线也能看）
@@ -486,12 +501,76 @@ try {
                 $relativeDirectory = ($relative -replace '/[^/]+$', '')
                 $relativeStem = [System.IO.Path]::GetFileNameWithoutExtension($relative)
                 $expectedThumb = "$relativeDirectory/thumb_$relativeStem.jpg"
+                # 留给第 5 步（删除事件）用：这两个变量在块外还要读
+                $uploadedRelative = $relative
+                $uploadedEventDate = $newRow.event_date
                 Assert-True ([bool]$newRow.thumb_path) "thumb_path 已写入（$($newRow.thumb_path)）"
                 Assert-True ($newRow.thumb_path -eq $expectedThumb) "thumb_path 与原图同目录且带 thumb_ 前缀（期望 $expectedThumb，实际 $($newRow.thumb_path)）"
                 Assert-True ($newRow.event_date -match '^\d{4}-\d{2}-\d{2}$') "event_date 已写入（$($newRow.event_date)）"
             }
         }
     }
+    # ---- 删除事件应当把图片文件一并清理（原清单第 6 项的后半句）----
+    # 这条只能端到端验：`remove_image_files` 的单测只覆盖"文件不存在时容错"，
+    # 而"删事件 → 资产被清掉"要走完整条 UI → 服务层链路。
+    Write-Host "`n[ui-upload] 5/5 删除事件应清理图片文件"
+    $eventCardTitle = $title
+    $deleteButton = $null
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        foreach ($candidate in @(Get-Elements $window)) {
+            if ($candidate.Current.Name -ne '删除事件') { continue }
+            $rect = $candidate.Current.BoundingRectangle
+            foreach ($nameElement in @(Get-Elements $window)) {
+                if ($nameElement.Current.Name -and $nameElement.Current.Name.Contains($eventCardTitle)) {
+                    $rowRect = $nameElement.Current.BoundingRectangle
+                    if ([Math]::Abs(($rect.Y + $rect.Height / 2) - ($rowRect.Y + $rowRect.Height / 2)) -le 40) {
+                        $deleteButton = $candidate
+                        break
+                    }
+                }
+            }
+            if ($deleteButton) { break }
+        }
+        if (-not $deleteButton) { Start-Sleep -Milliseconds 500 }
+    } while (-not $deleteButton -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$deleteButton) '找到该事件的「删除事件」按钮'
+    if ($deleteButton) {
+        Click-Element $deleteButton | Out-Null
+        Start-Sleep -Milliseconds 1200
+        # 气泡确认：按钮文案「删除」，取最后一个（弹窗/气泡在 DOM 末尾）
+        $confirmButtons = @(Find-ByName $window '删除')
+        if ($confirmButtons.Count -gt 0) {
+            Invoke-Element $confirmButtons[$confirmButtons.Count - 1] | Out-Null
+        }
+        Start-Sleep -Seconds 4
+    }
+
+    # 注意：关键事件是按 (账本, 日期) upsert 的，所以**同一天只有一个事件**，
+    # 历次跑留下的图片都挂在这同一天上——删事件会把这天的图片全部清掉（这是对的）。
+    # 这里就按"日期"来断言，并额外确认**别的日期**的图片不受影响（不误删）。
+    $imagesBeforeDelete = @(Read-ImageRows)
+    $eventDate = $uploadedEventDate
+    Assert-True ([bool]$eventDate) "拿到被删事件的日期（$eventDate）"
+    $otherDatesBefore = @($imagesBeforeDelete | Where-Object { $_.event_date -ne $eventDate })
+
+    $imagesAfterDelete = @(Read-ImageRows)
+    $sameDateAfter = @($imagesAfterDelete | Where-Object { $_.event_date -eq $eventDate })
+    $otherDatesAfter = @($imagesAfterDelete | Where-Object { $_.event_date -ne $eventDate })
+    Assert-True ($sameDateAfter.Count -eq 0) "删除事件后该日期的图片记录已清空（$eventDate）"
+    Assert-True ($otherDatesAfter.Count -eq $otherDatesBefore.Count) "别的日期的图片记录不受影响（$($otherDatesBefore.Count) → $($otherDatesAfter.Count)）"
+
+    $dayDirectory = Join-Path $assetsRoot $eventDate
+    $leftover = @(Get-ChildItem $dayDirectory -File -ErrorAction SilentlyContinue)
+    Assert-True ($leftover.Count -eq 0) "该日期的资产文件已被清理（$dayDirectory 下剩 $($leftover.Count) 个）"
+
+    $eventRows = Join-Path $OutDir 'key_events.json'
+    Push-Location $repo
+    & cargo -q xtask dump $ws --table tbl_billadm_key_event *> $eventRows
+    Pop-Location
+    $remaining = @((Get-Content $eventRows -Raw | ConvertFrom-Json).'tbl_billadm_key_event' |
+        Where-Object { $_.title -eq $eventCardTitle })
+    Assert-True ($remaining.Count -eq 0) "事件行也已删除（$eventCardTitle）"
 }
 finally {
     if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
@@ -507,4 +586,4 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
     exit 1
 }
-Write-Host '[ui-upload] 全部通过：原生文件框 → 落盘 → 缩略图 → 入库 → 界面刷新' -ForegroundColor Green
+Write-Host '[ui-upload] 全部通过：原生文件框 → 落盘 → 缩略图 → 入库 → 界面刷新 → 删事件清理资产' -ForegroundColor Green
