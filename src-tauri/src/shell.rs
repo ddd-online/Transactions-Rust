@@ -70,6 +70,7 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             .inner_size(config.width as f64, config.height as f64)
             .min_inner_size(960.0, 640.0)
             .disable_drag_drop_handler()
+            .on_navigation(is_allowed_navigation)
             .decorations(false);
 
     if let (Some(x), Some(y)) = (config.x, config.y) {
@@ -94,6 +95,7 @@ pub fn create_init_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .inner_size(600.0, 560.0)
         .resizable(false)
         .disable_drag_drop_handler()
+        .on_navigation(is_allowed_navigation)
         .decorations(false)
         .center()
         .build()?;
@@ -159,6 +161,25 @@ pub fn show_main_window(app: &AppHandle) {
         None => {
             let _ = create_main_window(app);
         }
+    }
+}
+
+/// 是否允许 WebView 导航到该 URL。
+///
+/// 等价原 Electron 版 `main.js` 的 `will-navigate` 守卫（只允许自己的界面与开发服务器）：
+/// 关掉 Tauri 的拖放处理器之后（见 `create_main_window` 的注释），把文件从资源管理器**拖进窗口**
+/// 会走 WebView2 的默认行为 —— 直接**导航到 `file:///…`**，界面就被整个换掉了。
+/// 这里把非本应用的导航一律拦掉。
+fn is_allowed_navigation(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        // 生产构建：`http://tauri.localhost/index.html`（Windows 的 custom-protocol）
+        // 开发构建：`http://localhost:1520/`（trunk serve）
+        // 个别平台/版本会用 `tauri://localhost`。
+        "http" | "https" | "tauri" => matches!(
+            url.host_str(),
+            Some("tauri.localhost") | Some("localhost") | Some("127.0.0.1") | Some("[::1]")
+        ),
+        _ => false,
     }
 }
 
@@ -334,6 +355,41 @@ mod tests {
         for scale in [0.0, -1.5, f64::NAN, f64::INFINITY] {
             let (size, _) = logical_bounds(physical(1000, 800), None, scale);
             assert_eq!((size.width, size.height), (1000, 800), "scale={scale}");
+        }
+    }
+
+    fn url(raw: &str) -> tauri::Url {
+        tauri::Url::parse(raw).unwrap()
+    }
+
+    /// 自己的界面（生产 / 开发 / tauri 协议）都必须放行，否则窗口会白屏。
+    #[test]
+    fn navigation_allows_own_pages() {
+        for allowed in [
+            "http://tauri.localhost/index.html",
+            "http://tauri.localhost/",
+            "http://localhost:1520/index.html",
+            "http://127.0.0.1:1520/",
+            "tauri://localhost/index.html",
+        ] {
+            assert!(is_allowed_navigation(&url(allowed)), "应放行: {allowed}");
+        }
+    }
+
+    /// 拖进来的本地文件（以及任何外部站点）必须拦住：WebView2 的默认行为是**导航**过去，
+    /// 那会把整个界面换成一个 file:// 页面。
+    #[test]
+    fn navigation_blocks_external_and_file_urls() {
+        for blocked in [
+            "file:///C:/Users/ljw/Desktop/photo.jpg",
+            "file:///D:/github/Transactions-Rust/target/x.png",
+            "https://example.com/",
+            "http://evil.example.com/index.html",
+            "javascript:alert(1)",
+            "data:text/html,<h1>hi</h1>",
+            "trasset://localhost/key_events/2026-01-01/a.png",
+        ] {
+            assert!(!is_allowed_navigation(&url(blocked)), "应拦截: {blocked}");
         }
     }
 }

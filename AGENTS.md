@@ -106,6 +106,11 @@ pwsh -File fixtures/ui-drag.ps1 [-Workspace <ws>] [-OutDir <dir>]
 # 逻辑值 → 再启动一次断言尺寸/位置完全一致（"记住上次的窗口大小和位置"的回归测试）。
 pwsh -File fixtures/window-bounds.ps1 [-Exe <exe>] [-OutDir <dir>]
 
+# 日记导入/导出端到端：驱动**原生选目录对话框**导入一个临时目录（UTF-8 + GBK + 一个非法文件名），
+# 断言 落库（正文逐字节、word_count 按标量值、非法文件名被跳过）→ 再导出到空目录 →
+# 断言文件数/命名/正文与库一致。数据链路另有 `cargo test -p tr-service diary::` 的单测。
+pwsh -File fixtures/ui-diary-io.ps1 [-Workspace <ws>] [-OutDir <dir>]
+
 # 代码规范
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -180,6 +185,20 @@ cargo clippy --all-targets -- -D warnings
   150% 缩放的机器上窗口每次启动都会放大 1.5 倍、位置越跑越偏。
   `save_window_bounds` 现在做物理 → 逻辑换算（纯函数 `logical_bounds` + 4 个单测），
   回归：`fixtures/window-bounds.ps1`（启动 → 关闭 → 再启动，尺寸/位置必须一致）。
+- **关掉拖放处理器之后必须补导航守卫**（`shell.rs` 的 `is_allowed_navigation`）：
+  Tauri 的拖放处理器同时也"吃"掉了拖入文件时的默认导航；`disable_drag_drop_handler()` 之后，
+  把文件从资源管理器拖进窗口会让 WebView2 **直接导航到 `file:///…`**，界面整个被换掉。
+  原 Electron 版用 `main.js` 里的 `will-navigate` 守卫挡住这类导航（只允许自己的界面），
+  这里等价地只放行 `tauri.localhost` / `localhost` / `127.0.0.1`，其余（file:、外部站点、data:）一律拦截；
+  `trasset://` 是**子资源**不走导航，所以不受影响。单测覆盖放行/拦截两侧。
+- **两种原生对话框的窗口归属不一样**（找错地方就会"对话框没弹出来"）：
+  * **WebView2 自己的文件框**（`<input type=file>`，见 `fixtures/ui-upload.ps1`）：
+    应用窗口的**子窗口**，`ProcessId` 属于 `msedgewebview2.exe` → 在应用窗口 Descendants 里找；
+  * **Tauri `dialog_open` 插件的选文件/选目录框**（见 `fixtures/ui-diary-io.ps1`）：
+    **桌面顶层窗口**，`ProcessId` 就是应用自己 → 在 `RootElement` 的 Children 里按进程号找。
+  另外两类框的路径输入框 AutomationId 不同：**选文件 = 1148**（`文件名(N):` 组合框）、
+  **选目录 = 1152**（`文件夹(F):` 编辑框）；**选目录时回车只是进入该目录，必须点「选择文件夹」按钮**
+  （选文件时回车才等于「打开」）。选目录框还只接受**已存在**的目录，否则弹「…不存在」提示框。
 - **UIA 驱动这个界面的四条经验**（写自动化脚本时会反复踩）：
   1. Chromium 的 UIA 树是**惰性构建**的：窗口刚出现时首次查询常只返回二十来个元素、连 Button 都没有，
      要**轮询反复查询**把它唤醒（所以所有脚本都是"轮询到标记出现"而不是固定 sleep）；
