@@ -111,6 +111,10 @@ pwsh -File fixtures/window-bounds.ps1 [-Exe <exe>] [-OutDir <dir>]
 # 断言文件数/命名/正文与库一致。数据链路另有 `cargo test -p tr-service diary::` 的单测。
 pwsh -File fixtures/ui-diary-io.ps1 [-Workspace <ws>] [-OutDir <dir>]
 
+# UI 增删改端到端（断言都落在数据库上）：分类/标签/图表的"新增→删除"、
+# 关键事件"点色板改颜色 / 写 Markdown 描述 / 删除事件"。
+pwsh -File fixtures/ui-crud.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
 # 代码规范
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -209,6 +213,18 @@ cargo clippy --all-targets -- -D warnings
      目录"影响，粘贴偶尔不生效就会停在上次的目录上，结果"选错了却看不出错"；
   3. 最后**验证**导航到位（面包屑的每一段都是独立元素，出现目标目录名才算到位），没到位就重试；
   4. 断言也要看**结果**（导出文件落在哪、库里多了哪几行），不要只看"对话框关了没有"。
+- **只读的"行内操作按钮"必须先 hover**（`fixtures/ui-crud.ps1` 的 `Find-RowButton`）：分类/标签行的操作区
+  是 `.ct-item-actions { display: none }`，只在 `:hover` 或 `.is-active` 时才 `display: flex`
+  （**与原 `CategoryColumn.vue` 逐字一致，是 parity 不是缺陷**）。`display: none` 的元素**不进 UIA 树**，
+  所以"新建的那一行能删、别的行删不了"——因为新建的行是 active。做法：先用真实鼠标把指针移到行中心、
+  等 ~0.5s，再按名字查按钮，并用"中心 Y 最近且在该行右侧"来区分同一列里的多个「删除」。
+- **别用 `| Select-Object -First N` 截断界面脚本的输出**：管道提前关闭会**终止上游脚本**，
+  它的 `finally`（关掉测试实例）不执行，于是下一个脚本会因"本仓库已有实例在运行"而拒绝启动——
+  我为此白查了一轮。要么 `-Last N`，要么 `*> 文件` 再读文件。
+- **启动时要抓"主窗口"而不是"该进程的第一个窗口"**：启动期会先出现初始化窗口（600×560、无侧栏），
+  随后才切成主窗口。抓到前者的话后面所有按名字的查找都会落空（整轮 26 项全红的假故障）。
+  稳妥做法（见 `fixtures/ui-crud.ps1` 的 `Get-ReadyWindow`）：**轮询**取窗口元素、
+  直到它包含侧栏条目（如「消费记录」）为止，每轮重新查询也顺带规避了句柄失效。
 - **UIA 驱动这个界面的四条经验**（写自动化脚本时会反复踩）：
   1. Chromium 的 UIA 树是**惰性构建**的：窗口刚出现时首次查询常只返回二十来个元素、连 Button 都没有，
      要**轮询反复查询**把它唤醒（所以所有脚本都是"轮询到标记出现"而不是固定 sleep）；
