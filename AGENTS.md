@@ -228,6 +228,15 @@ cargo clippy --all-targets -- -D warnings
   **它自己的"当前目录"**解析，于是脚本传 `-OutDir target\pkg-diary` 时，导入/导出就落到了别的地方
   （甚至弹「没有找到匹配的项目」）。所有 fixtures 的 `-OutDir` 现在都过 `GetFullPath` 归一化，
   `Select-Directory` 里还有 `IsPathRooted` 断言兜底。排查这类"选错目录"时**先看路径是不是绝对的**。
+- **同一个坑还有第二个受害者：黄金对比里的工作空间路径**（我为此白查了三轮）：`run-parity.ps1 -OutDir`
+  传**相对**路径时，Go 内核是以 `-WorkingDirectory <KernelDir>` 启动的，它按**自己的 cwd** 解析
+  `-workspace`，于是库落到 `<KernelDir>\target\parity-finalX\ws-go`（**污染了只读参照仓库**
+  `D:\github\Transactions\kernel\target\`），而驱动用 `xtask dump <同一相对路径>`（相对**本仓库**）去找它 ——
+  现象极具欺骗性：内核启动正常、前面几十个 HTTP 调用**全绿**（它们只跟内核说话），
+  直到第一个落库断言才炸，而且 trap 把真正的原因吞成了 `ScriptHalted`。
+  现在 `run-parity.ps1` / `go-driver.ps1` 入口处都做 `GetFullPath` 归一化；
+  `go-driver.ps1` 的 `Invoke-Dump` 也把 cargo 的 stderr 收进异常（原来写的是 `2>$null`，只剩一句"dump 失败"）。
+  教训：**断言走文件系统、被测进程走另一个 cwd 时，路径必须绝对化**；diff 红之前先确认两侧说的是同一个库。
 - **选目录的正确姿势**（`fixtures/ui-diary-io.ps1` 的 `Select-Directory`，逐条都踩过）：
   1. 把**绝对路径**粘进底部「文件夹(F):」框（剪贴板粘贴，别逐字符 SendKeys——输入法会把 `\` 变 `、`）；
   2. 回车**进入**该目录，再点「选择文件夹」；**不要**用地址栏（Alt+D）导航——它受"对话框记住的上次

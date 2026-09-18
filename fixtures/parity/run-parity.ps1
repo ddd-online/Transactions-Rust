@@ -23,10 +23,16 @@ $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not $OutDir) { $OutDir = Join-Path $repo 'target\parity' }
+# **必须绝对化**：Go 内核以 `-WorkingDirectory <KernelDir>` 启动，会按**它自己的 cwd** 解析
+# 传进去的工作空间路径。相对路径会让库落到参照仓库里，而 `xtask dump`（相对本仓库）找不到它 ——
+# 表现是"HTTP 全部成功，第一个落库断言才报『目录中没有 transactions.db』"。
+# 与 `fixtures/ui-diary-io.ps1` 里"填进原生选目录框的路径必须绝对"是同一类坑。
+$OutDir = [System.IO.Path]::GetFullPath($OutDir)
+$KernelDir = [System.IO.Path]::GetFullPath($KernelDir)
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
 
-$goWorkspace = Join-Path $OutDir 'ws-go'
-$rustWorkspace = Join-Path $OutDir 'ws-rust'
+$goWorkspace = [System.IO.Path]::GetFullPath((Join-Path $OutDir 'ws-go'))
+$rustWorkspace = [System.IO.Path]::GetFullPath((Join-Path $OutDir 'ws-rust'))
 foreach ($dir in @($goWorkspace, $rustWorkspace)) {
     if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
 }

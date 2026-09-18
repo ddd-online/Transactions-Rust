@@ -18,6 +18,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $baseUrl = "http://127.0.0.1:$Port/api/v1"
 
+# **工作空间路径必须绝对化**：Go 内核是以 `-WorkingDirectory $KernelDir` 启动的，
+# 它按**自己的 cwd** 解析传进去的 `-workspace`。若这里给相对路径，库会落到
+# `<KernelDir>\<相对路径>`（实测污染了只读参照仓库：`kernel\target\parity-finalX\ws-go`），
+# 而驱动自己用 `xtask dump <相对路径>`（相对**本仓库**）去找库 —— 于是 HTTP 那几步全绿，
+# 第一个落库断言才炸「目录中没有 transactions.db」。与原生对话框那条经验同源。
+$Workspace = [System.IO.Path]::GetFullPath($Workspace)
+$KernelDir = [System.IO.Path]::GetFullPath($KernelDir)
+
 if (-not (Test-Path $Workspace)) { New-Item -ItemType Directory -Path $Workspace -Force | Out-Null }
 
 Write-Host "[go-driver] 启动 Go 内核 ($KernelDir, port $Port)…" -ForegroundColor Cyan
@@ -147,9 +155,8 @@ function Get-StockSnapshot {
     foreach ($table in @('tbl_billadm_stock_trade', 'tbl_billadm_stock_trade_history',
             'tbl_billadm_stock_trade_round', 'tbl_billadm_stock_position',
             'tbl_billadm_stock_fund_record')) {
-        $text += (& cargo -q xtask dump $WorkspaceDir --table $table 2>$null | Out-String)
+        $text += (Invoke-Dump -WorkspaceDir $WorkspaceDir -Table $table)
     }
-    if ($LASTEXITCODE -ne 0) { throw "dump 失败: $WorkspaceDir" }
     return $text
 }
 
@@ -191,10 +198,27 @@ function Invoke-ApiExpectError {
 
 # P1-4 的「关键事件行数」指纹：`xtask dump --table` 是只读导出，
 # 与 Rust 侧 `key_event_row_count()` 读同一张表，用来断言"二次 upsert 是覆盖不是新增"。
+function Invoke-Dump {
+    <#
+      只读导出（供断言用）。**stderr 不能丢**：这里原来写的是 `2>$null`，于是 cargo 失败时
+      只剩一句 `dump 失败: <dir>` —— 直接被 trap 吞成 ScriptHalted，真正的原因（比如
+      "database is locked"、xtask 正在被重建）永远看不到。现在把 stderr 收进临时文件并写进异常。
+    #>
+    param([string]$WorkspaceDir, [string]$Table)
+    $stderrFile = Join-Path $env:TEMP 'go-driver-dump.err'
+    $arguments = @('-q', 'xtask', 'dump', $WorkspaceDir)
+    if ($Table) { $arguments += @('--table', $Table) }
+    $json = (& cargo @arguments 2>$stderrFile | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        $why = (Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue)
+        throw "dump 失败（exit=$LASTEXITCODE，table='$Table'）: $WorkspaceDir`n--- cargo stderr ---`n$why"
+    }
+    return $json
+}
+
 function Get-KeyEventCount {
     param([string]$WorkspaceDir, [string]$LedgerId)
-    $json = (& cargo -q xtask dump $WorkspaceDir --table 'tbl_billadm_key_event' 2>$null | Out-String)
-    if ($LASTEXITCODE -ne 0) { throw "dump 失败: $WorkspaceDir" }
+    $json = Invoke-Dump -WorkspaceDir $WorkspaceDir -Table 'tbl_billadm_key_event'
     $rows = @(($json | ConvertFrom-Json).tbl_billadm_key_event)
     return @($rows | Where-Object { $_.ledger_id -eq $LedgerId }).Count
 }
