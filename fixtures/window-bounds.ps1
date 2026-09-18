@@ -30,6 +30,9 @@ if (-not $OutDir) { $OutDir = Join-Path $repo 'target\bounds-smoke' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
+# `-OutDir` 归一化成绝对路径：它会被写进应用配置（`workspaceDir`）由应用去打开，
+# 相对路径会依赖"应用的当前目录"，结果不可预期 —— 与选目录框那边是同一类坑。
+$OutDir = [System.IO.Path]::GetFullPath($OutDir)
 $smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
 if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
     throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"

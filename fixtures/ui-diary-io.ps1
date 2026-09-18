@@ -30,6 +30,10 @@ if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
 $smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
+# **`-OutDir` 必须转成绝对路径**（踩过的坑）：脚本要把它**填进原生选目录框**，
+# 而那个框把相对路径按"它自己的当前目录"解析——传 `target\pkg-diary` 进去，
+# 导入/导出就会落到别的地方（甚至弹「找不到匹配的项目」）。参数可能是相对的，先归一化。
+$OutDir = [System.IO.Path]::GetFullPath($OutDir)
 if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
     throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"
 }
@@ -62,6 +66,9 @@ public class TrDiaryMouse {
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
   [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  // 直接给 Win32 编辑框写文本：不受输入法与 shell 自动补全影响（剪贴板粘贴只作退路）
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool SetWindowText(IntPtr hWnd, string text);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
   public static void Click(int x, int y) {
     SetCursorPos(x, y);
     mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
@@ -106,6 +113,18 @@ function Click-Element { param($Element)
     [TrDiaryMouse]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
     return $true
 }
+
+# **必须轮询**，不能只查一次：Chromium 的 UIA 树是惰性构建的，刚启动时元素数会先到阈值
+# （骨架屏）再补齐；一次性查找会在"界面还在渲染"时误判成"找不到按钮"（实测踩过）。
+function Wait-Element { param($Window, [string]$Name, [int]$TimeoutSec = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $element = Find-First $Window $Name
+        if ($element) { return $element }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
 function Save-Screenshot { param([string]$Path)
     try {
         $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -115,7 +134,7 @@ function Save-Screenshot { param([string]$Path)
         $graphics.Dispose()
         $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
         $bitmap.Dispose()
-        Write-Host "  失败截图: $Path" -ForegroundColor DarkYellow
+        Write-Host "  截图: $Path" -ForegroundColor DarkYellow
     }
     catch { Write-Host "  截图失败: $_" -ForegroundColor DarkYellow }
 }
@@ -138,12 +157,25 @@ function Find-FolderDialog { param([int]$ProcessId, [int]$TimeoutSec = 20)
     return $null
 }
 
-# 在选目录框里挑一个目录：把绝对路径粘进"文件夹:"框 → 右方向键收起补全 → 回车
+# 在选目录框里挑一个目录：往底部那个"文件夹(F):"框里填**绝对路径**。
+#
+# 要点（都是踩过的）：
+#   1. **必须是绝对路径**：这个框把相对路径按它自己的"当前目录"解析——
+#      填 `target\pkg-diary\import-src` 这种相对串会落到别处（或弹「没有找到匹配的项目」）。
+#      脚本里 `-OutDir` 已用 `GetFullPath` 归一化，所以 `$Directory` 一定是绝对路径（下面还有断言）。
+#   2. 路径**走剪贴板粘贴**（`Ctrl+A` / `Ctrl+V`）——逐字符 SendKeys 会被中文输入法接走（`\` → `、`）。
+#   3. 别用地址栏（Alt+D）导航：它受"对话框记住的上次目录"影响，粘贴偶尔不生效就会停在上次的目录上。
+#   4. 填完**先回车**进入该目录，再点「选择文件夹」；最后**验证**导航到位（面包屑出现目标目录名）。
 function Select-Directory {
-    param($Dialog, [string]$Directory, [int]$ProcessId)
-    # 路径输入框的 AutomationId 与对话框种类有关（都实测过）：
-    #   选**文件**框 = 1148（`文件名(N):` 组合框）；选**目录**框 = 1152（`文件夹(F):` 编辑框）。
-    # 依次尝试，最后退化成"任意一个 class='Edit' 的后代"。
+    param($Dialog, [string]$Directory, [int]$ProcessId, [string]$Step = 'step')
+    if (-not [System.IO.Path]::IsPathRooted($Directory)) {
+        throw "内部错误：要填进选目录框的路径必须是绝对路径（收到 '$Directory'）"
+    }
+    $dialogHwnd = [IntPtr]$Dialog.Current.NativeWindowHandle
+    [TrDiaryMouse]::SetForegroundWindow($dialogHwnd) | Out-Null
+    Start-Sleep -Milliseconds 400
+
+    # 底部路径框：选目录框是 AutomationId=1152（`文件夹(F):`），选文件框是 1148。
     $pathBox = $null
     foreach ($automationId in '1152', '1148') {
         $pathBox = $Dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
@@ -155,25 +187,35 @@ function Select-Directory {
             if ($element.Current.ClassName -eq 'Edit') { $pathBox = $element; break }
         }
     }
-    if (-not $pathBox) { throw '选目录框里找不到路径输入框（试过 1152 / 1148 / class=Edit）' }
+    if (-not $pathBox) { throw '选目录框里找不到底部路径输入框（试过 1152 / 1148 / class=Edit）' }
 
-    $dialogHwnd = [IntPtr]$Dialog.Current.NativeWindowHandle
-    [TrDiaryMouse]::SetForegroundWindow($dialogHwnd) | Out-Null
-    Start-Sleep -Milliseconds 400
-    Click-Element $pathBox | Out-Null
-    Start-Sleep -Milliseconds 500
+    $leaf = Split-Path -Path $Directory -Leaf
+    $navigated = $false
+    for ($attempt = 1; $attempt -le 4 -and -not $navigated; $attempt++) {
+        Click-Element $pathBox | Out-Null
+        Start-Sleep -Milliseconds 400
+        Set-Clipboard -Value $Directory
+        Start-Sleep -Milliseconds 300
+        [System.Windows.Forms.SendKeys]::SendWait('^a')          # 清掉框里已有的内容
+        Start-Sleep -Milliseconds 250
+        [System.Windows.Forms.SendKeys]::SendWait('^v')          # 粘贴绝对路径
+        Start-Sleep -Milliseconds 700
+        Save-Screenshot (Join-Path $OutDir "dialog-$Step-typed.png")
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')     # 回车：进入该目录
+        Start-Sleep -Seconds 2
+        # 面包屑的每一段都是独立元素：出现目标目录名 = 已经在该目录里
+        $navigated = @($Dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition) |
+            ForEach-Object { $_.Current.Name } | Where-Object { $_ -eq $leaf }).Count -gt 0
+        if (-not $navigated) {
+            Write-Host "  第 $attempt 次导航没到位（找不到面包屑 '$leaf'），重试" -ForegroundColor DarkYellow
+            Start-Sleep -Milliseconds 800
+        }
+    }
+    Write-Host "  已进入 '$leaf': $navigated"
+    Save-Screenshot (Join-Path $OutDir "dialog-$Step.png")
 
-    Set-Clipboard -Value $Directory
-    Start-Sleep -Milliseconds 300
-    [System.Windows.Forms.SendKeys]::SendWait('^a')
-    Start-Sleep -Milliseconds 250
-    [System.Windows.Forms.SendKeys]::SendWait('^v')
-    Start-Sleep -Milliseconds 700
-    [System.Windows.Forms.SendKeys]::SendWait('{RIGHT}')      # 收起自动补全下拉，保留完整路径
-    Start-Sleep -Milliseconds 400
-
-    # 选**目录**时回车只是"进入/选中"该目录，必须点「选择文件夹」才会返回；
-    # （选**文件**框相反：回车就等于按「打开」。）
+    # 「选择文件夹」按钮在 Win32 文件框里是 `class='Button'` 的 Pane（没有 InvokePattern），用鼠标点。
     $confirm = $null
     foreach ($element in @($Dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition))) {
         if ($element.Current.ClassName -ne 'Button') { continue }
@@ -217,6 +259,8 @@ function Read-DiaryRows {
 }
 
 # ---- 播种 ----
+# **默认每次重新播种**（只有显式 `-Workspace` 时才复用）：同一天日记再导入是 upsert，
+# 复用旧工作空间会让"库里新增 N 篇"这类断言失真——实测被上一次跑剩的行骗过一次。
 if (-not $Workspace -or -not (Test-Path (Join-Path $ws 'transactions.db'))) {
     if (Test-Path $ws) { Remove-Item $ws -Recurse -Force }
     Push-Location $repo
@@ -280,12 +324,12 @@ try {
     Start-Sleep -Milliseconds 500
 
     Write-Host "`n[diary] 1/2 打开「应用设置 → 日记配置」并点「选择目录导入」"
-    Assert-True (Invoke-Element (Find-First $window '应用设置')) '打开「应用设置」'
+    Assert-True (Invoke-Element (Wait-Element -Window $window -Name '应用设置')) '打开「应用设置」'
     Start-Sleep -Seconds 2
-    Assert-True (Invoke-Element (Find-First $window '日记配置')) '切到「日记配置」页签'
+    Assert-True (Invoke-Element (Wait-Element -Window $window -Name '日记配置')) '切到「日记配置」页签'
     Start-Sleep -Seconds 2
 
-    $importButton = Find-First $window '选择目录导入'
+    $importButton = Wait-Element -Window $window -Name '选择目录导入'
     Assert-True ([bool]$importButton) '找到「选择目录导入」按钮'
     if (-not $importButton) { throw '找不到「选择目录导入」按钮' }
     $rect = $importButton.Current.BoundingRectangle
@@ -301,7 +345,7 @@ try {
     if (-not $dialog) { throw '选目录对话框没有出现' }
     Write-Host "  对话框: name='$($dialog.Current.Name)'"
 
-    Assert-True (Select-Directory -Dialog $dialog -Directory $importDir -ProcessId $process.Id) '选目录框已关闭（提交被接受）'
+    Assert-True (Select-Directory -Dialog $dialog -Directory $importDir -ProcessId $process.Id -Step 'import') '选目录框已关闭（提交被接受）'
 
     # 导入是异步的：轮询库里的行数
     $expectedDates = @('2027-03-01', '2027-03-02')
@@ -325,7 +369,7 @@ try {
 
     Write-Host "`n[diary] 2/2 点「选择目录导出」导出到空目录"
     $beforeExport = Read-DiaryRows
-    $exportButton = Find-First $window '选择目录导出'
+    $exportButton = Wait-Element -Window $window -Name '选择目录导出'
     Assert-True ([bool]$exportButton) '找到「选择目录导出」按钮'
     if (-not $exportButton) { throw '找不到「选择目录导出」按钮' }
     $rect = $exportButton.Current.BoundingRectangle
@@ -336,7 +380,7 @@ try {
     $dialog2 = Find-FolderDialog -ProcessId $process.Id -TimeoutSec 20
     Assert-True ([bool]$dialog2) '导出时原生选目录框已弹出'
     if ($dialog2) {
-        Assert-True (Select-Directory -Dialog $dialog2 -Directory $exportDir -ProcessId $process.Id) '导出目录已选定'
+        Assert-True (Select-Directory -Dialog $dialog2 -Directory $exportDir -ProcessId $process.Id -Step 'export') '导出目录已选定'
     }
 
     # 导出是异步的：轮询目录里出现的 .md 文件数

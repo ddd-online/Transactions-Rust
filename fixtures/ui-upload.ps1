@@ -56,6 +56,9 @@ if (-not (Test-Path $smokeHome)) { New-Item -ItemType Directory -Force -Path $sm
 if (-not (Test-Path (Join-Path $smokeHome 'Desktop'))) {
     New-Item -ItemType Directory -Force -Path (Join-Path $smokeHome 'Desktop') | Out-Null
 }
+# `-OutDir` 归一化成绝对路径：这个目录里的文件会被**填进原生文件框**（见 `Select-Directory` 那套结论），
+# 而对话框把相对路径按它自己的"当前目录"解析 —— 传相对路径会落到别处（实测踩过）。
+$OutDir = [System.IO.Path]::GetFullPath($OutDir)
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
 
 $ws = [System.IO.Path]::GetFullPath($Workspace)

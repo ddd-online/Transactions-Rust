@@ -34,6 +34,9 @@ if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
 $smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
+# `-OutDir`/工作空间都归一化成绝对路径：配置里写的是 `workspaceDir`，相对路径会依赖应用的当前目录
+# （同一类坑在选目录框那边踩过：对话框按自己的当前目录解析相对路径）。
+$OutDir = [System.IO.Path]::GetFullPath($OutDir)
 if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
     throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"
 }
@@ -117,6 +120,18 @@ function Invoke-Element { param($Element)
     }
     return $false
 }
+
+# 列表项要**轮询等待**：UIA 树是惰性构建的，切页之后立刻查会"找不到分类"
+# （实测踩过：报「界面上找不到源项」但界面其实正常）。
+function Wait-Element { param($Window, [string]$Name, [int]$TimeoutSec = 25)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $element = Find-First $Window $Name
+        if ($element) { return $element }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
 function Save-Screenshot { param([string]$Path)
     try {
         $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -149,8 +164,8 @@ function Read-Categories {
 # 移动分段要够密（20 段 × 60ms）：Chromium 需要看到 pointer 连续移动才启动 HTML5 拖拽。
 function Invoke-DragTo {
     param($Window, [string]$FromName, [string]$ToName)
-    $from = Find-First $Window $FromName
-    $to = Find-First $Window $ToName
+    $from = Wait-Element -Window $Window -Name $FromName
+    $to = Wait-Element -Window $Window -Name $ToName
     if (-not $from) { throw "界面上找不到源项「$FromName」" }
     if (-not $to) { throw "界面上找不到目标项「$ToName」" }
     $fromRect = $from.Current.BoundingRectangle
