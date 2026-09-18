@@ -127,12 +127,24 @@ fn check_update(current_version: &str) -> UpdateCheckResponse {
         Err(_) => return error_response("Invalid JSON response".to_string()),
     };
 
+    parse_release(&payload, current_version).unwrap_or_default()
+}
+
+/// 从 GitHub release JSON 里挑出更新信息（**纯函数**，便于单测）。
+///
+/// 返回 `None` 表示"无需更新"：预发布、版本不比当前新，或 tag 为空。
+/// 注意"有更新但没有 `.exe` 资产"**仍算有更新**（`download_url` 为空串）——
+/// 与原 Electron 版一致，这样界面能如实提示"新版本但找不到安装包"。
+fn parse_release(
+    payload: &serde_json::Value,
+    current_version: &str,
+) -> Option<UpdateCheckResponse> {
     if payload
         .get("prerelease")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
     {
-        return UpdateCheckResponse::default();
+        return None;
     }
 
     let latest_version = payload
@@ -143,9 +155,10 @@ fn check_update(current_version: &str) -> UpdateCheckResponse {
         .to_string();
 
     if latest_version.is_empty() || !is_newer_version(&latest_version, current_version) {
-        return UpdateCheckResponse::default();
+        return None;
     }
 
+    // 取**第一个** `browser_download_url` 以 `.exe` 结尾的资产（发布产物里可能还有 zip/sig）
     let asset = payload
         .get("assets")
         .and_then(serde_json::Value::as_array)
@@ -159,29 +172,26 @@ fn check_update(current_version: &str) -> UpdateCheckResponse {
             })
         });
 
-    let download_url = asset
-        .and_then(|asset| asset.get("browser_download_url"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let digest = asset
-        .and_then(|asset| asset.get("digest"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_string();
-
-    UpdateCheckResponse {
+    Some(UpdateCheckResponse {
         has_update: true,
         latest_version,
-        download_url,
-        digest,
+        download_url: asset
+            .and_then(|asset| asset.get("browser_download_url"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        digest: asset
+            .and_then(|asset| asset.get("digest"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
         body: payload
             .get("body")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("")
             .to_string(),
         error: None,
-    }
+    })
 }
 
 fn error_response(message: String) -> UpdateCheckResponse {
@@ -394,23 +404,32 @@ fn download_and_verify(
         .map_err(|error| format!("刷新文件失败: {error}"))?;
     drop(file);
 
-    if let Some(expected) = expected_digest
-        .map(|digest| digest.trim_start_matches("sha256:").to_ascii_lowercase())
-        .filter(|digest| !digest.is_empty())
-    {
-        let actual = format!("{:x}", hasher.finalize());
-        if actual != expected {
-            let _ = std::fs::remove_file(&part);
-            return Err("下载文件校验失败（SHA256 不匹配）".to_string());
-        }
+    if !digest_matches(expected_digest, &format!("{:x}", hasher.finalize())) {
+        let _ = std::fs::remove_file(&part);
+        return Err("下载文件校验失败（SHA256 不匹配）".to_string());
     }
-
     std::fs::rename(&part, &target).map_err(|error| format!("重命名失败: {error}"))?;
     Ok(target)
 }
 
 fn part_path_of(target: &std::path::Path) -> PathBuf {
     PathBuf::from(format!("{}.part", target.display()))
+}
+
+/// 规范化 GitHub 的 `digest` 字段：`sha256:ABCD…` → 小写十六进制串。
+/// 缺失、空串或只有前缀时返回 `None`，表示**跳过校验**（与原实现一致）。
+fn normalize_digest(digest: Option<&str>) -> Option<String> {
+    digest
+        .map(|digest| digest.trim_start_matches("sha256:").to_ascii_lowercase())
+        .filter(|digest| !digest.is_empty())
+}
+
+/// 下载完成后是否需要放行：没有 digest 就放行，有就必须逐字符相等（忽略大小写与前缀）。
+fn digest_matches(expected: Option<&str>, actual_hex: &str) -> bool {
+    match normalize_digest(expected) {
+        Some(expected) => expected == actual_hex.to_ascii_lowercase(),
+        None => true,
+    }
 }
 
 /// 速度格式化（与原实现 `formatSpeed` 一致）。
@@ -486,5 +505,99 @@ mod tests {
         assert!(part_path_of(&target)
             .to_string_lossy()
             .ends_with("a.exe.part"));
+    }
+
+    fn release(tag: &str, prerelease: bool, assets: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "tag_name": tag,
+            "prerelease": prerelease,
+            "body": "更新说明",
+            "assets": assets,
+        })
+    }
+
+    /// 有更新：tag 的 `v` 前缀去掉、取第一个 `.exe` 资产的 url 与 digest、body 一并带出。
+    #[test]
+    fn parse_release_picks_first_exe_asset() {
+        let payload = release(
+            "v0.29.0",
+            false,
+            serde_json::json!([
+                // 非 .exe 的资产必须被跳过（发布里常有 zip / sig）
+                { "browser_download_url": "https://github.com/x/releases/download/v0.29.0/app.zip" },
+                { "browser_download_url": "https://github.com/x/releases/download/v0.29.0/notes.txt" },
+                {
+                    "browser_download_url": "https://github.com/x/releases/download/v0.29.0/Transactions-x64-v0.29.0.exe",
+                    "digest": "sha256:ABCDEF0123456789"
+                },
+                { "browser_download_url": "https://github.com/x/releases/download/v0.29.0/other.exe" }
+            ]),
+        );
+        let response = parse_release(&payload, "0.28.0").expect("应判定为有更新");
+        assert!(response.has_update);
+        assert_eq!(response.latest_version, "0.29.0");
+        assert_eq!(
+            response.download_url,
+            "https://github.com/x/releases/download/v0.29.0/Transactions-x64-v0.29.0.exe"
+        );
+        assert_eq!(response.digest, "sha256:ABCDEF0123456789");
+        assert_eq!(response.body, "更新说明");
+        assert!(response.error.is_none());
+    }
+
+    /// 预发布、版本不更新、tag 为空 → 都当"无更新"（返回 None，界面不提示）。
+    #[test]
+    fn parse_release_reports_no_update_when_not_newer_or_prerelease() {
+        let assets = serde_json::json!([]);
+        assert!(parse_release(&release("v0.29.0", true, assets.clone()), "0.28.0").is_none());
+        assert!(parse_release(&release("v0.28.0", false, assets.clone()), "0.28.0").is_none());
+        assert!(parse_release(&release("v0.27.0", false, assets.clone()), "0.28.0").is_none());
+        assert!(parse_release(&release("", false, assets.clone()), "0.28.0").is_none());
+        // 没有 prerelease 字段时按"正式版"处理
+        let no_flag = serde_json::json!({ "tag_name": "v0.29.0", "assets": [] });
+        assert!(parse_release(&no_flag, "0.28.0").is_some());
+    }
+
+    /// 有更新但没有 `.exe` 资产：仍算有更新，只是下载地址为空（与原实现一致）。
+    #[test]
+    fn parse_release_keeps_update_without_exe_asset() {
+        let payload = release(
+            "0.29.0",
+            false,
+            serde_json::json!([{ "browser_download_url": "https://github.com/x/app.zip" }]),
+        );
+        let response = parse_release(&payload, "0.28.0").expect("仍应提示有更新");
+        assert!(response.has_update);
+        assert_eq!(response.download_url, "");
+        assert_eq!(response.digest, "");
+        // body 缺失时是空串，不能是 null
+        let without_body = serde_json::json!({ "tag_name": "0.29.0", "assets": [] });
+        assert_eq!(parse_release(&without_body, "0.28.0").unwrap().body, "");
+    }
+
+    /// digest 规范化：GitHub 返回大写十六进制 + `sha256:` 前缀。
+    #[test]
+    fn normalize_digest_strips_prefix_and_lowercases() {
+        assert_eq!(
+            normalize_digest(Some("sha256:ABCDEF")),
+            Some("abcdef".to_string())
+        );
+        // 没有前缀也照收（按原样比较）
+        assert_eq!(normalize_digest(Some("AbCdEf")), Some("abcdef".to_string()));
+        // 缺失 / 空串 / 只有前缀 → 跳过校验
+        assert_eq!(normalize_digest(None), None);
+        assert_eq!(normalize_digest(Some("")), None);
+        assert_eq!(normalize_digest(Some("sha256:")), None);
+    }
+
+    /// 校验语义：没有 digest 就放行；有就必须相等（大小写不敏感）。
+    #[test]
+    fn digest_matches_only_when_equal_or_absent() {
+        assert!(digest_matches(None, "abc123"));
+        assert!(digest_matches(Some(""), "abc123"));
+        assert!(digest_matches(Some("sha256:ABC123"), "abc123"));
+        assert!(digest_matches(Some("abc123"), "ABC123"));
+        assert!(!digest_matches(Some("sha256:abc123"), "abc124"));
+        assert!(!digest_matches(Some("sha256:abc123"), ""));
     }
 }

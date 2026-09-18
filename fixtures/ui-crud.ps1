@@ -418,6 +418,32 @@ try {
     $described = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.date -eq $eventDate } | Select-Object -First 1)
     Assert-True (($described.Count -eq 1) -and ($described[0].content -eq $markdown)) "库里描述已写入（$($described[0].content -replace "`n", '\n')）"
 
+    # ---- Markdown **渲染**：正文里的 `# 标题` / `- 第一项` 应被渲染成标题/列表文本，
+    #      也就是说页面上能看到「标题」「第一项」，而**不是**原样的 `# 标题`。
+    #      （排版好不好看仍要人眼，这里只验"确实过了 Markdown 渲染器"。）
+    $renderedMarkdown = $false
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $texts = @(Get-Elements $window | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
+        $renderedMarkdown = (@($texts | Where-Object { $_ -eq '标题' }).Count -gt 0) -and
+            (@($texts | Where-Object { $_ -eq '第一项' }).Count -gt 0)
+        if (-not $renderedMarkdown) { Start-Sleep -Milliseconds 500 }
+    } while (-not $renderedMarkdown -and (Get-Date) -lt $deadline)
+    Assert-True $renderedMarkdown '描述被渲染成 Markdown（页面上出现「标题」「第一项」）'
+    # 只算**可见的 Text 元素**：编辑用的 textarea（`Edit`）里当然还留着原文，
+    # 隐藏节点也不算——它们都不代表"渲染结果"。
+    $rawLeftovers = @()
+    foreach ($element in @(Get-Elements $window)) {
+        $name = $element.Current.Name
+        if (-not $name -or -not $name.Contains('# 标题')) { continue }
+        $type = $element.Current.ControlType.ProgrammaticName.Replace('ControlType.', '')
+        if ($type -eq 'Text' -and -not $element.Current.IsOffscreen) {
+            $rawLeftovers += "[$type] $name"
+        }
+    }
+    if ($rawLeftovers.Count -gt 0) { Write-Host "  仍显示原文的元素: $($rawLeftovers -join ' | ')" -ForegroundColor DarkYellow }
+    Assert-True ($rawLeftovers.Count -eq 0) '可见区域内没有留下 `# 标题` 这种未渲染的原文'
+
     # ---- 删除事件（列表卡片上的「删除事件」→ 气泡确认）----
     $eventDeleteButton = Find-RowButton -Window $window -RowName $eventTitle -ButtonName '删除事件'
     Assert-True ([bool]$eventDeleteButton) '找到该事件的「删除事件」按钮'
@@ -430,6 +456,47 @@ try {
     }
     $eventGone = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.date -eq $eventDate })
     Assert-True ($eventGone.Count -eq 0) "删除后库里不再有该事件（$eventDate）"
+    # ================= 5/5 消费模板：新建 → 删除（设置页）=================
+    Write-Host "`n[crud] 5/5 消费模板：新建 → 删除"
+    $templateName = "UIA模板$stamp"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置')) '打开「应用设置」'
+    Start-Sleep -Seconds 2
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '消费模板')) '切到「消费模板」页签'
+    Start-Sleep -Seconds 2
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新建模板')) '点「新建模板」'
+    Start-Sleep -Milliseconds 1000
+    Assert-True (Set-Value (Wait-Element -Root $window -Name '请输入模板名称') $templateName) '填入模板名称'
+    # 分类是必填的（前端与后端都会挡）：点开 Select 再选一个已有分类
+    $categoryPicker = Wait-Element -Root $window -Name '请选择分类'
+    Assert-True ([bool]$categoryPicker) '找到「请选择分类」下拉'
+    if ($categoryPicker) {
+        Invoke-Element $categoryPicker | Out-Null
+        Start-Sleep -Milliseconds 800
+        $optionName = (Read-Table 'tbl_billadm_category' | Where-Object { $_.transaction_type -eq 'expense' } |
+            Sort-Object sort_order | Select-Object -First 1).name
+        $option = Wait-Element -Root $window -Name $optionName
+        Assert-True ([bool]$option) "下拉里选中分类「$optionName」"
+        if ($option) { Invoke-Element $option | Out-Null }
+        Start-Sleep -Milliseconds 800
+    }
+    Invoke-ModalButton -Window $window -Name '保存' | Out-Null
+    Start-Sleep -Seconds 3
+    $templateRows = @(Read-Table 'tbl_billadm_transaction_tpl' | Where-Object { $_.template_name -eq $templateName })
+    Assert-True ($templateRows.Count -eq 1) "库里出现新模板（$templateName）"
+
+    if ($templateRows.Count -eq 1) {
+        $templateDelete = Find-RowButton -Window $window -RowName $templateName -ButtonName '删除'
+        Assert-True ([bool]$templateDelete) '找到该模板行「删除」按钮'
+        if ($templateDelete) {
+            Click-Element $templateDelete | Out-Null
+            Start-Sleep -Milliseconds 1200
+            $templateConfirm = Find-All $window '删除'
+            if ($templateConfirm.Count -gt 0) { Invoke-Element $templateConfirm[$templateConfirm.Count - 1] | Out-Null }
+            Start-Sleep -Seconds 3
+        }
+        $templateGone = @(Read-Table 'tbl_billadm_transaction_tpl' | Where-Object { $_.template_name -eq $templateName })
+        Assert-True ($templateGone.Count -eq 0) "删除后库里不再有该模板（$templateName）"
+    }
 }
 finally {
     if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }

@@ -225,6 +225,15 @@ cargo clippy --all-targets -- -D warnings
   随后才切成主窗口。抓到前者的话后面所有按名字的查找都会落空（整轮 26 项全红的假故障）。
   稳妥做法（见 `fixtures/ui-crud.ps1` 的 `Get-ReadyWindow`）：**轮询**取窗口元素、
   直到它包含侧栏条目（如「消费记录」）为止，每轮重新查询也顺带规避了句柄失效。
+- **托盘图标能抓到，但浮出面板太"脆"，所以没做成常驻护栏**：Win11 下我们的托盘图标在
+  `TopLevelWindowForOverflowXamlIsland`（名字「系统托盘溢出窗口」）里，是一个 `Button`，`Name='Transactions'`；
+  点任务栏的「显示隐藏的图标」按钮能把它弹出来，右键会开一个 `#32768` 菜单。
+  但实测**两次里有一次浮出面板没弹出来**（面板失焦即关、出现时机不固定），做成 fixture 会变成红绿随机。
+  所以托盘菜单交互仍留在人工清单里；要再试的话，探针在 `target/tray2-probe.ps1`（不随仓库提交）。
+- **更新链路的两个纯函数已抽出来单测**（`updater.rs`）：`parse_release`（release JSON → 更新信息：
+  跳过预发布、`v` 前缀、取**第一个** `.exe` 资产、body 缺失给空串、没有 `.exe` 仍算"有更新"）
+  与 `digest_matches` / `normalize_digest`（`sha256:ABCD…` 大写去前缀后比较；缺失/空串则跳过校验）。
+  界面上的「检查更新」另有实测：真实 GitHub API 返回「已是最新版本」（探针 `target/update-probe.ps1`）。
 - **UIA 驱动这个界面的四条经验**（写自动化脚本时会反复踩）：
   1. Chromium 的 UIA 树是**惰性构建**的：窗口刚出现时首次查询常只返回二十来个元素、连 Button 都没有，
      要**轮询反复查询**把它唤醒（所以所有脚本都是"轮询到标记出现"而不是固定 sleep）；
