@@ -159,7 +159,9 @@ cargo clippy --all-targets -- -D warnings
 - **`Popconfirm` 的触发必须挂捕获阶段**（曾经的真实缺陷）：调用方常在子元素上写
   `stop_propagation()`（列表项里的删除按钮为了不触发整行"选中"），若触发挂在冒泡阶段就会被吃掉，
   气泡永远不弹——「删除图表」「删除事件」「删除关联交易」三处都因此点不动。
-  `popconfirm.rs` 现在用 `on:click:capture`，改动共享组件后请用 `fixtures/ui-smoke.ps1` 做回归。
+  `popconfirm.rs` 现在用 `on:click:capture`。**验证方式**：触发侧看气泡是否弹出（标题 + `取消/删除` 按钮）；
+  确认侧可用设置页删模板（普通 `<Button>` 子元素）走一遍"气泡 → 点确认 → 库里行数 -1"，
+  它与那三处用的是同一个组件、同一条确认链路。改动共享组件后请用 `fixtures/ui-smoke.ps1` 做回归。
 - **自动更新是自研实现**（`src-tauri/src/updater.rs`），**不用** `tauri-plugin-updater`：
   沿用 GitHub Releases + `asset.digest`(sha256) 校验的既有发布管线，不需要签名密钥与 `latest.json`。
   命令：`update_check` / `update_download`（发 `update:download-progress|complete|error` 事件）/ `update_cancel` / `update_install`；
