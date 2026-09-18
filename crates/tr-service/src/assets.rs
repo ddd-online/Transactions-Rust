@@ -158,6 +158,30 @@ fn generate_thumbnail(data: &[u8], out_path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView; // `dimensions()` 来自该 trait
+
+    /// 造一张纯色 PNG（宽高可控），再包成 data URI。
+    fn png_data_uri(width: u32, height: u32) -> String {
+        use base64::Engine;
+        let mut bytes = Vec::new();
+        image::DynamicImage::new_rgb8(width, height)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        )
+    }
+
+    fn temp_workspace(tag: &str) -> (PathBuf, Workspace) {
+        let dir = std::env::temp_dir().join(format!("tr-assets-{tag}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let workspace = Workspace::open(&dir).unwrap();
+        (dir, workspace)
+    }
 
     #[test]
     fn resolve_joins_under_assets_root() {
@@ -188,6 +212,117 @@ mod tests {
         assert!(!target.exists());
         // 再次调用（文件已不存在）不应 panic
         remove_image_files(&workspace, "key_events/2026-01-01/a.jpg", "");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 目录布局与命名是数据兼容的一部分：原图 `<uuid>.<ext>`、缩略图 `thumb_<uuid>.jpg`。
+    #[test]
+    fn save_image_writes_go_compatible_layout_and_scales_thumbnail_to_300() {
+        let (dir, workspace) = temp_workspace("save");
+
+        let (file_path, thumb_path) =
+            save_image(&workspace, "2026-01-01", "abc-123", &png_data_uri(600, 400)).unwrap();
+
+        assert_eq!(file_path, "key_events/2026-01-01/abc-123.png");
+        assert_eq!(thumb_path, "key_events/2026-01-01/thumb_abc-123.jpg");
+
+        // 原图按原字节落盘（不做任何转码）
+        let original = resolve(&workspace, &file_path);
+        assert!(original.exists());
+        assert_eq!(
+            image::load_from_memory(&std::fs::read(&original).unwrap())
+                .unwrap()
+                .dimensions(),
+            (600, 400)
+        );
+
+        // 缩略图：宽度压到 300 且保持比例（600x400 → 300x200），编码为 JPEG
+        let thumbnail = resolve(&workspace, &thumb_path);
+        let decoded = image::load_from_memory(&std::fs::read(&thumbnail).unwrap()).unwrap();
+        assert_eq!(decoded.dimensions(), (300, 200));
+        assert_eq!(
+            std::fs::read(&thumbnail).unwrap()[..2],
+            [0xFF, 0xD8],
+            "缩略图应是 JPEG"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_image_does_not_upscale_small_images() {
+        let (dir, workspace) = temp_workspace("small");
+
+        let (_, thumb_path) =
+            save_image(&workspace, "2026-01-01", "small-1", &png_data_uri(100, 50)).unwrap();
+
+        let decoded =
+            image::load_from_memory(&std::fs::read(resolve(&workspace, &thumb_path)).unwrap())
+                .unwrap();
+        assert_eq!(decoded.dimensions(), (100, 50));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 与原实现一致：缩略图失败时**回滚已写原图**，不能留下半个资产。
+    #[test]
+    fn save_image_rolls_back_original_when_thumbnail_fails() {
+        use base64::Engine;
+        let (dir, workspace) = temp_workspace("rollback");
+
+        let not_an_image =
+            base64::engine::general_purpose::STANDARD.encode(b"definitely not an image");
+        let error = save_image(
+            &workspace,
+            "2026-01-01",
+            "broken-1",
+            &format!("data:image/png;base64,{not_an_image}"),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("generate thumbnail"),
+            "错误文案应指向缩略图环节：{error}"
+        );
+
+        assert!(!resolve(&workspace, "key_events/2026-01-01/broken-1.png").exists());
+        let leftovers = std::fs::read_dir(assets_root(&workspace).join("key_events/2026-01-01"))
+            .unwrap()
+            .count();
+        assert_eq!(leftovers, 0, "回滚后目录应没有残留文件");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 未知 MIME 回退 `.jpg`（对照 Go `mimeToExt` 的 default 分支）。
+    #[test]
+    fn save_image_falls_back_to_jpg_extension_for_unknown_mime() {
+        let (dir, workspace) = temp_workspace("mime");
+
+        let payload = png_data_uri(20, 20);
+        let payload = payload.split_once(',').unwrap().1;
+        let (file_path, _) = save_image(
+            &workspace,
+            "2026-01-01",
+            "unknown-1",
+            &format!("data:application/octet-stream;base64,{payload}"),
+        )
+        .unwrap();
+        assert_eq!(file_path, "key_events/2026-01-01/unknown-1.jpg");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_image_rejects_data_uri_without_comma() {
+        let (dir, workspace) = temp_workspace("uri");
+
+        let error =
+            save_image(&workspace, "2026-01-01", "bad-1", "just-a-plain-string").unwrap_err();
+        assert!(
+            error.to_string().contains("no comma separator"),
+            "错误文案应与原实现对齐：{error}"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

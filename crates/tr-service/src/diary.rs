@@ -447,6 +447,49 @@ mod tests {
         assert_eq!(parse_year_month("2026-03"), None);
     }
 
+    /// 用户真实流程：A 工作空间导出 → 扫描目录 → 导入 B 工作空间，正文必须逐字节还原。
+    #[test]
+    fn export_then_import_round_trips_content() {
+        let (source, source_dir) = workspace("roundtrip-src");
+        let (target, target_dir) = workspace("roundtrip-dst");
+
+        let contents = [
+            ("2026-01-01", "第一行\n第二行"),
+            ("2026-01-02", "带 emoji 🙂 与制表符\t结束"),
+            ("2026-01-03", "无结尾换行"),
+        ];
+        for (date, content) in contents {
+            upsert(&source, date, content, "开心").unwrap();
+        }
+
+        let out = temp_dir("roundtrip-out");
+        let result = export_to_directory(&source, out.to_str().unwrap(), 0, 0).unwrap();
+        assert_eq!((result.total, result.success), (3, 3));
+
+        // 扫描出的文件按日期升序，且能被 import_file 逐个吃下
+        let scan = scan_directory(out.to_str().unwrap()).unwrap();
+        assert_eq!(scan.files.len(), 3);
+        let dates: Vec<&str> = scan.files.iter().map(|file| file.date.as_str()).collect();
+        assert_eq!(dates, vec!["2026-01-01", "2026-01-02", "2026-01-03"]);
+
+        for file in &scan.files {
+            let entry = import_file(&target, &file.path, &file.date).unwrap();
+            assert_eq!(entry.date, file.date);
+            // 导出格式是纯 Markdown，只有正文；mood 不随文件走（与原实现一致）
+            assert_eq!(entry.mood, "");
+        }
+
+        for (date, content) in contents {
+            let loaded = get_by_date(&target, date).unwrap();
+            assert_eq!(loaded.content, content, "{date} 正文未逐字节还原");
+            assert_eq!(loaded.word_count, tr_store::util::char_count(content));
+        }
+
+        for dir in [source_dir, target_dir, out] {
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+
     #[test]
     fn delete_is_idempotent() {
         let (workspace, dir) = workspace("delete");
