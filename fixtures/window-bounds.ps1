@@ -68,6 +68,7 @@ using System;
 using System.Runtime.InteropServices;
 public class TrBounds {
   [DllImport("user32.dll")] public static extern int GetDpiForSystem();
+  [DllImport("user32.dll")] public static extern int GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   public const uint WM_CLOSE = 0x0010;
@@ -134,9 +135,16 @@ function Stop-App {
     return $true
 }
 
-$dpi = [TrBounds]::GetDpiForSystem()
-$scale = $dpi / 96.0
-Write-Host "[bounds] 系统 DPI = $dpi（缩放 $scale）" -ForegroundColor Cyan
+# DPI 取**窗口自己的**而不是 `GetDpiForSystem()`：后者的返回值取决于调用进程的 DPI 感知级别
+# （同一个脚本在不同宿主里会拿到 96 或 144，实测踩过），而 `GetDpiForWindow` 总是该显示器的真实 DPI。
+function Get-WindowScale {
+    param($Window, [System.Diagnostics.Process]$Process)
+    $hwnd = if ($Window) { [IntPtr]$Window.Current.NativeWindowHandle } else { [IntPtr]::Zero }
+    $dpi = if ($hwnd -ne [IntPtr]::Zero) { [TrBounds]::GetDpiForWindow($hwnd) } else { 0 }
+    if ($dpi -le 0 -and $Process) { $dpi = [TrBounds]::GetDpiForSystem() }
+    if ($dpi -le 0) { $dpi = 96 }
+    return @{ Dpi = $dpi; Scale = $dpi / 96.0 }
+}
 
 # ---- 场景 1：配置里的逻辑尺寸要能还原成正确的物理窗口 ----
 $logicalWidth = 1000
@@ -148,6 +156,9 @@ try {
     $window = Get-AppWindow -Process $process
     if (-not $window) { throw '启动后 40 秒内没有拿到应用窗口' }
     Start-Sleep -Seconds 2
+    $dpiInfo = Get-WindowScale -Window $window -Process $process
+    $scale = $dpiInfo.Scale
+    Write-Host "[bounds] 窗口 DPI = $($dpiInfo.Dpi)（缩放 $scale）" -ForegroundColor Cyan
     $rect = $window.Current.BoundingRectangle
     $expectedWidth = $logicalWidth * $scale
     $expectedHeight = $logicalHeight * $scale
