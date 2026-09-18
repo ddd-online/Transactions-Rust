@@ -41,6 +41,7 @@ pwsh -File fixtures/ui-diary-io.ps1                 # 日记导入/导出端到�
 pwsh -File fixtures/ui-crud.ps1                     # UI 增删改端到端：分类/标签/图表增删、事件配色与描述、事件删除
 pwsh -File fixtures/ui-transactions.ps1               # 消费记录：编辑=先建后删（换 id、行数不变）+ 排序（金额降序）生效
 pwsh -File fixtures/ui-stock.ps1                    # 股票建仓端到端：真实行情查名 → 成交/持仓/资金记录 + 界面展示
+pwsh -File fixtures/ui-link-event.ps1               # 关联/解除关键事件：DatePicker 选日期 → key_event_date 落库 → 懒创建事件 → 解除
 pwsh -File fixtures/close-behavior.ps1              # 关闭行为三分支（quit / tray / 询问框）
 cargo tauri dev                                     # 人工验收：窗口 + 界面
 ```
@@ -87,6 +88,7 @@ build\target\transactions.exe               # 便携版（13.3 MB，双击即用
 | **UI 增删改**：分类/标签/图表 新增→删除、事件改颜色/写 Markdown/删除（断言全在数据库） | ✅ **端到端** | `fixtures/ui-crud.ps1` |
 | **消费记录页**：编辑一笔（**先建后删**：换 `transaction_id`、旧行消失、行数不变）、排序（重置 → 金额降序 → 表格区金额非递增） | ✅ **端到端** | `fixtures/ui-transactions.ps1` |
 | **同步到其他账本**：行内「同步到其他账本」→ 选目标账本 → 目标账本多一份新 id 的副本、源记录保留、切账本后界面可见（此前**零覆盖**） | ✅ **端到端** | `fixtures/ui-sync-ledger.ps1` |
+| **关联/解除关键事件**：行内「关联到关键事件」→ 弹窗里用 **DatePicker 选一个不是今天的日期** → 断言 `key_event_date` 落库 + 该日期懒创建空事件 → 「修改关联」→「解除关联」→ 字段清空 | ✅ **端到端**（同时是"弹窗里的下拉面板被 `overflow: hidden` 裁掉"这个真实缺陷的回归） | `fixtures/ui-link-event.ps1` |
 | 仅剩的**人工**项：托盘菜单交互（图标在 Win11"隐藏的图标"浮出面板里，脚本点不到）、设置页**新增模板**、视觉主观项（Markdown 排版、事件配色观感、图表样式） | ❌ 人工 | 见下表与各页清单 |
 
 > 说明：原先"原生对话框 UIA 合成不了"的判断是**错的**——`fixtures/ui-upload.ps1` 已经能完整驱动

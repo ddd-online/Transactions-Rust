@@ -129,6 +129,13 @@ pwsh -File fixtures/ui-transactions.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir 
 # 资金记录（余额链、买入变动 = -(成交额+手续费)）→ 界面上持仓卡片与交易历史的展示。
 pwsh -File fixtures/ui-stock.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
+# 关联/解除关键事件端到端（唯一自动化 DatePicker 的脚本）：记一笔 → 行内「关联到关键事件」→
+# 弹窗里用日期选择器选一个**不是今天**的日子（`link_date` 默认今天，选今天就等于没测选择器）
+# → 断言 触发器显示所选日期 + `key_event_date` 落库 + 该日期懒创建了一条空事件
+# → 再「修改关联」→「解除关联」→ 断言 `key_event_date` 清空。
+# 它同时是"弹窗里的下拉面板被 `overflow: hidden` 裁掉"这个真实缺陷的回归（见下方经验）。
+pwsh -File fixtures/ui-link-event.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
 # 代码规范
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -306,6 +313,24 @@ cargo clippy --all-targets -- -D warnings
   `popconfirm.rs` 现在用 `on:click:capture`。**验证方式**：触发侧看气泡是否弹出（标题 + `取消/删除` 按钮）；
   确认侧可用设置页删模板（普通 `<Button>` 子元素）走一遍"气泡 → 点确认 → 库里行数 -1"，
   它与那三处用的是同一个组件、同一条确认链路。改动共享组件后请用 `fixtures/ui-smoke.ps1` 做回归。
+- **弹窗里的下拉面板会被 `overflow: hidden` 裁掉**（真实缺陷，写 `fixtures/ui-link-event.ps1` 时才暴露）：
+  DatePicker / Select 的下拉都是**绝对定位的子元素**，而 `.ui-modal__content` 原来带
+  `overflow: hidden`（只为圆角）——小弹窗（如「关联关键事件」，只有一个表单项）里日历被裁到
+  **只剩月份标题和星期行**，日期格子看不见也点不动；中等高度的弹窗（关键事件新增、日记编辑等）
+  则被裁掉一半，看着像"面板画坏了"。原版 antd 把面板 **portal 到 body**，所以不受弹窗裁剪影响，
+  这是重写时引入的偏差。现已改成 `overflow: visible`（圆角不依赖裁剪：header/footer 都是透明底、
+  只有一条边框线，body 有内边距，没有子元素会画到圆角外）。
+  排查提示：**UIA 里看不到"被裁掉"**——被裁元素的矩形照样报出来（见下一条），
+  只有截图（全屏 PNG）才看得出"元素其实没画出来"。
+- **UIA 的"空矩形"元素是幽灵**（一度让 `fixtures/ui-link-event.ps1` 全绿却什么都没发生）：
+  没真正渲染出来的元素，`BoundingRectangle` 会报 ±∞（`X/Y=+∞`、`Width/Height=-∞`），
+  但 `IsOffscreen` **仍可能是 `False`**。于是：
+  1. 判据 `Width -le 0` 挡不住它（`-∞ <= 0` 为真倒是挡得住，但 `+∞` 参与 `[int]` 转换会**抛异常**：
+     `无法将值 "∞" 转换为类型 "System.Int32"`），必须显式排除非有限值
+     （`[double]::IsInfinity/IsNaN` 四个分量都查一遍）；
+  2. 命中的很可能是**别的日期选择器**（页面里没显示、但格子还挂在 UIA 树上的那些），
+     点它当然毫无反应 —— 所以要点"**真正渲染出来**"的那个，并且**轮询等它出现**，
+     不要固定 sleep 后取第一个同名元素。
 - **自动更新是自研实现**（`src-tauri/src/updater.rs`），**不用** `tauri-plugin-updater`：
   沿用 GitHub Releases + `asset.digest`(sha256) 校验的既有发布管线，不需要签名密钥与 `latest.json`。
   命令：`update_check` / `update_download`（发 `update:download-progress|complete|error` 事件）/ `update_cancel` / `update_install`；

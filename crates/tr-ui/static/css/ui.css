@@ -463,7 +463,12 @@
   background-color: var(--transactions-color-major-background);
   border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-xl);
-  overflow: hidden;
+  /* **不要 `overflow: hidden`**：弹窗里的下拉面板（DatePicker / Select 的 dropdown 都是
+   * `position: absolute` 的子元素）会被裁掉 —— 小弹窗（如「关联关键事件」）里日历被裁到
+   * 只剩标题和星期行，日期格子**看不见也点不动**（原 antd 把面板 portal 到 body，所以不受影响，
+   * 这是重写后引入的真实缺陷）。圆角不靠裁剪实现：header/footer 都是透明底、只有一条边框线，
+   * body 有内边距，没有任何子元素会画到圆角外。 */
+  overflow: visible;
   box-shadow: var(--transactions-shadow-xl);
 }
 
