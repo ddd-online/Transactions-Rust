@@ -7,7 +7,7 @@
 | # | 点哪里 | 期望 |
 |---|---|---|
 | 1 | 关键事件 → 选中一个事件 → **添加图片** → 选一张 jpg/png | **已自动化**：`fixtures/ui-upload.ps1` 驱动真实原生文件框（`#32770`）选图，断言「进度条走完 → 图库出现缩略图 → `<工作空间>\data\assets\key_events\<日期>\<uuid>.png` + `thumb_<uuid>.jpg` → 库里多一行」。人工只需**看一眼**图库里的缩略图好不好看（脚本只断言尺寸/字节数/文件名，管不了"好不好看"） |
-| 2 | 分类标签 → **拖动**分类/标签到新位置 | 顺序立即变化；重开应用后保持（排序落库已由黄金对比 P1-3 覆盖，这里只看手感） |
+| 2 | 分类标签 → **拖动**分类/标签到新位置 | **已自动化**（`fixtures/ui-drag.ps1`）：真实鼠标拖拽 → 顺序变化 → `sort_order` 落库 → 界面同步 → **重进页面仍一致**。**曾经拖不动**：Tauri 默认 `dragDropEnabled: true` 会让 wry 在 WebView2 宿主窗口上注册 OLE 拖放目标，而 Chromium 在 Windows 上的页内拖拽也走 OLE，于是 `drop` 永远到不了页面（`dragstart`/`dragover` 却正常，很有欺骗性）——已在建窗口时 `disable_drag_drop_handler()` 修复，脚本即回归 |
 | 3 | 设置 → 关闭行为 = **缩小到托盘** → 点窗口关闭 | 窗口消失但进程仍在；托盘右键「显示主窗口」能恢复；「关闭程序」能退出（三分支的自动验证见 `close-behavior.ps1`，这里看托盘菜单交互） |
 | 4 | 股票 → 账户 → 追加本金（已验）→ 持仓 → **建仓**：代码 `600519`、点「查询股票名称」、价格、手数 | **已实测整条链路**：填代码 → `查询股票名称` → 名称自动变成「贵州茅台」（走真实行情接口）→ 填 100 元 / 1 手 → 提交；页面随即显示 `贵州茅台 600519 持仓 1手 现价 ¥1257.12 -0.78% 浮盈 +115706.90 +1156.48%`；库里落 1 笔成交、持仓 `数量=100 成本=1000510 分`、资金记录 3 条。成本 = 100×100 股 + 手续费 5.10 = 10,005.10 元 ✓，浮盈 = (1257.12-100)×100 - 5.10 = 115,706.90 ✓ |
 | 5 | 设置 → 日记配置 → **导出**到某目录 / 从目录**导入** | 导出生成文件；导入后树里出现对应日期。**数据链路已由单测覆盖**（导出 → 扫描 → 导入逐字节还原，含 emoji/换行；UTF-8/UTF-16/GBK 编码回退；按年/月过滤）——人工只需确认**原生选目录对话框能弹出** |
@@ -35,6 +35,8 @@ pwsh -File fixtures/ui-smoke.ps1 -Workspace <ws> -WriteFlow
 pwsh -File fixtures/contract-audit.ps1              # 界面请求结构体 vs tr-ipc/外壳 的字段名契约
 pwsh -File fixtures/ui-shots.ps1 -Workspace <ws>    # 像素级逐页验证 + 主题切换验证（截图落 target\ui-shots\）
 pwsh -File fixtures/ui-upload.ps1                   # 图片上传端到端：驱动原生文件框 → 落盘 → 缩略图 → 入库 → 界面刷新
+pwsh -File fixtures/ui-drag.ps1                     # 拖拽排序端到端：真实鼠标拖拽 → sort_order 落库 → 重进页面保持
+pwsh -File fixtures/window-bounds.ps1               # 窗口几何往返：逻辑尺寸 → 关闭写回 → 重启尺寸/位置不变
 pwsh -File fixtures/close-behavior.ps1              # 关闭行为三分支（quit / tray / 询问框）
 cargo tauri dev                                     # 人工验收：窗口 + 界面
 ```
@@ -75,7 +77,9 @@ build\target\transactions.exe               # 便携版（13.3 MB，双击即用
 | 图片**写入**链路单测：布局/命名、>300 缩到 300、小图不放大、失败回滚原图、未知 MIME 回退 `.jpg`、无逗号 data URI 报错 | ✅ **7 个单测** | `cargo test -p tr-service assets::` |
 | 日记**导入导出**：编码回退链（UTF-8/UTF-16/GBK）、按年/月过滤、**导出→扫描→导入**逐字节还原 | ✅ **8 个单测** | `cargo test -p tr-service diary::` |
 | 股票**下单 + 行情**：代码查询名称（真实行情接口）、现价/涨跌幅/浮盈显示、成交与持仓落库 | ✅ 已实测整条链路 | 见快速验收第 4 项 |
-| 仅剩的**人工**项：拖拽排序手感、托盘菜单交互、日记导入/导出的**选目录对话框** | ❌ 人工 | 见下表与各页清单 |
+| **拖拽排序**：分类/标签/模板 拖动换位 → `sort_order` 落库 → 界面与库一致、重进页面保持 | ✅ **端到端**（真实鼠标） | `fixtures/ui-drag.ps1` |
+| **窗口几何往返**：逻辑尺寸开工 → 关闭写回逻辑值 → 再启动尺寸/位置不变 | ✅ **端到端** | `fixtures/window-bounds.ps1` |
+| 仅剩的**人工**项：托盘菜单交互、日记导入/导出的**选目录对话框**、视觉主观项（Markdown 排版、事件配色、图表样式） | ❌ 人工 | 见下表与各页清单 |
 
 > 说明：原先"原生对话框 UIA 合成不了"的判断是**错的**——`fixtures/ui-upload.ps1` 已经能完整驱动
 > 图片选择的原生文件框（关键点：它是应用窗口的子窗口、且属于 WebView2 浏览器进程；输入路径必须用
@@ -206,9 +210,10 @@ build\target\transactions.exe               # 便携版（13.3 MB，双击即用
 原组件：`TransactionsCategoryTagSetting`、`CategoryColumn`、`TagColumn`。
 
 - [ ] 分类：支出/收入/转账三类分开列；新增、改名、删除、拖拽排序（sort_order 落库并在重启后保持）
-      —— **拖拽这一步必须人工点**：组件用原生 HTML5 拖放（`draggable` + `dragstart/dragover/drop`，
-      与原实现的 SortableJS 同机制），合成鼠标事件驱动不了浏览器的拖放循环；
-      但"排序结果持久化"（`sort_order` 整组重排后逐行与 Go 一致）已由黄金对比 P1-3 覆盖
+      —— **拖拽已自动化**（`fixtures/ui-drag.ps1`）：先前的"合成鼠标事件驱动不了拖放循环"是错的，
+      OS 级鼠标输入对 Chromium 就是真拖拽；真正的问题在 Tauri 侧（默认注册 OLE 拖放目标吃掉了
+      页内 HTML5 拖放的 `drop`），修复见 `AGENTS.md`。
+      "排序结果持久化"另有黄金对比 P1-3（`sort_order` 整组重排后逐行与 Go 一致）
 - [ ] 删除被记录引用的分类 → 原实现的提示文案，不静默丢数据
 - [ ] 标签：新增、删除、按分类归档、排序；删标签后记录上的该标签消失
 - [ ] 初始化默认分类/标签：只在空账本上有意义，重复点击行为与原实现一致
@@ -244,6 +249,11 @@ build\target\transactions.exe               # 便携版（13.3 MB，双击即用
 9. **HEIC 转换在界面层**（canvas 交给 WebView2/系统解码器），后端只接受 JPEG/PNG/GIF/WebP。
 10. **自动更新是自研实现**（GitHub Releases + `asset.digest` sha256），不用 `tauri-plugin-updater`，
     不需要签名密钥与 `latest.json`。
+11. **关闭 Tauri 的原生文件拖放**（`.disable_drag_drop_handler()`）：Tauri 默认会接管拖放，
+    那会连带吃掉**页内**的 HTML5 拖拽（分类/标签/模板的拖动排序），所以必须让 WebView2 自己处理。
+    原 Electron 版本来也没有"把文件拖进窗口"这个功能，因此用户可见行为一致。
+12. **窗口几何按逻辑像素（DIP）存取**，与原 Electron 版的 `getBounds()` 一致
+    （Tauri 的 `inner_size()` 给的是物理像素，必须换算；见 `AGENTS.md`）。
 
 ## 数据兼容的边界
 

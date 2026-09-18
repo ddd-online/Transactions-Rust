@@ -97,6 +97,15 @@ pwsh -File fixtures/ui-upload.ps1 [-Workspace <ws>] [-OutDir <dir>]
 # 选「是」后退出。原生询问框的按钮在 UIA 里是 `是(Y)`/`否(N)`（Pane 类型），脚本已兼容。
 pwsh -File fixtures/close-behavior.ps1 [-Exe <exe>] [-Workspace <ws>]
 
+# 拖拽排序端到端：真实鼠标（按下 → 20 段移动 → 抬起，OS 级输入对 Chromium 就是真拖拽）
+# 把第 1 个分类拖到第 3 个位置，断言 顺序变化 + sort_order 落库 + 界面同步 + 重进页面仍一致。
+# 它锁的是"Tauri 默认 dragDropEnabled 会吃掉页内 HTML5 拖放"这个真实缺陷（见下方经验）。
+pwsh -File fixtures/ui-drag.ps1 [-Workspace <ws>] [-OutDir <dir>]
+
+# 窗口几何往返：用逻辑尺寸启动 → 断言物理窗口 = 逻辑 × DPI 缩放 → 关闭 → 断言配置里写回的仍是
+# 逻辑值 → 再启动一次断言尺寸/位置完全一致（"记住上次的窗口大小和位置"的回归测试）。
+pwsh -File fixtures/window-bounds.ps1 [-Exe <exe>] [-OutDir <dir>]
+
 # 代码规范
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -155,6 +164,22 @@ cargo clippy --all-targets -- -D warnings
   **不会碰用户真实的 `~/.transactions.json`**；手测 release 版时也可以这么隔离。
 - **别按进程名判断"应用是否在运行"**：原 Electron 版的 exe 也叫 `Transactions.exe`
   （本机装在 `D:\software\Transactions\`）。判重要按**完整路径**，否则会误判、误杀用户正在用的应用。
+- **Tauri 默认会吃掉页内 HTML5 拖拽**（曾经的真实缺陷，"分类/标签/模板拖不动"）：
+  Tauri 窗口默认 `dragDropEnabled: true`，wry 于是在 WebView2 宿主 HWND 上 `RegisterDragDrop`
+  并 `SetAllowExternalDrop(false)`（`wry-0.55.1/src/webview2/mod.rs:150`）；而 **Chromium 在 Windows 上的
+  页内拖拽也走 OLE 拖放**，于是 `drop` 永远到不了页面 —— 现象很有欺骗性：
+  `dragstart`/`dragover` 都正常（行会变半透明、插入指示线也会画），只有 `drop` 不触发。
+  修法：建窗口时调 `.disable_drag_drop_handler()`（`shell.rs` 的 `create_main_window` / `create_init_window`）。
+  代价是拿不到 `tauri://drag-drop` 原生文件落盘事件——本项目与原 Electron 版都没有这个功能。
+  回归：`fixtures/ui-drag.ps1`。
+- **窗口几何的单位是逻辑像素（DIP），不是物理像素**（曾经的真实缺陷，"记不住窗口大小和位置"）：
+  Windows 上 `window.inner_size()` / `outer_position()` 返回**物理**像素，
+  而 `WebviewWindowBuilder::inner_size()` / `position()` 收的是**逻辑**像素；
+  原 Electron 版两边都是 DIP（`getBounds()` / `new BrowserWindow({...})`），
+  且 `~/.transactions.json` 是**与原版共用**的配置文件。若把物理值原样存回去，
+  150% 缩放的机器上窗口每次启动都会放大 1.5 倍、位置越跑越偏。
+  `save_window_bounds` 现在做物理 → 逻辑换算（纯函数 `logical_bounds` + 4 个单测），
+  回归：`fixtures/window-bounds.ps1`（启动 → 关闭 → 再启动，尺寸/位置必须一致）。
 - **UIA 驱动这个界面的四条经验**（写自动化脚本时会反复踩）：
   1. Chromium 的 UIA 树是**惰性构建**的：窗口刚出现时首次查询常只返回二十来个元素、连 Button 都没有，
      要**轮询反复查询**把它唤醒（所以所有脚本都是"轮询到标记出现"而不是固定 sleep）；

@@ -47,6 +47,15 @@ pub fn create_startup_window(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// 主窗口。
+///
+/// `disable_drag_drop_handler()` **不能删**（曾经的真实缺陷）：
+/// Tauri 默认 `dragDropEnabled: true`，wry 会 `RegisterDragDrop` 到 WebView2 的宿主 HWND
+/// 并 `SetAllowExternalDrop(false)`；而 Chromium 在 Windows 上**内部拖拽也是走 OLE 拖放**的，
+/// 于是页面的 HTML5 拖拽（`SortableJS` 等价物，本项目用 `components/ui/drag_sort.rs`）
+/// 落点永远收不到 `drop` —— 表现就是"分类/标签/模板拖不动"。
+/// 关掉它之后由 WebView2 自己处理拖放，页内拖拽恢复正常；
+/// 代价是拿不到 `tauri://drag-drop` 原生文件落盘事件，而本项目（与原 Electron 版一样）
+/// 本来就没有这个功能。改动这里请用 `fixtures/ui-drag.ps1` 回归。
 pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     if let Some(existing) = app.get_webview_window(MAIN_WINDOW) {
         let _ = existing.show();
@@ -60,6 +69,7 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             .title("Transactions")
             .inner_size(config.width as f64, config.height as f64)
             .min_inner_size(960.0, 640.0)
+            .disable_drag_drop_handler()
             .decorations(false);
 
     if let (Some(x), Some(y)) = (config.x, config.y) {
@@ -83,6 +93,7 @@ pub fn create_init_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .title("欢迎使用 Transactions")
         .inner_size(600.0, 560.0)
         .resizable(false)
+        .disable_drag_drop_handler()
         .decorations(false)
         .center()
         .build()?;
@@ -151,17 +162,48 @@ pub fn show_main_window(app: &AppHandle) {
     }
 }
 
+/// 物理像素 → 逻辑像素（配置里存的单位）。
+///
+/// 单独抽出来是为了能单测：高 DPI 下漏掉这一步，窗口每次启动都会放大 `scale` 倍并偏移
+/// （见 `save_window_bounds` 的注释）。`scale` 非法时按 1.0 处理，避免除零。
+fn logical_bounds(
+    size: tauri::PhysicalSize<u32>,
+    position: Option<tauri::PhysicalPosition<i32>>,
+    scale: f64,
+) -> (tauri::LogicalSize<u32>, Option<tauri::LogicalPosition<i32>>) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (
+        size.to_logical(scale),
+        position.map(|value| value.to_logical(scale)),
+    )
+}
+
 /// 记录主窗口当前尺寸与位置（等价原 `handleWindowClose` 里的 bounds 合并）。
+///
+/// **单位必须是逻辑像素（DIP）**，这是踩过的坑：
+/// - 原实现用 Electron 的 `mainWindow.getBounds()`（DIP）存、`new BrowserWindow({width,height,x,y})`（DIP）取；
+/// - Windows 上 Tauri 的 `inner_size()` / `outer_position()` 返回的是**物理像素**，
+///   而 `WebviewWindowBuilder::inner_size()` / `position()` 收的是**逻辑像素**。
+///   直接把物理值存下来、下次当逻辑值用，在 150% 缩放的本机上窗口每次启动都会放大 1.5 倍、
+///   并且位置越跑越偏（用户实际反馈："每次打开软件都没有保留上次的窗口大小和位置"）。
+/// - 顺带一提，`~/.transactions.json` 是与原 Electron 版**共用**的配置文件，
+///   单位写错还会让两个程序互相污染窗口几何。
 pub fn save_window_bounds(app: &AppHandle, window: &WebviewWindow) {
     let state = app.state::<DesktopState>();
     let Ok(size) = window.inner_size() else {
         return;
     };
-    let position = window.outer_position().ok();
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let (logical_size, logical_position) =
+        logical_bounds(size, window.outer_position().ok(), scale);
     state.config.update(|config| {
-        config.width = size.width;
-        config.height = size.height;
-        if let Some(position) = position {
+        config.width = logical_size.width;
+        config.height = logical_size.height;
+        if let Some(position) = logical_position {
             config.x = Some(position.x);
             config.y = Some(position.y);
         }
@@ -241,6 +283,57 @@ pub fn handle_run_event(app: &AppHandle, event: &RunEvent) {
     if let RunEvent::ExitRequested { .. } = event {
         if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
             save_window_bounds(app, &window);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn physical(width: u32, height: u32) -> tauri::PhysicalSize<u32> {
+        tauri::PhysicalSize::new(width, height)
+    }
+
+    fn physical_position(x: i32, y: i32) -> tauri::PhysicalPosition<i32> {
+        tauri::PhysicalPosition::new(x, y)
+    }
+
+    /// 150% 缩放：1920×1290 物理像素 = 1280×860 逻辑像素（配置里存的就是这个）。
+    #[test]
+    fn logical_bounds_divides_by_scale_factor() {
+        let (size, position) =
+            logical_bounds(physical(1920, 1290), Some(physical_position(300, 225)), 1.5);
+        assert_eq!((size.width, size.height), (1280, 860));
+        let position = position.unwrap();
+        assert_eq!((position.x, position.y), (200, 150));
+    }
+
+    /// 100% 缩放：原样返回（不能"顺手取整"出偏差）。
+    #[test]
+    fn logical_bounds_is_identity_at_scale_one() {
+        let (size, position) =
+            logical_bounds(physical(1400, 1000), Some(physical_position(-120, 40)), 1.0);
+        assert_eq!((size.width, size.height), (1400, 1000));
+        let position = position.unwrap();
+        assert_eq!((position.x, position.y), (-120, 40));
+    }
+
+    /// 没有位置（窗口尚未定位成功）时只写尺寸，不能把 `None` 变成 `(0,0)`——
+    /// 那会让下次启动把窗口放到左上角。
+    #[test]
+    fn logical_bounds_keeps_missing_position_missing() {
+        let (size, position) = logical_bounds(physical(1600, 1200), None, 2.0);
+        assert_eq!((size.width, size.height), (800, 600));
+        assert!(position.is_none());
+    }
+
+    /// 非法缩放因子按 1.0 处理（除零会得到 inf/NaN 并写出垃圾配置）。
+    #[test]
+    fn logical_bounds_falls_back_on_invalid_scale() {
+        for scale in [0.0, -1.5, f64::NAN, f64::INFINITY] {
+            let (size, _) = logical_bounds(physical(1000, 800), None, scale);
+            assert_eq!((size.width, size.height), (1000, 800), "scale={scale}");
         }
     }
 }

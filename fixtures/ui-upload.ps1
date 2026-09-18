@@ -62,11 +62,19 @@ $ws = [System.IO.Path]::GetFullPath($Workspace)
 if (-not $Workspace) { $ws = [System.IO.Path]::GetFullPath((Join-Path $OutDir 'ws')) }
 
 $exeFull = [System.IO.Path]::GetFullPath($Exe)
-$running = Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
+# 单实例插件按 identifier 判重：本仓库里**任何**构建在跑都会顶掉本次启动
+# （包括隐藏到托盘的、以及 build\target 下的便携版）。判重按**完整路径**，
+# 不能按进程名——原 Electron 版也叫 Transactions.exe，且在 D:\software 下，与我们的 identifier 无关。
+$repoPrefix = $repo.TrimEnd('\') + '\'
+$running = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
     $path = try { $_.Path } catch { $null }
-    $path -and ([System.IO.Path]::GetFullPath($path) -eq $exeFull)
+    $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+})
+if ($running) {
+    $paths = $running | ForEach-Object { try { $_.Path } catch { '(unknown)' } }
+    throw "本仓库已有 Transactions 实例在运行（PID $($running.Id -join ', ')）：$($paths -join ' / ')`n" +
+        "单实例插件会顶掉本次启动，请先退掉它们（注意：隐藏到托盘也算在运行）。"
 }
-if ($running) { throw "同一个可执行文件已有实例在运行（PID $($running.Id -join ', ')），请先关掉" }
 
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
