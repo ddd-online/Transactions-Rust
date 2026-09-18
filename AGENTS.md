@@ -112,8 +112,13 @@ pwsh -File fixtures/window-bounds.ps1 [-Exe <exe>] [-OutDir <dir>]
 pwsh -File fixtures/ui-diary-io.ps1 [-Workspace <ws>] [-OutDir <dir>]
 
 # UI 增删改端到端（断言都落在数据库上）：分类/标签/图表的"新增→删除"、
-# 关键事件"点色板改颜色 / 写 Markdown 描述 / 删除事件"。
+# 关键事件"点色板改颜色 / 写 Markdown 描述 / 删除事件"、设置页"新建模板→删除"。
 pwsh -File fixtures/ui-crud.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
+# 股票建仓端到端：代码 → 查询股票名称（真实行情）→ 价格/手数 → 建仓，
+# 断言 成交（价按分/手数/股数/成交额/手续费）→ 持仓（数量、成本=成交额+手续费）→
+# 资金记录（余额链、买入变动 = -(成交额+手续费)）→ 界面上持仓卡片与交易历史的展示。
+pwsh -File fixtures/ui-stock.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
 # 代码规范
 cargo fmt --check
@@ -234,6 +239,25 @@ cargo clippy --all-targets -- -D warnings
   跳过预发布、`v` 前缀、取**第一个** `.exe` 资产、body 缺失给空串、没有 `.exe` 仍算"有更新"）
   与 `digest_matches` / `normalize_digest`（`sha256:ABCD…` 大写去前缀后比较；缺失/空串则跳过校验）。
   界面上的「检查更新」另有实测：真实 GitHub API 返回「已是最新版本」（探针 `target/update-probe.ps1`）。
+- **`Input` 的 UIA 判据用 `ControlType.Edit`，别用 ClassName**（踩过）：本项目的输入框渲染成
+  `class='ui-input__control'`，ClassName 并不是 `'Edit'`。用 `ClassName -eq 'Edit'` 过滤会
+  **一个都找不到**（当时表现为"建仓弹窗里找不到股票代码输入框"，整轮全红）。
+  只有原生 `<textarea>` 那类才是 `ClassName='Edit'`，所以判据要写成"ControlType 是 Edit **或** ClassName 是 Edit"。
+- **同名按钮要按"可见 + 在窗口矩形内"筛**：同一个页面里可能有多个同名按钮
+  （未展开的面板 / 另一个页签里也在 DOM 里），按名字取第一个常常拿到**不可见的那个**，点它毫无反应。
+  `fixtures/ui-stock.ps1` 的 `Find-VisibleButton` 会同时校验 `IsOffscreen=false` 与矩形落在窗口内，
+  并支持"取最后一个"（弹窗确认按钮与页面入口同名）。
+- **股票页的「减仓/清仓」目前没能自动化（诚实记录）**：详情区那两个按钮 UIA 报
+  `IsOffscreen=False`、矩形也确实在窗口内（实测窗口 `(304,304,2497,1438)`、按钮 `(2569,546,77,43)`），
+  但无论用 `InvokePattern` 还是真实鼠标点其矩形中心，都**不会**弹出「记录减仓/清仓」弹窗，
+  页面文案毫无变化。已试过：先点持仓卡片选中、过滤隐藏元素、加大窗口宽度、重试三次 —— 都不行。
+  这两条路径的**落库语义**有黄金对比阶段 3 与服务层单测覆盖，界面点击留给人工；
+  `fixtures/ui-stock.ps1` 因此只覆盖**建仓**整条链路 + 持仓卡片/交易历史的展示。
+- **"复用工作空间"的判断要在默认值赋值之前取**（踩过）：脚本常写成
+  `if (-not $Workspace) { $Workspace = <默认路径> }` 之后再 `if (-not $Workspace -or ...) { 重新播种 }`，
+  但那时 `$Workspace` 已经非空，条件恒为 false → 永远不重新播种。
+  断言"持仓数量"这类**绝对状态**时必须每次重新播种，否则上一轮的持仓会叠加
+  （实测 300 股变 600 股，后面全崩）。做法：函数开头先 `$explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)`。
 - **UIA 驱动这个界面的四条经验**（写自动化脚本时会反复踩）：
   1. Chromium 的 UIA 树是**惰性构建**的：窗口刚出现时首次查询常只返回二十来个元素、连 Button 都没有，
      要**轮询反复查询**把它唤醒（所以所有脚本都是"轮询到标记出现"而不是固定 sleep）；
