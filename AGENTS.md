@@ -88,6 +88,11 @@ pwsh -File fixtures/contract-audit.ps1
 # 同时把 7 张 PNG 落到 target\ui-shots\（人工验收可以先翻图）。补 UIA 的盲区。
 pwsh -File fixtures/ui-shots.ps1 [-Workspace <ws>] [-OutDir <dir>]
 
+# 图片上传端到端：真的点「添加图片」拉起**原生文件选择框**、选一张自己生成的 600×400 PNG，
+# 断言 原图按原字节落盘 + 缩略图缩到 300×200 且同目录同名前缀 + 库里 file_path/thumb_path/event_date
+# + 界面出现「下载图片」。失败会留一张全屏截图（target\upload-smoke\failure.png）。
+pwsh -File fixtures/ui-upload.ps1 [-Workspace <ws>] [-OutDir <dir>]
+
 # 关闭行为三分支：quit → 进程退出；tray → 进程存活且窗口隐藏；空 → 弹「关闭选项」框，
 # 选「是」后退出。原生询问框的按钮在 UIA 里是 `是(Y)`/`否(N)`（Pane 类型），脚本已兼容。
 pwsh -File fixtures/close-behavior.ps1 [-Exe <exe>] [-Workspace <ws>]
@@ -163,6 +168,26 @@ cargo clippy --all-targets -- -D warnings
   代码填 `600519` → 点「查询股票名称」 → 名称框**自动变成「贵州茅台」**（这一步打通了真实行情接口）
   → 填价格/手数 → 提交。随后断言三处：页面行显示现价/涨跌幅/浮盈、`tbl_billadm_stock_trade` 多一笔、
   持仓数量与成本对得上（**成本含手续费**：`价格×股数 + 佣金`，单位是分）。
+- **原生文件选择框其实是能自动化的**（`fixtures/ui-upload.ps1` 就是证据，别再想当然写成"人工项"）：
+  1. **窗口归属反直觉**：WebView2 的文件框（`#32770`，标题「打开」）**不是桌面顶层窗口**，
+     它是**应用窗口 HWND 的子窗口**，而且 `ProcessId` 属于 WebView2 浏览器进程（`msedgewebview2.exe`）。
+     所以按 `RootElement` 的 Children 找、或按 app 进程号过滤，**都找不到**——
+     表现是"点了按钮但对话框没弹出来"（我为此白跑了好几轮）。正确姿势：在
+     **应用窗口元素的 `TreeScope::Descendants` 里按 `ClassName='#32770'` 找**。
+  2. **输入路径必须走剪贴板**：`SendKeys` 逐字符输入会被**中文输入法**接走，反斜杠 `\` 变成顿号 `、`，
+     于是路径不存在、回车后弹「找不到文件」。用 `Set-Clipboard` + `Ctrl+A` + `Ctrl+V`。
+  3. **提交用「右方向键 + 回车」**：输入路径会弹出 shell 自动补全下拉，
+     - 直接回车 = "接受补全"，完整路径被换成裸文件名 → 「找不到文件」；
+     - `TAB` 能收起下拉，但焦点也移到"文件类型"下拉，回车不再触发默认按钮；
+     - `WM_COMMAND(IDOK)` 会关掉对话框但**跳过 modern 对话框"把文件名变成选中项"的内部步骤**——
+       等同于取消，界面毫无反应（最难查的一种失败：看起来成功了，但没有文件回来）；
+     - 右方向键收起下拉且焦点仍在编辑框 → 回车 = 按「打开」。
+  4. **别用 UIA 坐标点那个「打开(O)」**：对话框底部一行是 legacy provider，报出的矩形不可信
+     （实测「打开」的 rect 恰好等于对话框下边缘）；而且**不能按 AutomationId 找控件**——
+     文件列表项（`.agents`、`.ssh`…）的 AutomationId 恰好是 1..N，`id=1` 会点中列表第一项。
+  5. 临时 HOME 里要**先建 `Desktop` 目录**，否则文件框起始目录不存在，会先弹「位置不可用」。
+  6. 判定成功要**看结果**（资产目录/数据库/界面文案），不要看"对话框关没关"——
+     上面第 3 条的坑里，对话框确实关了但什么都没发生。
 - **`Popconfirm` 的触发必须挂捕获阶段**（曾经的真实缺陷）：调用方常在子元素上写
   `stop_propagation()`（列表项里的删除按钮为了不触发整行"选中"），若触发挂在冒泡阶段就会被吃掉，
   气泡永远不弹——「删除图表」「删除事件」「删除关联交易」三处都因此点不动。
