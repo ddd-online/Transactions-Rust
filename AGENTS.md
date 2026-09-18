@@ -115,6 +115,10 @@ pwsh -File fixtures/ui-diary-io.ps1 [-Workspace <ws>] [-OutDir <dir>]
 # 关键事件"点色板改颜色 / 写 Markdown 描述 / 删除事件"、设置页"新建模板→删除"。
 pwsh -File fixtures/ui-crud.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
+# 消费记录页：记三笔 → **编辑一笔**（断言"先建后删"：换 transaction_id、旧记录消失、行数不变）
+# → **排序**（重置 → 加「金额 降序」→ 应用 → 断言表格区金额序列非递增、最大值排第一）。
+pwsh -File fixtures/ui-transactions.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
 # 股票建仓端到端：代码 → 查询股票名称（真实行情）→ 价格/手数 → 建仓，
 # 断言 成交（价按分/手数/股数/成交额/手续费）→ 持仓（数量、成本=成交额+手续费）→
 # 资金记录（余额链、买入变动 = -(成交额+手续费)）→ 界面上持仓卡片与交易历史的展示。
