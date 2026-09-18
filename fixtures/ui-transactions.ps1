@@ -1,8 +1,11 @@
-# ui-transactions.ps1 —— 消费记录页的两条关键交互：**编辑（先建后删）** 与 **排序**。
+# ui-transactions.ps1 —— 消费记录页的三条关键交互：**编辑（先建后删）**、**保存为模板** 与 **排序**。
 #
 # 为什么需要它：
 #   * 「编辑」在原实现里是**先建后删**（不是原地 UPDATE）——`transaction_id` 会换一个、
 #     行数不变。这条语义在数据级黄金对比（阶段 2）里覆盖过落库，但界面这条路径没人走过；
+#   * 「保存为模板」是记账弹窗里的第二条出口（`handleConfirmSaveTemplate` → `template_create`），
+#     设置页的"新建模板→删除"已由 `fixtures/ui-crud.ps1` 覆盖，但从**记一笔弹窗**存模板这条没人走过：
+#     它的名称走 `template_name` 这个子弹窗输入框，类型/分类/标签/描述全部取当前表单；
 #   * 「排序」是页面上唯一的排序入口（`TrSortModal` 的 4 个字段 + 升降序），
 #     排序字段要过白名单、方向要强制 asc/desc，改坏了页面顺序会悄悄变形。
 #
@@ -279,8 +282,8 @@ try {
     Start-Sleep -Seconds 1
     Write-Host "[tr] UIA 可读元素 $((Get-Elements $window).Count) 个" -ForegroundColor Cyan
 
-    # ================= 1/3 记三笔（准备数据：排序需要多行才有意义）=================
-    Write-Host "`n[tr] 1/3 记三笔：77.77 / 12.34 / 45.67"
+    # ================= 1/4 记三笔（准备数据：排序需要多行才有意义）=================
+    Write-Host "`n[tr] 1/4 记三笔：77.77 / 12.34 / 45.67"
     Assert-True (Add-Record -Window $window -Description $sourceDesc -Amount '77.77') "记一笔 77.77（$sourceDesc）"
     Assert-True (Add-Record -Window $window -Description "$secondDesc" -Amount '12.34') "记一笔 12.34（$secondDesc）"
     Assert-True (Add-Record -Window $window -Description "$thirdDesc" -Amount '45.67') "记一笔 45.67（$thirdDesc）"
@@ -294,8 +297,8 @@ try {
         Assert-True ($sourceRows[0].price -eq 7777) "金额按分存（77.77 → 7777，实际 $($sourceRows[0].price)）"
     }
 
-    # ================= 2/3 编辑：先建后删 =================
-    Write-Host "`n[tr] 2/3 编辑这笔记录：金额 77.77 → 88.88、描述改名"
+    # ================= 2/4 编辑：先建后删 =================
+    Write-Host "`n[tr] 2/4 编辑这笔记录：金额 77.77 → 88.88、描述改名"
     $editButton = Find-RowButton -Window $window -RowText $sourceDesc -ButtonName '编辑记录'
     Assert-True ([bool]$editButton) '找到该行的「编辑记录」按钮'
     if (-not $editButton) { throw '找不到编辑按钮，后续无法继续' }
@@ -331,8 +334,53 @@ try {
     Assert-True (@($recordsAfter | Where-Object { $_.description -eq $sourceDesc }).Count -eq 0) '旧描述不复存在'
     Assert-True ($recordsAfter.Count -eq $countBefore) "总条数不变（编辑 = 先建后删，$countBefore → $($recordsAfter.Count)）"
 
-    # ================= 3/3 排序 =================
-    Write-Host "`n[tr] 3/3 排序：加一条「金额 降序」并应用"
+    # ================= 3/4 保存为模板 =================
+    # 从**记一笔弹窗**里存模板（设置页那条已由 ui-crud 覆盖）：名称走子弹窗的输入框，
+    # 类型/分类/标签/描述取当前表单 —— 所以这里复用刚编辑过的那笔记录（它类型/分类都在）。
+    Write-Host "`n[tr] 3/4 保存为模板：从编辑弹窗存一个模板"
+    $templateName = "UIA表单模板$stamp"
+    $editAgain = Find-RowButton -Window $window -RowText $editedDesc -ButtonName '编辑记录'
+    Assert-True ([bool]$editAgain) '再次找到「编辑记录」按钮'
+    if ($editAgain) {
+        Click-Element $editAgain | Out-Null
+        Start-Sleep -Seconds 2
+        # 「保存为模板」在「模板」这一项里，且表单类型/分类为空时是 disabled 的
+        $saveTplButton = Wait-Element -Root $window -Name '保存为模板' -TimeoutSec 10
+        Assert-True ([bool]$saveTplButton) '弹窗里找到「保存为模板」'
+        if ($saveTplButton) {
+            Invoke-Element $saveTplButton | Out-Null
+            Start-Sleep -Seconds 2
+            $tplNameInput = Wait-Element -Root $window -Name '请输入模板名称' -TimeoutSec 10
+            Assert-True ([bool]$tplNameInput) '弹出「保存为模板」子弹窗'
+            if ($tplNameInput) {
+                Assert-True (Set-Value $tplNameInput $templateName) '填入模板名称'
+                Start-Sleep -Milliseconds 600
+                # 子弹窗的确认按钮是「保存」（记账弹窗自己的是「确认」，不会混）
+                $saveTplOk = Wait-Element -Root $window -Name '保存' -TimeoutSec 10
+                Assert-True ([bool]$saveTplOk) '找到「保存」'
+                if ($saveTplOk) { Invoke-Element $saveTplOk | Out-Null }
+                Start-Sleep -Seconds 3
+            }
+        }
+        # 关掉记账弹窗（不保存这次编辑）
+        $cancel = @(Find-All $window '取消' | Where-Object { -not $_.Current.IsOffscreen })
+        if ($cancel.Count -gt 0) { Invoke-Element $cancel[$cancel.Count - 1] | Out-Null }
+        Start-Sleep -Seconds 2
+    }
+
+    $templateRows = @(Read-Table 'tbl_billadm_transaction_tpl' | Where-Object { $_.template_name -eq $templateName })
+    Assert-True ($templateRows.Count -eq 1) "库里出现从表单存下来的模板（$templateName）"
+    if ($templateRows.Count -eq 1 -and $editedRows.Count -ge 1) {
+        # 类型/分类/描述必须取当前表单（原实现是 `trForm` 的四个字段直接落到模板）
+        Assert-True ($templateRows[0].transaction_type -eq $editedRows[0].transaction_type) `
+            "模板类型跟着表单（$($templateRows[0].transaction_type)）"
+        Assert-True ($templateRows[0].category -eq $editedRows[0].category) `
+            "模板分类跟着表单（$($templateRows[0].category)）"
+        Assert-True ($templateRows[0].description -eq $editedDesc) "模板描述取当前表单（$editedDesc）"
+    }
+
+    # ================= 4/4 排序 =================
+    Write-Host "`n[tr] 4/4 排序：加一条「金额 降序」并应用"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '排序')) '点「排序」'
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '重置')) '点「重置」（回到日期+降序）'
@@ -403,4 +451,4 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
     exit 1
 }
-Write-Host '[tr] 全部通过：编辑=先建后删（id 换新、行数不变）+ 排序（金额降序）生效' -ForegroundColor Green
+Write-Host '[tr] 全部通过：编辑=先建后删（id 换新、行数不变）+ 保存为模板（取当前表单）+ 排序（金额降序）生效' -ForegroundColor Green

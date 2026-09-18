@@ -121,6 +121,7 @@ pwsh -File fixtures/ui-crud.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 pwsh -File fixtures/ui-sync-ledger.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
 # 消费记录页：记三笔 → **编辑一笔**（断言"先建后删"：换 transaction_id、旧记录消失、行数不变）
+# → **保存为模板**（记一笔弹窗里的子弹窗：填名称 → 断言模板落库且类型/分类/描述取当前表单）
 # → **排序**（重置 → 加「金额 降序」→ 应用 → 断言表格区金额序列非递增、最大值排第一）。
 pwsh -File fixtures/ui-transactions.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
