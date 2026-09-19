@@ -53,7 +53,7 @@ cargo tauri dev                                     # 人工验收：窗口 + �
 ## 产物位置（本轮已构建并验证）
 
 ```powershell
-build\target\Transactions-x64-v0.28.0.exe   # NSIS 安装包（4.9 MB，currentUser 安装、简体中文）
+build\target\Transactions-x64-v0.1.0.exe   # NSIS 安装包（4.9 MB，currentUser 安装、简体中文）
 build\target\transactions.exe               # 便携版（13.3 MB，双击即用）
 ```
 
@@ -112,7 +112,7 @@ build\target\transactions.exe               # 便携版（13.3 MB，双击即用
 | 0.11 | 配置文件保留未知键 | 关掉应用，手动往 `~\.transactions.json` 里加一个自定义键，再启动并改一次设置 → 自定义键仍在 |
 | 0.12 | 错误提示 | 任意一个失败操作（例如删除被引用的分类）弹出**原实现的文案**，而不是泛化的 "error" |
 | 0.13 | DevTools | 设置页的开发者工具开关能打开/关闭，且状态与窗口真实状态一致 |
-| 0.14 | 更新检查 | 设置页「关于软件」打开即自动检查，显示"版本 0.28.0 / 已是最新版本"（已实测：真的走了 GitHub API 拿到 v0.27.0 再比版本）；点「重新检查」可再跑一次 |
+| 0.14 | 更新检查 | 设置页「关于软件」打开即自动检查，显示"版本 0.1.0 / 已是最新版本"（已实测：真的走了 GitHub API 查**本仓库** `ddd-online/Transactions-Rust` 的 releases/latest 再比版本）；点「重新检查」可再跑一次 |
 
 ## 1. 记账页（`transactions.rs`）
 

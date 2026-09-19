@@ -5,6 +5,20 @@
 #
 # 版本号唯一来源：src-tauri/tauri.conf.json
 
+# This script contains non-ASCII (Chinese) comments, so it MUST run on PowerShell 7 (pwsh).
+# Windows PowerShell 5.1 decodes BOM-less UTF-8 as ANSI, which mis-parses this file: the last
+# step silently broke (the portable exe was never archived) WHILE STILL EXITING 0. Re-launch
+# ourselves under pwsh instead of trusting the caller's shell. Keep this block ASCII-only.
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+    if ($pwsh) {
+        Write-Host "This script needs PowerShell 7; re-launching under $pwsh" -ForegroundColor Yellow
+        & $pwsh -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @args
+        exit $LASTEXITCODE
+    }
+    Write-Warning "PowerShell 7 (pwsh) not found - running on 5.1 may mis-parse this script."
+}
+
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $scriptDir = $PSScriptRoot

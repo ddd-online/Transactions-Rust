@@ -1,8 +1,8 @@
 [package]
 name = "transactions"
-version = "0.28.0"
+version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 description = "Transactions —— 本地优先的桌面个人记账工作台"
 default-run = "transactions"
 

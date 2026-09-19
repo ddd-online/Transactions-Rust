@@ -189,8 +189,12 @@ cargo clippy --all-targets -- -D warnings
   （实测 wasm **7.3 MiB / 7.6 MB**，全 7 个页面都在；P6-a 只有 4 个页面时是 3.9 MB。
   作为对照：完全不优化、带调试信息的 debug 构建约 15 MB）。`tauri.conf.json` 的 `beforeBuildCommand` 已指向该脚本。
 - **`build/*.ps1` 被 `powershell`(5.1) 调用时必须 ASCII-only**：Windows PowerShell 把无 BOM 的 UTF-8
-  当 ANSI 解码，中文会破坏脚本解析（`build-ui.ps1` 因此全英文注释；由用户手动跑的
-  `clean/build/release.ps1` 走 pwsh 7，可保留中文）。
+  当 ANSI 解码，中文会破坏脚本解析（`build-ui.ps1` 因此全英文注释，且它**就是**被 `cargo tauri build`
+  用 5.1 调用的，不能改）。`build.ps1` / `release.ps1` 含中文注释，**约定用 pwsh 7 运行**；它们现在开头
+  自带一段 ASCII-only 的守卫：检测到 `PSEdition -ne 'Core'` 就用 `pwsh` 重跑自己（`$PSCommandPath` + `@args`）。
+  加这段守卫的原因是一次真实事故：我用 5.1 跑 `build.ps1`，中文行被误解析后**最后一步的 `$appExe` 变成 $null**，
+  便携版 exe 没被留档（`build\target` 里只有安装包），**而退出码依然是 0**。
+  教训：构建脚本的"最后一步"也要有产物断言（`Test-Path` + `Fail`），别只看退出码。
 - **手跑 exe 必须带 `custom-protocol`**（两条都踩过）：
   1. debug 构建会走 `devUrl`（`http://127.0.0.1:1520`），所以 `cargo build -p transactions`
      之后直接运行 `target\debug\transactions.exe` 只会得到一个**空白窗口**。
@@ -435,11 +439,20 @@ cargo clippy --all-targets -- -D warnings
 
 ## 发布
 
-**版本控制**：本仓库已 `git init` 并完成初始提交（197 个文件 / 2.5 MB，含全部源码、fixtures 与文档）。
-`.gitignore` 已排除 `/target`、`/build/target`、`/crates/tr-ui/dist`、`/src-tauri/gen/schemas`、
-`*.db(-wal|-shm)`、`transactions.log` 与 `/fixtures/private/`——**真实工作空间数据绝不入库**。
-提交前请 `git status --short` 核一眼，别把本地验证用的库或截图带进去。
+**远程仓库**：`https://github.com/ddd-online/Transactions-Rust`（分支 `main`，首次发布 `v0.1.0`）。
+参考实现 `ddd-online/Transactions` 是**另一个程序**（Electron 版），两边的 Release 资产不可互换：
+应用内更新检查与「关于软件」的 GitHub 链接、`build/release.ps1` 的 `$repo` **必须指向本仓库**，
+否则 0.1.0 会去比对 Electron 版的 v0.27.0、提示"有新版本"却下载到别的安装包。改动这三处时一并自检：
+```powershell
+Select-String -Path src-tauri\src\updater.rs,crates\tr-ui\src\pages\settings.rs,build\release.ps1 -Pattern 'ddd-online'
+```
+
+**版本控制**：`.gitignore` 已排除 `/target`、`/build/target`、`/crates/tr-ui/dist`、
+`/src-tauri/gen/schemas`、`*.db(-wal|-shm)`、`transactions.log` 与 `/fixtures/private/`
+——**真实工作空间数据绝不入库**。提交前请 `git status --short` 核一眼，别把本地验证用的库或截图带进去。
 
 `build/clean.ps1` → `build/build.ps1`（trunk → cargo tauri build → 重命名产物为
 `Transactions-x64-v{version}.exe`）→ `build/release.ps1`（`gh release create` 上传该 .exe）。
-版本号唯一来源是 `src-tauri/tauri.conf.json`；应用内更新读 release 的 `tag_name` 与首个 `.exe` 资产的 `digest`。
+版本号唯一来源是 `src-tauri/tauri.conf.json`（`Cargo.toml` 的 workspace/`src-tauri` 两处也要同步）；
+应用内更新读 release 的 `tag_name` 与首个 `.exe` 资产的 `digest`。
+许可证以仓库根 `LICENSE` 为准（Apache-2.0，与参考实现一致）。

@@ -23,8 +23,13 @@ use tauri::{AppHandle, Emitter, State};
 use tr_domain::error::AppError;
 use tr_ipc::{ApiError, ApiResult};
 
-/// GitHub 最新 release 接口（与原实现同一仓库）。
-const RELEASE_API: &str = "https://api.github.com/repos/ddd-online/Transactions/releases/latest";
+/// GitHub 最新 release 接口。
+///
+/// **必须是本仓库自身**：发布资产与应用内更新一一对应。曾沿用参考实现（Electron 版）
+/// 的 `ddd-online/Transactions`，那样 0.1.0 会去比对 Electron 版的 v0.27.0 并提示"有新版本"，
+/// 下载到的却是另一款程序的安装包。
+const RELEASE_API: &str =
+    "https://api.github.com/repos/ddd-online/Transactions-Rust/releases/latest";
 /// 检查更新的超时（原实现 15s）。
 const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 /// 下载安装包的超时（安装包可达数百 MB，给足时间）。
@@ -477,7 +482,7 @@ mod tests {
     #[test]
     fn url_host_parses_and_strips_userinfo_and_port() {
         assert_eq!(
-            url_host("https://github.com/ddd-online/Transactions/releases/download/v0.29.0/a.exe"),
+            url_host("https://github.com/ddd-online/Transactions-Rust/releases/download/v0.1.0/a.exe"),
             Some("github.com".to_string())
         );
         assert_eq!(

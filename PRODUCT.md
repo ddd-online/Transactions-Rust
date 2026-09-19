@@ -24,7 +24,7 @@ windows desktop (Tauri 2 + Rust)
 - Windows 桌面应用（Tauri 2 外壳 + Rust 内核 + Rust/Leptos WASM 界面），无边框自绘标题栏，单实例运行。
 - 每个工作空间一个独立 SQLite 数据库，工作空间内包含多个账本（ledger）。
 - 金额一律以整数分存储，界面层负责分/元换算。
-- 开发调试用 `cargo tauri dev` 一键启动 trunk(WASM, :1420) + 桌面窗口；构建走 `cargo tauri build`，发布走 `build/` 脚本与 GitHub Release。
+- 开发调试用 `cargo tauri dev` 一键启动 trunk(WASM, :1520) + 桌面窗口；构建走 `cargo tauri build`，发布走 `build/` 脚本与 GitHub Release。
 - 界面语言为中文。
 
 ## Capabilities and Constraints
@@ -43,7 +43,7 @@ windows desktop (Tauri 2 + Rust)
 ## Evidence on Hand
 
 - 代码库是功能与行为的唯一权威（当前无 DESIGN.md 历史，无用户证言、案例、演示素材）。
-- README.md 仅包含安装/调试/构建说明；后续工作不得凭空编造用户证言、案例、数据或市场声明。
+- README.md 包含功能概览与安装/调试/构建说明；后续工作不得凭空编造用户证言、案例、数据或市场声明。
 
 ## Product Principles
 

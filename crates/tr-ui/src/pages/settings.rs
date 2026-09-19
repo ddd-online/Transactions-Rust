@@ -93,7 +93,7 @@ const TRANSFER_TOOLTIP: &str = "买卖双向收取，仅沪市（60/68 开头）
 /// 交易标签最多保存数量（原文 `tags.length >= 20`）。
 const MAX_STOCK_TAGS: usize = 20;
 /// 外部链接（本轮增补，原文没有）。
-const GITHUB_URL: &str = "https://github.com/ddd-online/Transactions";
+const GITHUB_URL: &str = "https://github.com/ddd-online/Transactions-Rust";
 
 #[component]
 pub fn SettingsPage() -> impl IntoView {
