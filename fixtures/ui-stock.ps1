@@ -8,6 +8,14 @@
 #     `realized_pnl = amount - fee - cost_basis`，数量与成本按比例结转；清空时成本归零并归档本轮
 #   * 资金记录：`cash_balance` 恒等于 `principal + Σ amount_change`（不变量，逐步校验）
 #
+# ⚠ 它顺带锁死一个**真实缺陷**（本轮才发现，"减仓/清仓按钮点不动"的真凶）：
+#   详情区那三个按钮（清仓/减仓/加仓）原来在 `on_click` 里先写 `selected_code.set(code)`
+#   再 `open_trade(...)`。详情区本来就是按 `current_position()`（= `selected_code` 命中的那条）
+#   渲染的，写的是**同一个值**；但 `RwSignal` 同值写入依然会通知订阅者，于是点击瞬间详情子树
+#   重渲染，交易弹窗**永远弹不出来**——现象极像"按钮点不动"（真实鼠标 / 键盘回车 / InvokePattern
+#   三种激活方式都无效，而表头那个不写 selected_code 的「建仓」按钮一直正常）。
+#   修法：那三处去掉冗余的 `selected_code.set`（见 `src/pages/stock.rs` 的注释）。
+#
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/ui-stock.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
@@ -386,8 +394,8 @@ try {
     $ledgerId = ''
     $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 5
 
-    # ================= 1/4 建仓 =================
-    Write-Host "`n[stock] 1/4 建仓 $code × $buyLots 手 @ $buyPrice"
+    # ================= 1/3 建仓 =================
+    Write-Host "`n[stock] 1/3 建仓 $code × $buyLots 手 @ $buyPrice"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票交易')) '打开「股票交易」页'
     Start-Sleep -Seconds 3
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '我的持仓')) '切到「我的持仓」页签（建仓按钮在这里）'
@@ -447,13 +455,8 @@ try {
             "买入资金变动 = -(成交额 + 手续费)（$($buyRecord.amount_change)）"
     }
 
-    # ================= 2/2 界面展示 =================
-    # **减仓/清仓没做成自动**（诚实记录）：详情区那两个按钮在当前布局下确实"可见、矩形也在窗口内"，
-    # 但无论用 InvokePattern 还是真实鼠标点它们的矩形中心，都不会弹出「记录减仓/清仓」——
-    # 实测窗口=(304,304,2497,1438)、按钮=(2569,546,77,43)（在窗口内），点击后页面文案毫无变化。
-    # 这两条路径的**落库语义**已由黄金对比阶段 3（减仓/多轮次/预演）与服务层单测覆盖，
-    # 界面点击留给人工验收；这里只断言建仓之后界面**展示**正确。
-    Write-Host "`n[stock] 2/2 界面展示：持仓卡片与交易历史"
+    # ================= 2/3 界面展示（建仓之后）=================
+    Write-Host "`n[stock] 2/3 界面展示：持仓卡片与交易历史"
     $cardText = $null
     $deadline = (Get-Date).AddSeconds(20)
     do {
@@ -477,6 +480,134 @@ try {
         if (-not $seen) { Start-Sleep -Milliseconds 500 }
     } while (-not $seen -and (Get-Date) -lt $deadline)
     Assert-True $seen "交易历史里出现「$name / $code」"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '我的持仓')) '切回「我的持仓」（减仓/清仓按钮在详情区）'
+    Start-Sleep -Seconds 3
+
+    # ================= 3/3 减仓 → 清仓 =================
+    # 详情区的「减仓/清仓」现在真的能点开了（见文件顶部那条缺陷说明）。
+    Write-Host "`n[stock] 3/3 减仓 1 手 @ $reducePrice → 清仓 2 手 @ $closePrice"
+
+    $posBefore = @(Read-Table 'tbl_billadm_stock_position' |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
+    Assert-True ([bool]$posBefore) '减仓前能读到持仓行'
+    # 轮次是**清仓时**才归档出来的（`close_round`：建历史 + 建轮次 + 把未挂接的成交挂上去），
+    # 所以此刻：没有新轮次，刚建的仓也还没挂 round_id。
+    $roundsBefore = @(Read-Table 'tbl_billadm_stock_trade_round' |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code })
+    if ($openTrade) {
+        Assert-True ([string]::IsNullOrEmpty($openTrade.round_id)) '建仓成交尚未挂接轮次（轮到清仓时才归档）'
+    }
+
+    # ---- 减仓 1 手 ----
+    $reduceLots = '1'
+    Assert-True (Submit-Trade -Window $window -OpenButton '减仓' -ModalTitle '记录减仓' -Price $reducePrice -Lots $reduceLots) `
+        '「减仓」弹窗走完（填价/手数 → 提交）'
+    Start-Sleep -Seconds 2
+
+    $reduceTrade = @(Read-Table 'tbl_billadm_stock_trade' |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code -and $_.trade_type -eq 'reduce' } |
+        Sort-Object created_at) | Select-Object -Last 1
+    Assert-True ([bool]$reduceTrade) '库里出现减仓成交（trade_type=reduce）'
+    if ($reduceTrade -and $posBefore) {
+        $expectedBasis = [int64][Math]::Round([double]$posBefore.total_cost * 100.0 / [double]$posBefore.quantity)
+        $expectedRealized = [int64]$reduceTrade.amount - [int64]$reduceTrade.fee - $expectedBasis
+        Assert-True ($reduceTrade.price -eq 12000) "减仓价按分存（$reducePrice 元 → 12000，实际 $($reduceTrade.price)）"
+        Assert-True ($reduceTrade.lots -eq 1) "减仓手数 1（实际 $($reduceTrade.lots)）"
+        Assert-True ($reduceTrade.shares -eq 100) "减仓股数 100（实际 $($reduceTrade.shares)）"
+        Assert-True ($reduceTrade.amount -eq 1200000) "减仓成交额 1,200,000 分（实际 $($reduceTrade.amount)）"
+        Assert-True ($reduceTrade.fee -gt 0) "减仓手续费已计算（$($reduceTrade.fee) 分）"
+        Assert-True ($reduceTrade.realized_pnl -eq $expectedRealized) `
+            "减仓已实现盈亏 = 成交额 - 手续费 - 结转成本（期望 $expectedRealized，实际 $($reduceTrade.realized_pnl)）"
+
+        $posAfterReduce = @(Read-Table 'tbl_billadm_stock_position' |
+            Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
+        Assert-True ($posAfterReduce.quantity -eq ($posBefore.quantity - 100)) `
+            "持仓数量 300 → 200（实际 $($posAfterReduce.quantity)）"
+        Assert-True ($posAfterReduce.total_cost -eq ([int64]$posBefore.total_cost - $expectedBasis)) `
+            "持仓成本按比例结转（$($posBefore.total_cost) - $expectedBasis = $($posAfterReduce.total_cost)）"
+        Assert-True ($posAfterReduce.realized_pnl -eq ([int64]$posBefore.realized_pnl + $expectedRealized)) `
+            "持仓已实现盈亏累加（实际 $($posAfterReduce.realized_pnl)）"
+        # 减仓同样不归档：这一笔也还没挂轮次
+        Assert-True ([string]::IsNullOrEmpty($reduceTrade.round_id)) '减仓成交同样尚未挂接轮次'
+    }
+    Assert-FundChain -LedgerId $ledgerId -Stage '减仓后'
+
+    # ---- 清仓：可用手数应预填 2 手（原实现「清仓时预填全仓手数」）----
+    $closeButton = Wait-VisibleButton -Window $window -Name '清仓' -TimeoutSec 15
+    Assert-True ([bool]$closeButton) '详情区还有「清仓」按钮'
+    if ($closeButton) {
+        $rect = $closeButton.Current.BoundingRectangle
+        [TrStock]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 300
+        [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    }
+    $closeOpened = [bool](Wait-Element -Root $window -Name '记录清仓' -TimeoutSec 10)
+    Assert-True $closeOpened '弹窗「记录清仓」已打开'
+    if ($closeOpened) {
+        $lotsInput = Wait-EditLike -Root $window -Pattern '手数'
+        $prefilled = ''
+        $valuePattern = $null
+        if ($lotsInput -and $lotsInput.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
+            $prefilled = $valuePattern.Current.Value
+        }
+        Assert-True ($prefilled -eq '2') "清仓时手数预填剩余可卖手数 2（实际 '$prefilled'）"
+        Assert-True (Set-Value (Wait-Element -Root $window -Name '成交价（元/股）') $closePrice) "填入清仓价 $closePrice"
+        Start-Sleep -Milliseconds 600
+        $confirm = @(Find-All $window '清仓' | Where-Object { -not $_.Current.IsOffscreen })
+        if ($confirm.Count -gt 0) { Invoke-Element $confirm[$confirm.Count - 1] | Out-Null }
+        Start-Sleep -Seconds 4
+    }
+
+    $closeTrade = @(Read-Table 'tbl_billadm_stock_trade' |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code -and $_.trade_type -eq 'close' } |
+        Sort-Object created_at) | Select-Object -Last 1
+    Assert-True ([bool]$closeTrade) '库里出现清仓成交（trade_type=close）'
+    $posAfterClose = @(Read-Table 'tbl_billadm_stock_position' |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
+    if ($closeTrade) {
+        Assert-True ($closeTrade.lots -eq 2) "清仓手数 2（实际 $($closeTrade.lots)）"
+        Assert-True ($closeTrade.shares -eq 200) "清仓股数 200（实际 $($closeTrade.shares)）"
+        Assert-True ($closeTrade.amount -eq 2600000) "清仓成交额 2,600,000 分（实际 $($closeTrade.amount)）"
+        # 卖出全部持仓 → 结转成本 = 剩余总成本，成本与数量都归零
+        Assert-True ($posAfterClose.quantity -eq 0) "清仓后数量归零（实际 $($posAfterClose.quantity)）"
+        Assert-True ($posAfterClose.total_cost -eq 0) "清仓后成本归零（实际 $($posAfterClose.total_cost)）"
+    }
+    Assert-FundChain -LedgerId $ledgerId -Stage '清仓后'
+
+    # ---- 清仓归档：建一个新轮次 + 把本轮三笔成交挂上去 + 指向该股票的交易历史 ----
+    $roundsAfter = @(Read-Table 'tbl_billadm_stock_trade_round' |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code })
+    Assert-True ($roundsAfter.Count -eq ($roundsBefore.Count + 1)) `
+        "清仓归档出一个新轮次（$($roundsBefore.Count) → $($roundsAfter.Count)）"
+    if ($closeTrade) {
+        Assert-True (-not [string]::IsNullOrEmpty($closeTrade.round_id)) '清仓成交挂上了轮次 id（清仓单一并归档）'
+        $newRound = $roundsAfter | Where-Object { $_.id -eq $closeTrade.round_id } | Select-Object -First 1
+        Assert-True ([bool]$newRound) '新轮次行存在'
+        if ($newRound) {
+            Assert-True ([int64]$newRound.closed_at -eq [int64]$closeTrade.trade_time) `
+                "轮次 closed_at = 清仓成交时间（$($newRound.closed_at)）"
+            if ($openTrade) {
+                Assert-True ([int64]$newRound.opened_at -eq [int64]$openTrade.trade_time) `
+                    "轮次 opened_at = 本次建仓成交时间（$($newRound.opened_at)）"
+            }
+            Assert-True ($newRound.round_no -eq ($roundsBefore.Count + 1)) `
+                "轮次序号 = $($roundsBefore.Count + 1)（实际 $($newRound.round_no)）"
+            # 建仓 / 减仓 / 清仓 三笔都挂到这一轮（归档是"回填"未挂接的成交）
+            foreach ($tradeId in @($openTrade.id, $reduceTrade.id, $closeTrade.id)) {
+                if (-not $tradeId) { continue }
+                $row = @(Read-Table 'tbl_billadm_stock_trade' | Where-Object { $_.id -eq $tradeId }) | Select-Object -First 1
+                if ($row) {
+                    Assert-True ($row.round_id -eq $newRound.id) "成交「$($row.trade_type)」归到清仓归档的轮次"
+                }
+            }
+            $historyRow = @(Read-Table 'tbl_billadm_stock_trade_history' |
+                Where-Object { $_.id -eq $newRound.history_id }) | Select-Object -First 1
+            Assert-True ([bool]$historyRow) '轮次的 history_id 指向该股票的交易历史行'
+            if ($historyRow) {
+                Assert-True ($historyRow.stock_code -eq $code) "交易历史行属于 $code"
+            }
+        }
+    }
 }
 finally {
     if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
@@ -492,4 +623,4 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
     exit 1
 }
-Write-Host '[stock] 全部通过：建仓落库（成本含手续费/资金链）+ 持仓卡片与交易历史展示' -ForegroundColor Green
+Write-Host '[stock] 全部通过：建仓 → 减仓 → 清仓落库（成本结转/已实现盈亏/资金链）+ 清仓归档 + 界面展示' -ForegroundColor Green

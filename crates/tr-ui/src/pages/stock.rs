@@ -1485,7 +1485,6 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                         });
                         let day_class = format::pnl_class(day_change.unwrap_or(0));
                         let float_class = format::pnl_class(float_pnl.unwrap_or(0));
-                        let code = position.stock_code.clone();
                         view! {
                             <div class="stock-detail__head">
                                 <div class="stock-detail__identity">
@@ -1498,38 +1497,26 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                     <Button
                                         variant=ButtonVariant::PrimaryDanger
                                         size=ButtonSize::Small
-                                        on_click={
-                                            let code = code.clone();
-                                            move |_| {
-                                                selected_code.set(code.clone());
-                                                open_trade("close");
-                                            }
-                                        }
+                                        // **不要在这里 `selected_code.set(code)`**：详情区就是按
+                                        // `current_position()`（= `selected_code` 命中的那条）渲染的，
+                                        // 写的是同一个值；而 RwSignal 同值写入依然会通知订阅者，
+                                        // 于是点击瞬间详情子树重渲染，交易弹窗反而**弹不出来**（实测）。
+                                        on_click=move |_| open_trade("close")
                                     >
                                         "清仓"
                                     </Button>
                                     <Button
                                         size=ButtonSize::Small
-                                        on_click={
-                                            let code = code.clone();
-                                            move |_| {
-                                                selected_code.set(code.clone());
-                                                open_trade("reduce");
-                                            }
-                                        }
+                                        // 同上：这里写 selected_code 会让「减仓」弹窗弹不出来
+                                        on_click=move |_| open_trade("reduce")
                                     >
                                         "减仓"
                                     </Button>
                                     <Button
                                         variant=ButtonVariant::Primary
                                         size=ButtonSize::Small
-                                        on_click={
-                                            let code = code.clone();
-                                            move |_| {
-                                                selected_code.set(code.clone());
-                                                open_trade("add");
-                                            }
-                                        }
+                                        // 同上
+                                        on_click=move |_| open_trade("add")
                                     >
                                         "加仓"
                                     </Button>

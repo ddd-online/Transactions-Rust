@@ -125,9 +125,12 @@ pwsh -File fixtures/ui-sync-ledger.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <
 # → **排序**（重置 → 加「金额 降序」→ 应用 → 断言表格区金额序列非递增、最大值排第一）。
 pwsh -File fixtures/ui-transactions.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
-# 股票建仓端到端：代码 → 查询股票名称（真实行情）→ 价格/手数 → 建仓，
-# 断言 成交（价按分/手数/股数/成交额/手续费）→ 持仓（数量、成本=成交额+手续费）→
-# 资金记录（余额链、买入变动 = -(成交额+手续费)）→ 界面上持仓卡片与交易历史的展示。
+# 股票全生命周期端到端：建仓（真实行情查名）→ **减仓** → **清仓** → 界面展示。
+# 断言 成交（价按分/手数/股数/成交额/手续费）→ 持仓（数量、成本=成交额+手续费，减仓按比例结转
+# `cost_basis = round(total_cost × 本次股数 / 持仓股数)`、`realized_pnl = amount - fee - cost_basis`）
+# → 资金记录（余额链、买入 -(成交额+手续费)、卖出 +(成交额-手续费)）→ 清仓归档（新轮次 + 回填三笔
+# 成交的 round_id + 轮次指向该股票的交易历史）→ 持仓卡片与交易历史的展示。
+# 它同时是"详情区「减仓/清仓/加仓」点不动"这个真实缺陷的回归（见下方经验）。
 pwsh -File fixtures/ui-stock.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
 # 关联/解除关键事件端到端（唯一自动化 DatePicker 的脚本）：记一笔 → 行内「关联到关键事件」→
@@ -273,12 +276,20 @@ cargo clippy --all-targets -- -D warnings
   （未展开的面板 / 另一个页签里也在 DOM 里），按名字取第一个常常拿到**不可见的那个**，点它毫无反应。
   `fixtures/ui-stock.ps1` 的 `Find-VisibleButton` 会同时校验 `IsOffscreen=false` 与矩形落在窗口内，
   并支持"取最后一个"（弹窗确认按钮与页面入口同名）。
-- **股票页的「减仓/清仓」目前没能自动化（诚实记录）**：详情区那两个按钮 UIA 报
-  `IsOffscreen=False`、矩形也确实在窗口内（实测窗口 `(304,304,2497,1438)`、按钮 `(2569,546,77,43)`），
-  但无论用 `InvokePattern` 还是真实鼠标点其矩形中心，都**不会**弹出「记录减仓/清仓」弹窗，
-  页面文案毫无变化。已试过：先点持仓卡片选中、过滤隐藏元素、加大窗口宽度、重试三次 —— 都不行。
-  这两条路径的**落库语义**有黄金对比阶段 3 与服务层单测覆盖，界面点击留给人工；
-  `fixtures/ui-stock.ps1` 因此只覆盖**建仓**整条链路 + 持仓卡片/交易历史的展示。
+- **详情区「清仓/减仓/加仓」点不动 = 真实缺陷**（曾经被我误记成"UIA 自动化不了"，其实是产品 bug）：
+  三个按钮的 `on_click` 里先 `selected_code.set(code)` 再 `open_trade(...)`。详情区本来就按
+  `current_position()`（= `selected_code` 命中的那条）渲染，写的是**同一个值**；但 `RwSignal` 同值写入
+  依然会通知订阅者 → 点击瞬间详情子树重渲染 → 交易弹窗**永远不 mount**（DOM 里连 `ui-modal__mask` 都没有）。
+  表头那个不写 `selected_code` 的「建仓」按钮一直正常，对比之下才看出差别。
+  **怎么查出来的（这套手法留着复用）**：先证明"点击确实送达"——真实鼠标 / `SetFocus`+回车 / `InvokePattern`
+  三种激活都试，同时用 `AutomationElement.FromPoint` 与 `WindowFromPoint` 确认坐标上是谁
+  （Tauri 的 `TAURI_DRAG_RESIZE_BORDERS` 浮层会**抢答** `FromPoint`，但鼠标其实照样进 WebView，
+  所以 `FromPoint` 单独用会误判）；再往 handler 里塞 `Notifier` 提示，确认 handler 跑了、`trade_open=true`；
+  最后在同一视图里并排放**裸闭包节点**与 `<Show>` 探针（都正常反应）＋弹窗体里放挂载标记（始终不出现），
+  才锁定"信号写对了，是 Modal 没挂载"。**教训：先分清"没点到"和"点了没反应"**，
+  别用"这按钮自动化不了"给产品的 bug 打掩护。
+  修法：三处去掉冗余的 `selected_code.set`（`src/pages/stock.rs` 有注释）；
+  回归：`fixtures/ui-stock.ps1`（67 项断言，建仓 → 减仓 → 清仓全链路）。
 - **"复用工作空间"的判断要在默认值赋值之前取**（踩过）：脚本常写成
   `if (-not $Workspace) { $Workspace = <默认路径> }` 之后再 `if (-not $Workspace -or ...) { 重新播种 }`，
   但那时 `$Workspace` 已经非空，条件恒为 false → 永远不重新播种。
