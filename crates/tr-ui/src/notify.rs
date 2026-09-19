@@ -1,14 +1,13 @@
 //! 消息与通知队列。
 //!
-//! 对照原 `app/src/backend/notification.ts`（Ant Design Vue 的 `message` / `notification`）：
+//! 两种展示通道：
 //!
-//! | 原实现 | 语义 | 位置 |
+//! | 通道 | 语义 | 位置 |
 //! |---|---|---|
-//! | `message.*(text)` | 只有一句话，3 秒自动消失 | 屏幕底部（贴状态栏上方） |
-//! | `notification.*(message, description)` | 有描述，4.5 秒自动消失 | 右上角，`top: 96px` |
+//! | message | 只有一句话，3 秒自动消失 | 屏幕底部（贴状态栏上方） |
+//! | notification | 有描述，4.5 秒自动消失 | 右上角，`top: 96px` |
 //!
-//! `NotificationUtil.success/error/warning(text, description?)` 的分支规则被逐条保留：
-//! **有 description 走 notification，没有 description 走 message**。
+//! 分支规则：**有 description 走 notification，没有 description 走 message**。
 //!
 //! 队列实现：`RwSignal<Vec<Notice>>`（Leptos 信号）+ 模块级 thread_local 全局槽位。
 //! 用全局槽位而不是 `provide_context`：通知会在 `spawn_local` 的异步块、window 事件
@@ -19,7 +18,7 @@ use std::time::Duration;
 
 use leptos::prelude::*;
 
-/// 通知类型（对应原实现的四个入口）。
+/// 通知类型（成功 / 信息 / 警告 / 错误）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticeKind {
     Success,
@@ -52,13 +51,13 @@ pub struct Notice {
 }
 
 impl Notice {
-    /// 有描述 → notification；无描述 → message。与 `notification.ts` 一致。
+    /// 有描述 → notification；无描述 → message。
     pub fn is_notification(&self) -> bool {
         !self.description.is_empty()
     }
 }
 
-/// 自动消失时长：Ant Design 默认 message 3s / notification 4.5s。
+/// 自动消失时长：message 3s / notification 4.5s。
 const MESSAGE_DURATION: Duration = Duration::from_millis(3000);
 const NOTIFICATION_DURATION: Duration = Duration::from_millis(4500);
 
@@ -91,7 +90,7 @@ impl Notifier {
     /// 取全局队列；未安装时返回一个降级实例（只打日志，不 panic）。
     ///
     /// 之所以降级而不是 `expect`：通知是纯展示副作用，任何调用时机问题都不该
-    /// 让整个界面崩掉（原实现里 `message.error` 在任何时机都可调用）。
+    /// 让整个界面崩掉（通知在任何调用时机都应可用）。
     pub fn global() -> Notifier {
         GLOBAL.with(|slot| {
             slot.borrow().unwrap_or_else(|| {

@@ -1,15 +1,14 @@
-//! 账本命令。对照 Go `kernel/api/ledger_controller.go`。
+//! 账本命令。
 //!
-//! 入参形状按原 HTTP 语义逐字段对齐：
-//! * `GET /ledgers?id=all|uuid1,uuid2` → `ledger_list { id }`
-//! * `POST /ledgers { name, description }` → `ledger_create`
-//! * `GET /ledgers/:id` → `ledger_get { id }`
-//! * `PATCH /ledgers/:id { name, description }` → `ledger_update`
-//! * `DELETE /ledgers/:id` → `ledger_delete { id }`
+//! 入参形状是固定契约：
+//! * `ledger_list { id }`——`all` 表示全部，也接受逗号分隔的多个 id
+//! * `ledger_create { name, description }`
+//! * `ledger_get { id }`
+//! * `ledger_update { id, name, description }`
+//! * `ledger_delete { id }`
 //!
-//! 原实现用 `map[string]any` 取值，缺失字段报 `name在请求体中不存在`；
-//! 因此这里把 `name` 声明为 `Option<String>` 后手工校验，保持同一文案
-//! （若直接声明为 `String`，serde 会在进入函数体前失败，文案就变了）。
+//! 缺失 `name` 必须报 `name在请求体中不存在`；因此这里把 `name` 声明为 `Option<String>` 后手工校验，
+//! 保持同一文案（若直接声明为 `String`，serde 会在进入函数体前失败，文案就变了）。
 
 use serde::Deserialize;
 use tauri::State;
@@ -85,7 +84,7 @@ pub struct LedgerIdRequest {
     pub id: String,
 }
 
-/// 查询单个账本；不存在返回 404（与原 `getLedger` 一致）。
+/// 查询单个账本；不存在返回 404。
 #[tauri::command]
 pub fn ledger_get(state: State<'_, AppState>, req: LedgerIdRequest) -> ApiResult<LedgerDto> {
     if req.id.is_empty() {

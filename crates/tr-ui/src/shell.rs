@@ -1,18 +1,15 @@
 //! 应用外壳：左侧 200px 导航 + 内容区 + 顶部窗口控制 + 底部状态栏 + 工作空间选择。
 //!
-//! 对照原 `Layout.vue` + `AppLeftBar.vue` + `AppTopBar.vue` + `AppBottomBar.vue`：
-//!
-//! * 左侧 200px 导航（7 个页面，图标与文案照抄原 `AppLeftBar.vue` 的 `navItems`
-//!   与底部「设置」项）
+//! * 左侧 200px 导航（7 个页面：6 项导航 + 固定在底部的「设置」项）
 //! * 顶部右上角窗口控制（最小化 / 最大化 / 关闭 → `window_control`）
 //! * 账本切换：挂载时 `ledger_list { id: "all" }`，按 `createdAt` 升序，默认选第一个；
-//!   支持新建账本（与原文案一致）与删除确认
+//!   支持新建账本与删除确认
 //! * 底部状态栏：左侧工作空间/账本状态，右侧在「消费记录」页显示 `trStatistics` 统计
-//!   （等价原 `AppBottomBar` 只在该路由渲染 `TransactionsStatisticsFooter`）
+//!   （仅「消费记录」页渲染底部统计）
 //! * `workspace-required` 事件（由 [`crate::ipc`] 在识别到"未打开工作空间"时派发）
 //!   与"尚未配置工作空间"都会打开「选择工作空间」流程：`dialog_open` → `workspace_open`
 //!
-//! 与原实现的差异（有意为之，见汇报）：
+//! 本实现的设计取舍：
 //! * 没有"内核状态指示灯"：Rust 版没有子进程内核，进程即应用，该指示灯无对应语义
 //! * 没有内核重启后的恢复逻辑（同上），只有工作空间切换
 
@@ -32,7 +29,7 @@ use crate::pages::{
 };
 use crate::store::{AppStores, APPEARANCE_SYSTEM};
 
-/// 页面（与原 `router.ts` 的 7 条路由一一对应）。
+/// 页面（共 7 个）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     /// 消费记录
@@ -52,7 +49,7 @@ pub enum Page {
 }
 
 impl Page {
-    /// 侧边栏顺序（与原 `AppLeftBar.vue` 一致）。
+    /// 侧边栏顺序（顺序即渲染顺序）。
     pub const ALL: [Page; 7] = [
         Page::Transactions,
         Page::DataAnalysis,
@@ -63,7 +60,7 @@ impl Page {
         Page::Settings,
     ];
 
-    /// 侧边栏中除「设置」之外的 6 项（设置固定在最底部，见 `AppLeftBar.vue`）。
+    /// 侧边栏中除「设置」之外的 6 项（「设置」固定在最底部）。
     pub const NAV_ITEMS: [Page; 6] = [
         Page::CategoryTag,
         Page::Transactions,
@@ -85,7 +82,7 @@ impl Page {
         }
     }
 
-    /// 原路由 path，用于对照。
+    /// 页面的稳定标识（仅用于调试与占位页展示，不随界面改动）。
     pub fn route(self) -> &'static str {
         match self {
             Page::Transactions => "/tr_view",
@@ -98,11 +95,11 @@ impl Page {
         }
     }
 
-    /// 侧边栏图标（与 `@ant-design/icons-vue` 的选型一致）。
+    /// 侧边栏图标（与文案一一对应）。
     pub fn icon(self) -> Icon {
         match self {
-            // 原 `navItems`：TagOutlined / TransactionOutlined / LineChartOutlined /
-            // StockOutlined / StarOutlined / ReadOutlined，底部 SettingOutlined
+            // 导航图标的排列：分类标签 / 消费记录 / 数据分析 / 股票交易 /
+            // 关键事件 / 日记管理，底部是应用设置
             Page::CategoryTag => Icon::Tag,
             Page::Transactions => Icon::Transaction,
             Page::DataAnalysis => Icon::LineChart,
@@ -147,7 +144,7 @@ pub fn App() -> impl IntoView {
     let workspace_modal_open = RwSignal::new(false);
     let workspace_picking = RwSignal::new(false);
 
-    // 监听 `workspace-required`：由 ipc 层在"未打开工作空间"时派发（等价原 Layout.vue）
+    // 监听 `workspace-required`：由 ipc 层在"未打开工作空间"时派发
     let workspace_required = window_event_listener_untyped("workspace-required", move |_| {
         workspace_modal_open.set(true);
     });
@@ -228,7 +225,7 @@ pub fn App() -> impl IntoView {
                     }}
                 </div>
                 <p class="workspace-picker-text">
-                    "若目录里已有 0.27 及以上版本的 transactions.db，会直接打开（只读校验，不做任何迁移）。"
+                    "若目录里已有当前格式的 transactions.db，会直接打开（只读校验，不做任何迁移）。"
                 </p>
             </Modal>
         </div>
@@ -544,7 +541,7 @@ fn TopBar() -> impl IntoView {
     //
     // 为什么必须有它：双击标题栏 / Win+↑ / 拖到屏幕顶部贴靠都不会经过
     // `window_control`，只靠下面的"乐观取反"会让图标与真实状态漂移，
-    // 于是"点一下"的文案与动作不一致（原实现靠同一事件同步）。
+    // 于是"点一下"的文案与动作不一致。
     // 乐观取反保留（点击立刻有反馈），但事件到来后以事件值为准。
     crate::ipc::listen::<bool, _>("window-state-changed", move |value| maximized.set(value));
 
@@ -604,7 +601,7 @@ fn TopBar() -> impl IntoView {
 
 /// 消息（底部）与通知（右上角，`top: 96px`）两个队列。
 ///
-/// 与原 `notification.ts` 的分支规则一致：**有 description → notification，否则 message**。
+/// 有 description 走通知（右上角），否则走消息（底部）。
 #[component]
 fn NoticeOverlay() -> impl IntoView {
     let notifier = Notifier::global();
@@ -749,7 +746,7 @@ fn StatusBar(current_page: RwSignal<Page>, workspace_modal_open: RwSignal<bool>)
     }
 }
 
-/// 收支统计（原 `TransactionsStatisticsFooter.vue`）：收入 / 支出 / 转账，分转元。
+/// 收支统计：收入 / 支出 / 转账，分转元。
 #[component]
 fn StatisticsFooter(statistics: RwSignal<BTreeMap<String, i64>>) -> impl IntoView {
     let value = move |key: &'static str| statistics.with(|map| map.get(key).copied().unwrap_or(0));

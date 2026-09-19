@@ -1,8 +1,7 @@
-//! 标签服务。对照 Go `kernel/service/tag_service.go`。
+//! 标签服务：标签的查询 / 新建 / 删除 / 排序与关联交易数统计。
 //!
-//! 与 Go 的差异仅在结构：Go 用接口 + `wire.go` 注入 `TagDao` / `TrTagDao`，
-//! Rust 版是自由函数 + `&Workspace`（与 `ledger.rs` 一致）。
-//! 删除标签时"先删交易记录上的关联、再删标签本身"的顺序与事务边界与 Go 逐条一致。
+//! 本模块是自由函数 + `&Workspace`（与 `ledger.rs` 一致），不做接口抽象。
+//! 删除标签时"先删交易记录上的关联、再删标签本身"的顺序与事务边界是硬约定。
 
 use std::collections::BTreeMap;
 
@@ -55,8 +54,8 @@ pub fn create_tag(
     })
 }
 
-/// 删除某分类（`分类名:交易类型`）下的全部标签。对照 Go `DeleteTagsByCategory`
-/// （分类服务删除分类时经 `tagService` 调用）。
+/// 删除某分类（`分类名:交易类型`）下的全部标签
+/// （分类服务删除分类时一并调用）。
 pub fn delete_tags_by_category(
     workspace: &Workspace,
     ledger_id: &str,
@@ -119,7 +118,7 @@ pub fn count_records_by_tag(
     TagDao::count_by_tag(&workspace.connection(), ledger_id, tag).map_err(ServiceError::from)
 }
 
-/// 批量统计每个标签名下的关联交易数（空名单直接返回空 map，与 Go 一致）。
+/// 批量统计每个标签名下的关联交易数（空名单直接返回空 map）。
 pub fn count_records_by_tags(
     workspace: &Workspace,
     ledger_id: &str,
@@ -204,7 +203,7 @@ mod tests {
         let conn = workspace.connection();
         assert_eq!(TagDao::count_by_tag(&conn, "l1", "三餐").unwrap(), 0);
         assert_eq!(TagDao::count_by_tag(&conn, "l1", "外卖").unwrap(), 1);
-        // 其它账本的关联不受影响（Go 的 DeleteByTag 也带 ledger_id 条件）
+        // 其它账本的关联不受影响（删除同样带 ledger_id 条件）
         assert_eq!(TagDao::count_by_tag(&conn, "l2", "三餐").unwrap(), 1);
         let remaining = TagDao::query_by_ledger(&conn, "l1", "餐饮美食:expense").unwrap();
         assert_eq!(remaining.len(), 1);
@@ -244,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn update_sort_is_silent_for_missing_row_like_gorm() {
+    fn update_sort_is_silent_for_missing_row() {
         let (workspace, dir) = workspace("sort");
         create_tag(&workspace, "l1", "三餐", "餐饮美食:expense").unwrap();
         update_tag_sort(&workspace, "l1", "三餐", "餐饮美食:expense", 6).unwrap();

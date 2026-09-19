@@ -1,6 +1,6 @@
-//! 股票交易模型。全部对应 Go `kernel/models/stock.go`。
+//! 股票交易模型。
 //!
-//! 与核心记账模型不同，这些结构体的 JSON 名称是 **camelCase**（Go tag 如此），
+//! 与核心记账模型不同，这些结构体的 JSON 名称是 **camelCase**，
 //! 数据库中仍是 snake_case 列名；列映射在 DAO 层显式书写。
 
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ pub struct StockFeeSetting {
 }
 
 /// `Default` 必须与数据库列默认值一致（万2.354 / 5 元 / 0.05% / 0.001%），
-/// 否则"新建费用设置"的返回值会与 Go 版不同。
+/// 否则"新建费用设置"的返回值会与数据库列默认值不同。
 impl Default for StockFeeSetting {
     fn default() -> Self {
         Self {
@@ -237,7 +237,7 @@ pub struct StockTradeRound {
 }
 
 /// 股票交易标签设置（每个账本一份）。`tags` 是可用标签的有序 JSON 数组，
-/// 在 Go 中标记为 `json:"-"`（对外只通过 DTO 暴露），此处保持一致。
+/// 不参与序列化（对外只通过 DTO 暴露）。
 /// 表 `tbl_billadm_stock_trade_tag_setting`。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(trade["orderId"], "o1");
         assert_eq!(trade["orderSeq"], 2);
         assert_eq!(trade["tradeTime"], 99);
-        // 空的可空盈亏字段序列化为 null（与 Go 指针一致）
+        // 空的可空盈亏字段序列化为 null
         assert!(trade["realizedPnl"].is_null());
     }
 

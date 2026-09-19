@@ -1,9 +1,9 @@
 //! 界面级共享状态。
 //!
-//! 对照原项目的三个 Pinia store 的界面相关子集：
-//! * `ledgerStore`（账本列表 + 当前账本）
-//! * `appDataStore`（底部状态栏显示的收支统计）
-//! * `appearanceStore`（浅色/深色）
+//! 三块界面级共享状态：
+//! * 账本列表 + 当前账本
+//! * 底部状态栏显示的收支统计
+//! * 外观（浅色 / 深色）
 //!
 //! 实现方式与 [`crate::notify`] 一致：`RwSignal` + 模块级 thread_local 全局槽位。
 //! 原因相同——这些状态会在 `spawn_local` 的异步块与 window 事件回调里被读写，
@@ -88,8 +88,7 @@ impl AppStores {
 
     /// 写入账本列表：按 `createdAt` 升序排序，并在**未选中**时默认选第一个。
     ///
-    /// 与 `AppLeftBar.vue` 的账本切换一致：当前选中项若已不在列表中（例如被删除），
-    /// 回落到第一个。
+    /// 当前选中项若已不在列表中（例如被删除），回落到第一个。
     pub fn set_ledgers(&self, mut ledgers: Vec<LedgerDto>) {
         ledgers.sort_by_key(|ledger| ledger.created_at);
         let current = self.current_ledger_id.get_untracked();
@@ -115,7 +114,7 @@ impl AppStores {
         self.current_ledger_id.set(id);
     }
 
-    /// 统计值（分）；缺失的键按 0 处理（与原 `appDataStore` 的默认值一致）。
+    /// 统计值（分）；缺失的键按 0 处理。
     pub fn statistic(&self, key: &str) -> i64 {
         self.statistics
             .with(|map| map.get(key).copied().unwrap_or(0))

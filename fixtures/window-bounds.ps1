@@ -3,7 +3,7 @@
 # 为什么需要它：用户反馈"每次打开软件都没有保留上次的窗口大小和位置"。
 # 根因是**单位混用**：Windows 上 Tauri 的 `inner_size()` / `outer_position()` 返回**物理像素**，
 # 而 `WebviewWindowBuilder::inner_size()` / `position()` 收的是**逻辑像素**；
-# 原 Electron 版 (`getBounds()` / `new BrowserWindow({width,height,x,y})`) 两边都是逻辑像素。
+# 而配置文件里保存的窗口几何恒为**逻辑像素**（不随 DPI 缩放变化）。
 # 于是 150% 缩放的机器上：存了 1500、下次当 1500 逻辑用 → 变成 2250，每启动一次就更大、更偏。
 # 修复见 `src-tauri/src/shell.rs` 的 `save_window_bounds`（物理 → 逻辑）与 `logical_bounds` 单测。
 #
@@ -41,7 +41,7 @@ foreach ($dir in @($smokeHome, (Join-Path $smokeHome 'Desktop'), $OutDir)) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
 }
 
-# 判重按完整路径（原 Electron 版也叫 Transactions.exe，不能按进程名）
+# 判重必须按**完整路径**，不能按进程名（本机别的目录下可能有同名 exe）
 $repoPrefix = $repo.TrimEnd('\') + '\'
 $blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
     $path = try { $_.Path } catch { $null }

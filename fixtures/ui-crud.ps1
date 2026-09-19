@@ -1,6 +1,6 @@
 # ui-crud.ps1 —— UI 增删改的端到端验收（分类/标签 · 图表 · 关键事件的配色与描述 · 删除）。
 #
-# 覆盖 `docs/ACCEPTANCE.md` 快速验收里原先靠人工的第 6、8 项（以及第 7 项的删除半边）：
+# 覆盖快速验收里原先靠人工的第 6、8 项（以及第 7 项的删除半边）：
 #   * 分类标签页：新增分类 → 库里多一行 → 删除 → 库里少一行；标签同理
 #   * 数据分析页：新增图表 → 库里多一行 → 删除（气泡确认）→ 库里少一行
 #   * 关键事件页：点色板改颜色 → 库里 color 变；编辑描述写 Markdown → 保存 → 库里 content 变；
@@ -190,7 +190,7 @@ function Save-Screenshot { param([string]$Path)
 # 同一行里的按钮：先按名字找到"行"元素 → **把鼠标移上去** → 再取中心 Y 最近的那个按钮。
 #
 # 为什么必须 hover：分类/标签行的操作区是 `.ct-item-actions { display: none }`，
-# 只在 `:hover` / `.is-active` 时才 `display: flex`（**与原 `CategoryColumn.vue` 完全一致**）。
+# 只在 `:hover` / `.is-active` 时才 `display: flex`——这是有意保留的行为（**不要**因此改 CSS）：
 # `display: none` 的元素不进 UIA 树，所以不 hover 就"看不见"那个删除按钮——
 # 这也是为什么"新建的那一行"能删（它是 active），别的行不行。
 function Find-RowButton { param($Window, [string]$RowName, [string]$ButtonName)

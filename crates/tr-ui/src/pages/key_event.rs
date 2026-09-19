@@ -1,29 +1,26 @@
 //! 关键事件页（`/key_event_view`）—— P6-b 完整实现。
 //!
-//! ## 对照的原 Vue 文件
+//! ## 组成
 //!
-//! | 原文件 | 本文件对应部分 |
-//! |---|---|
-//! | `key_event_view/KeyEventView.vue` | [`KeyEventPage`]：年份导航 + 三栏编排 + 状态流转 |
-//! | `key_event_view/KeyEventList.vue` | [`event_list`]：事件卡片（色条 / 短日期 / 30 字摘要 / 删除气泡） |
-//! | `key_event_view/KeyEventAddModal.vue` | [`add_modal`]：日期 + 名称 |
-//! | `key_event_view/KeyEventDetail.vue` | [`detail_panel`]：20 个颜色 + 描述（查看/编辑）+ 底部操作 |
-//! | `key_event_view/KeyEventImageGallery.vue` | [`image_gallery`]：左大图 + 右侧 160px 缩略图列 + 另存/删除 |
-//! | `key_event_view/KeyEventLinkedTr.vue` | [`linked_panel`]：关联消费记录卡片 + 解除关联 |
-//! | `key_event_view/UploadProgressBar.vue` | [`ImageUploadHost`] + [`crate::components::ui::UploadProgressBar`] |
-//! | `hooks/useImageUpload.ts` | [`ImageUploadHost`] 内的串行上传状态机 + `crate::components::ui::read_as_data_url` |
+//! * [`KeyEventPage`]：年份导航 + 三栏编排 + 状态流转
+//! * [`event_list`]：事件卡片（色条 / 短日期 / 30 字摘要 / 删除气泡）
+//! * [`add_modal`]：日期 + 名称
+//! * [`detail_panel`]：20 个颜色 + 描述（查看/编辑）+ 底部操作
+//! * [`image_gallery`]：左大图 + 右侧 160px 缩略图列 + 另存/删除
+//! * [`linked_panel`]：关联消费记录卡片 + 解除关联
+//! * [`ImageUploadHost`] + [`crate::components::ui::UploadProgressBar`]：串行上传状态机与进度条，
+//!   单张图片的内容由 [`crate::components::ui::read_as_data_url`] 读出
 //!
-//! ## 有意与原实现的差异（详见汇报）
+//! ## 设计取舍
 //!
-//! 1. **不做 `preloadYearData` 的 O(N) 预取**：原实现在切年时对每个事件各发
-//!    `key_event_images_list` + `tr_linked_by_date`（2N 次请求）。这里改为选中时惰性加载
-//!    （带缓存），请求量从 2N 降到 2。
+//! 1. **切年不做 O(N) 预取**：切年时若对每个事件各发
+//!    `key_event_images_list` + `tr_linked_by_date`，请求量会到 2N。这里改为选中时惰性加载
+//!    （带缓存），请求量降到 2。
 //! 2. **上传进度是分阶段的近似值**：Tauri IPC 是一次性 invoke，拿不到 XHR 字节进度。
 //!    这里按「读取/转换 0→30→60」+「写库完成 100」上报；总进度仍是 `已完成/总数` 的阶梯式。
-//! 3. **`skip()` 的瑕疵未照抄**：原实现跳过文件后该行永久停在「上传中」，这里标为「已跳过」。
-//! 4. **灯箱**：原实现用 `a-image` 单图预览（ESC 关闭；`←/→` 在单图模式下无效）。
-//!    这里实现 ESC 关闭 + 上一张/下一张 + 缩放。
-//! 5. `key_event_get`：原页面同样没有调用点（选中事件从 `list_by_year` 结果里取），保持一致。
+//! 3. **跳过的文件标为「已跳过」**：本实现把被跳过的行标为「已跳过」，比让它停在「上传中」更诚实。
+//! 4. **灯箱**：ESC 关闭 + 上一张/下一张 + 缩放。
+//! 5. `key_event_get`：本页没有调用点 —— 选中事件直接从 `list_by_year` 的结果里取。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,23 +41,23 @@ use crate::notify::Notifier;
 use crate::store::AppStores;
 use crate::time::{split_ymd, today_ymd};
 
-/// 页面标题（与原 `AppLeftBar.vue` 文案一致）。
+/// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "关键事件";
 
-/// 事件颜色（照抄原 `KeyEventDetail.vue` 的 `EVENT_COLORS`，顺序即渲染顺序）。
+/// 事件颜色（顺序即渲染顺序，共 20 个）。
 const EVENT_COLORS: [&str; 20] = [
     "#D9705A", "#C25460", "#D07048", "#D48838", "#C6963A", "#A09040", "#5C9858", "#4A8E70",
     "#5C9E7C", "#3D8878", "#389098", "#4A78A0", "#5C8DB5", "#6070A0", "#7868A0", "#8C6B9E",
     "#A06088", "#B06078", "#8C7B6E", "#7E8890",
 ];
 
-/// 事件标题上限（原弹窗 `:maxlength="200"` + `extractTitle` 截断 200）。
+/// 事件标题上限（新建弹窗的 `maxlength` 与正文首行截断共用 200）。
 const TITLE_MAX: usize = 200;
-/// 描述上限（原 `a-textarea :maxlength="5000"`）。
+/// 描述上限（编辑区的 `maxlength`）。
 const CONTENT_MAX: u32 = 5000;
-/// 列表摘要长度（原 `truncate(content, 30)`）。
+/// 列表摘要长度（30 字）。
 const SUMMARY_MAX: usize = 30;
-/// 上传完成后进度条停留时长（原实现 2000ms）。
+/// 上传完成后进度条停留时长（2000ms）。
 const PROGRESS_LINGER_MS: u64 = 2000;
 
 /// 一次待上传的图片集合（`web_sys::File` 不是 `Send`，状态机留在界面线程）。
@@ -215,7 +212,7 @@ pub fn KeyEventPage() -> impl IntoView {
                 Ok(_) => {
                     Notifier::global().success("事件已保存".to_string(), None);
                     is_editing.set(false);
-                    // 就地同步列表与当前事件（原 `saveEvent` 会更新 store 的 events 数组）
+                    // 就地同步列表与当前事件
                     events.update(
                         |items| match items.iter_mut().find(|item| item.date == date) {
                             Some(existing) => {
@@ -339,7 +336,7 @@ pub fn KeyEventPage() -> impl IntoView {
                         events,
                         event_dates,
                     );
-                    // 立即选中新事件（原实现同款流程）
+                    // 立即选中新事件
                     if let Ok(items) =
                         api::key_event::list_by_year(&year.get_untracked().to_string(), &ledger_id)
                             .await
@@ -551,7 +548,7 @@ pub fn KeyEventPage() -> impl IntoView {
                                                 variant=ButtonVariant::Primary
                                                 size=ButtonSize::Small
                                                 on_click=move |_| {
-                                                    // 标题为空时用正文首行（原 `extractTitle`）
+                                                    // 标题为空时用正文首行
                                                     let (title, color) = match current_event
                                                         .get_untracked()
                                                     {
@@ -624,7 +621,7 @@ pub fn KeyEventPage() -> impl IntoView {
 
 // ==================================================================== 状态辅助
 
-/// 清空选中（原 `clearSelection`），并把底部状态统计归零。
+/// 清空选中，并把底部状态统计归零。
 #[allow(clippy::too_many_arguments)]
 fn clear_selection(
     stores: AppStores,
@@ -758,7 +755,7 @@ fn select_date(
         return;
     }
 
-    // 缓存命中：立即显示（原实现在缓存命中时也不会重新请求）
+    // 缓存命中：立即显示，不再重新请求
     let cached_images = image_cache.get_untracked().get(&date).cloned();
     let cached_trs = tr_cache.get_untracked().get(&date).cloned();
     match &cached_images {
@@ -848,7 +845,7 @@ pub(crate) async fn resolve_asset_urls(
 
 // ==================================================================== 上传状态机
 
-/// 开始一轮上传（原 `useImageUpload.addFiles`）。
+/// 开始一轮上传。
 fn start_upload(files: Vec<web_sys::File>, target_date: String, controls: UploadControls) {
     if files.is_empty() || target_date.is_empty() {
         Notifier::global().warning("请先选择事件日期".to_string(), None);
@@ -878,7 +875,7 @@ fn start_upload(files: Vec<web_sys::File>, target_date: String, controls: Upload
     drive_upload(controls);
 }
 
-/// 顺序处理下一个文件（原 `uploadCurrentFile`）。
+/// 顺序处理下一个文件。
 fn drive_upload(controls: UploadControls) {
     let Some(state) = controls.pending.get_untracked() else {
         return;
@@ -947,7 +944,7 @@ fn drive_upload(controls: UploadControls) {
     });
 }
 
-/// 一轮上传结束：`total` 改写为 done 数、状态置 done、2 秒后回到 idle（与原实现一致）。
+/// 一轮上传结束：`total` 改写为 done 数、状态置 done、2 秒后回到 idle。
 fn finish_upload(controls: UploadControls, state: std::rc::Rc<PendingUpload>) {
     let done = controls
         .progress
@@ -1211,7 +1208,7 @@ fn ImageUploadHost(
         asset_urls,
     };
 
-    // 默认选中第一张；选中项失效时回落（原 `watch(images)` 的行为）
+    // 默认选中第一张；选中项失效时回落
     Effect::new(move |_| {
         let items = images.get();
         let current = selected_id.get_untracked();
@@ -1250,7 +1247,7 @@ fn ImageUploadHost(
             return;
         };
         let index = state.index;
-        // 原实现直接 `index++` 会让被跳过的行永远停在「上传中」，这里标为失败更诚实
+        // 本实现把被跳过的行标为「已跳过」，比让它停在「上传中」更诚实
         mark_file(controls, index, |entry| {
             entry.status = FileStatus::Error;
             entry.error_message = "已跳过".to_string();
@@ -1673,7 +1670,7 @@ fn linked_panel(
     .into_any()
 }
 
-/// 「添加事件」弹窗（原文案：标题「添加事件」、ok「确认」、cancel「取消」、宽 360）。
+/// 「添加事件」弹窗（固定文案：标题「添加事件」、ok「确认」、cancel「取消」、宽 360）。
 fn add_modal(
     open: RwSignal<bool>,
     date: RwSignal<String>,

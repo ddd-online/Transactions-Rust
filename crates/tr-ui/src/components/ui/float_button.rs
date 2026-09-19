@@ -1,4 +1,4 @@
-//! 悬浮按钮 —— 对应原 `a-float-button`（右下角圆形的「记一笔」入口）。
+//! 悬浮按钮（右下角圆形的「记一笔」入口）。
 //!
 //! 固定在内容区右下角（`position: fixed`），带 `--transactions-shadow-lg` 与主色底色。
 

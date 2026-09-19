@@ -1,6 +1,4 @@
 //! 核心业务 DTO（账本 / 消费记录 / 分类 / 标签 / 模板 / 图表 / 查询条件）。
-//! 对应 Go `kernel/models/dto/{ledger_dto,category_dto,tag_dto,transaction_record_dto,
-//! transaction_template_dto,chart_dto,chart_query,query_condition,tr_query_result}.go`。
 
 use std::collections::BTreeMap;
 
@@ -13,9 +11,8 @@ use crate::models::{
     TransactionTemplate,
 };
 
-/// 查询条件项：原 Go 在 `models` 与 `dto` 各定义了一份结构相同的类型，
-/// 这里只保留一份并通过 `dto` 一并导出，避免两处漂移（`dto.QueryConditionItem`
-/// 与 `models.QueryConditionItem` 都能解析到同一类型）。
+/// 查询条件项：只保留一份定义并通过 `dto` 与 `models` 一并导出，避免两处漂移
+/// （`dto.QueryConditionItem` 与 `models.QueryConditionItem` 解析到同一类型）。
 pub use crate::models::QueryConditionItem;
 
 // ------------------------------------------------------------------ 账本
@@ -197,7 +194,7 @@ impl From<&Chart> for ChartDto {
             ledger_id: chart.ledger_id.clone(),
             title: chart.title.clone(),
             granularity: chart.granularity.clone(),
-            // chart_lines 为 JSON 文本；解析失败时按原实现返回空曲线列表
+            // chart_lines 为 JSON 文本；解析失败时返回空曲线列表
             lines: serde_json::from_str(&chart.chart_lines).unwrap_or_default(),
             chart_type: chart.chart_type.clone(),
             is_preset: chart.is_preset,
@@ -240,13 +237,11 @@ pub struct UpdateChartRequest {
 
 /// `chart_lines` 列 ↔ `Vec<ChartLine>` 的 JSON 互转。
 ///
-/// 原 Go 版在 `chart_service.go` 里直接用 `encoding/json`
-/// （`json.Marshal(req.Lines)` 与 `json.Unmarshal([]byte(chart.ChartLines), &lines)`）。
-/// Rust 的 `tr-service` 没有 serde_json 依赖，而 JSON 文本与 DTO 的互转在本 crate 里
-/// 已有先例（模板 `tags`、记录 `flags`），因此把这两个转换放在这里；
-/// 服务层只负责把失败包成与 Go 相同的文案。
+/// 放在这里而不是 `tr-service`：该 crate 没有 serde_json 依赖，而 JSON 文本与 DTO 的互转
+/// 在本 crate 里已有先例（模板 `tags`、记录 `flags`）。
+/// 服务层只负责把失败包成固定文案。
 ///
-/// 字段顺序与紧凑格式和 Go 的 `json.Marshal` 一致（预设图表的 `chart_lines` 因此逐字相同）。
+/// 字段顺序与紧凑格式必须稳定：预设图表的 `chart_lines` 逐字存入数据库，格式一变即为数据变更。
 pub fn encode_chart_lines(lines: &[ChartLine]) -> Result<String, String> {
     serde_json::to_string(lines).map_err(|error| error.to_string())
 }
@@ -256,7 +251,7 @@ pub fn decode_chart_lines(text: &str) -> Result<Vec<ChartLine>, String> {
     serde_json::from_str(text).map_err(|error| error.to_string())
 }
 
-/// 单条曲线的查询条件（与原 `ChartLineCondition` 对应）。
+/// 单条曲线的查询条件。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartLineCondition {
@@ -343,7 +338,7 @@ pub struct TransactionRecordDto {
 }
 
 impl TransactionRecordDto {
-    /// 与原实现逐字一致的校验文案。
+    /// 校验文案（用户可见，改动即破坏契约）。
     pub fn validate(&self) -> Result<(), AppError> {
         if self.ledger_id.trim().is_empty() {
             return Err(AppError::bad_request("LedgerID is empty"));
@@ -357,9 +352,9 @@ impl TransactionRecordDto {
         Ok(())
     }
 
-    /// 转模型：`outlier` 打包进 `flags` JSON（与原实现一致）。
+    /// 转模型：`outlier` 打包进 `flags` JSON。
     ///
-    /// 注意：**不**写入 `key_event_date`——原实现 `ToTransactionRecord` 同样不赋值，
+    /// 注意：**不**写入 `key_event_date`——新建记录一律未关联关键事件，
     /// 关联关键事件只能通过 `tr_link` 命令进行（前端即使传了 keyEventDate 也会被忽略）。
     pub fn to_record(&self) -> TransactionRecord {
         let flags = serde_json::to_string(&TransactionRecordFlags {
@@ -381,7 +376,7 @@ impl TransactionRecordDto {
         }
     }
 
-    /// 由模型填充；`tags` 由调用方另行补齐（与原实现一致：默认空数组而非 null）。
+    /// 由模型填充；`tags` 由调用方另行补齐（默认空数组而非 null）。
     pub fn from_record(record: &TransactionRecord) -> Self {
         let outlier = serde_json::from_str::<TransactionRecordFlags>(&record.flags)
             .map(|flags| flags.outlier)
@@ -401,13 +396,13 @@ impl TransactionRecordDto {
     }
 }
 
-/// 消费记录查询条件（POST /transactions/query 的请求体）。
+/// 消费记录查询条件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TrQueryCondition {
     #[serde(rename = "ledgerId")]
     pub ledger_id: String,
-    /// 默认 -1（表示不分页）；与原 `JsonQueryCondition` 的初值一致
+    /// 默认 -1（表示不分页）
     pub offset: i64,
     pub limit: i64,
     #[serde(rename = "tsRange")]
@@ -570,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn tr_query_condition_defaults_match_go() {
+    fn tr_query_condition_documented_defaults() {
         let condition = TrQueryCondition::default();
         assert_eq!(condition.offset, -1);
         assert_eq!(condition.limit, -1);
@@ -583,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_messages_match_go() {
+    fn validation_messages_are_stable() {
         let dto = TransactionRecordDto::default();
         assert_eq!(dto.validate().unwrap_err().msg, "LedgerID is empty");
 
@@ -633,9 +628,9 @@ mod tests {
     }
 
     #[test]
-    fn create_ignores_key_event_date_like_go() {
-        // 原实现 ToTransactionRecord 不写 key_event_date：新建记录一律未关联关键事件，
-        // 关联只能走 tr_link。若这里被"顺手补上"，会与旧版行为分叉。
+    fn create_ignores_key_event_date() {
+        // to_record 不写 key_event_date：新建记录一律未关联关键事件，
+        // 关联只能走 tr_link。若这里被"顺手补上"，会破坏这个约定。
         let dto = TransactionRecordDto {
             ledger_id: "l1".into(),
             transaction_type: "expense".into(),

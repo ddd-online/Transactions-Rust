@@ -1,4 +1,4 @@
-//! 标签域命令。对照原 `app/src/backend/api/tag.ts` 与 `tag_controller.go`。
+//! 标签域命令。
 //!
 //! 与分类域同构，但查询参数名是 `categoryTransactionType`（分类域是 `type`）——照抄
 //! `crates/tr-ipc/src/commands/tag.rs`，不要"顺手统一"。

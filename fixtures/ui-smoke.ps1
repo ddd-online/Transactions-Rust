@@ -1,7 +1,7 @@
 # ui-smoke.ps1 —— 逐页界面冒烟：用 UI Automation 驱动真实窗口，挨个点开 7 个页面并断言内容渲染。
 #
 # 为什么需要它：`fixtures/smoke.ps1` 只能证明"应用起来了、工作空间打开了"，
-# 证明不了"每个页面点开是好的"。人工逐页验收（docs/ACCEPTANCE.md）依然是最终判据，
+# 证明不了"每个页面点开是好的"。自动化脚本覆盖不了的部分仍需人工逐页验收，
 # 但这个脚本能把"页面能不能打开、有没有明显渲染"这一层自动化，人工只需看视觉细节。
 #
 # 机制：WebView2 会把 DOM 暴露成 UIA 树（首次查询后 1-2 秒才建好）。
@@ -9,7 +9,7 @@
 #
 # 用法（pwsh 7；需要 release 产物，debug 构建不会内嵌界面）：
 #   cargo build --release -p transactions
-#   pwsh -File fixtures/ui-smoke.ps1 -Workspace target\parity\ws-rust
+#   pwsh -File fixtures/ui-smoke.ps1 -Workspace target\ws-rust
 #   pwsh -File fixtures/ui-smoke.ps1 -Workspace <ws> -Discover     # 导出每页的元素清单，用来维护下面的标记表
 #
 # 隔离：和 smoke.ps1 一样用临时 USERPROFILE 启动，不会碰你真实的配置文件。
@@ -32,7 +32,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\smoke\home-ui' }
 if (-not $OutDir) { $OutDir = Join-Path $repo 'target\ui-smoke' }
-if (-not $Workspace) { $Workspace = Join-Path $repo 'target\parity\ws-rust' }
+if (-not $Workspace) { $Workspace = Join-Path $repo 'target\ws-rust' }
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 

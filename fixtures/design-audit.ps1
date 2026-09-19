@@ -6,7 +6,7 @@
 #      （未定义会静默失效：颜色变成继承值或透明，界面上很难一眼看出）；
 #   3. `[data-theme='dark']` 必须覆盖与 `prefers-color-scheme: dark` 兜底**完全相同**的令牌集合
 #      （两套深色定义漂移会导致"跟随系统"与"手动深色"看起来不一致）；
-#   4. 未被引用的令牌只作提示（参考实现的 _variables.scss 里有历史遗留令牌，允许保留）。
+#   4. 未被引用的令牌只作提示（`tokens.css` 里有历史遗留令牌，允许保留）。
 #
 # 用法（pwsh 7）：
 #   pwsh -File fixtures/design-audit.ps1
@@ -118,7 +118,7 @@ else {
 # ---------- 提示：未被引用的令牌 ----------
 $unused = $defined | Where-Object { $used -notcontains $_ }
 if ($unused) {
-    Write-Host "[design-audit] 提示：$($unused.Count) 个令牌定义了但未被引用（参考实现的历史遗留，允许保留）" -ForegroundColor Yellow
+    Write-Host "[design-audit] 提示：$($unused.Count) 个令牌定义了但未被引用（tokens.css 里的历史遗留，允许保留）" -ForegroundColor Yellow
 }
 
 if ($failures.Count -gt 0) {

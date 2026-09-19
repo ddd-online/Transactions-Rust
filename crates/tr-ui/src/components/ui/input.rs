@@ -1,7 +1,7 @@
 //! 输入框 —— 36px 高 / 8px 圆角 / 1px 发丝边框。
 //!
 //! 双向绑定：调用方传入 `RwSignal<String>`，组件内部用 `prop:value` 保持 DOM 与信号同步
-//! （输入时写回信号，信号外部变更时刷新 DOM —— 与原 `a-input v-model:value` 一致）。
+//! （输入时写回信号，信号外部变更时刷新 DOM）。
 //!
 //! 附加能力：`placeholder`、`maxlength`、`allow_clear`（右侧清空按钮）、`on_enter`。
 
@@ -19,7 +19,7 @@ pub fn Input(
     /// 禁用
     #[prop(optional, into)]
     disabled: Option<Signal<bool>>,
-    /// 最大字符数（原 `a-input :maxlength`）
+    /// 最大字符数上限
     #[prop(optional)]
     maxlength: Option<u32>,
     /// 显示清空按钮

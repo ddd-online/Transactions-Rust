@@ -1,8 +1,8 @@
 # ui-transactions.ps1 —— 消费记录页的四条关键交互：**编辑（先建后删）**、**保存为模板**、**排序** 与 **筛选/统计条**。
 #
 # 为什么需要它：
-#   * 「编辑」在原实现里是**先建后删**（不是原地 UPDATE）——`transaction_id` 会换一个、
-#     行数不变。这条语义在数据级黄金对比（阶段 2）里覆盖过落库，但界面这条路径没人走过；
+#   * 「编辑」是**先建后删**（不是原地 UPDATE）：`transaction_id` 会换一个、旧记录消失、
+#     行数不变。这条语义的落库侧已有测试覆盖，但界面这条路径没人走过；
 #   * 「保存为模板」是记账弹窗里的第二条出口（`handleConfirmSaveTemplate` → `template_create`），
 #     设置页的"新建模板→删除"已由 `fixtures/ui-crud.ps1` 覆盖，但从**记一笔弹窗**存模板这条没人走过：
 #     它的名称走 `template_name` 这个子弹窗输入框，类型/分类/标签/描述全部取当前表单；
@@ -374,7 +374,7 @@ try {
     $templateRows = @(Read-Table 'tbl_billadm_transaction_tpl' | Where-Object { $_.template_name -eq $templateName })
     Assert-True ($templateRows.Count -eq 1) "库里出现从表单存下来的模板（$templateName）"
     if ($templateRows.Count -eq 1 -and $editedRows.Count -ge 1) {
-        # 类型/分类/描述必须取当前表单（原实现是 `trForm` 的四个字段直接落到模板）
+        # 类型/分类/描述必须取当前表单（四个字段直接落到模板）
         Assert-True ($templateRows[0].transaction_type -eq $editedRows[0].transaction_type) `
             "模板类型跟着表单（$($templateRows[0].transaction_type)）"
         Assert-True ($templateRows[0].category -eq $editedRows[0].category) `

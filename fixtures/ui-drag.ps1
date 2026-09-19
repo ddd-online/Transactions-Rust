@@ -1,6 +1,6 @@
 # ui-drag.ps1 —— 拖拽排序的端到端验收（真实鼠标输入驱动 HTML5 拖放）。
 #
-# 为什么需要它：`docs/ACCEPTANCE.md` 原先把"拖动排序"列为人工项，理由是"HTML5 DnD 合成不了"。
+# 为什么需要它：拖动排序曾经被当成"自动化不了"的人工项（理由是"HTML5 DnD 合成不了"）。
 # 实际上 **OS 级鼠标输入对 Chromium 就是真拖拽**（`mouse_event` 按下 → 分段移动 → 抬起），
 # 所以可以自动化；真正做不到的是"派发 JS 合成事件"。
 #
@@ -50,9 +50,8 @@ if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDi
 # 单实例插件按 identifier 判重：只要**本仓库里任何一个构建**在跑（`target\release\transactions.exe`
 # 或 `build\target\*.exe`），这次启动就会被顶掉，表现是"窗口 40 秒都没出现"。
 #
-# ⚠ 判重**必须按完整路径**，不能按进程名：原 Electron 版的 exe 也叫 `Transactions.exe`
-# （本机装在 `D:\software\Transactions\`），按名字判会把人家的进程算进来
-# ——它跟我们的 identifier 毫无关系，误判会直接卡住本脚本。
+# ⚠ 判重**必须按完整路径**，不能按进程名（本机别的目录下可能有同名 exe），
+# 按名字判会把人家的进程算进来——它跟我们的 identifier 毫无关系，误判会直接卡住本脚本。
 $repoPrefix = $repo.TrimEnd('\') + '\'
 $blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
     $path = try { $_.Path } catch { $null }
@@ -273,7 +272,7 @@ try {
     $actual = @($after | ForEach-Object { $_.name })
     Assert-True (($actual -join ',') -eq ($expected -join ',')) "拖拽后顺序为 [1,2,3…] → [2,3,1…]（期望 $($expected -join ',')）"
 
-    # 落库的 sort_order 会被重排成 0..N-1（原实现的 `sortOrder !== i` 语义），
+    # 落库的 sort_order 会被重排成 0..N-1（`sortOrder !== i` 语义），
     # 注意种子数据本身是 1..N（`max+1`），所以这里断言的是**重排之后**的稠密 0 基。
     $sortOrders = @($after | ForEach-Object { $_.sort_order })
     $dense = ($sortOrders -join ',') -eq ((0..($sortOrders.Count - 1)) -join ',')

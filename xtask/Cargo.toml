@@ -5,8 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 # 构建/验证辅助工具（非发布产物）：
-# * `schema-diff` —— 校验 Rust 建库结果与 Go 0.27 建库结果完全一致（数据兼容护栏）
-# * `parity`      —— 68 个操作的黄金对比（P2 阶段接入）
+# * `schema-diff` —— 校验 Rust 建库结果与 fixtures/schema/fresh.sql 基线逐条一致（建库护栏）
+# * `validate`    —— 只读校验既有工作空间是否为当前格式
+# * `dump` / `seed` —— 播种示例工作空间并导出规范化 JSON（人工冒烟与回归对比）
 [dependencies]
 tr-domain = { workspace = true }
 tr-store = { workspace = true }

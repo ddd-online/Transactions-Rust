@@ -1,4 +1,4 @@
-//! 应用错误：对照 Go `kernel/models/app_error.go`。
+//! 应用错误。
 //!
 //! 语义保持一致：`status` 决定失败形态（400/404/409/500），`msg` 是**直接展示给用户的文案**，
 //! 因此这里的字符串既是 API 契约也是 UI 文案，改动即为破坏性变更。
@@ -40,7 +40,7 @@ impl AppError {
         Self::new(500, msg)
     }
 
-    /// 未打开工作空间（500）。原实现由 `RequireWorkspace` 中间件统一返回，
+    /// 未打开工作空间（500）。命令层统一返回这个错误，
     /// 前端据此派发 `workspace-required` 事件触发工作空间选择流程。
     pub fn workspace_not_opened() -> Self {
         Self::internal(ERR_WORKSPACE_NOT_OPENED)

@@ -1,14 +1,13 @@
 //! `trasset://` 自定义协议：把工作空间的 `data/assets` 只读暴露给界面。
 //!
-//! 原实现通过本机 HTTP 的 `GET /api/v1/static/*` 提供图片，前端把 URL 拼成
-//! `http://127.0.0.1:31943/api/v1/static/<相对路径>`。改为 IPC 后不再有本地 HTTP 服务，
-//! 因此用自定义协议承担同一职责（`<img src>` 可以直接使用）：
+//! 界面没有本地 HTTP 服务可用，因此由自定义协议承担读取图片的职责
+//! （`<img src>` 可以直接使用）：
 //!
 //! * Windows / WebView2：`http://trasset.localhost/<相对路径>`
 //! * 其它平台：`trasset://localhost/<相对路径>`
 //!
-//! 安全校验与原 `kernel/api/static_controller.go` 等价（并且更严格：额外做了真实路径解析）：
-//! 规范化路径、拒绝 `..`、解析符号链接后必须仍位于 `data/assets` 之内。
+//! 安全校验：规范化路径、拒绝 `..`、解析符号链接后必须仍位于 `data/assets` 之内
+//! （额外做真实路径解析，比只比较字符串更严格）。
 
 use std::borrow::Cow;
 use std::path::Path;

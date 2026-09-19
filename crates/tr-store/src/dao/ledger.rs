@@ -1,10 +1,10 @@
-//! 账本 DAO。对照 Go `kernel/dao/ledger_dao.go`。
+//! 账本 DAO。
 //!
-//! 与 GORM 的行为对齐点：
-//! * `Create` 自动填充 `created_at` / `updated_at`（GORM 的 autoCreateTime/autoUpdateTime）
-//! * `Update` 只写 `name` / `description`，但同样刷新 `updated_at`（GORM 的 `Updates` 会带上）
+//! 行为约定：
+//! * `create` 自动填充 `created_at` / `updated_at`（均为秒级 Unix 秒）
+//! * `update` 只写 `name` / `description`，但同样刷新 `updated_at`
 //! * 查询单条记录找不到时返回 [`rusqlite::Error::QueryReturnedNoRows`]，
-//!   与服务层 [`super::is_not_found`] 配合，等价 GORM 的 `ErrRecordNotFound`
+//!   与服务层 [`super::is_not_found`] 配合，区分"查无记录"与真实错误
 
 use rusqlite::{params, Connection};
 
@@ -28,8 +28,7 @@ impl LedgerDao {
         Ok(())
     }
 
-    /// 修改账本名称与描述（刷新 `updated_at`）。不存在的 id 视为成功（与原实现一致：
-    /// GORM 的 `Updates` 命中 0 行不报错）。
+    /// 修改账本名称与描述（刷新 `updated_at`）。不存在的 id 视为成功（命中 0 行不报错）。
     pub fn update(conn: &Connection, ledger: &Ledger) -> rusqlite::Result<()> {
         conn.execute(
             "UPDATE tbl_billadm_ledger SET name = ?2, description = ?3, updated_at = ?4 \
@@ -39,7 +38,7 @@ impl LedgerDao {
         Ok(())
     }
 
-    /// 全部账本（顺序由数据库决定，与原实现一致：调用方负责按创建时间排序）。
+    /// 全部账本（顺序由数据库决定：调用方负责按创建时间排序）。
     pub fn list_all(conn: &Connection) -> rusqlite::Result<Vec<Ledger>> {
         let mut statement = conn.prepare(&format!("SELECT {COLUMNS} FROM tbl_billadm_ledger"))?;
         let rows = statement.query_map([], from_row)?;
@@ -170,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn update_on_missing_id_is_silent_like_gorm() {
+    fn update_on_missing_id_is_silent() {
         let (workspace, dir) = workspace();
         LedgerDao::update(&workspace.connection(), &ledger("absent", "x")).unwrap();
         std::fs::remove_dir_all(&dir).ok();

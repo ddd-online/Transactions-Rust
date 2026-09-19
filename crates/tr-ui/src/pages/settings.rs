@@ -1,54 +1,44 @@
 //! 应用设置页（P6-a）：5 个分栏。
 //!
-//! ## 对照的原 Vue 文件清单
+//! 分栏与顺序（固定文案，改动即影响界面）：通用设置 / 消费模板 / 日记配置 / 股票交易 / 关于软件。
 //!
-//! | 分栏 | 原组件 |
-//! |---|---|
-//! | （分栏标题与顺序） | `settings_view/SettingsView.vue` |
-//! | 通用设置 | `settings_view/GeneralSetting.vue` |
-//! | 消费模板 | `settings_view/TransactionsTemplateSetting.vue`（+ `tr_view/TransactionRecordModal.vue` 的「保存为模板」弹窗） |
-//! | 日记配置 | `settings_view/DiarySetting.vue` |
-//! | 股票交易 | `settings_view/StockTradingSetting.vue` + `stock_view/StockAccountView.vue` 的「交易费用设置」 |
-//! | 关于软件 | `settings_view/AboutSetting.vue`（+ `stores/updateStore.ts` 的状态机） |
+//! ## 本实现的设计取舍（逐条，均为有意为之）
 //!
-//! ## 有意差异（逐条，均为有意为之）
-//!
-//! 1. **分栏导航形态**：原文是左侧 200px 竖向 `nav-item` 导航（`SettingsView.vue`），
-//!    本实现改用顶部 `Tabs` + `TabPane`（本轮任务要求交付并验证这两个组件）。
-//!    每个分栏内部仍按 `SettingsPageWrapper.vue` 的「分栏名标题 + 卡片列表」结构排布，
+//! 1. **分栏导航形态**：顶部 `Tabs` + `TabPane`（本轮任务要求交付并验证这两个组件）。
+//!    每个分栏内部是「分栏名标题 + 卡片列表」结构，
 //!    卡片外观（白底 / 1px `--transactions-color-divider` / `--transactions-radius-md` /
-//!    hover 底色 `--transactions-color-hover-bg` / padding 12px 16px）照抄原文。
-//! 2. **通用设置·工作空间**：原文按钮文案是「切换」、弹窗标题「选择工作目录」、输入框占位
+//!    hover 底色 `--transactions-color-hover-bg` / padding 12px 16px）。
+//! 2. **通用设置·工作空间**：按钮固定文案「切换」、弹窗标题「选择工作目录」、输入框占位
 //!    「请输入或选择工作目录路径」（任务单里概括成「更换目录…」，未采用）。
 //!    本仓库没有 `transactions-file-select` 组件，直接用 `dialog_open` 选目录。
-//! 3. **通用设置不展示版本信息**：原文该分栏只有 4 张卡片；`app_info` 的 version/isDev
-//!    只出现在「关于软件」（与原文一致）。`config_get()` 仍一次取全
+//! 3. **通用设置不展示版本信息**：该分栏只有 4 张卡片；`app_info` 的 version/isDev
+//!    只出现在「关于软件」。`config_get()` 仍一次取全
 //!    （workspace_dir / close_behavior / appearance / config_path / is_dev），
-//!    其中 `config_path` 与 `is_dev` 按原文**不渲染**（原设置页没有对应 UI；
+//!    其中 `config_path` 与 `is_dev` **不渲染**（本页没有对应 UI；
 //!    构建类型改用关于页的 `app_info("isDev")` 展示）。
-//! 4. **通用设置·外观/关闭行为/开发者工具**：原文 `appearanceStore` 静默吞掉持久化失败，
-//!    本实现失败时提示并**回滚界面选中值**（任务单要求）；开发者工具以 `devtools_toggle`
+//! 4. **通用设置·外观/关闭行为/开发者工具**：持久化失败时提示并**回滚界面选中值**
+//!    （任务单要求），不静默吞掉；开发者工具以 `devtools_toggle`
 //!    的返回布尔为准。
-//! 5. **消费模板·新建模板是增补**：v0.27 的设置页**没有**新建入口（模板在「记一笔」弹窗里
-//!    「保存为模板」）。本实现按任务单增补「新建模板」弹窗，文案沿用
-//!    `TransactionRecordModal.vue`（模板名称 / 请输入模板名称 / 保存模板失败 / 保存模板成功）。
+//! 5. **消费模板·新建模板是增补**：设置页此前**没有**新建入口（模板在「记一笔」弹窗里
+//!    「保存为模板」）。本实现按任务单增补「新建模板」弹窗，固定文案：
+//!    模板名称 / 请输入模板名称 / 保存模板失败 / 保存模板成功。
 //! 6. **消费模板·列表不是 `Table`**：行由 `DragSortItem` 渲染成 `<div>`（整行 draggable），
-//!    而 `<div>` 不能作为 `<tbody>` 的子节点，因此列宽/表头照抄原文但用 `st-table` 的 div 网格实现。
-//! 7. **日记配置**：原文**没有**「文件勾选」（扫描后顺序导入全部文件），本实现照原文，
-//!    只是每行状态；原文「浏览器 dev 模式降级」分支（手输路径）在 Tauri 下不存在，未移植；
-//!    原文导入完成后的 `diaryStore.loadDates()` 只影响日记页，本页不需要，省略。
-//! 8. **股票交易·费用设置卡片来自 `stock_view/StockAccountView.vue`**（设置页原文没有它）。
-//!    换算照抄原文：佣金费率按「万分之」（×10000），印花税/过户费按「%」（×100）。
-//!    原文把印花税/过户费 的 tooltip 内联在 label 里，本实现因 `FormItem` 的 label 是字符串，
-//!    把问号图标挪到输入框行尾（语义不变）。
+//!    而 `<div>` 不能作为 `<tbody>` 的子节点，因此保持原有列宽/表头，但用 `st-table` 的 div 网格实现。
+//! 7. **日记配置**：**没有**「文件勾选」（扫描后顺序导入全部文件），只是每行状态；
+//!    「浏览器 dev 模式降级」分支（手输路径）在 Tauri 下不存在，故不实现；
+//!    导入完成后无需刷新日记页，故省略。
+//! 8. **股票交易·费用设置卡片**：换算规则固定——佣金费率按「万分之」（×10000），
+//!    印花税/过户费按「%」（×100）。
+//!    印花税/过户费的 tooltip 本实现放在输入框行尾的图标上（语义不变；
+//!    因 `FormItem` 的 label 是字符串，无法内联到 label 里）。
 //!    最低佣金回填走 `tr_domain::money::cents_to_yuan`（任务要求的唯一金额换算入口），
-//!    因此显示两位小数（`5.00`），原文用 `parseFloat((分/100).toFixed(2))` 会显示 `5`——
-//!    这是**有意的**：金额换算一律过 `tr_domain::money`，不自行实现 `/100`。
+//!    因此显示两位小数（`5.00`）——这是**有意的**：
+//!    金额换算一律过 `tr_domain::money`，不自行实现 `/100`。
 //!    费率输入非法（非数字 / `NaN` / `inf`）时不发请求、只提示（不 panic）。
-//! 9. **关于软件**：原文没有 GitHub 链接（本轮任务要求增补）；**构建时间后端未提供**
+//! 9. **关于软件**：GitHub 链接是本轮任务要求增补；**构建时间后端未提供**
 //!    （`app_info` 只支持 `name` / `version` / `isDev`），故未展示，改为展示构建类型
-//!    （开发版 / 正式版）。更新说明照任务单按**纯文本 + 保留换行**渲染（原文是 MarkdownViewer，
-//!    本仓库没有 Markdown 解析器）；下载进度原文只渲染 `percent`，本实现额外用小字显示 `speed`。
+//!    （开发版 / 正式版）。更新说明照任务单按**纯文本 + 保留换行**渲染（本仓库没有 Markdown 解析器）；
+//!    下载进度额外用小字显示 `speed`。
 //! 10. 全页不使用 `unwrap` / `expect` 处理用户数据：解析失败、命令失败一律走通知。
 
 use std::cell::RefCell;
@@ -74,7 +64,7 @@ use crate::ipc;
 use crate::notify::Notifier;
 use crate::store::{AppStores, APPEARANCE_DARK, APPEARANCE_LIGHT, APPEARANCE_SYSTEM};
 
-/// 页面标题（原 `SettingsView.vue` 的「应用设置」）。
+/// 页面标题（固定文案「应用设置」，改动即影响界面）。
 pub const PAGE_TITLE: &str = "应用设置";
 
 const TAB_GENERAL: &str = "general";
@@ -83,16 +73,16 @@ const TAB_DIARY: &str = "diary";
 const TAB_STOCK: &str = "stock";
 const TAB_ABOUT: &str = "about";
 
-/// 交易费用说明（`StockAccountView.vue` 的 tooltip 文案，逐字照抄；
-/// 原文用 `<br />` 换行，这里用 `\n` + CSS `white-space: pre-line`）。
+/// 交易费用说明（tooltip 固定文案，改动即影响界面；
+/// 换行用 `\n` + CSS `white-space: pre-line`）。
 const FEE_TOOLTIP: &str = "佣金：委托成交总额 × 费率，不足最低佣金时按最低佣金收取（买卖双向）\n一笔委托分多笔成交时，费用按委托成交总额计算一次，再按各笔成交金额比例分摊\n买入实际成本 = 成交金额 + 佣金 + 过户费";
-/// 印花税说明（逐字照抄）。
+/// 印花税说明（固定文案）。
 const STAMP_TOOLTIP: &str = "卖出时按成交金额 × 费率收取";
-/// 过户费说明（逐字照抄）。
+/// 过户费说明（固定文案）。
 const TRANSFER_TOOLTIP: &str = "买卖双向收取，仅沪市（60/68 开头）适用";
-/// 交易标签最多保存数量（原文 `tags.length >= 20`）。
+/// 交易标签最多保存数量（上限 20）。
 const MAX_STOCK_TAGS: usize = 20;
-/// 外部链接（本轮增补，原文没有）。
+/// 外部链接（本仓库地址，改动即影响「关于软件」）。
 const GITHUB_URL: &str = "https://github.com/ddd-online/Transactions-Rust";
 
 #[component]
@@ -142,7 +132,7 @@ pub fn SettingsPage() -> impl IntoView {
 
 // ---------------------------------------------------------------- 通用设置
 
-/// 通用设置（`GeneralSetting.vue`）：工作空间 / 外观 / 关闭行为 / 开发者工具。
+/// 通用设置：工作空间 / 外观 / 关闭行为 / 开发者工具。
 #[component]
 fn GeneralSetting() -> impl IntoView {
     let stores = AppStores::global();
@@ -152,7 +142,7 @@ fn GeneralSetting() -> impl IntoView {
     let devtools = RwSignal::new(false);
     let switching = RwSignal::new(false);
 
-    // DevTools 真实状态同步（原 `onDevToolsStateChanged`）：开关始终跟随主进程，
+    // DevTools 真实状态同步：开关始终跟随主进程，
     // 避免"启动时自动打开 / 从 DevTools 自身按钮关闭"导致的状态脱节。
     ipc::listen::<bool, _>(api::desktop::EVENT_DEVTOOLS_STATE_CHANGED, move |opened| {
         devtools.set(opened)
@@ -344,7 +334,7 @@ fn GeneralSetting() -> impl IntoView {
 
 // ---------------------------------------------------------------- 消费模板
 
-/// 消费模板（`TransactionsTemplateSetting.vue`）：列表 + 删除 + 拖拽排序 + （增补）新建。
+/// 消费模板：列表 + 删除 + 拖拽排序 + （增补）新建。
 #[component]
 fn TemplateSetting() -> impl IntoView {
     let stores = AppStores::global();
@@ -535,7 +525,7 @@ fn TemplateSetting() -> impl IntoView {
             transaction_type: form_type.get_untracked(),
             category,
             tags: form_tags.get_untracked(),
-            // 原文 `trForm.flags.join(',')`：勾选离群值时写入标记名
+            // 勾选离群值时写入标记名（逗号分隔的标记串）
             flags: if form_outlier.get_untracked() {
                 "outlier".to_string()
             } else {
@@ -677,7 +667,7 @@ fn TemplateSetting() -> impl IntoView {
     }
 }
 
-/// 一行模板：`DragSortItem` 作整行容器（原 `SortableJS` 的 `.drag-handle` 是视觉元素）。
+/// 一行模板：`DragSortItem` 作整行容器（拖拽手柄是视觉元素）。
 fn template_row(
     template: TransactionTemplateDto,
     index: usize,
@@ -787,7 +777,7 @@ fn template_row(
 
 // ---------------------------------------------------------------- 日记配置
 
-/// 一个待导入文件的界面状态（原 `ImportFileItem`）。
+/// 一个待导入文件的界面状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DiaryImportRow {
     date: String,
@@ -816,7 +806,7 @@ impl DiaryImportRow {
     }
 }
 
-/// 日记配置（`DiarySetting.vue`）：导入 + 导出。
+/// 日记配置：导入 + 导出。
 #[component]
 fn DiarySetting() -> impl IntoView {
     // ---- 导入状态 ----
@@ -909,7 +899,7 @@ fn DiarySetting() -> impl IntoView {
             } else {
                 import_status.set("done".to_string());
                 Notifier::global().success(format!("成功导入 {completed} 篇日记"), None);
-                // 1.5 秒后自动复位（原 `setTimeout(..., 1500)`）
+                // 1.5 秒后自动复位
                 set_timeout(
                     move || {
                         import_status.set("idle".to_string());
@@ -983,7 +973,7 @@ fn DiarySetting() -> impl IntoView {
                         );
                     }
 
-                    // 3 秒后自动复位（原 `setTimeout(..., 3000)`）
+                    // 3 秒后自动复位
                     set_timeout(
                         move || {
                             export_status.set("idle".to_string());
@@ -1191,7 +1181,7 @@ fn DiarySetting() -> impl IntoView {
     }
 }
 
-/// 导入进度里的一行文件（原 `.file-row`）。
+/// 导入进度里的一行文件。
 fn diary_import_row(row: DiaryImportRow) -> impl IntoView {
     let status_text = row.status_text();
     let row_class = format!("st-file-row st-file-row--{}", row.status_class());
@@ -1241,7 +1231,7 @@ fn diary_failed_row(item: DiaryExportFileError) -> impl IntoView {
 
 // ---------------------------------------------------------------- 股票交易
 
-/// 股票交易（`StockTradingSetting.vue` + `StockAccountView.vue` 的费用设置）。
+/// 股票交易：交易费用设置 + 交易标签 + 重置股票数据。
 #[component]
 fn StockSetting() -> impl IntoView {
     let stores = AppStores::global();
@@ -1266,7 +1256,7 @@ fn StockSetting() -> impl IntoView {
 
     let no_ledger = move || stores.current_ledger_id.get().is_empty();
 
-    // 回填：佣金 ×10000、最低佣金（分→元）、印花税/过户费 ×100（逐字照抄原 `fillFeeForm`）
+    // 回填：佣金 ×10000、最低佣金（分→元）、印花税/过户费 ×100
     let fill_fee_form = move |setting: &StockFeeSetting| {
         fee_commission.set(format_scaled(setting.commission_rate, 10_000.0, 4));
         fee_min.set(cents_to_yuan(setting.min_commission));
@@ -1300,7 +1290,7 @@ fn StockSetting() -> impl IntoView {
             return;
         }
 
-        // 校验顺序与文案逐字照抄原 `handleSaveFeeSettings`
+        // 校验顺序与文案固定（改动即影响界面）
         let Some(commission) = parse_number(&fee_commission.get_untracked()) else {
             Notifier::global().error("请输入大于 0 的佣金费率", None);
             return;
@@ -1466,7 +1456,7 @@ fn StockSetting() -> impl IntoView {
             match api::stock::reset(&ledger_id).await {
                 Ok(_) => {
                     confirm_open.set(false);
-                    // 重置会清掉费用设置与交易标签，重新拉一遍（原实现 reloadAll）
+                    // 重置会清掉费用设置与交易标签，重新拉一遍
                     load_fee(ledger_id.clone());
                     load_tags(ledger_id);
                     Notifier::global().success("股票交易数据已重置", None);
@@ -1588,7 +1578,7 @@ fn StockSetting() -> impl IntoView {
                     </div>
                 </div>
 
-                // ---- 交易费用设置（来自 StockAccountView.vue） ----
+                // ---- 交易费用设置 ----
                 <div class="st-card st-card--block">
                     <div class="st-panel-head">
                         <div class="st-panel-title-row">
@@ -1708,12 +1698,12 @@ fn StockSetting() -> impl IntoView {
 
 // ---------------------------------------------------------------- 关于软件
 
-/// 「关于软件」的更新状态（对应原 `stores/updateStore.ts` 的 Pinia store）。
+/// 「关于软件」的更新状态（模块级全局状态，见下）。
 ///
-/// 为什么放在模块级 `thread_local` 而不是组件内信号：原实现的 updateStore 是**全局 store**，
-/// 跨路由常驻；本实现的 `TabPane` 切走会卸载组件，组件内信号会随之丢失
+/// 为什么放在模块级 `thread_local` 而不是组件内信号：更新状态需要跨路由常驻；
+/// 本实现的 `TabPane` 切走会卸载组件，组件内信号会随之丢失
 /// （"下载中切到别的分栏再切回来"会看到状态归零），且每次重新挂载都会重复注册事件监听。
-/// 这里把状态与监听都收敛到模块级槽位，语义与原文一致。
+/// 这里把状态与监听都收敛到模块级槽位。
 #[derive(Clone, Copy)]
 struct UpdateState {
     app_name: RwSignal<String>,
@@ -1794,7 +1784,7 @@ impl UpdateState {
     }
 }
 
-/// 关于软件（`AboutSetting.vue` + `stores/updateStore.ts`）。
+/// 关于软件：应用信息 + 更新检查 + 下载进度 + GitHub 链接。
 ///
 /// **构建时间后端未提供**（`app_info` 只支持 `name` / `version` / `isDev`），
 /// 因此这里只展示「应用名 / 版本 / 构建类型（开发版 / 正式版）」，不显示构建时间。
@@ -1868,7 +1858,7 @@ fn AboutSetting() -> impl IntoView {
         });
     };
 
-    // 挂载时自动检查一次（原文 `onMounted` 里的 `checkForUpdate()`）
+    // 挂载时自动检查一次
     Effect::new(move |_: Option<()>| check_for_update());
 
     let download_update = move || {
@@ -2063,7 +2053,7 @@ fn AboutSetting() -> impl IntoView {
                                     <span class="st-update-text">
                                         {move || format!("{:.0}%", download_percent.get())}
                                     </span>
-                                    // 原实现只渲染 percent；速度是本轮任务要求的增补
+                                    // 百分比之外额外显示速度（本轮任务要求的增补）
                                     <span class="st-update-speed">
                                         {move || download_speed.get()}
                                     </span>
@@ -2172,7 +2162,7 @@ fn AboutSetting() -> impl IntoView {
 
 // ---------------------------------------------------------------- 工具函数
 
-/// 等价原前端的 `String(parseFloat((value * scale).toFixed(digits)))`：
+/// 按 `scale` 换算并格式化：
 /// 先按 `scale` 换算，再四舍五入到 `digits` 位小数，最后去掉多余的 0。
 fn format_scaled(value: f64, scale: f64, digits: i32) -> String {
     let factor = 10_f64.powi(digits);

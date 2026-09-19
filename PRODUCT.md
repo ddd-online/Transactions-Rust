@@ -30,7 +30,8 @@ windows desktop (Tauri 2 + Rust)
 ## Capabilities and Constraints
 
 - 功能面：消费记录（模板/分类/标签/账本间同步）、数据分析图表、股票交易（账户/持仓/交易记录/统计/重置）、关键事件、日记、设置（通用/消费模板/日记/股票交易/关于）。
-- 支持 HEIC 图片导入（界面层在 WebView2 内转换后上传；与原实现"前端转换、后端只收 JPEG/PNG/GIF/WebP"的分工一致），图表为界面层自绘 SVG（原版本用 ECharts）。
+- 支持 HEIC 图片导入（界面层在 WebView2 内转换后上传，后端只接受 JPEG/PNG/GIF/WebP），
+  图表为界面层自绘 SVG（不引入图表 JS 库）。
 - 技术约束：浅色/深色双主题、默认跟随系统、单一强调色 `#3964fe`（见 DESIGN.md）、CSS 变量统一使用 `--transactions-` 前缀；界面为 Rust(Leptos/WASM)，仓库内无 Node 依赖；金额恒为整数分。
 - 明确边界：除股票行情查询外，其余功能完全离线可用。
 

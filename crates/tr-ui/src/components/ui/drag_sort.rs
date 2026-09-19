@@ -1,6 +1,5 @@
 //! 拖拽排序 —— HTML5 draggable，零 JS 库依赖。
 //!
-//! 语义对齐原 `app/src/hooks/useListDragSort.ts`：
 //! 拖拽结束后把**新顺序**交给调用方，由调用方逐项调用 `*_update_sort`
 //! （`category_update_sort` / `tag_update_sort` / `template_update_sort`）。
 //! 本组件只负责"从哪儿拖到哪儿"，不做任何持久化。

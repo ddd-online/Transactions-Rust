@@ -1,8 +1,8 @@
 //! 表单容器与表单项 —— 标签 / 必填星号 / 校验错误文案。
 //!
-//! 对应原 `a-form` + `a-form-item` 的 `label` / `required` / `validate-status` / `help`：
-//! * 标签在控件上方（`layout = Vertical`，原设置页与弹窗的默认）
-//! * 标签在控件左侧（`layout = Horizontal`，原「通用设置」的一行一项）
+//! 表单项支持 `label` / `required` / 校验错误文案：
+//! * 标签在控件上方（`layout = Vertical`，设置页与弹窗的默认）
+//! * 标签在控件左侧（`layout = Horizontal`，「通用设置」的一行一项）
 //! * `required` 在标签前加红色 `*`
 //! * `error` 非空时在控件下方显示红色校验文案，并把控件边框染红
 

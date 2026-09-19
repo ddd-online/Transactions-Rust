@@ -1,17 +1,7 @@
 //! IPC 命令实现。
 //!
-//! 命令按业务域分模块，与原 `kernel/api/*_controller.go` 一一对应：
-//!
-//! | 模块 | 原控制器 | 阶段 |
-//! |---|---|---|
-//! | `workspace` | `workspace_controller.go` | P2 |
-//! | `ledger` | `ledger_controller.go` | P2 |
-//! | `tr` | `transaction_record_controller.go` | P2 |
-//! | `category` / `tag` | `category_controller.go` / `tag_controller.go` | P2 |
-//! | `template` / `chart` | `transaction_template_controller.go` / `chart_controller.go` | P2 |
-//! | `key_event` | `key_event_controller.go` | P3 |
-//! | `diary` | `diary_controller.go` | P3 |
-//! | `stock` | `stock_controller.go` | P4 |
+//! 命令按业务域分模块：`ledger` / `tr` / `category` / `tag` / `template` / `chart` /
+//! `key_event` / `diary` / `stock`。
 //!
 //! 每个命令都用 `#[tauri::command]` 标注、接收 `tauri::State<'_, AppState>`，
 //! 由 `src-tauri` 的 `generate_handler![]` 集中注册（命令清单因此只在一处）。

@@ -1,15 +1,14 @@
-//! 分类 DAO。对照 Go `kernel/dao/category_dao.go`。
+//! 分类 DAO。
 //!
-//! 与 GORM 的行为对齐点：
-//! * `Category` 模型没有时间戳列（Go 模型里本来就没有），所以 `create` / `update_sort`
+//! 行为约定（改 SQL 前先读一遍）：
+//! * `Category` 模型没有时间戳列，所以 `create` / `update_sort`
 //!   不写 `created_at` / `updated_at`
-//! * 列表排序与原实现逐字一致：`ORDER BY sort_order ASC, name DESC`
+//! * 列表排序固定为：`ORDER BY sort_order ASC, name DESC`
 //! * 唯一键是 `(ledger_id, name, transaction_type)`（见基线 schema 的
-//!   `idx_category_ledger_name_type`），重复插入由 SQLite 报错，与原实现一致
-//! * `count_records_by_category` / `count_records_by_categories` 对应 Go
-//!   `category_service.go` 里直接查 `TransactionRecord` 的两处统计（`Count` 与
-//!   `GROUP BY category`）。消费记录 DAO 由另一处负责，因此这两条只读 SQL 放在本文件，
-//!   语义与 Go 逐字一致。
+//!   `idx_category_ledger_name_type`），重复插入由 SQLite 报错，删除则是幂等的
+//! * `count_records_by_category` / `count_records_by_categories` 是分类维度的两处统计
+//!   （单个分类的 `COUNT(*)` 与按 `GROUP BY category` 的批量版）。消费记录 DAO 由另一处
+//!   负责，因此这两条只读 SQL 放在本文件，两处口径必须保持逐字一致。
 
 use std::collections::BTreeMap;
 
@@ -22,7 +21,7 @@ pub struct CategoryDao;
 const COLUMNS: &str = "ledger_id, name, transaction_type, sort_order";
 
 impl CategoryDao {
-    /// 按账本查询分类；`transaction_type` 为空或 `all` 时不过滤（与原实现一致）。
+    /// 按账本查询分类；`transaction_type` 为空或 `all` 时不过滤。
     pub fn query_by_ledger(
         conn: &Connection,
         ledger_id: &str,
@@ -41,8 +40,8 @@ impl CategoryDao {
         rows.collect()
     }
 
-    /// 该账本 + 交易类型下最大的 `sort_order`（无记录时为 0，等价 GORM 的
-    /// `Select("COALESCE(MAX(sort_order), 0)")`）。
+    /// 该账本 + 交易类型下最大的 `sort_order`（无记录时为 0，SQL 里用
+    /// `COALESCE(MAX(sort_order), 0)`）。
     pub fn get_max_sort(
         conn: &Connection,
         ledger_id: &str,
@@ -71,7 +70,7 @@ impl CategoryDao {
         Ok(())
     }
 
-    /// 删除单个分类（不存在的记录视为成功，与原实现一致）。
+    /// 删除单个分类（不存在的记录视为成功，删除是幂等的）。
     pub fn delete(
         conn: &Connection,
         ledger_id: &str,
@@ -134,10 +133,10 @@ impl CategoryDao {
         )
     }
 
-    /// 批量统计每个分类名下的交易记录数（等价 Go 的
-    /// `Select("category, COUNT(*) AS cnt").Where("ledger_id = ? AND category IN ?").Group("category")`）。
+    /// 批量统计每个分类名下的交易记录数（`SELECT category, COUNT(*) ... WHERE
+    /// ledger_id = ? AND category IN (...) GROUP BY category`）。
     ///
-    /// 返回的 map 只包含**确实有记录**的分类名（与 Go 一致：调用方用
+    /// 返回的 map 只包含**确实有记录**的分类名（调用方用
     /// `counts[name]` 取不到时得 0）；`names` 为空时直接返回空 map，不查库。
     pub fn count_records_by_categories(
         conn: &Connection,
@@ -273,7 +272,7 @@ mod tests {
         let loaded = CategoryDao::query_by_ledger(&conn, "l1", "expense").unwrap();
         assert_eq!(loaded[0].sort_order, 9);
 
-        // 不存在的记录更新视为成功（与原实现一致）
+        // 不存在的记录更新视为成功（命中 0 行不报错）
         CategoryDao::update_sort(&conn, "l1", "不存在", "expense", 1).unwrap();
 
         std::fs::remove_dir_all(&dir).ok();
@@ -324,7 +323,7 @@ mod tests {
         assert_eq!(counts["购物消费"], 1);
         assert_eq!(counts.get("无记录"), None);
 
-        // 空名单不查库（与 Go 的提前返回一致）
+        // 空名单不查库（提前返回）
         assert!(CategoryDao::count_records_by_categories(&conn, "l1", &[])
             .unwrap()
             .is_empty());

@@ -1,11 +1,9 @@
-# Transactions (Rust)
+# Transactions
 
-桌面端个人记账工具 **Transactions** 的**纯 Rust 重写版**：Tauri 2 外壳 + Leptos(WASM) 界面 + rusqlite 内核。
+桌面端个人记账应用：**Tauri 2 外壳 + Leptos(WASM) 界面 + rusqlite 内核**，全部由 Rust 实现。
 所有记账数据保存在你自己选择的本地工作空间（一个 SQLite 数据库）里，无云端账户、无后台服务、无 Node 依赖。
 
-> 这是对原 [Electron + Vue 3 + Go/Gin 版 Transactions](https://github.com/ddd-online/Transactions)（v0.27.0）
-> 的**行为等价 + 数据兼容**重写：同一份工作空间两种实现都能打开。
-> 本文档描述的是 **0.1.0**（本仓库的第一个版本）。
+本文档描述 **0.1.0**。
 
 ## 功能
 
@@ -28,32 +26,33 @@
 
 ```
 crates/tr-domain/    # 纯领域层：模型 / DTO / 金额分元换算 / 费用分摊（native + wasm 双可编，无 I/O）
-crates/tr-store/     # 存储层：最新 schema 建库 + 只读格式校验 + 各 Dao
+crates/tr-store/     # 存储层：当前 schema 建库 + 只读格式校验 + 各 Dao
 crates/tr-service/   # 服务层：业务规则（账本 / 交易 / 图表 / 关键事件 / 日记 / 股票），不依赖 tauri
 crates/tr-ipc/       # IPC 命令面：全部 #[tauri::command] + 统一错误信封
 crates/tr-ui/        # 界面：Leptos CSR + static/{css,fonts,icons}
 src-tauri/           # 桌面外壳：窗口 / 托盘 / 配置 / 日志 / 资产协议 / 更新
-xtask/               # 验证工具：schema-diff（数据兼容护栏）、parity（与原实现的黄金对比）
-fixtures/            # 最新 schema 基线、种子工作空间、黄金 JSON、端到端脚本（**不含任何真实个人数据**）
+xtask/               # 验证工具：schema-diff（建库护栏）、seed / dump（示例数据与只读导出）
+fixtures/            # schema 基线、端到端脚本（**不含任何真实个人数据**）
 ```
 
 分层纪律：`tr-domain` 不得引入任何 I/O 依赖（native 与 wasm 共用同一份金额/费用算法）；
 只有 `tr-ipc` 依赖 `tauri`，业务规则都能在没有窗口的环境里用 `cargo test` 验证。
 
-## 数据兼容
+## 数据
 
-- 工作空间结构沿用参考实现 **0.27 的最新 schema**：`transactions.db` 不存在时按基线建库，
+- 工作空间结构以 `fixtures/schema/fresh.sql` 为基线：`transactions.db` 不存在时按基线建库，
   已存在时**只做只读校验，绝不执行任何 DDL/DML 去改结构**（`cargo xtask validate <dir>`）。
-- **本仓库没有、也不会有数据迁移代码**：更早版本的工作空间会被明确拒绝，提示先用 0.27 版打开一次。
+- **本仓库没有、也不会有数据迁移代码**：更早格式的工作空间会被明确拒绝
+  （提示改用其他工作目录，或用支持该格式的旧版本升级）。
 - 金额恒为整数分（`i64`），只有展示层做分/元换算。
-- 用户配置文件位置与键名不变（`~/.transactions.json`，开发构建 `~/.transactions-dev.json`），读写时保留未知键。
+- 用户配置文件位置与键名稳定（`~/.transactions.json`，开发构建 `~/.transactions-dev.json`），读写时保留未知键。
 
 ## 下载安装
 
 到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载
 `Transactions-x64-v0.1.0.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
 
-首次启动会让你选择一个工作空间目录：空目录会按最新 schema 建库，已有的 0.27 工作空间会直接打开。
+首次启动会让你选择一个工作空间目录：空目录会按当前 schema 建库，已经是当前格式的目录会直接打开。
 应用内「设置 → 关于软件」会检查本仓库的 Release，发现新版本可下载并校验 `sha256` 后安装。
 
 ## 从源码构建
@@ -93,14 +92,10 @@ cargo test --workspace                      # 领域/存储/服务/外壳 单元
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 
-cargo xtask schema-diff                     # 建库结构与最新 schema 基线逐条一致
-cargo xtask schema-diff --go-db <path>      # 直接与参考实现 0.27 建出的库比对
-cargo xtask validate <workspace-dir>        # 只读校验既有工作空间
-
-# 黄金对比：同一批输入分别由参考实现（HTTP 内核）与本仓库写入两个全新工作空间，
-# 再逐表逐字段比较落库结果，退出码 0 = 一致（18 张表全列逐字段，
-# 覆盖新建 / 更新 / 删除 / 股票多轮次与预演等操作面）
-pwsh -File fixtures/parity/run-parity.ps1
+cargo xtask schema-diff                     # 建库结构与 fixtures/schema/fresh.sql 基线逐条一致
+cargo xtask validate <workspace-dir>        # 只读校验既有工作空间是否为当前格式
+cargo xtask seed <workspace-dir>            # 播种一份可复现的示例数据（人工冒烟）
+cargo xtask dump <workspace-dir>            # 只读导出业务表为规范化 JSON
 
 # 端到端：真机启动应用，用 UI Automation 驱动窗口
 pwsh -File fixtures/smoke.ps1               # 首次启动/已配置 两种启动形态
@@ -109,15 +104,8 @@ pwsh -File fixtures/ui-stock.ps1            # 股票全生命周期（138 项断
 pwsh -File fixtures/ui-transactions.ps1     # 消费记录：编辑/模板/排序/筛选
 pwsh -File fixtures/ui-diary-edit.ps1       # 日记编辑链路
 pwsh -File fixtures/ui-key-event.ps1        # 关键事件：任选日期新建 + 同日 upsert
-# 其余见 AGENTS.md 的「常用命令」（共 17 个端到端脚本）
+# 其余脚本见 AGENTS.md 的「常用命令」
 ```
-
-## 与原实现的关系
-
-- 参考实现（只读）：`D:\github\Transactions`（Electron + Vue 3 + Go/Gin，v0.27.0）。
-- **功能与数据等价**由 `xtask schema-diff` + `xtask parity` 把守；**界面**是重新实现的，
-  组件与图标不逐像素复刻（见 `DESIGN.md` 与 `docs/UI-KIT.md`）。
-- 有意偏离（逐条列明，含取舍理由）：`docs/ACCEPTANCE.md`；本机踩过的坑与诊断手法：`AGENTS.md`。
 
 ## 文档
 
@@ -127,10 +115,8 @@ pwsh -File fixtures/ui-key-event.ps1        # 关键事件：任选日期新建 
 | `AGENTS.md` | 架构、全部常用命令、本机环境陷阱与经验教训（开发前必读） |
 | `PRODUCT.md` | 产品定位、用户、能力边界 |
 | `DESIGN.md` | 设计系统与设计令牌（界面改动的裁决标准） |
-| `docs/ACCEPTANCE.md` | 逐页人工验收清单 + 与原实现的有意偏离 |
-| `docs/UI-KIT.md` | 组件套件清单（↔ 原 Vue 组件的对应关系） |
-| `fixtures/README.md` | 测试基线、种子数据与黄金对比说明 |
+| `fixtures/README.md` | 数据基线、种子数据与端到端脚本说明 |
 
 ## 许可证
 
-[Apache License 2.0](LICENSE)（与参考实现一致）。
+[Apache License 2.0](LICENSE)

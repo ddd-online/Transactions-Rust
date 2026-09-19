@@ -11,7 +11,7 @@
  * ============================================ */
 
 /* ============================================
- * 1. 时间范围选择器（原 TransactionsTimeRangePicker.vue）
+ * 1. 时间范围选择器
  *    高 32px 的横向 flex，gap 8px
  * ============================================ */
 
@@ -182,7 +182,7 @@
 }
 
 /* ============================================
- * 2. 悬浮按钮（原文 .float-primary / .float-secondary / .float-sort）
+ * 2. 悬浮按钮（.float-primary / .float-secondary / .float-sort）
  * ============================================ */
 
 .tr-float-primary {
@@ -255,10 +255,10 @@
 }
 
 /* ============================================
- * 3. 表格操作列（原 TransactionRecordTable.vue 的 .cell-actions）
+ * 3. 表格操作列（.cell-actions）
  * ============================================ */
 
-/* 标签单元格里的标签（原 .tag-item：中性底 + 次要文字） */
+/* 标签单元格里的标签（.tag-item：中性底 + 次要文字） */
 .tr-cell-tags .tag-item {
   border: none;
   background-color: var(--transactions-color-minor-background);
@@ -266,7 +266,7 @@
   font-size: var(--transactions-size-text-caption);
 }
 
-/* 已关联关键事件的星标（原标记列） */
+/* 已关联关键事件的星标（标记列） */
 .tr-cell-mark {
   display: inline-flex;
   align-items: center;
@@ -336,7 +336,7 @@
   }
 }
 
-/* 同步目标账本气泡（原 a-popover 的 .sync-popover-content） */
+/* 同步目标账本气泡（.sync-popover-content） */
 .tr-sync-panel {
   position: absolute;
   z-index: 1050;
@@ -397,7 +397,7 @@
 }
 
 /* ============================================
- * 4. 记一笔 / 编辑弹窗（原 TransactionRecordModal.vue）
+ * 4. 记一笔 / 编辑弹窗
  * ============================================ */
 
 .tr-modal-form .ui-form-item__control > * {
@@ -586,7 +586,7 @@
 }
 
 /* ============================================
- * 6. 筛选弹窗（原 TransactionRecordFilter.vue）
+ * 6. 筛选弹窗
  * ============================================ */
 
 .tr-filter {
@@ -682,7 +682,7 @@
 }
 
 /* ============================================
- * 7. 排序弹窗（原 TrSortModal.vue）
+ * 7. 排序弹窗
  * ============================================ */
 
 .tr-sort {

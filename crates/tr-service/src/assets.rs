@@ -28,7 +28,7 @@ pub fn resolve(workspace: &Workspace, relative_path: &str) -> PathBuf {
 
 /// 删除一张图片的原图与缩略图。
 ///
-/// 与原实现一致：文件不存在不算失败（例如手工清理过），只记录告警。
+/// 文件不存在不算失败（例如手工清理过），只记录告警。
 /// 调用时机也必须一致——**在事务提交之后**，避免"记录已删但文件删除失败"造成状态不可恢复。
 pub fn remove_image_files(workspace: &Workspace, file_path: &str, thumb_path: &str) {
     for relative in [file_path, thumb_path] {
@@ -44,17 +44,17 @@ pub fn remove_image_files(workspace: &Workspace, file_path: &str, thumb_path: &s
     }
 }
 
-/// 缩略图最大宽度（与原实现 `thumbMaxWidth` 一致）。
+/// 缩略图最大宽度：300（像素）。
 const THUMB_MAX_WIDTH: u32 = 300;
-/// 缩略图 JPEG 质量（与原实现 `thumbQuality` 一致）。
+/// 缩略图 JPEG 质量：75。
 const THUMB_QUALITY: u8 = 75;
 
 /// 保存图片：解码 data URI，写原图并生成缩略图，返回（原图相对路径, 缩略图相对路径）。
 ///
-/// 与 Go `util.SaveImage` 等价，包括错误文案与"缩略图失败时删掉已写原图"的回滚。
+/// 错误文案与"缩略图失败时删掉已写原图"的回滚是硬契约。
 ///
-/// **关于 HEIC**：原实现的后端也只支持 JPEG/PNG/GIF/WebP（`mimeToExt` + `image.Decode`），
-/// HEIC 是前端用 JS 库转成 JPEG 后再上传的。Rust 版沿用同一分工：
+/// **关于 HEIC**：后端只支持 JPEG/PNG/GIF/WebP，
+/// HEIC 由前端转成 JPEG 后再上传。分工保持不变：
 /// HEIC 转换留在界面层（web-sys canvas 交给 WebView2/系统解码器），后端不必接入 libheif/WIC。
 pub fn save_image(
     workspace: &Workspace,
@@ -80,7 +80,7 @@ pub fn save_image(
 
     let thumb_path = directory.join(&thumb_name);
     if let Err(error) = generate_thumbnail(&bytes, &thumb_path) {
-        // 与原实现一致：缩略图失败视为整体失败并回滚已写原图
+        // 缩略图失败视为整体失败并回滚已写原图
         let _ = std::fs::remove_file(&original_path);
         return Err(ServiceError::Internal(format!(
             "generate thumbnail: {error}"
@@ -117,7 +117,7 @@ fn decode_base64_data(raw: &str) -> Result<(String, Vec<u8>), ServiceError> {
     Ok((mime.to_string(), bytes))
 }
 
-/// MIME → 扩展名。与原实现一致：未知类型回退 `.jpg`。
+/// MIME → 扩展名：未知类型回退 `.jpg`。
 fn mime_to_extension(mime: &str) -> &'static str {
     match mime {
         "image/jpeg" => ".jpg",
@@ -218,7 +218,7 @@ mod tests {
 
     /// 目录布局与命名是数据兼容的一部分：原图 `<uuid>.<ext>`、缩略图 `thumb_<uuid>.jpg`。
     #[test]
-    fn save_image_writes_go_compatible_layout_and_scales_thumbnail_to_300() {
+    fn save_image_writes_compatible_layout_and_scales_thumbnail_to_300() {
         let (dir, workspace) = temp_workspace("save");
 
         let (file_path, thumb_path) =
@@ -265,7 +265,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 与原实现一致：缩略图失败时**回滚已写原图**，不能留下半个资产。
+    /// 缩略图失败时**回滚已写原图**，不能留下半个资产。
     #[test]
     fn save_image_rolls_back_original_when_thumbnail_fails() {
         use base64::Engine;
@@ -294,7 +294,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 未知 MIME 回退 `.jpg`（对照 Go `mimeToExt` 的 default 分支）。
+    /// 未知 MIME 回退 `.jpg`。
     #[test]
     fn save_image_falls_back_to_jpg_extension_for_unknown_mime() {
         let (dir, workspace) = temp_workspace("mime");
@@ -321,7 +321,7 @@ mod tests {
             save_image(&workspace, "2026-01-01", "bad-1", "just-a-plain-string").unwrap_err();
         assert!(
             error.to_string().contains("no comma separator"),
-            "错误文案应与原实现对齐：{error}"
+            "错误文案应保持稳定：{error}"
         );
 
         std::fs::remove_dir_all(&dir).ok();

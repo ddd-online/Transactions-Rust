@@ -1,6 +1,6 @@
 //! 标签页 —— 顶部横向标签栏 + 内容面板。
 //!
-//! 对应原 `a-tabs`：受控的 `v-model:activeKey` 换成了 `RwSignal<String>`，
+//! 受控的激活页签用 `RwSignal<String>` 表示，
 //! 内容面板用 [`TabPane`] 包一层（`Show` 语义，非激活时不渲染）。
 //!
 //! 之所以不做"`TabPane` 自动注册到 `Tabs`"的 context 方案：设置页的分栏内容差异极大

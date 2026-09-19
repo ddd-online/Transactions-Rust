@@ -1,10 +1,11 @@
-//! 标签 DAO。对照 Go `kernel/dao/tag_dao.go`。
+//! 标签 DAO。
 //!
-//! 与 GORM 的行为对齐点：
+//! 行为约定：
 //! * `Tag` 模型没有时间戳列，`create` / `update_sort` 不写时间
-//! * 列表排序与原实现一致：`ORDER BY sort_order ASC, name DESC`
+//! * 列表排序固定为：`ORDER BY sort_order ASC, name DESC`
 //! * 唯一键是 `(ledger_id, name, category_transaction_type)`，重复插入由 SQLite 报错
-//! * `count_by_tag` 统计的是**交易记录标签关联表**（Go 的 `models.TrTag`），不是标签表本身
+//! * `count_by_tag` 统计的是**交易记录标签关联表**（`tbl_billadm_transaction_record_tag`），
+//!   不是标签表本身
 
 use std::collections::BTreeMap;
 
@@ -17,7 +18,7 @@ pub struct TagDao;
 const COLUMNS: &str = "ledger_id, name, category_transaction_type, sort_order";
 
 impl TagDao {
-    /// 按账本查询标签；`category_transaction_type` 为空或 `all` 时不过滤（与原实现一致）。
+    /// 按账本查询标签；`category_transaction_type` 为空或 `all` 时不过滤。
     pub fn query_by_ledger(
         conn: &Connection,
         ledger_id: &str,
@@ -82,7 +83,7 @@ impl TagDao {
         Ok(())
     }
 
-    /// 删除某分类（`分类名:交易类型`）下的全部标签。对照 Go `DeleteByCategory`。
+    /// 删除某分类（`分类名:交易类型`）下的全部标签。
     pub fn delete_by_category(
         conn: &Connection,
         ledger_id: &str,
@@ -121,8 +122,7 @@ impl TagDao {
         Ok(())
     }
 
-    /// 该标签名下的交易记录数。对照 Go `TagDao.CountByTag`（查 `models.TrTag`，
-    /// 即 `tbl_billadm_transaction_record_tag`）。
+    /// 该标签名下的交易记录数（查 `tbl_billadm_transaction_record_tag`）。
     pub fn count_by_tag(conn: &Connection, ledger_id: &str, tag: &str) -> rusqlite::Result<i64> {
         conn.query_row(
             "SELECT COUNT(*) FROM tbl_billadm_transaction_record_tag \
@@ -132,8 +132,8 @@ impl TagDao {
         )
     }
 
-    /// 批量统计每个标签名下的关联交易数（等价 Go 的
-    /// `Select("tag, COUNT(*) AS cnt").Where("ledger_id = ? AND tag IN ?").Group("tag")`）。
+    /// 批量统计每个标签名下的关联交易数（`SELECT tag, COUNT(*) ... WHERE
+    /// ledger_id = ? AND tag IN (...) GROUP BY tag`）。
     /// `names` 为空时直接返回空 map，不查库。
     pub fn count_records_by_tags(
         conn: &Connection,

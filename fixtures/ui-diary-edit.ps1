@@ -315,7 +315,7 @@ try {
     $wordLabel = Get-Elements $window | ForEach-Object { $_.Current.Name } |
         Where-Object { $_ -eq "$($contentA.Length)字" } | Select-Object -First 1
     Assert-True ([bool]$wordLabel) "编辑器右上角显示「$($contentA.Length)字」"
-    # 保存状态标签：「已保存」会一直显示（原实现如此）——这是"自动保存真的跑了"的界面证据
+    # 保存状态标签：「已保存」会一直显示——这是"自动保存真的跑了"的界面证据
     $savedLabel = Get-Elements $window | ForEach-Object { $_.Current.Name } |
         Where-Object { $_ -eq '已保存' } | Select-Object -First 1
     Assert-True ([bool]$savedLabel) '页脚保存状态显示「已保存」'

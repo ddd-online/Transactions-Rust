@@ -5,20 +5,18 @@
 
 use tr_domain::money::cents_to_yuan;
 
-/// 交易类型 → 中文标签。逐条照抄原 `app/src/backend/constant.ts` 的
-/// `TransactionTypeToLabel`：income→收入、expense→支出、transfer→转账。
+/// 交易类型 → 中文标签：income→收入、expense→支出、transfer→转账。
 pub fn transaction_type_label(transaction_type: &str) -> &'static str {
     match transaction_type {
         "income" => "收入",
         "expense" => "支出",
         "transfer" => "转账",
-        // 原实现 `TransactionTypeToLabel.get(...) || record.transactionType`：
         // 未知类型回落到原始字符串，这里交给调用方处理（返回空串表示"未知"）
         _ => "",
     }
 }
 
-/// 交易类型标签，未知类型回落到原始值（与原表格的 `|| record.transactionType` 一致）。
+/// 交易类型标签，未知类型回落到原始值。
 pub fn transaction_type_text(transaction_type: &str) -> String {
     let label = transaction_type_label(transaction_type);
     if label.is_empty() {
@@ -35,8 +33,7 @@ pub fn amount(cents: i64) -> String {
 
 /// 带符号金额：支出前缀 `-`、收入前缀 `+`、转账不加符号。
 ///
-/// 与原 `TransactionRecordTable.vue` 的 `cell-price` 渲染逐字一致
-/// （符号由**交易类型**决定，而不是由金额正负决定）。
+/// 符号由**交易类型**决定，而不是由金额正负决定（与 [`signed_yuan`] 相反）。
 pub fn signed_amount(transaction_type: &str, cents: i64) -> String {
     match transaction_type {
         "expense" => format!("-{}", cents_to_yuan(cents)),
@@ -55,7 +52,7 @@ pub fn amount_class(transaction_type: &str) -> &'static str {
     }
 }
 
-/// 交易类型行底色类名（原 `getRowClassName` 的 `row-type-*`）。
+/// 交易类型行底色类名（`row-type-*`）。
 pub fn row_class(transaction_type: &str) -> String {
     format!("row-type-{transaction_type}")
 }
@@ -69,8 +66,7 @@ pub fn type_class(transaction_type: &str) -> String {
 
 /// 带符号金额（元）：`>0` 加 `+`、`<0` 由 [`amount`] 自带 `-`、`0` 不加。
 ///
-/// 与原 `formatSignedYuan(cents)` 一致：符号由**正负**决定（与 [`signed_amount`]
-/// 按交易类型决定符号不同），值为绝对值。
+/// 符号由**正负**决定（与 [`signed_amount`] 按交易类型决定符号不同），值为绝对值。
 pub fn signed_yuan(cents: i64) -> String {
     if cents > 0 {
         format!("+{}", amount(cents))
@@ -165,17 +161,17 @@ pub fn quote_text(latest_price: Option<i64>) -> String {
     }
 }
 
-/// 是否有有效行情（原 `hasQuote`：`!!latestPrice && latestPrice > 0`）。
+/// 是否有有效行情（存在且大于 0）。
 pub fn has_quote(latest_price: Option<i64>) -> bool {
     matches!(latest_price, Some(price) if price > 0)
 }
 
-/// 股数 → 手数（1 手 = 100 股，**向下取整**，与原 `Math.floor(shares/100)` 一致）。
+/// 股数 → 手数（1 手 = 100 股，**向下取整**）。
 pub fn lots_of(shares: i64) -> i64 {
     shares.div_euclid(100)
 }
 
-/// 股票交易类型 → 中文标签（原 `tradeTypeLabel`；未知值回落到原始字符串）。
+/// 股票交易类型 → 中文标签（未知值回落到原始字符串）。
 pub fn trade_type_label(trade_type: &str) -> String {
     match trade_type {
         "open" => "建仓".to_string(),
@@ -247,7 +243,7 @@ pub fn truncate(text: &str, max: usize) -> String {
     format!("{head}…")
 }
 
-/// 字符数（与原 `[...text].length` 一致：按 Unicode 码点计）。
+/// 字符数（按 Unicode 码点计）。
 pub fn char_count(text: &str) -> usize {
     text.chars().count()
 }

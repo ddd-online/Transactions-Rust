@@ -1,4 +1,4 @@
-//! 语义标签 —— 10% 语义色底 + 语义色文字（原 `_components.scss` 的 `.tag-*`）。
+//! 语义标签 —— 10% 语义色底 + 语义色文字。
 //!
 //! 用于交易类型（收入/支出/转账）、离群值标记，以及中性/主色标签。
 //! 样式：`--transactions-color-<kind>` + `--transactions-color-<kind>-tint`。

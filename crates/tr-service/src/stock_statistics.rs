@@ -1,6 +1,6 @@
-//! 逐笔结算统计。对照 Go `kernel/service/stock_statistics.go`（400 行）。
+//! 逐笔结算统计。
 //!
-//! 口径（与原实现逐条一致，注释直接抄自 Go）：
+//! 统计口径：
 //! * 胜率 = 盈利笔数 ÷ 总笔数（**平局计入总笔数**，不计胜负）；
 //! * 平均盈利/亏损分别只按盈利笔与亏损笔求和取平均，亏损金额取正数；
 //! * 实际盈亏比 = 平均盈利 ÷ 平均亏损（**无亏损样本时为 null**）；
@@ -115,7 +115,7 @@ fn statistics(
     if !tag.is_empty() {
         events.retain(|event| event.round.tag == tag);
     }
-    // 稳定排序：closed_at → created_at → id（与原实现一致，保证同值时顺序确定）
+    // 稳定排序：closed_at → created_at → id（保证同值时顺序确定）
     events.sort_by(|left, right| {
         left.round
             .closed_at
@@ -184,7 +184,7 @@ fn statistics(
     let mut cum_pnl = 0_i64;
     let mut principal_at = initial_principal;
     let mut withdrawn_at = 0_i64;
-    // 总资产曲线：与原实现一致，从「初始本金」起步（`principal_at + cum_pnl - withdrawn_at`）
+    // 总资产曲线：从「初始本金」起步（`principal_at + cum_pnl - withdrawn_at`）
     let mut equity = principal_at + cum_pnl - withdrawn_at;
     let mut peak_equity = equity;
     let mut max_drawdown = 0_i64;
@@ -350,7 +350,7 @@ fn include_statistics_event(
 
 /// 校验起止月份（`YYYY-MM`）并返回首尾两天的日期边界。
 ///
-/// 对照 Go `normalizeStatisticsMonthRange`：两端必须同时提供、格式必须是严格 `YYYY-MM`、
+/// 两端必须同时提供、格式必须是严格 `YYYY-MM`、
 /// `end_month` 不能早于 `start_month`；返回 `（当月 1 日, 末月最后一天）`。
 pub fn normalize_statistics_month_range(
     start_month: &str,
@@ -413,7 +413,7 @@ fn list_capital_flows(
     conn: &rusqlite::Connection,
     ledger_id: &str,
 ) -> ServiceResult<Vec<CapitalFlow>> {
-    // 原实现按 page_size=100 逐页拉取直到覆盖 total；这里一次取全量，结果集合等价。
+    // 按 page_size=100 逐页拉取直到覆盖 total；结果集合等价于全量。
     let mut flows: Vec<CapitalFlow> = Vec::new();
     let mut page = 1_i64;
     loop {
@@ -421,7 +421,7 @@ fn list_capital_flows(
         for record in &records {
             push_capital_flow(&mut flows, record);
         }
-        // 与原实现一致：`page*100 >= total` 时停止翻页（原实现用 int(total) 比较）
+        // `page*100 >= total` 时停止翻页
         if page * 100 >= total.max(0) {
             break;
         }

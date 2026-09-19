@@ -1,11 +1,10 @@
-//! 账本服务。对照 Go `kernel/service/ledger_service.go`。
+//! 账本服务：账本的增 / 改 / 查 / 删（含级联清理）。
 //!
-//! ## 与原实现的结构差异（有意为之）
+//! ## 设计说明
 //!
-//! Go 版为每个服务定义接口并用 `server/wire.go` 做依赖注入，目的是便于 mock。
-//! Rust 版改为**无状态函数 + `&Workspace` 入参**：数据访问层是自由函数，
-//! 测试直接开一个真实临时工作空间（Go 测试也是这么做的），因此不需要 DI 容器，
-//! 也就没有 `wire.go` 的对应物。
+//! 本模块是**无状态函数 + `&Workspace` 入参**：数据访问层是自由函数，
+//! 测试直接开一个真实临时工作空间，因此不需要 DI 容器，
+//! 也没有接口抽象与 mock 对象。
 
 use tr_domain::models::Ledger;
 use tr_store::dao::key_event_image::KeyEventImageDao;
@@ -14,7 +13,7 @@ use tr_store::Workspace;
 
 use crate::{assets, ServiceError, ServiceResult};
 
-/// 删除账本时的级联清理顺序，与 Go `DeleteLedgerById` 事务内的顺序**逐条一致**：
+/// 删除账本时的级联清理顺序（**逐条固定**，新增业务表必须同步补进这个数组）：
 /// 交易标签 → 交易 → 分类 → 标签 → 图表 → 模板 → 关键事件图片 → 关键事件
 /// → 股票（资金记录/费用设置/标签设置/交易/轮次/历史/持仓/账户）→ 账本本身。
 const LEDGER_CASCADE: &[&str] = &[
@@ -126,7 +125,7 @@ pub fn delete_ledger_by_id(workspace: &Workspace, ledger_id: &str) -> ServiceRes
             error
         })?;
 
-    // 事务提交成功后再删除磁盘文件（与原实现一致，避免删库成功而删文件失败导致记录缺失）
+    // 事务提交成功后再删除磁盘文件（避免删库成功而删文件失败导致记录缺失）
     for (file_path, thumb_path) in image_files {
         assets::remove_image_files(workspace, &file_path, &thumb_path);
     }

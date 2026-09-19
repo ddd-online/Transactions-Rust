@@ -1,13 +1,13 @@
-//! 图表命令。对照 Go `kernel/api/chart_controller.go`。
+//! 图表命令。
 //!
-//! 入参形状按原 HTTP 语义逐字段对齐（图表 DTO 是 camelCase）：
-//! * `POST /charts { ledgerId, title, granularity, lines, chartType }` → `chart_create`
-//! * `DELETE /charts/:id` → `chart_delete { chartId }`（同时接受 `id`）
-//! * `GET /charts?ledgerId=xxx` → `chart_list { ledgerId }`
-//! * `PATCH /charts { chartId, title, granularity, lines, chartType, sortOrder }` → `chart_update`
+//! 入参形状是固定契约（图表 DTO 是 camelCase）：
+//! * `chart_create`：`{ ledgerId, title, granularity, lines, chartType }`
+//! * `chart_delete { chartId }`（同时接受 `id`）
+//! * `chart_list { ledgerId }`
+//! * `chart_update`：`{ chartId, title, granularity, lines, chartType, sortOrder }`
 //!
-//! 原文案：`missing ledgerId`、`missing chart id`（均 400）；
-//! `parse create chart request failed` / `parse update chart request failed` 是 Gin 绑定失败
+//! 错误文案：`missing ledgerId`、`missing chart id`（均 400）；
+//! `parse create chart request failed` / `parse update chart request failed` 是请求体绑定失败
 //! 时的文案，在 Tauri 里请求体反序列化发生在进入命令体之前，无法复用同一文案（见汇报）。
 
 use serde::Deserialize;
@@ -30,7 +30,7 @@ pub fn chart_create(state: State<'_, AppState>, req: CreateChartRequest) -> ApiR
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ChartIdRequest {
-    /// 原路径参数 `:id`；图表 DTO 里的字段名是 `chartId`，两者都接受
+    /// 图表 DTO 里的字段名是 `chartId`，也接受 `id`
     #[serde(rename = "chartId", alias = "id")]
     pub chart_id: String,
 }

@@ -1,20 +1,19 @@
 //! 统一错误信封：`{"code": -1, "msg": "...", "status": 500}`。
 //!
-//! 这段形状是界面与内核之间的硬契约（原 HTTP 版返回的就是 `models.Result`），
-//! 字段名与取值都不允许改动。
+//! 这段形状是界面与内核之间的硬契约，字段名与取值都不允许改动。
 
 use serde::Serialize;
 
 use tr_domain::error::AppError;
 use tr_service::ServiceError;
 
-/// 失败载荷。`code` 恒为 -1（与原 `Handle` 一致：只有 0 与非 0 两种语义）。
+/// 失败载荷。`code` 恒为 -1（只有 0 与非 0 两种语义）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ApiError {
     pub code: i32,
     /// 用户可见文案，同时被界面用于判定"未打开工作空间"
     pub msg: String,
-    /// 原 HTTP 状态码语义（400/404/409/500），保留以便界面按类别处理
+    /// HTTP 状态码语义（400/404/409/500），保留以便界面按类别处理
     pub status: u16,
 }
 

@@ -1,18 +1,15 @@
 //! 图片选择 / HEIC 转换 / 上传进度条。
 //!
-//! 对照原实现的三块：
+//! 三块能力：
 //!
-//! | 原文件 | 本模块 |
-//! |---|---|
-//! | `hooks/useImageUpload.ts` | [`read_as_data_url`] + [`HeicOutcome`] + [`UploadProgress`] 状态机 |
-//! | `KeyEventImageGallery.vue` 的 `<input type="file">` | [`ImagePicker`]（隐藏 input + 触发按钮） |
-//! | `UploadProgressBar.vue` | [`UploadProgressBar`]（顶部总进度 + 逐文件行 + 重试/跳过） |
+//! * [`read_as_data_url`] + [`HeicOutcome`] + [`UploadProgress`]：读取与上传状态机
+//! * [`ImagePicker`]：隐藏 `input[type=file]` + 触发按钮
+//! * [`UploadProgressBar`]：顶部总进度 + 逐文件行 + 重试/跳过
 //!
 //! ## HEIC 的分工（与 AGENTS.md 一致）
 //!
 //! 后端只接受 JPEG/PNG/GIF/WebP，因此 **HEIC/HEIF 必须在界面层转成 JPEG**。
-//! 原实现用 `heic-to`（libheif 的 wasm 版）；本仓库界面层不引入 JS 库，
-//! 改为交给 **WebView2（Edge/Windows）自带的解码器 + canvas**：
+//! 本仓库界面层不引入 JS 库，改为交给 **WebView2（Edge/Windows）自带的解码器 + canvas**：
 //!
 //! 1. 先把 HEIC 读成 `Blob`；
 //! 2. 优先 `createImageBitmap`（对 HEIF 支持最好的路径），失败再退回
@@ -20,8 +17,7 @@
 //! 3. 画进 `<canvas>` → `toDataURL("image/jpeg", 0.92)` 直接得到 **JPEG data URI**；
 //! 4. 把该 data URI 交给 `key_event_image_add`。
 //!
-//! 两条路径都失败时给出明确提示（[`HEIC_CONVERT_FAILED`]），
-//! 与原实现 `'HEIC 转换失败: ' + message` 的语义一致。
+//! 两条路径都失败时给出明确提示（[`HEIC_CONVERT_FAILED`]）。
 
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
@@ -29,13 +25,13 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::icons::{self, Icon};
 
-/// HEIC/HEIF 的扩展名（照抄原 `useImageUpload.ts` 的 `HEIC_EXTENSIONS`）。
+/// HEIC/HEIF 的扩展名。
 const HEIC_EXTENSIONS: [&str; 4] = [".heic", ".heif", ".HEIC", ".HEIF"];
 
-/// JPEG 质量（原 `heicTo({ quality: 0.92 })`）。
+/// JPEG 质量（转码时的质量参数）。
 const JPEG_QUALITY: f64 = 0.92;
 
-/// HEIC 转换失败时的用户可见文案前缀（原实现同款）。
+/// HEIC 转换失败时的用户可见文案前缀。
 pub const HEIC_CONVERT_FAILED: &str = "HEIC 转换失败";
 
 /// 文件名是否是 HEIC/HEIF。
@@ -213,7 +209,7 @@ fn canvas_context(
         .map_err(|_| "获取 2D 画布上下文失败".to_string())
 }
 
-/// blob → base64 data URI（原实现用 `FileReader.readAsDataURL`）。
+/// blob → base64 data URI。
 pub async fn blob_to_data_url(blob: &web_sys::Blob) -> ReadOutcome {
     let reader = web_sys::FileReader::new().map_err(|_| "读取文件失败".to_string())?;
     let promise = {
@@ -276,7 +272,7 @@ fn js_error_text(error: &JsValue) -> String {
 
 // ---------------------------------------------------------------- 上传进度
 
-/// 单个文件的进度状态（照抄原 `UploadFileProgress`）。
+/// 单个文件的进度状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadFileProgress {
     pub name: String,
@@ -305,7 +301,7 @@ impl FileStatus {
         }
     }
 
-    /// 状态文字（逐字照抄原模板）。
+    /// 状态文字。
     pub fn label(self) -> &'static str {
         match self {
             FileStatus::Pending => "等待中",
@@ -316,7 +312,7 @@ impl FileStatus {
     }
 }
 
-/// 整体状态（照抄原 `UploadProgress.status`）。
+/// 整体状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadStatus {
     Idle,
@@ -341,7 +337,7 @@ impl UploadProgress {
         matches!(self.status, None | Some(UploadStatus::Idle))
     }
 
-    /// 总进度百分比（`completed / total`，与原文一致）。
+    /// 总进度百分比（`completed / total`）。
     pub fn overall_percent(&self) -> u8 {
         if self.total == 0 {
             return 0;
@@ -359,9 +355,9 @@ impl UploadProgress {
     }
 }
 
-/// 上传进度条（原 `UploadProgressBar.vue`）。
+/// 上传进度条。
 ///
-/// `on_retry` / `on_skip` 与原文的两个 emit 对应；`progress` 为空闲时渲染空视图。
+/// `on_retry` / `on_skip` 分别对应「重试」与「跳过」；`progress` 为空闲时渲染空视图。
 #[component]
 pub fn UploadProgressBar(
     /// 进度快照
@@ -513,8 +509,7 @@ pub fn UploadProgressBar(
 
 // ---------------------------------------------------------------- 文件选择
 
-/// 隐藏的 `<input type="file">` + 触发按钮（原 `KeyEventImageGallery.vue` 的
-/// `<input ref="fileInput" type="file" :accept="accept" multiple hidden>`）。
+/// 隐藏的 `<input type="file">` + 触发按钮。
 ///
 /// 选中文件后回调 `(文件名, File)` 列表；`reset` 由调用方在每次选择后清空
 /// input 的 `value`，否则同一个文件第二次选择不会触发 `change`。

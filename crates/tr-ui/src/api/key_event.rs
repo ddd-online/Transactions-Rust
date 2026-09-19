@@ -1,10 +1,10 @@
-//! 关键事件域命令。对照原 `app/src/backend/api/key-event.ts` 与 `key_event_controller.go`。
+//! 关键事件域命令。
 //!
 //! 关键事件/图片模型是 camelCase（`ledgerId` / `createdAt` / `filePath`），
 //! 但**请求入参一律 snake_case**（`ledger_id`）—— 照抄 `tr-ipc/src/commands/key_event.rs`。
 //!
 //! `key_event_upsert` 是"有则更新、无则插入"，返回日期；`title` / `content` / `color`
-//! 可选（缺省按空串处理，与原实现的宽松度一致）。
+//! 可选（缺省按空串处理）。
 
 use serde::Serialize;
 use tr_domain::models::{KeyEvent, KeyEventImage};
@@ -56,7 +56,7 @@ pub async fn list_by_year(year: &str, ledger_id: &str) -> Result<Vec<KeyEvent>, 
     .await
 }
 
-/// 某年有事件的日期列表（原实现用于日历打点）。
+/// 某年有事件的日期列表（用于日历打点）。
 pub async fn dates_by_year(year: &str, ledger_id: &str) -> Result<Vec<String>, IpcError> {
     ipc::call(
         "key_event_dates_by_year",

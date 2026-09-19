@@ -1,10 +1,10 @@
 //! Transactions 桌面端入口（Tauri 2 + Rust）。
 //!
-//! 与旧版（Electron + Go 内核 + 本机 HTTP API）的结构性差异：
+//! 结构性约定：
 //! * **没有子进程内核**：业务代码以库的形式跑在本进程内，通过 Tauri IPC 暴露给界面
 //! * **没有本地 HTTP 服务**：不监听端口、没有 API 令牌、没有 CORS
 //! * **界面是 Rust**：Leptos 编译为 WASM，由 Tauri 窗口加载
-//! * 因此"内核健康检查/重启"这套机制整体移除（进程崩溃即应用崩溃），
+//! * 因此不存在"内核健康检查/重启"这套机制（进程崩溃即应用崩溃），
 //!   SQLite 依旧处于 WAL 保护下，不会因退出丢失已提交数据
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -19,7 +19,7 @@ mod updater;
 use tauri::Manager;
 
 fn main() {
-    // 与原 Electron 的 `!app.isPackaged` 等价：debug 构建视为开发模式（配置文件名带 -dev）
+    // debug 构建视为开发模式（配置文件名带 -dev）
     let is_dev = cfg!(debug_assertions);
 
     let desktop_state = commands::DesktopState::new(is_dev);

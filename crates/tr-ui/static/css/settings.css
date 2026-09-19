@@ -1,17 +1,16 @@
 /* ============================================
  * 应用设置页专属样式（5 个分栏）
  *
- * 对照原项目：
- *   - settings_view/SettingsView.vue（左侧导航 + 内容区）
- *   - settings_view/SettingsPageWrapper.vue（分栏标题 + 卡片列表）
- *   - settings_view/{GeneralSetting,TransactionsTemplateSetting,DiarySetting,
- *     StockTradingSetting,AboutSetting}.vue
- *   - stock_view/StockAccountView.vue 的「交易费用设置」
+ * 覆盖内容：
+ *   - 分栏骨架（页签 + 内容区）
+ *   - 分栏标题 + 卡片列表
+ *   - 通用设置 / 消费模板 / 日记配置 / 股票交易 / 关于软件
+ *   - 「交易费用设置」那一组表单（挂在股票交易分栏下）
  *
  * 约定：
  *   - 类名一律 st- 前缀；
  *   - 取值只用 --transactions-* 令牌（禁止裸 hex / rgb）；
- *   - 原实现的左侧 200px 竖向导航在本实现里换成顶部 Tabs（见 settings.rs 顶部注释）。
+ *   - 导航形态是顶部 Tabs（见 settings.rs 顶部注释）。
  * ============================================ */
 
 /* ---------------------------------------------------------------- 分栏骨架 */
@@ -106,7 +105,7 @@
   text-overflow: ellipsis;
 }
 
-/* 工作空间路径用等宽字体（原 `.setting-desc` 的 `--transactions-font-mono`） */
+/* 工作空间路径用等宽字体（`.setting-desc` 的 `--transactions-font-mono`） */
 .st-card-desc--mono {
   font-family: var(--transactions-font-mono);
 }
@@ -707,7 +706,7 @@
   text-align: center;
 }
 
-/* 下载速度：原实现不渲染，按任务单增补的小字 */
+/* 下载速度：按任务单增补的小字 */
 .st-update-speed {
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-caption);
@@ -733,7 +732,7 @@
   width: 200px;
 }
 
-/* 更新说明：纯文本 + 保留换行（原文是 MarkdownViewer，本仓库无 Markdown 解析器） */
+/* 更新说明：纯文本 + 保留换行（本仓库没有 Markdown 解析器，不渲染 Markdown） */
 .st-release-body {
   width: 100%;
   max-height: 168px;

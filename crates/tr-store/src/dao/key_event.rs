@@ -1,6 +1,6 @@
-//! 关键事件 DAO。对照 Go `kernel/dao/key_event_dao.go`。
+//! 关键事件 DAO。
 //!
-//! **幂等 upsert 的语义细节**（与原实现一致，容易写错）：
+//! **幂等 upsert 的语义细节**（容易写错）：
 //! 冲突键是 `(ledger_id, date)`；冲突时只更新 `title / content / color / updated_at`，
 //! **保留原有的 `id` 与 `created_at`**。因此"同一天反复保存"不会产生新 id，
 //! 也不会刷新创建时间。
@@ -15,7 +15,7 @@ pub struct KeyEventDao;
 
 const COLUMNS: &str = "id, date, title, content, color, created_at, updated_at, ledger_id";
 
-/// 标题按**字符**（不是字节）截断的上限，对照 Go `UpsertKeyEvent` 里的 200。
+/// 标题按**字符**（不是字节）截断的上限：200。
 pub const TITLE_MAX_CHARS: usize = 200;
 
 impl KeyEventDao {
@@ -59,7 +59,7 @@ impl KeyEventDao {
         )
     }
 
-    /// 某账本某年的全部关键事件（原实现用 `date LIKE 'YYYY-%'`）。
+    /// 某账本某年的全部关键事件（用 `date LIKE 'YYYY-%'`）。
     pub fn query_by_year(
         conn: &Connection,
         ledger_id: &str,
@@ -93,7 +93,7 @@ impl KeyEventDao {
         Ok(())
     }
 
-    /// 确保某天存在关键事件：不存在则按原实现自动创建一条空事件
+    /// 确保某天存在关键事件：不存在则自动创建一条空事件
     /// （标题/正文/颜色均为空串），返回是否发生了创建。
     pub fn ensure_exists(conn: &Connection, ledger_id: &str, date: &str) -> rusqlite::Result<bool> {
         match Self::query_by_date(conn, ledger_id, date) {
@@ -119,7 +119,7 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<KeyEvent> {
     Ok(KeyEvent {
         id: row.get(0)?,
         date: row.get(1)?,
-        // title/content/color 在原 schema 里可空，取不到时按空串处理
+        // title/content/color 在基线 schema 里可空，取不到时按空串处理
         title: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
         content: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
         color: row.get::<_, Option<String>>(4)?.unwrap_or_default(),

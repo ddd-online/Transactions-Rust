@@ -1,10 +1,8 @@
-//! 消费模板服务。对照 Go `kernel/service/transaction_template_service.go`
-//! （含控制器里的 `dto.Validate()`）。
+//! 消费模板服务：新建 / 删除 / 列出模板与排序号更新。
 //!
-//! 与 Go 的差异：
-//! * Go 在 `transaction_template_controller.go` 里先 `Validate()` 再调服务；Rust 命令层
-//!   没有 gin 的绑定层，校验放在 `create` 入口（这样 headless 测试能覆盖到文案）。
-//! * `Validate()` 在 Go 里返回普通 `error`，经 `Handle` 兜底为 **500**（不是 400），
+//! 设计说明：
+//! * 没有单独的绑定层，校验放在 `create` 入口（这样 headless 测试能覆盖到文案）。
+//! * 校验失败经内部错误通道兜底为 **500**（不是 400），
 //!   因此这里把校验失败收敛为 [`ServiceError::Internal`]，文案逐字保留。
 
 use tr_domain::dto::TransactionTemplateDto;
@@ -60,7 +58,7 @@ pub fn list_by_ledger_id(
         .collect())
 }
 
-/// 更新模板排序号（`ledger_id` 与原实现一样不参与 SQL，仅保留在接口上）。
+/// 更新模板排序号（`ledger_id` 不参与 SQL，仅保留在接口上）。
 pub fn update_sort_order(
     workspace: &Workspace,
     template_id: &str,
@@ -75,7 +73,7 @@ pub fn update_sort_order(
     )
 }
 
-/// 模板校验（对应 Go 控制器里的 `templateDto.Validate()`）。
+/// 模板校验。
 fn validate(dto: &TransactionTemplateDto) -> ServiceResult<()> {
     dto.validate()
         .map_err(|error| ServiceError::Internal(error.msg))
@@ -131,7 +129,7 @@ mod tests {
         assert_eq!(templates[0].description, "午餐");
         assert_eq!(templates[0].category, "餐饮美食");
 
-        // 落库的 tags 是 JSON 数组字符串（与 Go 的 json.Marshal 一致）
+        // 落库的 tags 是 JSON 数组字符串
         let stored = Dao::query_by_ledger_id(&workspace.connection(), "l1").unwrap();
         assert_eq!(stored[0].tags, r#"["三餐","外卖"]"#);
         assert!(stored[0].created_at > 0);
@@ -140,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn create_validates_with_go_messages_and_500() {
+    fn create_validates_with_stable_messages_and_500() {
         let (workspace, dir) = workspace("validate");
 
         let cases = [
@@ -166,7 +164,7 @@ mod tests {
         for (request, expected) in cases {
             let error = create(&workspace, &request).unwrap_err();
             assert_eq!(error.to_string(), expected);
-            // Go 的 Validate() 返回普通 error → Handle 兜底 500
+            // 校验失败经内部错误通道 → 兜底 500
             assert_eq!(error.into_app_error().status, 500, "文案: {expected}");
         }
 
@@ -195,7 +193,7 @@ mod tests {
         assert_eq!(updated.sort_order, 5);
         assert_eq!(updated.created_at, created.created_at);
         assert!(updated.updated_at > created.updated_at);
-        // 不存在的模板：与原实现一样不报错
+        // 不存在的模板：不报错
         update_sort_order(&workspace, "absent", "l1", 1).unwrap();
 
         std::fs::remove_dir_all(&dir).ok();
@@ -212,7 +210,7 @@ mod tests {
         assert_eq!(templates.len(), 1);
         assert_eq!(templates[0].template_name, "乙");
 
-        // 不存在的 ID 视为成功（GORM 删除 0 行不报错）
+        // 不存在的 ID 视为成功（删除 0 行不报错）
         delete_by_id(&workspace, "absent").unwrap();
 
         std::fs::remove_dir_all(&dir).ok();

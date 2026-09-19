@@ -1,6 +1,6 @@
-//! 股票域 DTO。对应 Go `kernel/models/dto/stock_dto.go`。
+//! 股票域 DTO。
 //!
-//! 命名全部为 camelCase（与原实现一致）。金额单位一律为**分**；
+//! 命名全部为 camelCase。金额单位一律为**分**；
 //! 百分比与比率以「小数百分比/倍数」表示（例如 12.5 表示 12.5%）。
 
 use serde::{Deserialize, Serialize};
@@ -57,7 +57,7 @@ pub struct StockFundRecordDto {
     pub amount_change: i64,
     #[serde(rename = "cashBalance")]
     pub cash_balance: i64,
-    /// 非卖出事件为 null（原实现无 omitempty，保留 null）
+    /// 非卖出事件为 null（该字段不省略，null 会被序列化出来）
     #[serde(rename = "netPnl")]
     pub net_pnl: Option<i64>,
     pub remark: String,
@@ -218,7 +218,7 @@ pub struct StockTradeDto {
     pub stamp_duty: i64,
     #[serde(rename = "transferFee")]
     pub transfer_fee: i64,
-    /// 非卖出为 null（原实现无 omitempty）
+    /// 非卖出为 null（该字段不省略）
     #[serde(rename = "realizedPnl")]
     pub realized_pnl: Option<i64>,
     #[serde(rename = "tradeTime")]
@@ -460,7 +460,7 @@ pub struct StockStatisticsPointDto {
 /// 由一轮交易推导本轮盈亏与盈亏率（不存储冗余派生值）。
 ///
 /// 买入成本 = Σ(成交金额 + 费用)；卖出净额 = Σ(成交金额 − 费用)；盈亏 = 卖出净额 − 买入成本。
-/// 盈亏率按买入成本计算，四舍五入到小数点后两位（与原实现 `math.Round(x*10000)/100` 一致）。
+/// 盈亏率按买入成本计算，四舍五入到小数点后两位（`round(x * 10000) / 100`）。
 pub fn round_pnl(trades: &[StockTrade]) -> (i64, f64, i64) {
     let mut pnl = 0_i64;
     let mut buy_cost = 0_i64;

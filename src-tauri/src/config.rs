@@ -1,7 +1,7 @@
 //! 桌面配置：`~/.transactions.json`（开发期 `~/.transactions-dev.json`）。
 //!
-//! **这是用户数据的一部分**：原 Electron 版把窗口尺寸/位置、上次工作空间目录、
-//! 关闭行为、外观写在这里。Rust 版必须读写同一文件、同一组键，并且——这一点很关键——
+//! **这是用户数据的一部分**：窗口尺寸/位置、上次工作空间目录、
+//! 关闭行为、外观都写在这里。本实现必须读写同一文件、同一组键，并且——这一点很关键——
 //! **保留未知键**：`extra` 用 `serde(flatten)` 捕获未识别的字段并原样写回，
 //! 避免升级/降级时把别的版本写入的配置项抹掉。
 
@@ -10,9 +10,9 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-/// 生产配置文件名（与原实现一致）。
+/// 生产配置文件名（用户数据契约，不可更改）。
 pub const CONFIG_FILE: &str = ".transactions.json";
-/// 开发配置文件名（与原实现一致）。
+/// 开发配置文件名（用户数据契约，不可更改）。
 pub const CONFIG_FILE_DEV: &str = ".transactions-dev.json";
 
 /// 关闭行为取值。
@@ -50,7 +50,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            // 与原 main.js 的默认窗口尺寸一致
+            // 默认窗口尺寸
             width: 1400,
             height: 1000,
             x: None,
@@ -64,13 +64,13 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// 配置文件路径（dev 与生产分离，与原实现一致）。
+    /// 配置文件路径（dev 与生产分离；文件名属于用户数据契约，不可更改）。
     pub fn path(dev: bool) -> PathBuf {
         let file = if dev { CONFIG_FILE_DEV } else { CONFIG_FILE };
         home_dir().join(file)
     }
 
-    /// 读取配置；文件不存在或解析失败时回退默认值（原实现同样只记日志、不中断启动）。
+    /// 读取配置；文件不存在或解析失败时回退默认值（只记日志、不中断启动）。
     pub fn load(path: &Path) -> Self {
         let Ok(content) = std::fs::read_to_string(path) else {
             return Self::default();
@@ -84,7 +84,7 @@ impl AppConfig {
         }
     }
 
-    /// 写回配置（缩进 2 空格，与原实现的 `JSON.stringify(cfg, null, 2)` 一致）。
+    /// 写回配置（缩进 2 空格，保持既有的文件格式）。
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let content = serde_json::to_string_pretty(self)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
@@ -129,7 +129,7 @@ impl ConfigStore {
     }
 }
 
-/// 用户主目录。Windows 用 `USERPROFILE`，其它平台用 `HOME`（等价 Node 的 `os.homedir()`）。
+/// 用户主目录。Windows 用 `USERPROFILE`，其它平台用 `HOME`。
 fn home_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_electron_initial_values() {
+    fn defaults_match_documented_initial_values() {
         let config = AppConfig::default();
         assert_eq!(config.width, 1400);
         assert_eq!(config.height, 1000);
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_existing_electron_config_file() {
+    fn reads_existing_config_file() {
         // 与真实 ~/.transactions.json 内容同构
         let json = r#"{
             "width": 1815,

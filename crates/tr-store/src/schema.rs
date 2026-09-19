@@ -2,27 +2,27 @@
 //!
 //! ## 为什么是"只读校验"而不是"迁移"
 //!
-//! 本仓库只兼容最新 schema（v0.27 起）。既有数据库要么已经是当前格式（校验通过、原样使用），
+//! 本仓库只兼容**当前** schema。既有数据库要么已经是当前格式（校验通过、原样使用），
 //! 要么是更早格式（明确拒绝并给出可操作的提示）。这样就没有任何"就地改写用户财务数据"的代码路径，
 //! 也就不存在迁移脚本写错导致数据损坏的风险。
 //!
 //! ## 为什么 DDL 要逐字节照抄
 //!
-//! `fresh_v0_27.sql` 是从 Go 0.27 版建出的空库上用 `sqlite3 .schema` 导出的原始语句。
+//! `fresh.sql` 是当前格式空库的原始 DDL（`sqlite3 transactions.db .schema` 的输出）。
 //! SQLite 会把 `CREATE TABLE` 的原文存进 `sqlite_master`，因此只要执行同样的语句，
-//! 两个版本建出的库在 `.schema` 层面完全一致（由 `cargo xtask schema-diff` 守住这条不变式）。
+//! 建出的库在 `.schema` 层面就与基线逐字节一致（由 `cargo xtask schema-diff` 守住这条不变式）。
 
 use rusqlite::Connection;
 
 use crate::workspace::WorkspaceError;
 
-/// 最新（v0.27）空库 DDL：19 张表 + 21 个索引 + 3 条迁移登记记录。
+/// 当前空库 DDL：19 张表 + 21 个索引 + 3 条迁移登记记录。
 ///
-/// 文件内**不含任何迁移执行逻辑**，只有建库后的最终状态；末尾 3 条 INSERT 复刻的是
-/// Go 版对空库跑完 AutoMigrate + 3 条版本化迁移后的登记结果（三条 SQL 对空库都是空操作）。
-pub const FRESH_SCHEMA_SQL: &str = include_str!("../../../fixtures/schema/fresh_v0_27.sql");
+/// 文件内**不含任何迁移执行逻辑**，只有建库后的最终状态；末尾 3 条 INSERT 是历史迁移的
+/// 登记记录（那些迁移对空库都是空操作），保留它们只为让新建库与已升级到当前格式的库完全一致。
+pub const FRESH_SCHEMA_SQL: &str = include_str!("../../../fixtures/schema/fresh.sql");
 
-/// 旧版（≤0.26）的全局唯一索引名；存在即说明该库尚未升级到 (ledger_id, date) 复合唯一索引。
+/// 历史遗留的全局唯一索引名；存在即说明该库尚未升级到 (ledger_id, date) 复合唯一索引。
 const LEGACY_GLOBAL_UNIQUE_INDEX: &str = "idx_tbl_billadm_key_event_date";
 
 /// 最新 schema 要求的表与列。顺序与 DDL 一致，便于人工比对。
@@ -245,7 +245,8 @@ pub fn create_fresh(conn: &Connection) -> Result<(), WorkspaceError> {
 /// 只读校验：确认既有库已是最新 schema。
 ///
 /// 只查 `sqlite_master` 与 `PRAGMA table_info`，不写任何数据、不改任何结构。
-/// 校验失败时返回可操作的提示（让用户用 0.27 版打开一次完成升级），而不是就地修复。
+/// 校验失败时返回可操作的提示（引导用户改用其他工作目录，或用能打开该格式的旧版本升级），
+/// 而不是就地修复。
 pub fn validate_current(conn: &Connection) -> Result<(), WorkspaceError> {
     let mut problems: Vec<String> = Vec::new();
 
@@ -288,9 +289,9 @@ pub fn validate_current(conn: &Connection) -> Result<(), WorkspaceError> {
     }
 
     Err(WorkspaceError::Incompatible(format!(
-        "该工作空间不是最新格式（{}）：{}。请先用 0.27 版本打开一次以完成升级，\
-         或在设置中改用其他工作目录（本版本不会自动改写既有数据库）。",
-        "需 0.27+",
+        "该工作空间不是当前格式（{}）：{}。请在设置中改用其他工作目录，\
+         或用支持该格式的旧版本把它升级到当前格式（本版本不会自动改写既有数据库）。",
+        "格式过旧",
         problems.join("；")
     )))
 }
@@ -352,8 +353,8 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_pre_027_workspace() {
-        // 模拟 0.26 版建出的库：stock_trade 没有 order_id / order_seq，且存在旧全局唯一索引
+    fn validation_rejects_older_workspace() {
+        // 模拟更早格式建出的库：stock_trade 没有 order_id / order_seq，且存在旧的全局唯一索引
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE `tbl_billadm_stock_trade` (`id` text, `ledger_id` text);
@@ -368,7 +369,7 @@ mod tests {
             message.contains("idx_tbl_billadm_key_event_date"),
             "message = {message}"
         );
-        assert!(message.contains("0.27"), "message = {message}");
+        assert!(message.contains("不是当前格式"), "message = {message}");
     }
 
     #[test]

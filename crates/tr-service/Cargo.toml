@@ -4,14 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# 服务层：业务规则。对照原 Go 版 `kernel/service/*`。
+# 服务层：业务规则（账本 / 交易 / 分类 / 标签 / 模板 / 图表 / 日记 / 股票）。
 # 依赖 tr-store（数据）+ tr-domain（模型与纯算法），**不依赖 tauri**（保证 headless 可测）。
 [dependencies]
 tr-domain = { workspace = true }
 tr-store = { workspace = true }
 rusqlite = { version = "0.40", features = ["bundled"] }
 tracing = "0.1"
-# 日记导入的编码回退链（UTF-8 → UTF-16 → GBK），对照 Go 的 golang.org/x/text
+# 日记导入的编码回退链（UTF-8 → UTF-16 → GBK）
 encoding_rs = "0.8"
 # 关键事件图片：base64 解码 + 解码/缩放/JPEG 编码（缩略图）
 base64 = "0.22"
@@ -22,6 +22,6 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
 ] }
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip"] }
-# 日期换算：复刻 Go 的 time.Parse/time.Format 与 strftime(unixepoch) 语义
+# 日期换算：严格的日期/月份解析，与 strftime(..., 'unixepoch') 的 UTC 口径一致
 chrono = "0.4"
 serde_json = "1.0.151"

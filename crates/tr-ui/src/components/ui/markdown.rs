@@ -1,10 +1,9 @@
 //! Markdown 渲染（纯 Rust，无新依赖）。
 //!
-//! 对照原 `app/src/utils/markdown.ts`：那里用 `marked`（GFM）+ `DOMPurify` 白名单
-//! 清洗 + `highlight.js` 高亮。本实现把前两步合成一步——**先转义再拼标签**，
+//! 解析与清洗合成一步——**先转义再拼标签**，
 //! 因此输出天然不含任何来自输入的 HTML，`<script>` 之类不可能被执行。
 //!
-//! ## 支持范围（对齐 DOMPurify 白名单里的标签）
+//! ## 支持范围
 //!
 //! | 语法 | 输出 |
 //! |---|---|
@@ -18,13 +17,13 @@
 //! | GFM 表格 | `<table><thead><tbody><tr><th><td>`（含 `:---:` 对齐） |
 //! | 行内 | `` `code` ``、`**粗**`、`*斜*`/`_斜_`、`~~删除~~`、`[文本](url)`、`![alt](url)` |
 //!
-//! ## 安全边界（有意为之，见汇报）
+//! ## 安全边界（有意为之）
 //!
 //! * **全文转义**：`&` `<` `>` `"` 先转义，任何原始 HTML 都只会当作纯文本显示
-//!   （DOMPurify 是"过滤"，这里是"根本不产生"）。
+//!   （不是"过滤掉危险标签"，而是"根本不产生标签"）。
 //! * **URL 白名单**：只放行 `http://` / `https://` / `mailto:` / 站内锚点 `#`；
 //!   `javascript:`、`data:`、`file:` 等一律降级为纯文本（不给 `<a>`/`<img>`）。
-//! * 不做语法高亮（原实现用 highlight.js；本仓库界面层不引入 JS 库，
+//! * 不做语法高亮（本仓库界面层不引入 JS 库，
 //!   代码块只按等宽字体 + `--transactions-color-markdown-code-block` 底色渲染）。
 //! * 不做 HTML 实体解码：`&amp;` 这类输入会按字面显示成 `&amp;`。
 
@@ -206,8 +205,8 @@ pub fn render_markdown(source: &str) -> String {
         }
         if !paragraph.is_empty() {
             out.push_str("<p>");
-            // 段内换行按原 `marked` 的 `breaks: false` 是一个空格拼在一起；
-            // 这里用 <br> 更贴近用户预期（原实现里单换行确实会被合并，见汇报的差异说明）
+            // 段内换行这里用 <br> 保留，而不是合并成一个空格；
+            // 用户在文本域里敲下的换行会被原样呈现，更贴近预期
             let mut first = true;
             for part in paragraph.split('\n') {
                 if !first {
@@ -229,7 +228,7 @@ pub fn render_markdown(source: &str) -> String {
 /// 因此这里不存在注入面。
 #[component]
 pub fn Markdown(
-    /// Markdown 原文
+    /// Markdown 源文本
     #[prop(into)]
     source: Signal<String>,
     /// 附加类名
@@ -700,8 +699,7 @@ fn try_render_link(
 
     let label: String = chars[bracket_index + 1..close].iter().collect();
     let target: String = chars[close + 2..end].iter().collect();
-    // `[文本](url "标题")`：标题部分丢弃（与 DOMPurify 白名单里 title 的取舍一致，
-    // 这里只保留 href/src/alt，不输出 title）
+    // `[文本](url "标题")`：标题部分丢弃（这里只保留 href/src/alt，不输出 title）
     let url = target
         .split_whitespace()
         .next()
@@ -709,7 +707,7 @@ fn try_render_link(
         .to_string();
 
     if !is_safe_url(&url) {
-        // 不安全协议：降级为纯文本（原实现是 DOMPurify 剥掉属性）
+        // 不安全协议：降级为纯文本
         out.push_str(&escape_html(&format!(
             "{}[{}]({})",
             if is_image { "!" } else { "" },

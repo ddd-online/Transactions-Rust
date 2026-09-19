@@ -1,6 +1,6 @@
 //! 通用组件套件（P5 首批 8 个 + P6-a 增补 16 个）。
 //!
-//! 外观对齐 `DESIGN.md` 与原 `index.scss` / `_components.scss`：
+//! 外观对齐 `DESIGN.md`：
 //! 按钮 36px 高 / 8px 圆角 / 主色 `#3964fe`（令牌 `--transactions-color-primary`）、
 //! 输入框 36px / 8px / 1px 发丝边框、模态 16px 圆角 + 大阴影、
 //! tag 语义色 10% 底 + 语义色文字、`focus-visible` 2px 主色环。
@@ -9,33 +9,18 @@
 //!
 //! ## P6-a 增补（本轮）
 //!
-//! | 组件 | 对应原 Ant Design Vue | 主要用途 |
-//! |---|---|---|
-//! | [`Table`] | `a-table` | 消费记录 / 分类标签 / 模板列表 |
-//! | [`Pagination`] | `a-pagination` | 消费记录分页（含每页条数） |
-//! | [`Form`] / [`FormItem`] | `a-form` / `a-form-item` | 设置页与弹窗的字段排版 |
-//! | [`Tabs`] / [`TabPane`] | `a-tabs` | 设置页 5 个分栏 |
-//! | [`Segmented`] | `a-segmented` | 交易类型 / 外观 |
-//! | [`Switch`] | `a-switch` | 离群值 / 开发者工具 |
-//! | [`Popconfirm`] | `a-popconfirm` | 删除二次确认 |
-//! | [`DatePicker`] / [`DateRangePicker`] | `a-date-picker` / `a-range-picker` | 交易日期 / 筛选时间范围 |
-//! | [`Dropdown`] | `a-dropdown` | 行内「更多」操作 |
-//! | [`Popover`] | `a-popover` | 条件小结 / 说明浮层 |
-//! | [`FloatButton`] | `a-float-button` | 右下角「记一笔」 |
-//! | [`Drawer`] | `a-drawer` | 筛选面板（消费记录页） |
-//! | [`Divider`] | `a-divider` | 设置页分块 |
-//! | [`Checkbox`] / [`CheckboxGroup`] | `a-checkbox` / `a-checkbox-group` | 多选标签 / 文件勾选 |
-//! | [`Progress`] | `a-progress` | 更新下载进度 |
-//! | [`DragSortItem`] | （原文 `useListDragSort.ts`） | 分类/标签/模板排序 |
+//! 表格与分页（消费记录 / 分类标签 / 模板列表）、表单与表单项、标签页（设置页 5 个分栏）、
+//! 分段控制器（交易类型 / 外观）、开关（离群值 / 开发者工具）、二次确认、日期与日期区间选择、
+//! 下拉菜单（行内「更多」）、气泡卡片（条件小结 / 说明浮层）、悬浮按钮（右下角「记一笔」）、
+//! 抽屉（筛选面板）、分割线、复选框与复选框组、进度条（更新下载）、
+//! 拖拽排序项（分类 / 标签 / 模板排序）。
 //!
 //! ## P6-b 增补（本轮）
 //!
-//! | 组件 | 对应原实现 | 主要用途 |
-//! |---|---|---|
-//! | [`LineChart`] | `da_view/TransactionsChart.vue`（ECharts） | 自绘 SVG 折线图（多序列 / 类目轴 / 图例 / 轴 tooltip / 虚线参考线） |
-//! | [`Markdown`] | `utils/markdown.ts` + `MarkdownViewer.vue` | 纯 Rust Markdown 渲染（先转义再拼标签，无注入面） |
-//! | [`ImagePicker`] | `KeyEventImageGallery.vue` 的文件输入 | 隐藏 `input[type=file]` + 触发按钮 |
-//! | [`UploadProgressBar`] | `key_event_view/UploadProgressBar.vue` | 多文件上传进度（总进度 + 逐文件 + 重试/跳过） |
+//! 折线图（自绘 SVG：多序列 / 类目轴 / 图例 / 轴 tooltip / 虚线参考线）、
+//! Markdown 渲染（纯 Rust：先转义再拼标签，无注入面）、
+//! 图片选择（隐藏 `input[type=file]` + 触发按钮）、
+//! 多文件上传进度条（总进度 + 逐文件 + 重试/跳过）。
 
 mod button;
 mod chart;

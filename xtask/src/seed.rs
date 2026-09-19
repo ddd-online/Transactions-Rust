@@ -2,7 +2,7 @@
 //!
 //! 用途：
 //! * `cargo xtask seed <dir>` —— 人工冒烟（配合 `cargo tauri dev` 打开这个目录）
-//! * 后续 `parity` 黄金对比的输入基线（同一份种子 + Go 参考实现跑同一批操作）
+//! * 后续回归/验收的固定输入基线（同一份种子反复播种，落库结果必须稳定可复现）
 //!
 //! 刻意通过 `tr-service` 的公开函数写入，而不是直接 SQL：
 //! 这样种子本身就在验证服务层的真实行为（插入失败会立刻暴露）。
@@ -25,7 +25,7 @@ const DAY_2026_02_10: i64 = 1_770_681_600;
 const DAY_2026_03_15: i64 = 1_773_590_400;
 
 /// 股票委托的成交时间（UTC 秒）：2026-01-06 / 2026-01-20 / 2026-03-10。
-/// 与 `fixtures/parity/go-driver.ps1` 里的取值必须**逐字一致**，否则黄金对比无意义。
+/// 一旦写定就不要改：同一份种子反复播种必须得到同样的落库结果，回归对比才有意义。
 pub const TRADE_TIME_OPEN: i64 = 1_767_657_600;
 pub const TRADE_TIME_ADD: i64 = 1_768_867_200;
 pub const TRADE_TIME_CLOSE: i64 = 1_773_100_800;
@@ -63,7 +63,7 @@ const ADD_PRINCIPAL_CENTS: i64 = 50_000_000;
 /// 阶段 2 重新建仓的成交价：16.80 元 = 1680 分。
 const REOPEN_PRICE_CENTS: i64 = 1_680;
 
-/// 阶段 2 新增的分类 / 标签 / 图表 / 模板名称（两侧必须逐字一致）。
+/// 阶段 2 新增的分类 / 标签 / 图表 / 模板名称（每次播种必须逐字一致）。
 const PHASE2_CATEGORY: &str = "阶段二分类";
 const PHASE2_TAG: &str = "阶段二标签";
 const PHASE2_CHART_TITLE: &str = "阶段二图表";
@@ -73,9 +73,9 @@ const PHASE2_STOCK_TAG: &str = "波段";
 
 /// P1-2 图表更新：`PATCH /charts` 覆盖写后的标题 / 粒度 / 排序号。
 ///
-/// `sort_order` 取值与 `fixtures/parity/go-driver.ps1` **逐字一致**：
+/// `sort_order` 刻意写死为常量 9：
 /// 必须大于 3 个预设图表的 0/1/2，更新后这条自定义图表才会排到列表末尾。
-/// 这里刻意写死 9 而不是"当前最大值 + 1"——两侧的图表 ID 各不相同，
+/// 不写成"当前最大值 + 1"——图表 ID 每次都不同，
 /// 只有与 ID 无关的常量才能让落库行逐字可比。
 const P1_CHART_UPDATED_TITLE: &str = "阶段二图表（更新：分类+标签+离群点）";
 const P1_CHART_UPDATED_GRANULARITY: &str = "year";
@@ -86,7 +86,7 @@ const P1_CHART_UPDATED_SORT_ORDER: i32 = 9;
 ///
 /// 分类与标签是**整组重排**：把一组里的每一行都改成新序号，
 /// 落库后 `tbl_billadm_category` / `tbl_billadm_tag` 的每一行 `sort_order`
-/// 都必须与 Go 逐字一致（序号刻意互不相同且不连续，避免"只改了一行没改其它行"被掩盖）。
+/// 都必须逐行落库正确（序号刻意互不相同且不连续，避免"只改了一行没改其它行"被掩盖）。
 const P1_TEMPLATE_SORT_ORDER: i32 = 7;
 const P1_CATEGORY_SORT_ORDER: &[(&str, i32)] = &[
     ("餐饮美食", 5),
@@ -291,8 +291,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     log.push_str(&format!("备用账本记录={other_record}\n"));
 
     // ---- 股票交易（覆盖最高风险的算法：委托级费用一次计收 + 分摊、持仓重放、轮次归档、资金链）----
-    // 这些操作的输入在 `fixtures/parity/go-driver.ps1` 里被**逐字重放**给 Go 参考实现，
-    // 再比较两侧落库结果（`cargo xtask parity diff`），因此这里的取值不可随意改动。
+    // 这些操作的输入**逐字写定**（种子即基线），因此这里的取值不可随意改动。
     stock::set_principal(workspace, &main_ledger, PRINCIPAL_CENTS)?;
     stock::create_trade_order(
         workspace,
@@ -354,15 +353,15 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     // ==================================================================================
     // 阶段 2：更新 / 删除写入路径
     //
-    // 阶段 1 只覆盖「新建」；这里按 `fixtures/parity/go-driver.ps1` 的**同一顺序**追加
-    // 更新与删除操作，让黄金对比覆盖 UPDATE / DELETE 的落库行为（派生数据重放、
-    // 级联清理、归档轮次的标签与复盘等）。两侧的取值必须逐字一致。
+    // 阶段 1 只覆盖「新建」；这里按**同一套取值**追加更新与删除操作，
+    // 让种子覆盖 UPDATE / DELETE 的落库行为（派生数据重放、
+    // 级联清理、归档轮次的标签与复盘等）。取值保持写定，不随实现调整。
     // ==================================================================================
     log.push_str("---- 阶段 2 ----\n");
 
     // ---- 1. 消费记录：批量新建 → 关联 → 取消关联 → 删除 ----
-    // 批量新建返回的是条数而不是 ID（与 Go `BatchCreateTr` 一致），
-    // 因此与 Go 驱动一样，按描述查回记录以取得要删除的那一条。
+    // 批量新建返回的是条数而不是 ID，
+    // 因此这里按描述查回记录，以取得要删除的那一条。
     let batch_dtos = [
         phase2_record(
             &main_ledger,
@@ -429,10 +428,10 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     log.push_str(&format!("图表：新建再删除 {}\n", custom_chart.chart_id));
 
     // ---- P1-2. 图表：新建一条自定义图表后用 `PATCH /charts` **整体替换** `lines` ----
-    // 覆盖点：`chart_lines` 的 JSON 文本必须与 Go `json.Marshal` 逐字一致
+    // 覆盖点：`chart_lines` 的 JSON 文本必须逐字节稳定
     // （对象字段顺序敏感），因此这里用了同时带「分类 + 标签 + 交易类型 + includeOutlier」
     // 的复合条件；粒度改成 year、排序号改到预设图表之后。
-    // 两侧图表 ID 各自生成，所以 update 只按各自拿到的 ID 走，落库行除 ID 外必须逐字相同。
+    // 图表 ID 每次生成都不同，所以 update 只按拿到的 ID 走，其余落库列必须逐字相同。
     let p1_chart = chart::create(
         workspace,
         &CreateChartRequest {
@@ -503,11 +502,11 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     // P1-3：四个 `sort_order` 写入路径（模板 / 分类 / 标签）
     //
     // 分类与标签是**整组重排**：一组里的每一行都改成新序号，落库后逐行比对。
-    // 取值必须与 `fixtures/parity/go-driver.ps1` 逐字一致。
+    // 取值写定，改动会让落库结果漂移。
     // ==================================================================================
 
     // ---- P1-3a. 模板：`PATCH /templates/:id/sort`（路径参数是模板 ID）----
-    // 模板的 `sort_order` 与 `updated_at` 都会被刷新（GORM 的 autoUpdateTime）。
+    // 模板的 `sort_order` 与 `updated_at` 都会被刷新。
     transaction_template::update_sort_order(
         workspace,
         &template_id,
@@ -542,7 +541,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     //
     // 覆盖点：`(ledger_id, date)` 冲突时只更新 title/content/color/updated_at，
     // **保留原 id 与 created_at**，且行数不变（是覆盖不是新增）；
-    // 删除后该行必须消失。取值必须与 `fixtures/parity/go-driver.ps1` 逐字一致。
+    // 删除后该行必须消失。取值同样写定。
     // ==================================================================================
     let p1_event_before = key_event::query_by_date(workspace, &main_ledger, P1_KEY_EVENT_DATE)?;
     let p1_rows_before = key_event_row_count(workspace, &main_ledger)?;
@@ -705,9 +704,9 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     ));
 
     // ---- 6b. 股票：编辑已归档轮次的标签与复盘（第一轮来自清仓）----
-    // 归档的历史集合由「交易历史」列表懒补齐（`ListTradeHistories` 先做 backfill），
-    // `GetTradeHistoryDetail` 自身不做补齐——两侧都必须先走一次列表查询，
-    // 否则详情接口会报"该股票暂无交易历史"（与 Go 完全同构）。
+    // 归档的历史集合由「交易历史」列表懒补齐（列表查询先做 backfill），
+    // 详情查询自身不做补齐——所以必须先走一次列表查询，
+    // 否则详情接口会报"该股票暂无交易历史"。
     stock::list_trade_histories(workspace, &main_ledger)?;
     let detail = stock::get_trade_history_detail(workspace, &main_ledger, "600519")?;
     let round_id = detail
@@ -793,7 +792,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     //   第三轮 600519：1 手；1 手
     //   第四轮 000001：1 手；1 手
     // 所有 trade_time 互不相同（同秒卖单会被重放并成一笔）。
-    // 取值必须与 `fixtures/parity/go-driver.ps1` 逐字一致。
+    // 取值写定，改动会让落库结果漂移。
     // ==================================================================================
 
     // 阶段 3 在**独立账本**上运行：避免与阶段 1/2 的持仓行、历史集合、资金记录互相影响，
@@ -972,8 +971,8 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
             "预演 delete 不应落库，但库内容发生了变化".to_string(),
         ));
     }
-    // 只断言"不落库"；`position_after` 的具体数值由两侧黄金对比负责比对
-    // （Go 也会返回同一个 `positionAfter`，落库与否由 dump 指纹保证）。
+    // 只断言"不落库"；`position_after` 的具体数值由服务层单测负责比对
+    // （预演不写库这一点由这里的 dump 前后指纹保证）。
     log.push_str(&format!(
         "股票：预演 delete（删除减仓甲委托）不落库 ✅ 预演后持仓={} 失效轮次={:?}\n",
         preview_delete.position_after,
@@ -1144,9 +1143,9 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
 
 /// 阶段 3 的成交不变量自检。
 ///
-/// 这两条是黄金对比阶段 3 第一次失败时暴露出来的真实笔误（两笔减仓写了同一个
-/// `trade_time`、以及手数不守恒导致超卖）。放在播种脚本里自检，可以让同类错误
-/// 立刻以清晰信息失败，而不是留到对比结果里反推。
+/// 这两条是播种脚本自身曾经写错过的真实笔误（两笔减仓写了同一个
+/// `trade_time`、以及手数不守恒导致超卖）。放在这里自检，可以让同类错误
+/// 立刻以清晰信息失败，而不是留到回归对比里反推。
 fn phase3_assert_trade_invariants(
     workspace: &Workspace,
     ledger_id: &str,
@@ -1271,7 +1270,7 @@ fn phase3_round_id(
         .ok_or_else(|| ServiceError::Internal(format!("交易历史缺少第 {round_no} 轮")))
 }
 
-/// 阶段 2 的消费记录 DTO（与 `go-driver.ps1` 的 batch 请求体逐字段对应）。
+/// 阶段 2 的消费记录 DTO。
 fn phase2_record(
     ledger_id: &str,
     description: &str,
@@ -1296,8 +1295,8 @@ fn phase2_record(
 
 /// 按描述查回消费记录 ID。
 ///
-/// `batch_create_tr` 只返回条数（与 Go `BatchCreateTr` 一致），
-/// 所以两侧都用同一个「按描述查询」的公开服务路径取回 ID，而不是靠内存里的顺序假设。
+/// `batch_create_tr` 只返回条数，
+/// 所以用「按描述查询」的公开服务路径取回 ID，而不是靠内存里的顺序假设。
 fn phase2_find_record(
     workspace: &Workspace,
     ledger_id: &str,

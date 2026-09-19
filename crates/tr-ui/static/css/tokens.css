@@ -1,8 +1,8 @@
 /* ============================================
  * Transactions 设计令牌（Design Tokens）
- * 原项目 `app/src/styles/_variables.scss` 的纯 CSS 逐条移植。
+ * 设计令牌：颜色 / 间距 / 字号 / 圆角 / 阴影的唯一来源；界面里不得硬编码颜色。
  *
- * 命名规则（对应原 SCSS 的 `@mixin emit-theme($map)`）：
+ * 命名规则（对应主题映射混入 `emit-theme($map)`）：
  *   --transactions-#{$key}: #{$value}
  * 因此 `$light` / `$dark` 里的每一个键都变成 `--transactions-<key>`，取值一字不改。
  *
@@ -10,9 +10,9 @@
  *   * 浅色（默认）→ `:root`
  *   * 深色        → `<html data-theme="dark">`
  *   * 兜底        → 未显式设置 data-theme 时跟随系统（`prefers-color-scheme: dark`
- *                   作用于 `html:not([data-theme])`，与原 SCSS 完全一致）
+ *                   作用于 `html:not([data-theme])`）
  *
- * 计数（与原 SCSS 对照用）：主题色 67 × 2 = 134，主题无关令牌 54，合计 188。
+ * 计数：主题色 67 × 2 = 134，主题无关令牌 54，合计 188。
  * ============================================ */
 
 /* ============================================
@@ -115,7 +115,7 @@
   --transactions-ledger-moss: #6b9e7e;
   --transactions-ledger-camel: #b89a80;
 
-  /* ---------- 字体族（原 _typography.scss 的 :root 块） ---------- */
+  /* ---------- 字体族 ---------- */
   --transactions-font-display: 'Inter', system-ui, -apple-system, sans-serif;
   --transactions-font-body: 'Inter', system-ui, -apple-system, sans-serif;
   --transactions-font-mono: 'JetBrains Mono', 'SF Mono', Consolas, 'Courier New', monospace;
@@ -278,8 +278,8 @@
 
 /* ============================================
  * 系统跟随兜底：还没有显式 data-theme 时（例如初始化窗口），
- * 直接遵从操作系统偏好。与 `_variables.scss` 的
- * `@media (prefers-color-scheme: dark) { html:not([data-theme]) { ... } }` 一致。
+ * 直接遵从操作系统偏好，规则为
+ * `@media (prefers-color-scheme: dark) { html:not([data-theme]) { ... } }`。
  * ============================================ */
 @media (prefers-color-scheme: dark) {
   html:not([data-theme]) {

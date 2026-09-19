@@ -1,16 +1,15 @@
-//! 分类服务。对照 Go `kernel/service/category_service.go`，并涵盖
-//! `kernel/workspace/seed.go` 的默认分类 / 标签种子数据。
+//! 分类服务：分类的查询 / 新建 / 删除 / 排序，分类下的记录数统计，
+//! 以及默认分类与标签的种子数据。
 //!
-//! ## 与原实现的结构差异（有意为之）
+//! ## 设计说明
 //!
-//! * Go 为每个服务定义接口并用 `wire.go` 注入实现（便于 mock）；Rust 版与 `ledger.rs`
-//!   一致，改为**无状态自由函数 + `&Workspace` 入参**。
-//! * `defaultData` 在 Go 里位于 `workspace` 包并直接拿 `*gorm.DB` 建行；Rust 版把它放在
-//!   唯一调用方（分类服务）里，经 `CategoryDao` / `TagDao` 写入。数据本身逐字照抄，
-//!   且按 Go 字面量的书写顺序固定遍历（Go 遍历 map 的顺序随机，但落库结果不受影响：
+//! * 本 crate 不用接口抽象与依赖注入：全部是**无状态自由函数 + `&Workspace` 入参**
+//!   （与 `ledger.rs` 一致）。
+//! * 种子数据放在唯一调用方（分类服务）里，经 `CategoryDao` / `TagDao` 写入；
+//!   按字面量的书写顺序固定遍历（不依赖 map 的随机顺序，落库结果不受影响：
 //!   所有 `sort_order` 都是 0，列表统一按 `sort_order ASC, name DESC` 排序）。
-//! * `CountRecordsByCategories` 在 Go 里直接查 `TransactionRecord`；Rust 版把这两条只读
-//!   SQL 放进 `CategoryDao`（消费记录 DAO 由另一处负责）。
+//! * 分类下的记录数统计（两条只读 SQL）放在 `CategoryDao`
+//!   （消费记录 DAO 由另一处负责）。
 
 use std::collections::BTreeMap;
 
@@ -27,7 +26,7 @@ pub type DefaultCategory = (&'static str, &'static [&'static str]);
 /// 一个交易类型下的默认分类集合：`(交易类型, 分类列表)`。
 pub type DefaultCategoryGroup = (&'static str, &'static [DefaultCategory]);
 
-/// 默认分类与标签（逐字照抄 Go `kernel/workspace/seed.go` 的 `defaultData`）：
+/// 默认分类与标签（逐字固定，改动即破坏既有工作空间的数据兼容）：
 /// 交易类型 → 分类名 → 标签名列表。共 19 个分类 / 57 个标签。
 pub const DEFAULT_DATA: &[DefaultCategoryGroup] = &[
     (
@@ -87,9 +86,9 @@ pub const DEFAULT_DATA: &[DefaultCategoryGroup] = &[
     ),
 ];
 
-/// 写入默认分类与标签，返回 `(分类数, 标签数)`。对照 Go `workspace.SeedData`。
+/// 写入默认分类与标签，返回 `(分类数, 标签数)`。
 ///
-/// 与原实现一样**不使用事务**：逐行插入，任一行失败即整体报错（已插入的行保留）。
+/// **不使用事务**：逐行插入，任一行失败即整体报错（已插入的行保留）。
 pub fn seed_default_data(workspace: &Workspace, ledger_id: &str) -> ServiceResult<(i32, i32)> {
     let conn = workspace.connection();
     let mut category_count = 0;
@@ -219,7 +218,7 @@ pub fn count_records_by_category(
         .map_err(ServiceError::from)
 }
 
-/// 批量统计每个分类名下的交易记录数（空名单直接返回空 map，与 Go 一致）。
+/// 批量统计每个分类名下的交易记录数（空名单直接返回空 map）。
 pub fn count_records_by_categories(
     workspace: &Workspace,
     ledger_id: &str,
@@ -231,8 +230,8 @@ pub fn count_records_by_categories(
 
 /// 为账本初始化默认分类与标签，返回 `(分类数, 标签数)`。
 ///
-/// 已有分类时报错（文案与 Go 相同："该账本已有分类，无需初始化"）。
-/// 注意该错误在 Go 里是普通 `error`（经 `Handle` 兜底为 500），不是 400，
+/// 已有分类时报错（文案："该账本已有分类，无需初始化"）。
+/// 注意该错误经内部错误通道兜底为 500，不是 400，
 /// 因此这里用 [`ServiceError::Internal`]。
 pub fn initialize_categories(workspace: &Workspace, ledger_id: &str) -> ServiceResult<(i32, i32)> {
     tracing::info!("开始初始化账本 {} 的分类", ledger_id);
@@ -286,8 +285,8 @@ mod tests {
             .flat_map(|(_, items)| items.iter())
             .map(|(_, names)| names.len())
             .sum();
-        assert_eq!(categories, 19, "默认分类数必须与 Go 一致");
-        assert_eq!(tags, 57, "默认标签数必须与 Go 一致");
+        assert_eq!(categories, 19, "默认分类数必须是 19");
+        assert_eq!(tags, 57, "默认标签数必须是 57");
 
         // 关键条目：分类归属的交易类型、`分类名:交易类型` 的标签关联格式
         let expense = DEFAULT_DATA
@@ -324,12 +323,12 @@ mod tests {
             .any(|(name, tags)| *name == "五险一金" && *tags == ["养老", "医疗", "失业", "住房"]));
     }
 
-    /// Go `kernel/workspace/seed.go` 的 `defaultData` 规范化导出
+    /// 默认种子数据的规范化导出
     /// （`交易类型|分类名|标签,标签`，交易类型与分类名按 UTF-8 字节序排序，标签保持字面量顺序）。
     ///
-    /// 由参考实现（Go 1.26，`sort.Strings` + `strings.Join`）直接打印而来：
+    /// 以下期望值来自一次真实运行，作为回归基线，不要手改：
     /// 任何名字、归属或顺序上的偏差都会让下面的测试失败。
-    const GO_DEFAULT_DATA_DUMP: &str = "\
+    const DEFAULT_DATA_DUMP: &str = "\
 expense|交通出行|打车,地铁,公交,高铁,油费,停车,ETC,车险
 expense|人情往来|红包,请客,礼金
 expense|医疗健康|医药,医险
@@ -351,7 +350,7 @@ transfer|五险一金|养老,医疗,失业,住房
 transfer|税费党费|团费,交税";
 
     #[test]
-    fn default_data_matches_go_seed_go_verbatim() {
+    fn default_data_matches_seed_dump_verbatim() {
         let mut rows: Vec<(String, String, String)> = Vec::new();
         for (transaction_type, categories) in DEFAULT_DATA {
             for (name, tags) in *categories {
@@ -369,7 +368,7 @@ transfer|税费党费|团费,交税";
             .map(|(transaction_type, name, tags)| format!("{transaction_type}|{name}|{tags}"))
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(dump, GO_DEFAULT_DATA_DUMP);
+        assert_eq!(dump, DEFAULT_DATA_DUMP);
     }
 
     #[test]
@@ -419,7 +418,7 @@ transfer|税费党费|团费,交税";
     }
 
     #[test]
-    fn initialize_twice_reports_go_message_with_500() {
+    fn initialize_twice_returns_same_message_with_500() {
         let (workspace, dir) = workspace("initialize-twice");
         initialize_categories(&workspace, "l1").unwrap();
 
@@ -499,7 +498,7 @@ transfer|税费党费|团费,交税";
     }
 
     #[test]
-    fn update_sort_is_silent_for_missing_row_like_gorm() {
+    fn update_sort_is_silent_for_missing_row() {
         let (workspace, dir) = workspace("sort");
         create_category(&workspace, "l1", "餐饮美食", "expense").unwrap();
         update_category_sort(&workspace, "l1", "餐饮美食", "expense", 9).unwrap();
@@ -508,7 +507,7 @@ transfer|税费党费|团费,交税";
                 .sort_order,
             9
         );
-        // 不存在的记录：与原实现一样不报错
+        // 不存在的记录：不报错
         update_category_sort(&workspace, "l1", "不存在", "expense", 1).unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -1,10 +1,10 @@
-//! 关键事件服务（含图片）。对照 Go `kernel/service/{key_event_service,key_event_image_service}.go`。
+//! 关键事件服务（含图片）。
 //!
-//! 几个必须照抄的点：
+//! 几个必须遵守的点：
 //! * 标题按**字符**（rune）截断到 200，避免在多字节 UTF-8 中间切断
 //! * upsert 每次都生成新 id，但冲突时数据库保留原 id 与 created_at（见 `KeyEventDao::upsert`）
 //! * 删除关键事件：先取图片列表 → 事务内删记录 → **提交后**再删磁盘文件
-//! * 新增图片：先落盘 → 记录失败时回滚磁盘文件（原实现同样如此）
+//! * 新增图片：先落盘 → 记录失败时回滚磁盘文件
 //! * 图片排序号 = 该天现有最大 sort_order + 1
 
 use tr_domain::models::{KeyEvent, KeyEventImage};
@@ -38,7 +38,7 @@ pub fn upsert_key_event(
     Ok(KeyEventDao::upsert(&workspace.connection(), &event)?)
 }
 
-/// 按日期取关键事件；不存在时报错（与原实现一致）。
+/// 按日期取关键事件；不存在时报错。
 pub fn query_by_date(
     workspace: &Workspace,
     ledger_id: &str,
@@ -64,7 +64,7 @@ pub fn query_by_year(
     )?)
 }
 
-/// 某账本某年有事件的日期列表（顺序由查询决定，与原实现一致）。
+/// 某账本某年有事件的日期列表（顺序由查询决定）。
 pub fn query_dates_by_year(
     workspace: &Workspace,
     ledger_id: &str,
@@ -160,7 +160,7 @@ pub fn list_images(
 /// 删除一张图片（记录 + 磁盘文件）。
 pub fn delete_image(workspace: &Workspace, image_id: &str) -> ServiceResult<()> {
     let conn = workspace.connection();
-    // 先查文件路径：记录删掉后就找不到文件了；查不到记录时按原实现继续删记录（幂等）
+    // 先查文件路径：记录删掉后就找不到文件了；查不到记录时继续删记录（幂等）
     match KeyEventImageDao::query_by_id(&conn, image_id) {
         Ok(image) => assets::remove_image_files(workspace, &image.file_path, &image.thumb_path),
         Err(error) if is_not_found(&error) => {}

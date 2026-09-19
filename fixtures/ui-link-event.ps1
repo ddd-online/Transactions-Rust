@@ -4,15 +4,15 @@
 #   * 记一笔 → 行内「关联到关键事件」→ 弹窗里用 **DatePicker** 选日期（本项目第一次自动化这个组件：
 #     触发器是按钮、日期格子是 `<button class="ui-date-picker__cell">`，可访问名就是"日"数字）→ 确认关联；
 #   * 断言 `tbl_billadm_transaction_record.key_event_date` 写成所选日期；
-#     该日期若还没有事件，后端会**懒创建**一条空事件（原实现行为）→ 一并断言；
+#     该日期若还没有事件，后端会**懒创建**一条空事件 → 一并断言；
 #   * 再点「修改关联」→「解除关联」→ 断言 `key_event_date` 清空。
 #
-# 为什么需要它：关联/解除在黄金对比阶段 2 里只覆盖了**落库**（`link_to_key_event` / `unlink`），
+# 为什么需要它：关联/解除此前只覆盖了**落库**（`link_to_key_event` / `unlink`），
 # 界面这条路径（含日期选择器、`修改关联` 这个按钮名切换）此前没人走过。
 #
 # 它同时锁住一个**真实缺陷**：`.ui-modal__content` 原来带 `overflow: hidden`（只为圆角），
 # 于是弹窗里 DatePicker 的下拉面板被裁掉 —— 本弹窗只有一个表单项，日历被裁到只剩标题和星期行，
-# 日期格子**看不见也点不动**（原版 antd 把面板 portal 到 body，不受影响）。已改 `overflow: visible`。
+# 日期格子**看不见也点不动**（下拉面板是绝对定位子元素，弹窗的 `overflow` 会把它裁掉）。已改 `overflow: visible`。
 # 两个写脚本时踩到的坑也留在这里当范例：
 #   * 触发器**不能按占位符找**：`link_date` 默认今天，有值时它的可访问名就是那个日期；
 #   * 必须选一个**不是今天**的日子，否则"选择器有没有生效"根本看不出来（第一版就这样，全绿但没测到）；
@@ -398,7 +398,7 @@ try {
     if ($linked.Count -eq 1) {
         Assert-True ($linked[0].key_event_date -eq $linkDate) "关联日期写进库（期望 $linkDate，实际 $($linked[0].key_event_date)）"
     }
-    # 原实现：关联到还没有事件的日期会**懒创建**一条空事件
+    # 关联到还没有事件的日期会**懒创建**一条空事件
     $events = @((Read-Table 'tbl_billadm_key_event') | Where-Object { $_.date -eq $linkDate -and $_.ledger_id -eq $linked[0].ledger_id })
     Assert-True ($events.Count -ge 1) "该日期在库里有一条事件（懒创建，$linkDate）"
 

@@ -1,15 +1,13 @@
 //! 时间格式化。
 //!
-//! 对照原 `app/src/backend/functions.ts` 的 `formatTimestamp(timestamp, format)`：
-//! `dayjs(timestamp * 1000).format(format)` —— 即**本地时区**格式化。
+//! 全部按**宿主（WebView）的本地时区**格式化，与后端的 Unix 秒语义对应。
 //!
-//! 为什么用 `js_sys::Date` 而不是自己按秒算：dayjs 走的是宿主本地时区，
-//! Rust 侧没有时区数据库，手算必然在跨时区/夏令时上与原实现分叉。
-//! `js_sys::Date` 的 `get_month()` / `get_date()` 等访问器同样是本地时区语义，
-//! 与 dayjs 完全一致。
+//! 为什么用 `js_sys::Date` 而不是自己按秒算：本地时区/夏令时只有宿主知道，
+//! Rust 侧没有时区数据库，手算必然在跨时区、夏令时上分叉。
+//! `js_sys::Date` 的 `get_month()` / `get_date()` 等访问器同样是本地时区语义。
 //!
-//! 支持的占位符（dayjs 常用子集，够当前界面使用）：
-//! `YYYY` 年、`MM` 月、`DD` 日、`HH` 时、`mm` 分、`ss` 秒。
+//! 支持的占位符：`YYYY` 年、`MM` 月、`DD` 日、`HH` 时、`mm` 分、`ss` 秒
+//! ——够当前界面使用。
 
 use wasm_bindgen::JsValue;
 
@@ -93,7 +91,7 @@ pub fn ymd_to_seconds(input: &str) -> Option<i64> {
     if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    // 0 基月份 + 本地时区（与原实现用 dayjs 解析同一串的行为一致）
+    // 0 基月份 + 本地时区
     let date = js_sys::Date::new_with_year_month_day(year, month as i32 - 1, day as i32);
     Some((date.get_time() / 1000.0) as i64)
 }
@@ -122,7 +120,7 @@ const WEEKDAY_CN: [&str; 7] = [
     "星期六",
 ];
 
-/// `YYYY-MM-DD` → `2026年6月19日`（原 `dayjs(date).format('YYYY年M月D日')`）。
+/// `YYYY-MM-DD` → `2026年6月19日`。
 ///
 /// 解析失败时原样返回输入（不 panic）。
 pub fn format_ymd_cn(input: &str) -> String {
@@ -138,11 +136,11 @@ pub fn format_ymd_cn(input: &str) -> String {
     ) else {
         return input.to_string();
     };
-    // 去掉前导零：M / D（dayjs 的 M/D 占位符语义）
+    // 去掉前导零：月 / 日
     format!("{year}年{month}月{day}日")
 }
 
-/// `YYYY-MM-DD` → 星期中文名（原 `dayjs(date).format('dddd')` + `zh-cn` locale）。
+/// `YYYY-MM-DD` → 星期中文名（中文 locale）。
 ///
 /// 解析失败返回空串。
 pub fn weekday_cn(input: &str) -> String {

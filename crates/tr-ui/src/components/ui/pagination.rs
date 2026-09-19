@@ -1,11 +1,11 @@
 //! 分页 —— 从 `pages/transactions.rs` 抽出复用（含每页条数）。
 //!
-//! 对照原 `a-pagination` 的三个属性：
-//! * `v-model:current` → `page`
-//! * `:total` / `:page-size` → 由调用方自己算出的 `total_pages`
-//! * `show-size-changer` + `:page-size-options` → `page_size`（`None` 时隐藏该控件）
+//! 三个入参：
+//! * `page`：当前页
+//! * `total_pages`：由调用方自己算出
+//! * `page_size`（`None` 时隐藏每页条数控件）
 //!
-//! 页码收敛规则与原实现（Ant Design 默认）一致：首页、末页、当前页 ±1 必显，其余折叠为 `…`；
+//! 页码收敛规则：首页、末页、当前页 ±1 必显，其余折叠为 `…`；
 //! 靠近两端时多显示几个，避免出现 `1 … 2` 这类空洞。
 
 use leptos::prelude::*;
@@ -13,7 +13,7 @@ use leptos::tachys::view::any_view::IntoAny;
 
 use crate::icons::{self, Icon};
 
-/// 每页条数可选项（原 `a-pagination` 的 `pageSizeOptions`）。
+/// 每页条数可选项。
 pub const PAGE_SIZE_OPTIONS: [i32; 6] = [15, 20, 30, 50, 100, 200];
 
 /// 页码槽位：`None` 表示省略号。

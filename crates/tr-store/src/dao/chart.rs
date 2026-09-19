@@ -1,10 +1,10 @@
-//! 图表 DAO。对照 Go `kernel/dao/chart_dao.go`。
+//! 图表 DAO。
 //!
-//! 与 GORM 的行为对齐点：
-//! * `Create` 自动填充 `created_at` / `updated_at`
-//! * `Save` 在 GORM 里是"按主键写回全部字段"，`UpdatedAt` 由 autoUpdateTime 刷新，
+//! 行为约定：
+//! * `create` 自动填充 `created_at` / `updated_at`（均为秒级 Unix 秒）
+//! * `save` 是"按主键写回全部字段"，并刷新 `updated_at`，
 //!   因此这里整行回写（`ledger_id` / `created_at` 保持调用方传入的值）
-//! * 列表排序与原实现一致：`ORDER BY is_preset DESC, sort_order ASC, created_at DESC`
+//! * 列表排序固定为：`ORDER BY is_preset DESC, sort_order ASC, created_at DESC`
 //! * `is_preset` 列在基线 schema 里是 `numeric`，按整数 0/1 存储/读取
 
 use rusqlite::{params, Connection};
@@ -95,7 +95,7 @@ impl ChartDao {
         )
     }
 
-    /// 整行回写（等价 GORM 的 `Save`：主键命中则更新全部字段并刷新 `updated_at`）。
+    /// 整行回写（主键命中则更新全部字段并刷新 `updated_at`；否则不改动任何行）。
     pub fn save(conn: &Connection, chart: &Chart) -> rusqlite::Result<()> {
         conn.execute(
             "UPDATE tbl_billadm_chart SET ledger_id = ?2, title = ?3, granularity = ?4, \

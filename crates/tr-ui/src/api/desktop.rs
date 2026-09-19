@@ -1,33 +1,32 @@
-//! 桌面外壳命令。对照原 `electronAPI`（`electron/src/preload.js`）与
-//! `src-tauri/src/commands.rs`。
+//! 桌面外壳命令，定义在 `src-tauri/src/commands.rs`。
 //!
 //! 这些命令不属于业务域（不由 `tr-ipc` 提供），但界面同样需要：
 //!
-//! | 命令 | 原实现 | 入参 |
-//! |---|---|---|
-//! | [`window_control`] | `window-control` | `{ action: minimize\|maximize\|close }` |
-//! | [`app_info`] | `app`（field: name/version/isDev） | `{ field }` |
-//! | [`asset_url`] | `imageUrl.ts` | `{ filePath }` |
-//! | [`config_get`] | `config:get-*` | 无参数 |
-//! | [`config_set_appearance`] | 外观设置 | `{ appearance: light\|dark\|system }` |
-//! | [`config_set_close_behavior`] | 关闭行为 | `{ behavior: quit\|tray\|"" }` |
-//! | [`workspace_get`] | `workspace:get` | 无参数 |
-//! | [`workspace_set`] | `workspace:set` | `{ workspaceDir }` |
-//! | [`workspace_open`] | `POST /workspace` | `{ workspaceDir }` |
-//! | [`dialog_open`] | `dialog:open` | `{ title?, defaultPath? }` |
-//! | [`file_save_image`] | `file:save` | `{ relativePath }` |
-//! | [`devtools_get_state`] | `devtools:get-state` | 无参数 |
-//! | [`devtools_toggle`] | `devtools:toggle` | `{ enabled }`（并广播 `devtools:state-changed`） |
-//! | [`config_file_path`] | —— | 无参数 |
+//! | 命令 | 入参 |
+//! |---|---|
+//! | [`window_control`] | `{ action: minimize\|maximize\|close }` |
+//! | [`app_info`] | `{ field }`（name / version / isDev） |
+//! | [`asset_url`] | `{ filePath }` |
+//! | [`config_get`] | 无参数 |
+//! | [`config_set_appearance`] | `{ appearance: light\|dark\|system }` |
+//! | [`config_set_close_behavior`] | `{ behavior: quit\|tray\|"" }` |
+//! | [`workspace_get`] | 无参数 |
+//! | [`workspace_set`] | `{ workspaceDir }` |
+//! | [`workspace_open`] | `{ workspaceDir }` |
+//! | [`dialog_open`] | `{ title?, defaultPath? }` |
+//! | [`file_save_image`] | `{ relativePath }` |
+//! | [`devtools_get_state`] | 无参数 |
+//! | [`devtools_toggle`] | `{ enabled }`（并广播 `devtools:state-changed`） |
+//! | [`config_file_path`] | 无参数 |
 //!
-//! `dialog_open` / `file_save_image` 的返回形状与原实现一致
+//! `dialog_open` / `file_save_image` 的返回形状是固定契约
 //! （`{ canceled, filePaths, error? }` / `{ success, canceled?, error? }`）。
 
 use serde::{Deserialize, Serialize};
 
 use crate::ipc::{self, IpcError};
 
-/// 窗口控制动作（与原 `window-control` 的三个命令一致）。
+/// 窗口控制动作（最小化 / 最大化 / 关闭）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowAction {
@@ -102,7 +101,7 @@ pub struct ConfigSnapshot {
     pub is_dev: bool,
 }
 
-/// `dialog_open` 的返回（与原 `dialog:open` 一致）。
+/// `dialog_open` 的返回（固定契约）。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct DialogOpenResponse {

@@ -1,4 +1,4 @@
-//! 进度条 —— 对应原 `a-progress`（`percent` / `:show-info`）。
+//! 进度条（`percent` / `show_info`）。
 //!
 //! 用于「关于软件」的下载进度。百分比由外部传入（`update:download-progress` 事件的
 //! `percent` 已经是 0..=100 的整数，直接 `as f64` 即可，不要再乘除）。

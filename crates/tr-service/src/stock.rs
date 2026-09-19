@@ -1,6 +1,7 @@
-//! 股票域服务。对照 Go `kernel/service/stock_service.go`（2,211 行）。
+//! 股票域服务：账户与本金、费用设置、交易标签设置、委托下单与重放、
+//! 持仓与交易历史、资金记录链、影响预演。
 //!
-//! 本模块保留原实现的全部业务规则，逐条对应关系见各函数文档。三处最容易踩空的：
+//! 三处最容易踩空的：
 //!
 //! 1. **费用按委托一次计收**：最低佣金按「委托」而不是按每笔成交收；算法本身在
 //!    [`tr_domain::fee`]（`compute_order_fee` / `allocate_order_fee`），本模块只负责
@@ -37,10 +38,10 @@ use crate::quote::{StockQuoteFetcher, TencentStockQuoteFetcher};
 use crate::{ServiceError, ServiceResult};
 
 /// 预演专用哨兵错误文案：事务内执行改动后强制回滚，不对外暴露。
-/// 对照 Go 的 `errPreviewRollback`（`errors.New("trade impact preview rollback")`）。
+/// 哨兵文案（`trade impact preview rollback`）只在内部流转，不对外暴露。
 pub const ERR_PREVIEW_ROLLBACK: &str = "trade impact preview rollback";
 
-/// 委托内的一笔成交（价格单位：分/股）。对照 Go `service.TradeFill`。
+/// 委托内的一笔成交（价格单位：分/股）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TradeFill {
     pub price_cents: i64,
@@ -57,7 +58,7 @@ fn is_sell(trade_type: &str) -> bool {
     trade_type == consts::STOCK_TRADE_REDUCE || trade_type == consts::STOCK_TRADE_CLOSE
 }
 
-/// 成交所属委托 ID；存量数据未标记委托时以自身为独立委托。对照 Go `orderKeyOf`。
+/// 成交所属委托 ID；存量数据未标记委托时以自身为独立委托。
 fn order_key_of(trade: &StockTrade) -> String {
     if trade.order_id.is_empty() {
         trade.id.clone()
@@ -66,7 +67,7 @@ fn order_key_of(trade: &StockTrade) -> String {
     }
 }
 
-/// 轮次索引键：股票 + 轮次序号。对照 Go `roundMetaKey`。
+/// 轮次索引键：股票 + 轮次序号。
 fn round_meta_key(stock_code: &str, round_no: i64) -> String {
     format!("{stock_code}#{round_no}")
 }
@@ -76,12 +77,12 @@ fn db<T>(result: rusqlite::Result<T>) -> ServiceResult<T> {
     result.map_err(ServiceError::Database)
 }
 
-// ---------- 日期工具（复刻 Go 的 time 语义） ----------
+// ---------- 日期工具 ----------
 
 /// Unix 秒 → `YYYY-MM-DD`。
 ///
-/// 对照 Go `time.Unix(x, 0).Format("2006-01-02")`：`time.Unix` 返回 **UTC** 时间，
-/// 因此这里也用 UTC 格式化（与 `strftime(_, _, 'unixepoch')` 的 UTC 口径一致）。
+/// 按 **UTC** 格式化，
+/// 与 `strftime(_, _, 'unixepoch')` 的 UTC 口径一致。
 pub fn unix_to_date(timestamp: i64) -> String {
     match chrono::DateTime::from_timestamp(timestamp, 0) {
         Some(datetime) => datetime.format("%Y-%m-%d").to_string(),
@@ -90,15 +91,15 @@ pub fn unix_to_date(timestamp: i64) -> String {
     }
 }
 
-/// 当前日期 `YYYY-MM-DD`（Go `time.Now().Format("2006-01-02")`）。
+/// 当前日期 `YYYY-MM-DD`。
 fn today() -> String {
     unix_to_date(tr_store::util::now_unix())
 }
 
 /// 归一化资金变化的发生日期；空值按当天记录，非法格式报错。
 ///
-/// 对照 Go `normalizeStockRecordDate`：只接受严格的 `YYYY-MM-DD`
-/// （Go 的 `time.Parse` 会拒绝 `2026/01/05` 与 `2026-1-5`，这里同样严格）。
+/// 只接受严格的 `YYYY-MM-DD`
+/// （`2026/01/05` 与 `2026-1-5` 都会被拒绝）。
 pub fn normalize_stock_record_date(date: &str) -> ServiceResult<String> {
     if date.is_empty() {
         return Ok(today());
@@ -129,7 +130,6 @@ fn parse_strict_date(date: &str) -> Option<(i32, u32, u32)> {
 
 /// 分 → 保留两位小数的元字符串，用于资金记录备注。
 ///
-/// 对照 Go `centsToYuanStr`（`strconv.FormatFloat(x/100, 'f', 2, 64)`）。
 /// 用整数运算实现，避免浮点误差。
 fn cents_to_yuan_str(cents: i64) -> String {
     tr_domain::money::cents_to_yuan(cents)
@@ -137,7 +137,7 @@ fn cents_to_yuan_str(cents: i64) -> String {
 
 // ---------- 账户 / 费用设置 / 标签设置 ----------
 
-/// 获取账户，不存在则创建（本金为 0）。对照 Go `getOrCreateAccount`。
+/// 获取账户，不存在则创建（本金为 0）。
 pub fn get_or_create_account(
     workspace: &Workspace,
     ledger_id: &str,
@@ -201,7 +201,7 @@ fn get_trade_tag_setting(
     }
 }
 
-/// 可用标签的有序 JSON 数组序列化（与 Go `json.Marshal([]string)` 一致）。
+/// 可用标签的有序 JSON 数组序列化。
 fn tags_to_json(tags: &[String]) -> String {
     serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())
 }
@@ -228,7 +228,7 @@ fn contains_tag(tags: &[String], tag: &str) -> bool {
     tags.iter().any(|item| item == tag)
 }
 
-/// 账户总览。对照 Go `GetOverview`（可用现金公式见函数内注释）。
+/// 账户总览（可用现金公式见函数内注释）。
 pub fn get_overview(workspace: &Workspace, ledger_id: &str) -> ServiceResult<StockOverviewDto> {
     get_overview_with(workspace, ledger_id, &TencentStockQuoteFetcher::new())
 }
@@ -256,7 +256,7 @@ pub fn get_overview_with(
     let (position_market_value, unrealized_pnl, quote_failed_count) =
         compute_held_market_value(&held_positions, &quotes);
 
-    // 总资产 = 可用现金 + 持仓市值（行情全部缺失时市值=成本，口径与旧版一致）
+    // 总资产 = 可用现金 + 持仓市值（行情全部缺失时市值=成本）
     let total_assets = available_cash + position_market_value;
 
     // 总盈亏占本金百分比，本金为 0 时按 0 处理（防除零）
@@ -279,7 +279,7 @@ pub fn get_overview_with(
     })
 }
 
-/// 设置初始本金。对照 Go `SetPrincipal`。
+/// 设置初始本金。
 pub fn set_principal(
     workspace: &Workspace,
     ledger_id: &str,
@@ -314,7 +314,7 @@ pub fn set_principal(
     get_overview(workspace, ledger_id)
 }
 
-/// 追加本金。对照 Go `AddPrincipal`。
+/// 追加本金。
 pub fn add_principal(
     workspace: &Workspace,
     ledger_id: &str,
@@ -529,12 +529,12 @@ fn get_trade_tags_in(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceRes
     }
 }
 
-/// 读取费用设置（不存在则创建默认值）。对照 Go `GetFeeSettings`。
+/// 读取费用设置（不存在则创建默认值）。
 pub fn get_fee_settings(workspace: &Workspace, ledger_id: &str) -> ServiceResult<StockFeeSetting> {
     get_or_create_fee_setting(workspace, ledger_id)
 }
 
-/// 保存费用设置。对照 Go `SaveFeeSettings`。
+/// 保存费用设置。
 pub fn save_fee_settings(
     workspace: &Workspace,
     ledger_id: &str,
@@ -645,7 +645,7 @@ pub fn save_trade_tags(
 
 // ---------- 资金记录 / 持仓 ----------
 
-/// 资金记录分页。对照 Go `ListFundRecords`。
+/// 资金记录分页。
 pub fn list_fund_records(
     workspace: &Workspace,
     ledger_id: &str,
@@ -675,7 +675,7 @@ pub fn list_fund_records(
     })
 }
 
-/// 持仓列表（只含未清仓股票，挂载行情）。对照 Go `ListPositions`。
+/// 持仓列表（只含未清仓股票，挂载行情）。
 pub fn list_positions(
     workspace: &Workspace,
     ledger_id: &str,
@@ -760,7 +760,7 @@ pub fn update_position_review(
     Ok(StockPositionDto::from(&position))
 }
 
-/// 仅对当前持仓股票请求行情；无持仓时返回空映射。对照 Go `fetchHeldQuotes`。
+/// 仅对当前持仓股票请求行情；无持仓时返回空映射。
 fn fetch_held_quotes(
     fetcher: &dyn StockQuoteFetcher,
     held: &[StockPosition],
@@ -825,7 +825,7 @@ fn compute_held_market_value(
 
 // ---------- 交易列表 ----------
 
-/// 某股交易列表。对照 Go `ListTrades`：
+/// 某股交易列表：
 /// 持仓中的股票只展示本轮（最近一次清仓之后）的交易，历史轮次留在「交易历史」页。
 pub fn list_trades(
     workspace: &Workspace,
@@ -841,7 +841,7 @@ pub fn list_trades(
     let position = StockDao::get_position(&conn, ledger_id, stock_code);
     match position {
         Ok(position) if position.quantity > 0 => {
-            // 倒序 → 升序（原实现按索引倒排，避免再查一次库）
+            // 倒序 → 升序（按索引倒排，避免再查一次库）
             let asc: Vec<StockTrade> = trades.iter().rev().cloned().collect();
             let mut current = current_round_trades(&asc);
             current.reverse();
@@ -921,7 +921,7 @@ fn trade_order_remark(
 /// 买入（建仓/加仓）：现金减少 Σ成交金额+费用；卖出（减仓/清仓）：现金增加 Σ成交金额-费用，
 /// 并按平均成本逐笔结转已实现盈亏；全部成交后持仓归零则归档本轮轮次。
 ///
-/// 参数多是有意的：签名与原 Go 的 `CreateTradeOrder` 一一对应，便于逐条比对。
+/// 参数多是有意的：与命令面的字段一一对应，便于逐条比对。
 #[allow(clippy::too_many_arguments)]
 pub fn create_trade_order(
     workspace: &Workspace,
@@ -1380,7 +1380,7 @@ fn derive_trade_cycles(trades: &[StockTrade]) -> Vec<TradeCycle> {
         .collect()
 }
 
-/// 交易历史集合列表（左栏），按最近清仓时间倒序。对照 Go `ListTradeHistories`。
+/// 交易历史集合列表（左栏），按最近清仓时间倒序。
 pub fn list_trade_histories(
     workspace: &Workspace,
     ledger_id: &str,
@@ -1403,12 +1403,12 @@ pub fn list_trade_histories_with(
         items.push(build_history_dto(&conn, history)?);
     }
     attach_history_quotes(fetcher, &mut items);
-    // 稳定排序：最近清仓时间倒序（与原实现的 SliceStable 一致，保持同值顺序）
+    // 稳定排序：最近清仓时间倒序（同值时保持原有顺序）
     items.sort_by_key(|item| std::cmp::Reverse(item.last_closed_at));
     Ok(items)
 }
 
-/// 汇总单只股票的轮次数、累计盈亏与最近清仓时间。对照 Go `buildHistoryDto`。
+/// 汇总单只股票的轮次数、累计盈亏与最近清仓时间。
 fn build_history_dto(
     conn: &rusqlite::Connection,
     history: &StockTradeHistory,
@@ -1766,7 +1766,7 @@ pub fn delete_trade_order(
 /// 预演编辑/删除的影响：同一事务内执行改动并重放后强制回滚，
 /// 返回变动后的持仓、可用现金，以及会因此失效（复盘丢失）的轮次。
 ///
-/// 参数与原 Go 的 `PreviewTradeChange` 一一对应（`update_trade` / `delete_order` 复用同一入口）。
+/// 参数与命令面一一对应（`update_trade` / `delete_order` 复用同一入口）。
 #[allow(clippy::too_many_arguments)]
 pub fn preview_trade_change(
     workspace: &Workspace,
@@ -1975,7 +1975,7 @@ fn delete_trade_order_tx(
     Ok(stock_code)
 }
 
-/// 重放过程中累积的一笔委托。对照 Go `replayOrder`。
+/// 重放过程中累积的一笔委托。
 struct ReplayOrder {
     key: String,
     stock_code: String,
@@ -2203,7 +2203,7 @@ pub fn rebuild_trades(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceRe
 
 /// 结束当前委托的重放：写一条资金记录，必要时归档轮次，并回写各笔成交的派生字段。
 ///
-/// 这段逻辑与 Go 的 `flush` 闭包一一对应；抽成独立函数是因为 Rust 里一棵同时借用
+/// 抽成独立函数是因为 Rust 里一棵同时借用
 /// `trades` 与多个可变 map 的闭包无法通过借用检查。
 #[allow(clippy::too_many_arguments)]
 fn flush_replay_order(
@@ -2256,7 +2256,7 @@ fn flush_replay_order(
         ),
         created_at: order.created_at,
     };
-    // 录入顺序 = `created_at ASC, id ASC`。原实现的 created_at 是秒级的，
+    // 录入顺序 = `created_at ASC, id ASC`。created_at 是秒级的，
     // 同一秒录入的多条记录靠随机 UUID 决胜负，顺序不确定；这里在重放时把时间戳
     // 拉成严格递增，使重放结果与资金链重算完全确定（不同秒的原值保持不变）。
     record.created_at = record
@@ -2357,7 +2357,7 @@ fn flush_replay_order(
 /// 重放后重算资金记录的现金余额，精确复刻既有的链条规则：
 ///
 /// 按录入顺序逐条结算，每条的前值取「当前已存在记录里 (日期 → 创建时间 → ID) 最大一条」的余额
-/// （与 `QueryLatestFundRecord` 口径一致，且**只在前 i 条里找**，与原实现的内层循环一致）；
+/// （与 `QueryLatestFundRecord` 口径一致，且**只在前 i 条里找**）；
 /// 首条记录的起点 = 本金 − Σ追加本金。
 ///
 /// 该规则在补录历史日期交易时并非单纯按日期排序，因此这里同样逐条取最大值而不是重排序。
@@ -2412,7 +2412,7 @@ mod tests {
     use super::*;
     use tr_domain::dto::StockQuoteDto;
 
-    /// 测试账本 / 股票常量，与 Go 测试同名（`testLedgerID` / `testCode` / ...）。
+    /// 测试用的账本 / 股票常量。
     const TEST_LEDGER_ID: &str = "ledger-history";
     const TEST_CODE: &str = "600000";
     const TEST_NAME: &str = "浦发银行";
@@ -2422,7 +2422,6 @@ mod tests {
     const TEST_ORDER_NAME: &str = "协和电子";
 
     /// 测试用行情源：只返回预设代码，模拟部分/全部获取失败。
-    /// 对照 Go `stubQuoteFetcher`。
     struct StubQuoteFetcher {
         quotes: HashMap<String, StockQuoteDto>,
         name: String,
@@ -2483,7 +2482,7 @@ mod tests {
         (Workspace::open(&dir).unwrap(), dir)
     }
 
-    /// 设置本金（等价 Go 测试里的 `svc.SetPrincipal`）。
+    /// 设置本金。
     fn set_principal_amount(workspace: &Workspace, amount: i64) -> ServiceResult<StockOverviewDto> {
         set_principal(workspace, TEST_LEDGER_ID, amount)
     }
@@ -2493,7 +2492,7 @@ mod tests {
         set_principal_amount(workspace, amount).unwrap();
     }
 
-    /// 建仓后立即清仓，产生一条已归档轮次。对照 Go `closeRound`。
+    /// 建仓后立即清仓，产生一条已归档轮次。
     fn close_round_helper(
         workspace: &Workspace,
         code: &str,
@@ -2530,7 +2529,6 @@ mod tests {
     }
 
     /// 直接用时间戳造一轮干净结算，建仓比清仓早一分钟。
-    /// 对照 Go `seedCleanRound` / `seedCleanRoundAt`。
     fn seed_clean_round_from(
         workspace: &Workspace,
         code: &str,
@@ -2566,10 +2564,9 @@ mod tests {
         }
     }
 
-    /// 直接用时间戳造一轮干净结算（建仓比清仓早一分钟）。
-    /// 对照 Go `seedCleanRound`；原实现把建仓与清仓写成同一时间戳，
-    /// 因为 GORM 的 `created_at` 也是秒级、次序由主键兜底；这里显式错开一分钟，
-    /// 让"按成交时间升序重放"的次序确定（重放算法本身与原实现一致）。
+    /// 直接用时间戳造一轮干净结算。
+    /// `created_at` 是秒级、次序由主键兜底，因此显式错开一分钟，
+    /// 才能让"按成交时间升序重放"的次序确定。
     fn seed_clean_round_at_ts(
         workspace: &Workspace,
         code: &str,
@@ -2623,7 +2620,7 @@ mod tests {
         );
     }
 
-    /// `YYYY-MM-DD HH:MM:SS`（UTC）→ Unix 秒，与 Go `time.Date(..., time.UTC).Unix()` 一致。
+    /// `YYYY-MM-DD HH:MM:SS`（UTC）→ Unix 秒。
     fn utc_timestamp(text: &str) -> i64 {
         let (date, time) = text.split_once(' ').expect("需要 `YYYY-MM-DD HH:MM:SS`");
         let (year, month, day) = parse_strict_date(date).expect("日期非法");
@@ -2636,8 +2633,8 @@ mod tests {
             .timestamp()
     }
 
-    /// 备注必须逐笔落库：Go 侧是 GORM `Create(trade)`，**非零值字段参与 INSERT**
-    /// （曾被误读成"GORM 一律不写 remark"，黄金对比因此报出 4 行差异）。
+    /// 备注必须逐笔落库：**非零值字段参与 INSERT**
+    /// （曾被误读成"remark 一律不写"，回归对比因此报出 4 行差异）。
     #[test]
     fn create_trade_order_persists_remark_on_every_fill() {
         let (workspace, dir) = workspace("order-remark");
@@ -2672,7 +2669,7 @@ mod tests {
             "两笔成交都应带上委托备注: {trades:?}"
         );
 
-        // 空备注与列默认值 '' 等价（Go 省略零值字段走列默认值）。
+        // 空备注与列默认值 '' 等价（零值字段省略，走列默认值）。
         create_trade_order(
             &workspace,
             TEST_LEDGER_ID,
@@ -2696,7 +2693,7 @@ mod tests {
 
     /// 回归：`rebuild_trades`（重放）之后对**同一只股票**继续下单，必须读到最新状态。
     ///
-    /// 背景：黄金对比阶段 3 报告过一个疑似"重放后读到旧快照"的缺陷（预检放行超卖、
+    /// 背景：回归验证中曾报告过一个疑似"重放后读到旧快照"的缺陷（预检放行超卖、
     /// 减仓手数被写错），但**这个最小序列（建仓 2 笔 → 编辑成交触发重放 → 减仓 1 手）
     /// 在本仓库上是通过的**，所以那条报告尚未证实。这条测试先把最容易出错的不变量固定住：
     /// 重放之后的下一次下单，持仓与写入的手数都必须是新的。
@@ -2773,7 +2770,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 证伪用：完整重放黄金对比阶段 3 失败的那条序列（只用公开服务 API）。
+    /// 证伪用：完整重放曾失败的那条序列（只用公开服务 API）。
     ///
     /// 与上一条测试的区别：这里先把「阶段 1/2 结束时的真实状态」搭出来
     /// （一轮已归档的 600519、持仓归零、一次 update_trade_fill、一次 delete_trade_order），
@@ -3004,7 +3001,7 @@ mod tests {
 
     /// 复现：第三轮归档后编辑该轮建仓（1手→3手），重放**不得丢掉该轮的清仓成交**。
     ///
-    /// 黄金对比阶段 3 观察到的现象：编辑之后，库里只剩第三轮的 `close`、
+    /// 曾观察到的现象：编辑之后，库里只剩第三轮的 `close`、
     /// 第三轮的 `open` 消失，紧接着的重放报「卖出数量超过持仓（当前 0 股）」。
     #[test]
     fn editing_third_round_open_keeps_its_close_trade() {
@@ -3227,7 +3224,7 @@ mod tests {
 
         // 阶段 3-5：**另一只股票** 000001 建仓 1 手 → 清仓 1 手
         // （这一步是必需的：它让 600519 的第三轮在"编辑之前"就已经和另一只股票的
-        //   重放共存过，正是黄金对比里的顺序）
+        //   重放共存过，正是出问题时的顺序）
         create_trade_order(
             &workspace,
             TEST_LEDGER_ID,
@@ -3312,7 +3309,7 @@ mod tests {
     /// 回归：`preview_trade_change` 是"预演"——**不能**改动任何状态。
     ///
     /// 界面上"删除委托"要先弹影响预演（`delete_order`），确认后才真删。
-    /// 黄金对比阶段 3 报告过：预演删除之后再触发任何重放都会报"卖出数量超过持仓"。
+    /// 曾报告过：预演删除之后再触发任何重放都会报"卖出数量超过持仓"。
     /// 实际排查结论：**那条报错来自预演本身**——删掉建仓委托会让重放看到"只有卖出没有买入"，
     /// 预演与真删都会以同一个 400 拒绝（这是正确行为，不是状态被污染）。
     /// 所以这里用**合法**的预演目标（删清仓委托，删完还剩持仓）来验证"预演零副作用"。
@@ -3481,7 +3478,7 @@ mod tests {
         .unwrap()
     }
 
-    // ---------- 账户 / 支取（stock_account_service_test.go） ----------
+    // ---------- 账户 / 支取 ----------
 
     #[test]
     fn withdraw_follows_total_assets_formula() {
@@ -3705,7 +3702,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ---------- 标签设置（stock_tag_setting_service_test.go） ----------
+    // ---------- 标签设置 ----------
 
     #[test]
     fn trade_tag_setting_defaults() {
@@ -3894,7 +3891,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ---------- 行情挂载（stock_quote_service_test.go） ----------
+    // ---------- 行情挂载 ----------
 
     #[test]
     fn list_positions_attaches_quotes() {
@@ -4091,7 +4088,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ---------- 委托与费用（stock_trade_order_service_test.go） ----------
+    // ---------- 委托与费用 ----------
 
     #[test]
     fn create_trade_order_charges_fee_once_per_order() {
@@ -4411,7 +4408,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ---------- 历史与轮次（stock_history_service_test.go） ----------
+    // ---------- 历史与轮次 ----------
 
     #[test]
     fn close_archives_round_with_all_trades() {
@@ -5068,7 +5065,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ---------- 统计（stock_statistics_service_test.go） ----------
+    // ---------- 统计 ----------
 
     #[test]
     fn statistics_starts_from_first_settlement() {
@@ -5907,7 +5904,7 @@ mod tests {
     }
 
     /// 手写一个把「设置本金」重复调用两次的回归：确认首次调用后再调用会报 409
-    /// （对应 `SetPrincipal` 的 count > 0 分支，Go 侧由 `TestWithdrawFollowsTotalAssetsFormula` 覆盖）。
+    /// （对应 `SetPrincipal` 的 count > 0 分支）。
     #[test]
     fn fee_settings_roundtrip_and_validation() {
         let (workspace, dir) = workspace("fee-settings");

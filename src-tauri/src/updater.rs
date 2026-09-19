@@ -1,12 +1,15 @@
 //! 应用更新：GitHub Releases 检查 → 流式下载 → SHA256 校验 → 拉起安装包并退出。
 //!
-//! 与原 Electron 版 `electron/src/main.js` 的 `update:*` 行为逐条一致：
-//! 只认 GitHub 的 latest release、跳过 prerelease、取第一个 `.exe` 资产、
-//! 下载到 `%TEMP%`（已存在则直接复用）、流式写入 `<file>.part` 再改名、
-//! 用 GitHub 提供的 `asset.digest`（`sha256:...`）校验、取消时清理临时文件、
-//! 打开安装包后退出应用。事件名也保持一致（`update:download-progress|complete|error`）。
+//! 本实现的行为清单：
+//! * 只认 GitHub 的 latest release、跳过 prerelease、取第一个 `.exe` 资产
+//! * 检查更新超时 15s（下载另给 1800s），下载地址只允许 GitHub 域名
+//! * 下载到 `%TEMP%`，已存在则直接复用；流式写入 `<file>.part` 再改名
+//! * 用 GitHub 提供的 `asset.digest`（`sha256:...`）校验完整性，缺失则跳过校验
+//! * 取消时清理临时文件与已下载文件
+//! * 打开安装包后退出应用
+//! 事件名：`update:download-progress|complete|error`。
 //!
-//! **为什么不用 `tauri-plugin-updater`**：原发布管线只上传普通 `.exe` 资产（没有签名与 `latest.json`），
+//! **为什么不用 `tauri-plugin-updater`**：本项目的发布管线只上传普通 `.exe` 资产（没有签名与 `latest.json`），
 //! 自研路径沿用同一管线、用 `asset.digest` 做完整性校验，无需引入签名密钥管理；
 //! 界面契约不变，后续若要切换到插件只需替换本文件与发布脚本。
 
@@ -25,12 +28,11 @@ use tr_ipc::{ApiError, ApiResult};
 
 /// GitHub 最新 release 接口。
 ///
-/// **必须是本仓库自身**：发布资产与应用内更新一一对应。曾沿用参考实现（Electron 版）
-/// 的 `ddd-online/Transactions`，那样 0.1.0 会去比对 Electron 版的 v0.27.0 并提示"有新版本"，
-/// 下载到的却是另一款程序的安装包。
+/// **必须是本仓库自身**：发布资产与应用内更新一一对应；指向别的仓库会比对到不相干的
+/// 版本并下载错误的安装包。
 const RELEASE_API: &str =
     "https://api.github.com/repos/ddd-online/Transactions-Rust/releases/latest";
-/// 检查更新的超时（原实现 15s）。
+/// 检查更新的超时（15s）。
 const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 /// 下载安装包的超时（安装包可达数百 MB，给足时间）。
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(1800);
@@ -138,8 +140,8 @@ fn check_update(current_version: &str) -> UpdateCheckResponse {
 /// 从 GitHub release JSON 里挑出更新信息（**纯函数**，便于单测）。
 ///
 /// 返回 `None` 表示"无需更新"：预发布、版本不比当前新，或 tag 为空。
-/// 注意"有更新但没有 `.exe` 资产"**仍算有更新**（`download_url` 为空串）——
-/// 与原 Electron 版一致，这样界面能如实提示"新版本但找不到安装包"。
+/// 注意"有更新但没有 `.exe` 资产"**仍算有更新**（`download_url` 为空串），
+/// 这样界面能如实提示"新版本但找不到安装包"。
 fn parse_release(
     payload: &serde_json::Value,
     current_version: &str,
@@ -207,7 +209,7 @@ fn error_response(message: String) -> UpdateCheckResponse {
     }
 }
 
-/// 版本比较（按点分段数值比较，与原实现一致）。
+/// 版本比较（按点分段数值比较）。
 fn is_newer_version(latest: &str, current: &str) -> bool {
     fn parts(version: &str) -> Vec<u64> {
         version
@@ -286,7 +288,7 @@ pub fn update_cancel(state: State<'_, UpdaterState>) -> ApiResult<()> {
     Ok(())
 }
 
-/// 打开已下载的安装包并退出应用（与原实现的 `shell.openPath` + `app.quit()` 一致）。
+/// 打开已下载的安装包并退出应用（给安装器留出启动时间后再退出）。
 #[tauri::command]
 pub fn update_install(
     app: AppHandle,
@@ -337,7 +339,7 @@ fn download_and_verify(
         .unwrap_or("transactions-update.exe");
     let target = std::env::temp_dir().join(file_name);
 
-    // 已下载完成的文件直接复用（原实现同样如此）
+    // 已下载完成的文件直接复用
     if target.exists() {
         return Ok(target);
     }
@@ -422,7 +424,7 @@ fn part_path_of(target: &std::path::Path) -> PathBuf {
 }
 
 /// 规范化 GitHub 的 `digest` 字段：`sha256:ABCD…` → 小写十六进制串。
-/// 缺失、空串或只有前缀时返回 `None`，表示**跳过校验**（与原实现一致）。
+/// 缺失、空串或只有前缀时返回 `None`，表示**跳过校验**。
 fn normalize_digest(digest: Option<&str>) -> Option<String> {
     digest
         .map(|digest| digest.trim_start_matches("sha256:").to_ascii_lowercase())
@@ -437,7 +439,7 @@ fn digest_matches(expected: Option<&str>, actual_hex: &str) -> bool {
     }
 }
 
-/// 速度格式化（与原实现 `formatSpeed` 一致）。
+/// 速度格式化（按 1024 进制给出 B/s、KB/s、MB/s）。
 fn format_speed(bytes_per_second: f64) -> String {
     if bytes_per_second >= 1_048_576.0 {
         format!("{:.1} MB/s", bytes_per_second / 1_048_576.0)
@@ -467,13 +469,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_comparison_matches_electron_logic() {
+    fn version_comparison_orders_by_numeric_segments() {
         assert!(is_newer_version("0.29.0", "0.28.0"));
         assert!(is_newer_version("v0.29.0", "0.28.0"));
         assert!(is_newer_version("1.0.0", "0.28.0"));
         assert!(is_newer_version("0.28.1", "0.28.0"));
         assert!(!is_newer_version("0.28.0", "0.28.0"));
-        assert!(!is_newer_version("0.27.9", "0.28.0"));
+        assert!(!is_newer_version("0.1.9", "0.2.0"));
         // 段数不同按 0 补齐
         assert!(is_newer_version("0.28.0.1", "0.28.0"));
         assert!(!is_newer_version("0.28", "0.28.0"));
@@ -482,7 +484,9 @@ mod tests {
     #[test]
     fn url_host_parses_and_strips_userinfo_and_port() {
         assert_eq!(
-            url_host("https://github.com/ddd-online/Transactions-Rust/releases/download/v0.1.0/a.exe"),
+            url_host(
+                "https://github.com/ddd-online/Transactions-Rust/releases/download/v0.1.0/a.exe"
+            ),
             Some("github.com".to_string())
         );
         assert_eq!(
@@ -498,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_formatting_matches_electron() {
+    fn speed_formatting_is_stable() {
         assert_eq!(format_speed(512.0), "512 B/s");
         assert_eq!(format_speed(2048.0), "2.0 KB/s");
         assert_eq!(format_speed(3.0 * 1_048_576.0), "3.0 MB/s");
@@ -556,14 +560,14 @@ mod tests {
         let assets = serde_json::json!([]);
         assert!(parse_release(&release("v0.29.0", true, assets.clone()), "0.28.0").is_none());
         assert!(parse_release(&release("v0.28.0", false, assets.clone()), "0.28.0").is_none());
-        assert!(parse_release(&release("v0.27.0", false, assets.clone()), "0.28.0").is_none());
+        assert!(parse_release(&release("v0.1.0", false, assets.clone()), "0.2.0").is_none());
         assert!(parse_release(&release("", false, assets.clone()), "0.28.0").is_none());
         // 没有 prerelease 字段时按"正式版"处理
         let no_flag = serde_json::json!({ "tag_name": "v0.29.0", "assets": [] });
         assert!(parse_release(&no_flag, "0.28.0").is_some());
     }
 
-    /// 有更新但没有 `.exe` 资产：仍算有更新，只是下载地址为空（与原实现一致）。
+    /// 有更新但没有 `.exe` 资产：仍算有更新，只是下载地址为空。
     #[test]
     fn parse_release_keeps_update_without_exe_asset() {
         let payload = release(

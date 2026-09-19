@@ -1,18 +1,7 @@
-//! 关键事件命令。对照 Go `kernel/api/key_event_controller.go`。
+//! 关键事件命令：按年/按日期查询、写入与删除、图片列表/上传/删除。
 //!
-//! | 原路由 | 命令 |
-//! |---|---|
-//! | `GET /key-events/year/:year` | `key_event_list_by_year` |
-//! | `GET /key-events/dates/:year` | `key_event_dates_by_year` |
-//! | `GET /key-events/:date` | `key_event_get` |
-//! | `POST /key-events` | `key_event_upsert` |
-//! | `DELETE /key-events/:date` | `key_event_delete` |
-//! | `GET /key-events/:date/images` | `key_event_images_list` |
-//! | `POST /key-events/:date/images` | `key_event_image_add` |
-//! | `DELETE /key-event-images/:id` | `key_event_image_delete` |
-//!
-//! 原实现的 path/query 参数全部并入 `req`，命名保持 snake_case（`ledger_id`），
-//! 校验文案与顺序也与控制器一致。
+//! 所有参数并入一个 `req`，命名保持 snake_case（`ledger_id`），
+//! 校验文案与顺序是固定契约。
 
 use serde::Deserialize;
 use tauri::State;
@@ -44,7 +33,7 @@ fn require_year_and_ledger(req: &YearRequest) -> ApiResult<()> {
     Ok(())
 }
 
-/// `GET /key-events/year/:year`：某年的全部关键事件。
+/// 某年的全部关键事件。
 #[tauri::command]
 pub fn key_event_list_by_year(
     state: State<'_, AppState>,
@@ -59,7 +48,7 @@ pub fn key_event_list_by_year(
     )?)
 }
 
-/// `GET /key-events/dates/:year`：某年有事件的日期列表。
+/// 某年有事件的日期列表。
 #[tauri::command]
 pub fn key_event_dates_by_year(
     state: State<'_, AppState>,
@@ -94,7 +83,7 @@ fn require_date_and_ledger(req: &KeyEventDateRequest) -> ApiResult<()> {
     Ok(())
 }
 
-/// `GET /key-events/:date`：按日期取关键事件（不存在时报错）。
+/// 按日期取关键事件（不存在时报错）。
 #[tauri::command]
 pub fn key_event_get(state: State<'_, AppState>, req: KeyEventDateRequest) -> ApiResult<KeyEvent> {
     require_date_and_ledger(&req)?;
@@ -106,7 +95,7 @@ pub fn key_event_get(state: State<'_, AppState>, req: KeyEventDateRequest) -> Ap
     )?)
 }
 
-/// `POST /key-events`：写入关键事件，返回日期（与原实现返回 `date` 一致）。
+/// 写入关键事件，返回日期。
 #[derive(Debug, Deserialize)]
 pub struct KeyEventUpsertRequest {
     pub ledger_id: String,
@@ -129,7 +118,7 @@ pub fn key_event_upsert(
             "ledger_id is required",
         )));
     }
-    // 原实现只要求 date 字段存在（可以为空串），据此保留同样的宽松度
+    // 只要求 date 字段存在（可以为空串），保留同样的宽松度
     let workspace = state.workspace()?;
     key_event::upsert_key_event(
         &workspace,
@@ -142,7 +131,7 @@ pub fn key_event_upsert(
     Ok(req.date)
 }
 
-/// `DELETE /key-events/:date`：删除事件及其图片（记录 + 磁盘文件）。
+/// 删除事件及其图片（记录 + 磁盘文件）。
 #[tauri::command]
 pub fn key_event_delete(state: State<'_, AppState>, req: KeyEventDateRequest) -> ApiResult<()> {
     require_date_and_ledger(&req)?;
@@ -154,7 +143,7 @@ pub fn key_event_delete(state: State<'_, AppState>, req: KeyEventDateRequest) ->
     )?)
 }
 
-/// `GET /key-events/:date/images`：某天的图片列表。
+/// 某天的图片列表。
 #[tauri::command]
 pub fn key_event_images_list(
     state: State<'_, AppState>,
@@ -169,7 +158,7 @@ pub fn key_event_images_list(
     )?)
 }
 
-/// `POST /key-events/:date/images`：上传一张图片（base64 data URI）。
+/// 上传一张图片（base64 data URI）。
 #[derive(Debug, Deserialize)]
 pub struct KeyEventImageAddRequest {
     pub date: String,
@@ -211,7 +200,7 @@ pub struct KeyEventImageIdRequest {
     pub id: String,
 }
 
-/// `DELETE /key-event-images/:id`：删除一张图片。
+/// 删除一张图片。
 #[tauri::command]
 pub fn key_event_image_delete(
     state: State<'_, AppState>,

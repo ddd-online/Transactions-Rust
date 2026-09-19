@@ -1,4 +1,4 @@
-//! 关键事件图片 DAO。对照 Go `kernel/dao/key_event_image_dao.go`。
+//! 关键事件图片 DAO。
 //!
 //! 图片按 `(ledger_id, event_date)` 归属；排序在插入时由服务层算成 `max(sort_order) + 1`。
 
@@ -41,7 +41,7 @@ impl KeyEventImageDao {
         )
     }
 
-    /// 某账本某天的全部图片（按 sort_order 升序，与原实现的查询顺序一致）。
+    /// 某账本某天的全部图片（按 sort_order 升序）。
     pub fn query_by_event_date(
         conn: &Connection,
         ledger_id: &str,

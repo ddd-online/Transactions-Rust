@@ -1,13 +1,13 @@
 /* ============================================
  * 应用外壳与页面样式
  *
- * 对照原 `Layout.vue` / `AppLeftBar.vue` / `AppTopBar.vue` / `AppBottomBar.vue`
- * 的 scoped 样式逐条移植，取值全部走 `--transactions-*` 令牌。
+ * 应用外壳骨架样式：侧边栏（固定 200px）+ 顶部窗口控制 + 底部状态栏，
+ * 取值全部走 `--transactions-*` 令牌。
  * 设计令牌本身在 `tokens.css`，不要在本文档里重复定义。
  * ============================================ */
 
 /* ============================================
- * 外壳骨架（Layout.vue）
+ * 外壳骨架
  * ============================================ */
 
 .app-shell {
@@ -27,7 +27,7 @@
   overflow: hidden;
 }
 
-/* 侧边栏 —— 固定 200px（Layout.vue 的 .app-sidebar） */
+/* 侧边栏 —— 固定 200px */
 .app-sidebar {
   width: 200px;
   min-width: 200px;
@@ -58,7 +58,7 @@
   flex-direction: column;
 }
 
-/* 底部状态栏（AppBottomBar.vue） */
+/* 底部状态栏 */
 .app-footer {
   height: var(--transactions-size-footer-height);
   background-color: var(--transactions-color-bg-base);
@@ -102,7 +102,7 @@
 }
 
 /* ============================================
- * 左侧导航（AppLeftBar.vue）
+ * 左侧导航
  * ============================================ */
 
 .app-left-bar {
@@ -364,7 +364,7 @@
 }
 
 /* ============================================
- * 顶部窗口控制（AppTopBar.vue）—— 浮动在右上角
+ * 顶部窗口控制 —— 浮动在右上角
  * ============================================ */
 
 .app-top-bar {
@@ -649,7 +649,7 @@
 }
 
 /* ============================================
- * 消费记录页（TransactionRecordView.vue / TransactionRecordTable.vue）
+ * 消费记录页
  * ============================================ */
 
 .tr-toolbar {
@@ -866,7 +866,7 @@
   color: var(--transactions-color-transfer);
 }
 
-/* 行底色按交易类型（TransactionRecordTable.vue 的 row-type-*） */
+/* 行底色按交易类型（row-type-*） */
 .tr-table tbody > tr.row-type-income > td {
   background-color: var(--transactions-color-income-tint);
 }
@@ -883,7 +883,7 @@
   background-color: var(--transactions-color-hover-bg);
 }
 
-/* 空态引导（TransactionRecordView.vue 的 empty-guide） */
+/* 空态引导（empty-guide） */
 .empty-guide {
   display: flex;
   flex-direction: column;
@@ -936,7 +936,7 @@
 }
 
 /* ============================================
- * 工作空间选择（TransactionsFileSelect.vue 的精简等价物）
+ * 工作空间选择（只保留必要的目录选择入口）
  * ============================================ */
 
 .workspace-picker-text {

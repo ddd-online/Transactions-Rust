@@ -1,14 +1,13 @@
 //! xtask —— 仓库级验证工具。
 //!
-//! 提供数据兼容护栏与诊断能力：
-//! * `schema-diff`：Rust 建库结果与参照物（基线 SQL 或 Go 0.27 建出的库）逐条比对
-//! * `validate`   ：只读校验既有工作空间是否为最新格式（不建库、不改写）
-//! * `dump`       ：把工作空间的业务表导成规范化 JSON（黄金对比与排障用）
+//! 提供建库护栏与诊断能力：
+//! * `schema-diff`：Rust 建库结果与 `fixtures/schema/fresh.sql` 基线逐条比对
+//! * `validate`   ：只读校验既有工作空间是否为当前格式（不建库、不改写）
+//! * `dump`       ：把工作空间的业务表导成规范化 JSON（排障与回归对比用）
 //!
 //! 用法：
 //! ```text
-//! cargo xtask schema-diff                        # 以 fixtures/schema/fresh_v0_27.sql 为参照
-//! cargo xtask schema-diff --go-db <path/db>      # 直接与 Go 0.27 建出的库比对（更强）
+//! cargo xtask schema-diff                        # 以 fixtures/schema/fresh.sql 为基线
 //! cargo xtask validate <workspace-dir>
 //! cargo xtask dump <workspace-dir> [--table <name>]
 //! ```
@@ -21,7 +20,6 @@ use rusqlite::Connection;
 use tr_domain::consts;
 use tr_store::{schema, Workspace};
 
-mod parity;
 mod seed;
 
 /// 工作空间里的全部业务表（不含 sqlite 内部表与迁移登记表），按依赖顺序排列。
@@ -53,7 +51,6 @@ fn main() -> ExitCode {
         Some("validate") => validate_workspace(&args[1..]),
         Some("dump") => dump_workspace(&args[1..]),
         Some("seed") => seed_workspace(&args[1..]),
-        Some("parity") => parity_command(&args[1..]),
         Some(other) => {
             eprintln!("未知任务: {other}");
             usage();
@@ -69,151 +66,15 @@ fn main() -> ExitCode {
 fn usage() {
     println!(
         "用法:\n  \
-         cargo xtask schema-diff [--go-db <path>]\n      \
-         校验 Rust 建库结果与参照物逐条一致\n  \
+         cargo xtask schema-diff\n      \
+         校验 Rust 建库结果与 fixtures/schema/fresh.sql 基线逐条一致\n  \
          cargo xtask validate <workspace-dir>\n      \
-         只读校验某个工作空间是否为最新格式（不会创建或修改任何文件）\n  \
+         只读校验某个工作空间是否为当前格式（不会创建或修改任何文件）\n  \
          cargo xtask dump <workspace-dir> [--table <name>]\n      \
          把业务表导成规范化 JSON（只读）\n  \
          cargo xtask seed <workspace-dir>\n      \
-         新建（若不存在）并用服务层写入一份可复现的示例数据\n  \
-         cargo xtask parity normalize <in.json> [--out <out.json>]\n      \
-         把易变字段（UUID/时间戳）替换为占位符\n  \
-         cargo xtask parity diff <a.json> <b.json>\n      \
-         归一化后逐路径比较两份结果（黄金对比）"
+         新建（若不存在）并用服务层写入一份可复现的示例数据"
     );
-}
-
-/// `parity` 子命令：归一化与差异报告（黄金对比的底座）。
-fn parity_command(args: &[String]) -> ExitCode {
-    match args.first().map(String::as_str) {
-        Some("normalize") => parity_normalize(&args[1..]),
-        Some("diff") => parity_diff(&args[1..]),
-        other => {
-            eprintln!(
-                "parity 子命令：normalize <in.json> [--out <out.json>] | diff <a.json> <b.json>（收到 {other:?}）"
-            );
-            ExitCode::FAILURE
-        }
-    }
-}
-
-/// 把易变字段替换为占位符（UUID / 时间戳），便于人工核对与提交基线。
-fn parity_normalize(args: &[String]) -> ExitCode {
-    let mut input: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--out" => {
-                index += 1;
-                match args.get(index) {
-                    Some(path) => output = Some(PathBuf::from(path)),
-                    None => {
-                        eprintln!("--out 需要一个路径参数");
-                        return ExitCode::FAILURE;
-                    }
-                }
-            }
-            other => {
-                if input.is_none() {
-                    input = Some(PathBuf::from(other));
-                } else {
-                    eprintln!("多余的参数: {other}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-        index += 1;
-    }
-
-    let Some(input) = input else {
-        eprintln!("normalize 需要一个输入 JSON 文件");
-        return ExitCode::FAILURE;
-    };
-
-    let mut value = match read_json(&input) {
-        Ok(value) => value,
-        Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::FAILURE;
-        }
-    };
-    parity::normalize(&mut value);
-
-    let text = match serde_json::to_string_pretty(&value) {
-        Ok(text) => text,
-        Err(error) => {
-            eprintln!("序列化失败: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    match output {
-        Some(path) => match std::fs::write(&path, text) {
-            Ok(()) => {
-                println!("已写出归一化结果: {}", path.display());
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("写入失败: {error}");
-                ExitCode::FAILURE
-            }
-        },
-        None => {
-            println!("{text}");
-            ExitCode::SUCCESS
-        }
-    }
-}
-
-/// 比较两个 JSON（先各自归一化，再逐路径比较）；有任何差异即返回失败。
-fn parity_diff(args: &[String]) -> ExitCode {
-    let (Some(left_path), Some(right_path)) = (args.first(), args.get(1)) else {
-        eprintln!("diff 需要两个 JSON 文件参数");
-        return ExitCode::FAILURE;
-    };
-
-    let mut left = match read_json(&PathBuf::from(left_path)) {
-        Ok(value) => value,
-        Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut right = match read_json(&PathBuf::from(right_path)) {
-        Ok(value) => value,
-        Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    parity::normalize(&mut left);
-    parity::normalize(&mut right);
-
-    let differences = parity::diff(&left, &right);
-    if differences.is_empty() {
-        println!("parity diff 通过：归一化后两侧完全一致 ✅");
-        return ExitCode::SUCCESS;
-    }
-
-    println!("parity diff 失败：{} 处差异", differences.len());
-    for difference in differences.iter().take(50) {
-        println!(
-            "  {}\n    A: {}\n    B: {}",
-            difference.path, difference.left, difference.right
-        );
-    }
-    if differences.len() > 50 {
-        println!("  …（共 {} 处，仅显示前 50 处）", differences.len());
-    }
-    ExitCode::FAILURE
-}
-
-fn read_json(path: &std::path::Path) -> Result<serde_json::Value, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|error| format!("读取 {} 失败: {error}", path.display()))?;
-    serde_json::from_str(&text).map_err(|error| format!("解析 {} 失败: {error}", path.display()))
 }
 
 /// 新建（必要时）并播种一个工作空间。
@@ -247,7 +108,7 @@ fn seed_workspace(args: &[String]) -> ExitCode {
 
 /// 只读导出业务表为规范化 JSON。
 ///
-/// 「规范化」的含义（供黄金对比使用）：按 `rowid` 升序、列名升序输出为对象数组，
+/// 「规范化」的含义：按 `rowid` 升序、列名升序输出为对象数组，
 /// 因此不受列顺序或插入顺序以外的偶然因素影响；调用方再自行剔除时间戳这类易变字段。
 fn dump_workspace(args: &[String]) -> ExitCode {
     let mut directory: Option<PathBuf> = None;
@@ -430,28 +291,11 @@ fn validate_workspace(args: &[String]) -> ExitCode {
     }
 }
 
-/// 建库 → 导出语句 → 与参照物比对。
+/// 建库 → 导出语句 → 与 `fixtures/schema/fresh.sql` 基线比对。
 fn schema_diff(args: &[String]) -> ExitCode {
-    let mut go_db: Option<PathBuf> = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--go-db" => {
-                index += 1;
-                match args.get(index) {
-                    Some(path) => go_db = Some(PathBuf::from(path)),
-                    None => {
-                        eprintln!("--go-db 需要一个路径参数");
-                        return ExitCode::FAILURE;
-                    }
-                }
-            }
-            other => {
-                eprintln!("未知参数: {other}");
-                return ExitCode::FAILURE;
-            }
-        }
-        index += 1;
+    if let Some(argument) = args.first() {
+        eprintln!("未知参数: {argument}");
+        return ExitCode::FAILURE;
     }
 
     let temp_dir = fresh_temp_dir();
@@ -466,29 +310,12 @@ fn schema_diff(args: &[String]) -> ExitCode {
         schema::validate_current(&conn).map_err(|error| error.to_string())?;
 
         let actual = dump_schema(&conn)?;
-        let (reference, reference_label) = match go_db.as_deref() {
-            Some(path) if path.exists() => {
-                let conn =
-                    Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                        .map_err(|error| error.to_string())?;
-                (
-                    dump_schema(&conn)?,
-                    format!("Go 0.27 库 {}", path.display()),
-                )
-            }
-            Some(path) => {
-                eprintln!("指定的 --go-db 不存在: {}", path.display());
-                return Err("参照库不存在".to_string());
-            }
-            None => (
-                reference_from_sql_file(schema::FRESH_SCHEMA_SQL)?,
-                "fixtures/schema/fresh_v0_27.sql".to_string(),
-            ),
-        };
+        let reference = reference_from_sql_file(schema::FRESH_SCHEMA_SQL)?;
+        let reference_label = "fixtures/schema/fresh.sql";
 
-        println!("参照物: {reference_label}");
+        println!("基线: {reference_label}");
         println!(
-            "语句条数: Rust 建库 {} 条 / 参照 {} 条",
+            "语句条数: Rust 建库 {} 条 / 基线 {} 条",
             actual.len(),
             reference.len()
         );
@@ -501,7 +328,7 @@ fn schema_diff(args: &[String]) -> ExitCode {
                 (Some(left), Some(right)) => {
                     mismatches += 1;
                     println!(
-                        "\n第 {} 条不一致:\n  Rust:   {left}\n  参照:   {right}",
+                        "\n第 {} 条不一致:\n  Rust:   {left}\n  基线:   {right}",
                         index + 1
                     );
                 }
@@ -511,7 +338,7 @@ fn schema_diff(args: &[String]) -> ExitCode {
                 }
                 (None, Some(right)) => {
                     mismatches += 1;
-                    println!("\n第 {} 条仅存在于参照物: {right}", index + 1);
+                    println!("\n第 {} 条仅存在于基线: {right}", index + 1);
                 }
                 (None, None) => break,
             }
@@ -561,7 +388,7 @@ fn reference_from_sql_file(sql: &str) -> Result<Vec<String>, String> {
         .map(|line| line.trim_end_matches(';').to_string())
         .collect();
     if statements.is_empty() {
-        return Err("参照 SQL 文件里没有解析到任何 CREATE 语句".to_string());
+        return Err("基线 SQL 文件里没有解析到任何 CREATE 语句".to_string());
     }
     Ok(statements)
 }

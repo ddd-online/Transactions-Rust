@@ -1,38 +1,38 @@
 //! 消费记录页（P6-a 完整版：只读列表 + 全部写操作）。
 //!
-//! ## 对照的原 Vue 文件
+//! ## 文件结构
 //!
-//! | 原文件 | 本文件对应部分 |
+//! | 组成部分 | 说明 |
 //! |---|---|
-//! | `components/tr_view/TransactionRecordView.vue` | 页面编排：工具栏 / 时间范围 / 分页 / 空态三态 / 三个悬浮按钮 / 关联弹窗 |
-//! | `components/tr_view/TransactionRecordTable.vue` | [`row_view`]：列结构、行底色、行内「编辑 / 关联 / 删除」（同步到其他账本不在 P6-a 范围内） |
-//! | `components/tr_view/TransactionRecordModal.vue` | [`record_modal`]：记一笔 / 编辑（模板套用、类型→分类→标签联动、离群值） |
-//! | `components/tr_view/TrSortModal.vue` | [`sort_modal`] + [`TrSortRow`] |
-//! | `components/common/TransactionRecordFilter.vue` | [`filter_modal`] |
-//! | `components/common/TransactionsTimeRangePicker.vue` | [`TrTimeRangePicker`] |
-//! | `stores/transactionStore.ts` | `pageSize = 15`、默认排序 `transactionAt desc`、查询参数组装 |
-//! | `stores/trQueryConditionStore.ts` | 时间范围默认「今天」+ 粒度「日」 |
-//! | `backend/timerange.ts` | [`start_of_month`] / [`add_months_to_ymd`] / [`week_monday`] 等纯整数日期算术 |
-//! | `backend/api/tr.ts` | 全部走 `crate::api::tr::*` 封装 |
+//! | [`TransactionsPage`] | 页面编排：工具栏 / 时间范围 / 分页 / 空态三态 / 三个悬浮按钮 / 关联弹窗 |
+//! | [`table_view`] / [`row_view`] | 表格：8 列（日期/类型/分类/标签/描述/金额/标记/操作）、列宽、行底色、行内「编辑 / 关联 / 同步 / 删除」 |
+//! | [`record_modal`] | 记一笔 / 编辑（模板套用、类型→分类→标签联动、离群值） |
+//! | [`sort_modal`] / [`sort_row_view`] | 排序弹窗及其每一行 |
+//! | [`filter_modal`] | 筛选弹窗 |
+//! | [`TrTimeRangePicker`] | 时间范围选择：预设「今天 / 本周 / 本月 / 上周 / 上月 / 今年」+ 日 / 月 / 年粒度 |
+//! | [`empty_state_view`] | 空态三态（加载中 / 查询失败 / 无记录引导） |
 //!
-//! ## 有意与原实现的差异
+//! 查询参数：每页 `pageSize = 15`、默认排序 `transactionAt desc`；
+//! 时间范围默认「今天」+ 粒度「日」。
+//! [`month_bounds`] / [`add_month`] / [`week_monday`] 等是纯整数日期算术；
+//! 数据访问统一走 `crate::api::tr::*` 封装。
 //!
-//! 1. **查询错误前缀**：原文是「查询消费记录失败」，但本仓库 P5 已把 [`QUERY_ERROR_PREFIX`]
-//!    定为「查询失败」且被别处引用，故保留 const 不动，仅在注释里记录这条差异。
-//! 2. **编辑 = 先建后删**（与原文一致，任务单里写的「先删后建」是笔误）：原文注释明确说明
-//!    「先创建新记录、成功后再删除旧记录」以避免旧记录被删除后新记录创建失败造成数据丢失；
-//!    删除失败时回滚新建。这里逐条照抄该顺序（含回滚与提示文案）。
-//! 3. **保存按钮文案**：原文是「确认」（`TransactionRecordModal.vue` 的 `ok-text`），
-//!    任务单里写的「保存」以原文为准。
-//! 4. **保存为模板**：原文弹窗里的「保存为模板」入口不在本任务范围内（只要求「模板套用」），
-//!    故未实现；`template_create` 命令仍可用。
+//! ## 设计取舍
+//!
+//! 1. **查询错误前缀**：[`QUERY_ERROR_PREFIX`] 定为「查询失败」且被别处引用，故保留该常量不动。
+//! 2. **编辑 = 先建后删**：先创建新记录、成功后再删除旧记录，以避免旧记录被删除后新记录
+//!    创建失败造成数据丢失；删除失败时回滚新建。顺序、回滚与提示文案都按此实现。
+//! 3. **保存按钮文案**是「确认」。
+//! 4. **保存为模板**：记一笔弹窗内另有「保存为模板」子弹窗，只填名称；
+//!    模板本身的编辑与排序不在本任务范围内。
 //! 5. **标签多选**：`ui::Select` 是单选（值 `String`），多选改用本文件的 [`TrCheckList`]
-//!    （UI 上对应 `a-select mode="multiple"` 的勾选面板）。
-//! 6. **时间范围面板**：`ui::DateRangePicker` 没有 presets 参数，按原组件的 presets
-//!    （今天/本周/本月/上周/上月/今年）自绘一排链接按钮。
-//! 7. **date 粒度下的「周」**：原实现没有独立「周」粒度，而是当区间跨 6 天时按整周翻页；
-//!    这里逐条照抄 [`shift_period`] 的判定。
-//! 8. 原 `TransactionRecordTable.vue` 的「同步到其他账本」按钮未实现（任务单未列，属 P6-b）。
+//!    （UI 上是一个勾选面板）。
+//! 6. **时间范围面板**：`ui::DateRangePicker` 没有 presets 参数，故自绘一排链接按钮
+//!    （今天/本周/本月/上周/上月/今年）。
+//! 7. **date 粒度下的「周」**：没有独立「周」粒度，而是当区间跨 6 天时按整周翻页；
+//!    判定见 [`shift_period`]。
+//! 8. **同步到其他账本**：IPC 里没有 sync 命令，界面复制一份 DTO（换目标账本、清空 id
+//!    让后端生成新 id），源记录保留。
 //!
 //! ## 关键纪律
 //!
@@ -65,27 +65,27 @@ use crate::notify::Notifier;
 use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd, ymd_to_seconds};
 
-/// 页面标题（原 `router.ts` / `AppLeftBar.vue` 文案）
+/// 页面标题（固定文案，改动即影响界面）
 pub const PAGE_TITLE: &str = "消费记录";
-/// 查询错误前缀（**原文是「查询消费记录失败」**，此常量由 P5 定稿并被别处引用，故保留）
+/// 查询错误前缀（此常量由 P5 定稿并被别处引用，故保留）
 pub const QUERY_ERROR_PREFIX: &str = "查询失败";
 
-/// 默认每页条数（原 `transactionStore.ts`：`pageSize = ref(15)`）
+/// 默认每页条数（15 条 / 页）
 const DEFAULT_PAGE_SIZE: i32 = 15;
-/// 每页条数可选项（原 `a-pagination :pageSizeOptions="['15','30','50','100']"`）
+/// 每页条数可选项：15 / 30 / 50 / 100
 const PAGE_SIZE_OPTIONS: [i32; 4] = [15, 30, 50, 100];
 
-/// 交易类型分段选项（原 `TransactionRecordModal.vue` 的 `typeOptions`）。
+/// 交易类型分段选项（收入 / 支出 / 转账）。
 const TRANSACTION_TYPES: [(&str, &str); 3] = [
     ("income", "收入"),
     ("expense", "支出"),
     ("transfer", "转账"),
 ];
 
-/// 时间范围粒度标签（原 `constant.ts` 的 `TimeRangeValueToLabel` + `TimeRangeLabelToValue`）。
+/// 时间范围粒度标签（日 / 月 / 年）。
 const TIME_RANGE_MODES: [(&str, &str); 3] = [("date", "日"), ("month", "月"), ("year", "年")];
 
-/// 排序字段选项（原 `TrSortModal.vue` 的 `sortFieldOptions`）。
+/// 排序字段选项（日期 / 金额 / 分类 / 类型）。
 const SORT_FIELDS: [(&str, &str); 4] = [
     ("transactionAt", "日期"),
     ("price", "金额"),
@@ -93,13 +93,13 @@ const SORT_FIELDS: [(&str, &str); 4] = [
     ("transactionType", "类型"),
 ];
 
-/// 标签匹配策略常量（原 `TransactionRecordFilter.vue`：`any` / `all`）。
+/// 标签匹配策略常量（`any` / `all`）。
 const TAG_POLICY_ANY: &str = "any";
 
 /// 一天的秒数（`date` 粒度翻页用）。
 const DAY_SECONDS: i64 = 86_400;
 
-/// 行内操作（原 `TransactionRecordTable.vue` 的 `@edit` / `@delete` / `@link` 与同步）。
+/// 行内操作：编辑 / 关联 / 同步到其他账本 / 删除。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RowAction {
     Edit,
@@ -109,7 +109,7 @@ enum RowAction {
     Delete,
 }
 
-/// 排序项（原 `TrSortModal.vue` 的 `SortItem`）。
+/// 排序项（字段 + 方向）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SortItem {
     field: String,
@@ -142,7 +142,7 @@ pub fn TransactionsPage() -> impl IntoView {
     let init_loading = RwSignal::new(false);
     let init_confirm_open = RwSignal::new(false);
 
-    // ---- 时间范围（原 `trQueryConditionStore`：默认「今天」+ 粒度「日」）----
+    // ---- 时间范围（默认「今天」+ 粒度「日」）----
     let range_mode = RwSignal::new("date".to_string());
     let range_start = RwSignal::new(today_ymd());
     let range_end = RwSignal::new(today_ymd());
@@ -210,10 +210,10 @@ pub fn TransactionsPage() -> impl IntoView {
 
     // 账本 / 页码 / 每页条数 / 时间范围 / 筛选 / 排序 任一变化即重查。
     //
-    // 回到第 1 页的规则照抄原组件：
+    // 回到第 1 页的规则：
     // * 账本 / 时间范围 / 筛选条件变化 → 只有当前不在第 1 页时才回退（避免打断用户翻页）；
     // * 每页条数变化 → 无条件回到第 1 页；
-    // * 排序应用后原实现也重查（页码不变）。
+    // * 排序应用后也重查（页码不变）。
     Effect::new(move |prev: Option<QueryInputs>| {
         let current = read_inputs_tracked();
 
@@ -249,7 +249,7 @@ pub fn TransactionsPage() -> impl IntoView {
         current
     });
 
-    // ---- 记一笔：先检查分类是否存在（原 `createTr`）----
+    // ---- 记一笔：先检查分类是否存在 ----
     let request_create = move || {
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() {
@@ -295,7 +295,7 @@ pub fn TransactionsPage() -> impl IntoView {
         });
     };
 
-    // ---- 空态引导：跳到上个月 / 今年（原 `goToLastMonth` / `goToThisYear`）----
+    // ---- 空态引导：跳到上个月 / 今年 ----
     let go_last_month = move || {
         range_mode.set("month".to_string());
         set_range(&today_ymd(), "month", range_start, range_end, Some(-1));
@@ -333,7 +333,7 @@ pub fn TransactionsPage() -> impl IntoView {
                 return;
             }
             syncing_id.set(record.transaction_id.clone());
-            // 原实现：复制一份 DTO，换上目标账本、清空 id 让后端生成新 id
+            // 复制一份 DTO，换上目标账本、清空 id 让后端生成新 id
             let mut copy = record.clone();
             copy.ledger_id = target_ledger_id;
             copy.transaction_id = String::new();
@@ -525,7 +525,7 @@ pub fn TransactionsPage() -> impl IntoView {
                 </div>
             </div>
 
-            // ---- 悬浮按钮组（位置与原 `.float-*` 一致）----
+            // ---- 悬浮按钮组 ----
             <FloatButton
                 class="tr-float-primary"
                 title="记一笔"
@@ -581,7 +581,7 @@ pub fn TransactionsPage() -> impl IntoView {
             // ---- 记一笔 / 编辑弹窗 ----
             {record_modal(record_open, editing, Callback::new(move |_| do_refresh()))}
 
-            // ---- 分类缺失确认框（原 `Modal.confirm`）----
+            // ---- 分类缺失确认框 ----
             <Modal
                 open=Signal::derive(move || init_confirm_open.get())
                 title="还没有分类"
@@ -614,9 +614,9 @@ struct QueryInputs {
     sorts: Vec<SortItem>,
 }
 
-/// 拉取一页并写入各信号（原 `fetchTransactions`）。
+/// 拉取一页并写入各信号。
 ///
-/// 查询条件按原 `buildCondition` 的顺序组装：
+/// 查询条件按固定顺序组装：
 /// `ledgerId` / `offset` / `limit` 由 `api::tr::default_condition` 打底，
 /// 再按需覆盖 `tsRange` / `items` / `sortFields`（`timeRange` 为空时不传 `tsRange`）。
 #[allow(clippy::too_many_arguments)]
@@ -630,7 +630,7 @@ fn fetch_page(
     error_message: RwSignal<Option<String>>,
     stores: AppStores,
 ) {
-    // 当前时间范围快照：供「新增记录默认日期」读取（原 `defaultRecordDate`）
+    // 当前时间范围快照：供「新增记录默认日期」读取
     RANGE_SNAPSHOT.with(|slot| {
         *slot.borrow_mut() = (input.start.clone(), input.end.clone());
     });
@@ -676,7 +676,7 @@ fn fetch_page(
     });
 }
 
-/// 交易类型下拉选项（原 `transactionTypeOptions`：收入 / 支出 / 转账）。
+/// 交易类型下拉选项（收入 / 支出 / 转账）。
 fn transaction_type_options() -> Vec<SelectOption> {
     TRANSACTION_TYPES
         .iter()
@@ -716,7 +716,7 @@ fn sort_fields(items: &[SortItem]) -> Vec<QueryConditionSortField> {
         .collect()
 }
 
-/// 查询账本元信息：该账本是否已有记录 / 是否已有分类（原 `loadLedgerMeta`）。
+/// 查询账本元信息：该账本是否已有记录 / 是否已有分类。
 ///
 /// 任一查询失败都保持 `None`（回退成通用空态），不让引导信息阻断页面。
 fn load_ledger_meta(
@@ -804,8 +804,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 
 /// 某天所在周的周一。
 ///
-/// 与原 `getThisWeekRange()` 的 `startOf('week').add(1, 'day')` 等价
-/// （dayjs 默认周日为一周开始，`add(1,'day')` 之后恰好是周一）。
+/// 一周从周一算起：`get_day()` 的 0 是周日，用 `(day + 6) % 7` 折算成距周一的偏移；
 fn week_monday(ymd: &str) -> Option<String> {
     let (year, month, day) = split_ymd_full(ymd)?;
     let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32);
@@ -958,7 +957,7 @@ fn shift_period(start: &str, end: &str, mode: &str, direction: i32) -> (String, 
     }
 }
 
-/// 时间范围的展示文案（原 `a-range-picker` 的输入框内容）。
+/// 时间范围的展示文案（范围输入框里的内容）。
 fn range_text(start: &str, end: &str) -> String {
     if start.is_empty() || end.is_empty() {
         return "请选择时间范围".to_string();
@@ -972,7 +971,7 @@ fn range_text(start: &str, end: &str) -> String {
 
 // ==================================================================== 时间范围选择器
 
-/// 「今天 / 本周 / 本月 / 上周 / 上月 / 今年」六个预设（原 `getTimeRangePresets`）。
+/// 「今天 / 本周 / 本月 / 上周 / 上月 / 今年」六个预设。
 fn preset_ranges() -> Vec<(&'static str, String, String)> {
     let today = today_ymd();
     let mut presets: Vec<(&'static str, String, String)> = Vec::new();
@@ -1010,7 +1009,7 @@ fn preset_ranges() -> Vec<(&'static str, String, String)> {
     presets
 }
 
-/// 时间范围选择器（原 `TransactionsTimeRangePicker.vue`）：
+/// 时间范围选择器：
 /// 粒度分段（日/月/年）+ 区间选择器 + 前后翻页 + 一排预设。
 #[component]
 fn TrTimeRangePicker(
@@ -1264,7 +1263,7 @@ fn year_panel(
 
 // ==================================================================== 表格
 
-/// 表格（原 `TransactionRecordTable.vue` 的 8 列：日期/类型/分类/标签/描述/金额/标记/操作）。
+/// 表格：8 列（日期/类型/分类/标签/描述/金额/标记/操作）。
 fn table_view(
     rows: Vec<TransactionRecordDto>,
     on_action: UnsyncCallback<RowEvent>,
@@ -1298,7 +1297,7 @@ fn table_view(
     .into_any()
 }
 
-/// 渲染一行（列顺序与列宽照抄原 `columns`；操作列的四个动作见行内注释）。
+/// 渲染一行（列顺序与列宽见 [`table_view`] 的表头；操作列的四个动作见行内注释）。
 fn row_view(
     record: TransactionRecordDto,
     on_action: UnsyncCallback<RowEvent>,
@@ -1490,7 +1489,7 @@ fn row_view(
                         </span>
                     </crate::components::ui::Tooltip>
 
-                    // 4. 删除（原文 `:show-cancel="false"`）
+                    // 4. 删除（不显示取消按钮）
                     <crate::components::ui::Popconfirm
                         title="删除这条消费记录？此操作不可恢复。"
                         ok_text="删除"
@@ -1516,7 +1515,7 @@ fn row_view(
     .into_any()
 }
 
-/// 「同步到其他账本」的候选账本：`AppStores.ledgers` 里排除当前账本（原 `ledgers.filter(...)`）。
+/// 「同步到其他账本」的候选账本：`AppStores.ledgers` 里排除当前账本。
 fn sync_ledger_options() -> Vec<(String, String)> {
     let stores = AppStores::global();
     let current = stores.current_ledger_id.get();
@@ -1531,7 +1530,7 @@ fn sync_ledger_options() -> Vec<(String, String)> {
 
 // ==================================================================== 空态
 
-/// 空态三态（原 `TransactionRecordView.vue` 的 `tr-empty` 分支）。
+/// 空态三态（加载中 / 查询失败 / 无记录引导）。
 #[allow(clippy::too_many_arguments)]
 fn empty_state_view(
     loading: RwSignal<bool>,
@@ -1646,7 +1645,7 @@ fn empty_state_view(
 
 // ==================================================================== 记一笔 / 编辑弹窗
 
-/// 记一笔 / 编辑弹窗（原 `TransactionRecordModal.vue`）。
+/// 记一笔 / 编辑弹窗。
 fn record_modal(
     open: RwSignal<bool>,
     editing: RwSignal<Option<TransactionRecordDto>>,
@@ -1661,7 +1660,7 @@ fn record_modal(
     let category = RwSignal::new(String::new());
     let tags = RwSignal::new(Vec::<String>::new());
     let description = RwSignal::new(String::new());
-    // 原 `TrForm.flags` 是一个字符串数组（多选），这里照抄用 `Vec<String>`：
+    // `flags` 是一个字符串数组（多选），用 `Vec<String>`：
     // 唯一选项是 `outlier`（标签「离群值」）。
     let flags = RwSignal::new(Vec::<String>::new());
     let template_id = RwSignal::new(String::new());
@@ -1676,7 +1675,7 @@ fn record_modal(
     let save_template_open = RwSignal::new(false);
     let template_name = RwSignal::new(String::new());
 
-    // 打开弹窗时回填表单（原 `watch(() => props.open)`）
+    // 打开弹窗时回填表单
     Effect::new(move |_| {
         if !open.get() {
             return;
@@ -1726,7 +1725,7 @@ fn record_modal(
             if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
                 return;
             }
-            // 新建时分类取该类型的第一个（原 `createEmptyForm` 分支）
+            // 新建时分类取该类型的第一个
             let current = category.get_untracked();
             let matched = category_list.iter().any(|item| item.name == current);
             if !matched {
@@ -1742,7 +1741,7 @@ fn record_modal(
         });
     });
 
-    // 类型变化 → 重查分类；分类变化 → 重查标签（原两个 watch）
+    // 类型变化 → 重查分类；分类变化 → 重查标签
     Effect::new(move |_| {
         if !open.get() {
             return;
@@ -1760,7 +1759,7 @@ fn record_modal(
             if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
                 return;
             }
-            // 当前分类不在新类型下时回落到第一个（原 `watch(categoryOptions)`）；
+            // 当前分类不在新类型下时回落到第一个；
             // 列表为空则把分类置空。
             let matched = category_list
                 .iter()
@@ -1784,7 +1783,7 @@ fn record_modal(
                 return;
             }
             let names: Vec<String> = available.iter().map(|item| item.name.clone()).collect();
-            // 原 `watch(() => trForm.value.category)`：已选标签过滤成仍然存在的那些
+            // 已选标签过滤成仍然存在的那些
             let kept: Vec<String> = tags
                 .get_untracked()
                 .into_iter()
@@ -1797,8 +1796,8 @@ fn record_modal(
         });
     });
 
-    // 模板套用（原 `watch(selectedTemplateId)`）：
-    // 逐字照抄——`flags` 是把整个模板 flags 串当作单个元素塞进数组。
+    // 模板套用：
+    // 注意：`flags` 是把整个模板 flags 串当作单个元素塞进数组。
     let apply_template = move |id: String| {
         if id.is_empty() {
             return;
@@ -1821,7 +1820,7 @@ fn record_modal(
         description.set(template.description.clone());
     };
 
-    // 保存为模板（原 `handleConfirmSaveTemplate`）
+    // 保存为模板
     let confirm_save_template = move || {
         let name = template_name.get_untracked().trim().to_string();
         if name.is_empty() {
@@ -1838,7 +1837,7 @@ fn record_modal(
             transaction_type: transaction_type.get_untracked(),
             category: category.get_untracked(),
             tags: tags.get_untracked(),
-            // 原文：`flags: trForm.flags.join(',')`
+            // `flags` 用逗号拼成字符串
             flags: flags.get_untracked().join(","),
             description: description.get_untracked(),
             sort_order: 0,
@@ -1861,7 +1860,7 @@ fn record_modal(
         });
     };
 
-    // 保存（原文：新建 → 直接创建；编辑 → 先建后删，删除失败回滚新建）
+    // 保存：新建 → 直接创建；编辑 → 先建后删，删除失败回滚新建
     let confirm = move || {
         if saving.get_untracked() {
             return;
@@ -1904,7 +1903,7 @@ fn record_modal(
             tags: tags.get_untracked(),
             transaction_at,
             outlier: flags.get_untracked().iter().any(|flag| flag == "outlier"),
-            // 原文：`keyEventDate: data.keyEventDate || ''`（关联只能走 `tr_link`）
+            // key_event_date 一律留空（关联只能走 `tr_link`）
             key_event_date: String::new(),
         };
         if record.description.is_empty() {
@@ -1948,7 +1947,7 @@ fn record_modal(
         });
     };
 
-    // 弹窗标题（原 `modalTitle`）：
+    // 弹窗标题：
     // `Modal.title` 是普通 `String`（`#[prop(into)]`），不接受 `Signal` / 闭包，
     // 所以这里在构建视图时（此时 `editing` 已被打开弹窗的动作写好）算成静态串。
     let modal_title = if editing.get_untracked().is_some() {
@@ -1966,7 +1965,7 @@ fn record_modal(
             on_close=move || open.set(false)
         >
             <Form layout=FormLayout::Vertical class="tr-modal-form">
-                // 字段顺序照抄原文：模板 / 日期 / 类型 / 分类 / 标签 / 标记 / 描述 / 金额
+                // 字段顺序：模板 / 日期 / 类型 / 分类 / 标签 / 标记 / 描述 / 金额
                 <FormItem label="模板">
                     <div class="tr-modal-template">
                         {move || {
@@ -2096,7 +2095,7 @@ fn record_modal(
             </div>
         </Modal>
 
-        // 保存为模板（原文的第二个 `a-modal`）
+        // 保存为模板（子弹窗）
         <Modal
             open=Signal::derive(move || save_template_open.get())
             title="保存为模板"
@@ -2121,7 +2120,7 @@ async fn create_record(record: &TransactionRecordDto) -> Result<String, crate::i
     api::tr::create(record.clone()).await
 }
 
-/// 新增记录的默认日期：今天在范围内 → 今天；否则用范围起点（原 `defaultRecordDate`）。
+/// 新增记录的默认日期：今天在范围内 → 今天；否则用范围起点。
 fn default_record_ymd() -> String {
     let today = today_ymd();
     let start = page_range_start();
@@ -2154,17 +2153,16 @@ thread_local! {
 
 /// 把「所选日期」与「原记录的时分秒」合并成 Unix 秒。
 ///
-/// 原实现是 `trForm.time = trForm.time.hour(12).minute(0).second(0)`：
 /// **每次保存都把时间重置为所选日期的 12:00:00**（本地时区），
-/// 既不是 00:00:00 也不是沿用原时分秒。这里逐字照抄（含新建与编辑两条路径）。
+/// 既不是 00:00:00 也不是沿用原时分秒；新建与编辑两条路径都走这里。
 ///
-/// 注：任务单里提到「保留原记录的时分秒」——原文并没有这么做（见上），故以原文为准。
+/// 注：不保留原记录的时分秒（见上），一律取所选日期的 12:00:00。
 fn combine_date_and_time(ymd: &str) -> Option<i64> {
     let day_start = ymd_to_seconds(ymd)?;
     Some(day_start + 12 * 3600)
 }
 
-/// 金额校验（原 `rules.price` 的正则 `^(0|[1-9]\d*)(\.\d{1,2})?$` + `yuanToCents`）：
+/// 金额校验（正则 `^(0|[1-9]\d*)(\.\d{1,2})?$` + [`yuan_to_cents`]）：
 ///
 /// * 空串 → 「请输入金额」
 /// * 不匹配正则 → 「请输入 ≥0 的有效金额，最多两位小数」
@@ -2196,7 +2194,7 @@ fn parse_price(input: &str) -> Result<i64, String> {
 
 // ==================================================================== 标签多选
 
-/// 标签多选面板（对应原 `a-select mode="multiple"`）。
+/// 标签多选面板（勾选式多选）。
 #[component]
 fn TrCheckList(
     /// 已选值集合
@@ -2327,7 +2325,7 @@ fn TrCheckList(
 
 // ==================================================================== 筛选弹窗
 
-/// 筛选弹窗（原 `TransactionRecordFilter.vue`）。
+/// 筛选弹窗。
 fn filter_modal(
     open: RwSignal<bool>,
     conditions: RwSignal<Vec<QueryConditionItem>>,
@@ -2348,7 +2346,7 @@ fn filter_modal(
     let categories = RwSignal::new(Vec::<CategoryDto>::new());
     let tag_list = RwSignal::new(Vec::<TagDto>::new());
 
-    // 重置临时输入（原 `resetTempInputs`）
+    // 重置临时输入
     let reset_filter_inputs = move || {
         temp_type.set(String::new());
         temp_category.set(String::new());
@@ -2359,7 +2357,7 @@ fn filter_modal(
         temp_description.set(String::new());
     };
 
-    // 打开时回填已确认条件并重置临时输入（原 `watch(open)`）
+    // 打开时回填已确认条件并重置临时输入
     Effect::new(move |_| {
         if !open.get() {
             return;
@@ -2370,7 +2368,7 @@ fn filter_modal(
         tag_list.set(Vec::new());
     });
 
-    // 交易类型 → 分类；分类 → 标签（原两个 watch）
+    // 交易类型 → 分类；分类 → 标签
     Effect::new(move |_| {
         if !open.get() {
             return;
@@ -2421,7 +2419,7 @@ fn filter_modal(
         let condition_category = temp_category.get_untracked();
         let condition_tags = temp_tags.get_untracked();
         let condition_description = temp_description.get_untracked().trim().to_string();
-        // 四个字段全空 → 直接 return 不加（原文如此）
+        // 四个字段全空 → 直接 return 不加
         if condition_type.is_empty()
             && condition_category.is_empty()
             && condition_tags.is_empty()
@@ -2614,7 +2612,7 @@ fn filter_modal(
                         variant=ButtonVariant::Secondary
                         size=ButtonSize::Small
                         on_click=move || {
-                            // 原 `clearAllConditions`
+                            // 清空草稿里的全部条件
                             draft.set(Vec::new());
                             reset_filter_inputs();
                         }
@@ -2625,7 +2623,7 @@ fn filter_modal(
                         variant=ButtonVariant::Secondary
                         size=ButtonSize::Small
                         on_click=move || {
-                            // 原 `discardFilterModal`：丢弃本次未确认的编辑并关闭
+                            // 丢弃本次未确认的编辑并关闭
                             draft.set(Vec::new());
                             reset_filter_inputs();
                             open.set(false);
@@ -2650,7 +2648,7 @@ fn filter_modal(
     .into_any()
 }
 
-/// 条件项的 `For` key（原 `contentKey` 的签名算法）。
+/// 条件项的 `For` key（按条件各字段拼出的签名）。
 fn condition_key(item: &QueryConditionItem) -> String {
     format!(
         "{}|{}|{}|{}|{}|{}",
@@ -2665,7 +2663,7 @@ fn condition_key(item: &QueryConditionItem) -> String {
 
 // ==================================================================== 排序弹窗
 
-/// 排序弹窗里的一行（原 `SortItem` 的可编辑形态，每个字段各持一个信号）。
+/// 排序弹窗里的一行（每个字段各持一个信号）。
 #[derive(Clone, Copy)]
 struct SortRow {
     field: RwSignal<String>,
@@ -2690,7 +2688,7 @@ impl SortRow {
     }
 }
 
-/// 排序弹窗（原 `TrSortModal.vue`）。
+/// 排序弹窗。
 fn sort_modal(
     open: RwSignal<bool>,
     applied: RwSignal<Vec<SortItem>>,
@@ -2698,7 +2696,7 @@ fn sort_modal(
 ) -> AnyView {
     let draft = RwSignal::new(Vec::<SortRow>::new());
 
-    // 打开时回填当前排序（原 `openSort` 的 `setItems`）
+    // 打开时回填当前排序
     Effect::new(move |_| {
         if open.get() {
             draft.set(
@@ -2717,7 +2715,7 @@ fn sort_modal(
         if used.len() >= 4 {
             return;
         }
-        // 原 `addItem`：追加第一个还没用过的字段，方向默认「降序」
+        // 追加第一个还没用过的字段，方向默认「降序」
         if let Some((field, _)) = SORT_FIELDS
             .iter()
             .find(|(field, _)| !used.contains(&(*field).to_string()))
@@ -2761,7 +2759,7 @@ fn sort_modal(
                         variant=ButtonVariant::Secondary
                         size=ButtonSize::Small
                         on_click=move || {
-                            // 原 `reset`：回到「日期 + 降序」单条
+                            // 回到「日期 + 降序」单条
                             draft.set(vec![SortRow::new("transactionAt", "desc")]);
                         }
                     >
@@ -2789,7 +2787,7 @@ fn sort_modal(
 
 /// 排序弹窗的一行（优先级序号 + 字段 + 方向 + 删除）。
 fn sort_row_view(index: usize, row: SortRow, draft: RwSignal<Vec<SortRow>>) -> AnyView {
-    // 原 `getAvailableFields(index)`：同一行之前的字段不重复出现
+    // 同一行之前的字段不重复出现
     let field_options = move || {
         let used: Vec<String> = draft.with(|list| {
             list.iter()
@@ -2833,7 +2831,7 @@ fn sort_row_view(index: usize, row: SortRow, draft: RwSignal<Vec<SortRow>>) -> A
                 title="删除该排序条件"
                 disabled=Signal::derive(move || draft.with(|list| list.len()) <= 1)
                 on_click=move || {
-                    // 原 `removeItem`：至少保留一行；删完重建为全新的行信号
+                    // 至少保留一行；删完重建为全新的行信号
                     draft.update(|list| {
                         if list.len() > 1 && index < list.len() {
                             list.remove(index);
@@ -2860,7 +2858,7 @@ fn sort_row_view(index: usize, row: SortRow, draft: RwSignal<Vec<SortRow>>) -> A
 
 // ==================================================================== 关联关键事件弹窗
 
-/// 关联关键事件弹窗（原 `TransactionRecordView.vue` 里的 `a-modal`）。
+/// 关联关键事件弹窗。
 fn link_modal(
     open: RwSignal<bool>,
     target: RwSignal<Option<TransactionRecordDto>>,
@@ -2909,34 +2907,34 @@ fn link_modal(
     .into_any()
 }
 
-// ==================================================================== 内联 SVG（Ant Design 形状）
+// ==================================================================== 内联 SVG
 
-/// `EditOutlined` 的 path。
+/// 编辑图标的 path。
 const EDIT_PATHS: [&str; 1] = [
     "M257.7 752c2 0 4-.2 6-.5L431.9 722c2-.4 3.9-1.3 5.3-2.8l423.9-423.9a9.96 9.96 0 000-14.1L694.9 114.9c-1.9-1.9-4.4-2.9-7.1-2.9s-5.2 1-7.1 2.9L256.8 538.8c-1.5 1.5-2.4 3.3-2.8 5.3l-29.5 168.2a33.5 33.5 0 009.4 29.8c6.6 6.4 14.9 9.9 23.8 9.9zm67.4-174.4L687.8 215l73.3 73.3-362.7 362.6-88.9 15.7 15.6-89zM880 836H144c-17.7 0-32 14.3-32 32v36c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-36c0-17.7-14.3-32-32-32z",
 ];
 
-/// `LinkOutlined` 的 path。
+/// 关联（链接）图标的 path。
 const LINK_PATHS: [&str; 1] = [
     "M574 665.4a8.03 8.03 0 00-11.3 0L446.5 781.6c-53.8 53.8-144.8 53.9-198.7 0C221 755 208 721.5 208 686s13-69 39.8-95.7l115.1-115.2c3.1-3.1 3.1-8.2 0-11.3l-28.3-28.3a8.03 8.03 0 00-11.3 0L208 550.6c-37.4 37.4-58 87.2-58 140.1s20.6 102.7 58 140.1c38.7 38.7 89.5 58 140.1 58s101.4-19.3 140.1-58l116.2-116.2c3.1-3.1 3.1-8.2 0-11.3L574 665.4zM816 182.5c-38.7-38.7-89.5-58-140.1-58s-101.5 19.3-140.1 58L419.6 298.7c-3.1 3.1-3.1 8.2 0 11.3l28.3 28.3c3.1 3.1 8.2 3.1 11.3 0l116.2-116.2c53.8-53.8 144.8-53.9 198.7 0 26.8 26.7 39.8 60.2 39.8 95.7s-13 69-39.8 95.7L659.6 528.7c-3.1 3.1-3.1 8.2 0 11.3l28.3 28.3c3.1 3.1 8.2 3.1 11.3 0L816 451.3c37.4-37.4 58-87.2 58-140.1s-20.6-101.5-58-138.7z",
 ];
 
-/// `SortAscendingOutlined` 的 path。
+/// 升序图标的 path。
 const SORT_ASCENDING: [&str; 1] = [
     "M839.6 433.8L749 150.5a9.24 9.24 0 00-8.9-6.5h-77.4c-4.1 0-7.6 2.6-8.9 6.5l-91.3 283.3c-.3.9-.5 1.9-.5 2.9 0 5.1 4.1 9.3 9.3 9.3h56.4c4.2 0 7.8-2.8 9.2-6.8l17.5-61.6h89l17.3 61.5c1.3 4 4.8 6.8 9.1 6.8h61.2c1 0 1.9-.1 2.8-.4 2.8-.8 4.8-3.4 4.8-6.3-.1-1-.3-2.1-.8-3.1zm-191.1-95.8l32.9-115.8h1.3l33.5 115.8h-67.7zM533 793h-229V291c0-4.4-3.6-8-8-8h-56c-4.4 0-8 3.6-8 8v502H3c-6.2 0-9.4 7.4-5.1 11.8l265 264.5c2.9 3 7.7 3 10.6 0l265-264.5c4.3-4.4 1.1-11.8-5.5-11.8z",
 ];
 
-/// `SortDescendingOutlined` 的 path。
+/// 降序图标的 path。
 const SORT_DESCENDING: [&str; 1] = [
     "M839.6 433.8L749 150.5a9.24 9.24 0 00-8.9-6.5h-77.4c-4.1 0-7.6 2.6-8.9 6.5l-91.3 283.3c-.3.9-.5 1.9-.5 2.9 0 5.1 4.1 9.3 9.3 9.3h56.4c4.2 0 7.8-2.8 9.2-6.8l17.5-61.6h89l17.3 61.5c1.3 4 4.8 6.8 9.1 6.8h61.2c1 0 1.9-.1 2.8-.4 2.8-.8 4.8-3.4 4.8-6.3-.1-1-.3-2.1-.8-3.1zm-191.1-95.8l32.9-115.8h1.3l33.5 115.8h-67.7zM3 795.7l265 264.5c2.9 3 7.7 3 10.6 0l265-264.5c4.3-4.4 1.1-11.8-5.5-11.8H304V291c0-4.4-3.6-8-8-8h-56c-4.4 0-8 3.6-8 8v502.7H8.5c-6.6 0-9.8 7.4-5.5 11.8z",
 ];
 
-/// `SyncOutlined` 的 path。
+/// 同步图标的 path。
 const SYNC_PATHS: [&str; 1] = [
     "M925.7 381.8l-59.3-10.4a8 8 0 00-9.1 6.1l-6.8 31.6a353.3 353.3 0 00-114.3-144.4 352.8 352.8 0 00-112.4-75.9c-43.6-18.4-89.9-27.8-137.6-27.8-89.6 0-174.1 32.7-240.2 92.6l-46.5-36.4c-5-3.9-12.3-.3-12.3 6.1l-1.1 148.8c0 5.1 4.9 8.8 9.8 7.6l155.3-38a8 8 0 002.9-14l-49.9-39a277.5 277.5 0 01133.2-72.9 289.6 289.6 0 01112.4 0 289.6 289.6 0 01112.4 45.9 277.5 277.5 0 0189.9 111.6 276.7 276.7 0 0127.7 70.3l-17.3 61.4c-1.4 4 2.2 7.9 6.3 7.9h73.3c4.3 0 7.9-2.8 9.2-6.9l20.4-72.3 1.9-7.1c1.1-4-2-7.8-6.1-8.5zM512 754a277.5 277.5 0 01-133.2-72.9 277.5 277.5 0 01-89.9-111.6 276.7 276.7 0 01-27.7-70.3l17.3-61.4c1.4-4-2.2-7.9-6.3-7.9h-73.3c-4.3 0-7.9 2.8-9.2 6.9l-22.3 79.4c-1.1 4 2 7.8 6.1 8.5l59.3 10.4a8 8 0 009.1-6.1l6.8-31.6a353.3 353.3 0 00114.3 144.4 352.8 352.8 0 00112.4 75.9c43.6 18.4 89.9 27.8 137.6 27.8 89.6 0 174.1-32.7 240.2-92.6l46.5 36.4c5 3.9 12.3.3 12.3-6.1l1.1-148.8c0-5.1-4.9-8.8-9.8-7.6l-155.3 38a8 8 0 00-2.9 14l49.9 39a277.5 277.5 0 01-133.2 72.9 289.6 289.6 0 01-112.4 0z",
 ];
 
-/// 渲染一枚内联 SVG（`viewBox` 与原 `@ant-design/icons-vue` 一致）。
+/// 渲染一枚内联 SVG（`viewBox` 固定为 `64 64 896 896`）。
 fn svg_icon(paths: &[&'static str]) -> AnyView {
     let first = paths.first().copied().unwrap_or_default();
     view! {

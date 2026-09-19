@@ -1,5 +1,4 @@
-//! 消费模板域命令。对照原 `app/src/backend/api/template.ts` 与
-//! `transaction_template_controller.go`。
+//! 消费模板域命令。
 //!
 //! 模板请求体在 `tr-ipc` 里是 **snake_case**（`template_id` / `template_name` /
 //! `transaction_type` / `sort_order`），但列表/排序的查询参数是 camelCase

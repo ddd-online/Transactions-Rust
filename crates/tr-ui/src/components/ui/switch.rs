@@ -1,4 +1,4 @@
-//! 开关 —— 对应原 `a-switch`（`checked` / `checked-children` / `disabled`）。
+//! 开关（`checked` / `checked_children` / `disabled`）。
 //!
 //! 用 `<button role="switch" aria-checked>` 而不是 `<input type="checkbox">`：
 //! 与组件套件其余部分的"按钮 + `data-*` 状态"风格一致，也免去 `:checked` 选择器的

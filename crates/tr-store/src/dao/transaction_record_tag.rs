@@ -1,7 +1,7 @@
-//! 消费记录 ↔ 标签关联 DAO。对照 Go `kernel/dao/transaction_record_tag_dao.go`。
+//! 消费记录 ↔ 标签关联 DAO。
 //!
-//! 该表**没有主键**（与原 schema 一致），重复插入同一组 (ledger_id, transaction_id, tag)
-//! 不会报错也不会去重——因此写入前必须先删后插，这一语义与原实现相同。
+//! 该表**没有主键**（基线 schema 如此），重复插入同一组 (ledger_id, transaction_id, tag)
+//! 不会报错也不会去重——因此写入前必须先删后插。
 
 use std::collections::HashMap;
 
@@ -66,7 +66,7 @@ impl TrTagDao {
             return Ok(result);
         }
 
-        // 与 GORM 的 `IN ?` 等价：按 id 数量拼占位符（id 为内部生成，不存在注入面）
+        // 按 id 数量拼 `IN (?, ?, …)` 占位符（id 为内部生成，不存在注入面）
         let placeholders = vec!["?"; transaction_ids.len()].join(",");
         let sql = format!(
             "SELECT {COLUMNS} FROM tbl_billadm_transaction_record_tag \
@@ -132,7 +132,7 @@ mod tests {
             TrTagDao::query_by_tr_ids(&conn, &["t1".to_string(), "t2".to_string()]).unwrap();
         assert_eq!(grouped["t1"].len(), 2);
         assert_eq!(grouped["t2"].len(), 1);
-        // 空输入直接返回空 map（原实现同样短路）
+        // 空输入直接返回空 map（提前短路）
         assert!(TrTagDao::query_by_tr_ids(&conn, &[]).unwrap().is_empty());
 
         TrTagDao::delete_by_tr_id(&conn, "t1").unwrap();
@@ -147,8 +147,8 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_rows_are_allowed_like_the_original_table() {
-        // 该表无主键：重复写入会产生重复行（原实现同样如此），服务层靠"先删后插"避免
+    fn duplicate_rows_are_allowed_by_the_table_definition() {
+        // 该表无主键：重复写入会产生重复行，服务层靠"先删后插"避免
         let (workspace, dir) = workspace();
         let conn = workspace.connection();
         TrTagDao::create_batch(&conn, &[tag("t1", "三餐")]).unwrap();

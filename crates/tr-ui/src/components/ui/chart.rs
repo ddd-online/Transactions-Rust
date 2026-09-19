@@ -1,24 +1,20 @@
 //! 自绘 SVG 折线图（界面层无 JS 图表库，全部几何在 Rust 里算完）。
 //!
-//! 对照原 `components/da_view/TransactionsChart.vue`（ECharts 折线图）与
-//! `components/stock_view/StockStatisticsView.vue` 里的统计曲线：
+//! 能力：
 //!
-//! | 原 ECharts 能力 | 本组件 |
-//! |---|---|
-//! | 多序列 `series[]` | [`ChartSeries`] 列表 |
-//! | 类目轴 `xAxis.type = 'category'` | `points: Vec<String>`（月份 / 年份 / 序号） |
-//! | 数值轴 + 分割线 | 自动 nice tick（默认 5 段）+ 横向网格线 |
-//! | 图例（点击开关） | [`ChartConfig::hide_legend`] 控制显示；点击开关由**页面**维护可见序列集合后重传 `series` |
-//! | `axisPointer` + `tooltip` | `pointermove` 命中最近类目 → 竖参考线 + 浮层（金额 `¥` 两位小数） |
-//! | `markLine` 虚线参考线 | [`ChartConfig::reference`] |
-//! | `dataZoom` 缩放 | **未实现**（见汇报的差异说明） |
+//! * 多序列 —— [`ChartSeries`] 列表
+//! * 类目轴 —— `points: Vec<String>`（月份 / 年份 / 序号）
+//! * 数值轴 + 分割线 —— 自动 nice tick（默认 5 段）+ 横向网格线
+//! * 图例 —— [`ChartConfig::hide_legend`] 控制显示；点击开关由**页面**维护可见序列集合后重传 `series`
+//! * tooltip —— `pointermove` 命中最近类目 → 竖参考线 + 浮层（金额 `¥` 两位小数）
+//! * 虚线参考线 —— [`ChartConfig::reference`]
+//! * 缩放 —— **未实现**。
 //!
 //! ## 配色
 //!
 //! 序列颜色一律是 **CSS 变量名**（例如 `--transactions-color-transfer`），
 //! 在 SVG 里以 `stroke="var(--transactions-color-transfer)"` 使用。
-//! 这样浅色/深色主题切换由 CSS 自动完成，不需要 `getComputedStyle`
-//! （原 `utils/themeColors.ts` 是因为 ECharts 读不到 CSS 变量才必须解析色值）。
+//! 这样浅色/深色主题切换由 CSS 自动完成，不需要 `getComputedStyle`。
 //!
 //! ## 纪律
 //!
@@ -128,7 +124,7 @@ impl ChartConfig {
         self
     }
 
-    /// 预设配色（与原 ECharts 默认取色顺序一致的语义色）。
+    /// 预设配色（语义色，顺序即取值顺序）。
     pub fn default_colors() -> [&'static str; 5] {
         [
             "var(--transactions-color-transfer)",

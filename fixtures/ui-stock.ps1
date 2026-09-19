@@ -1,6 +1,6 @@
 # ui-stock.ps1 —— 股票「建仓 → 减仓 → 清仓」的端到端验收（真实界面 + 数据库断言）。
 #
-# 为什么需要它：数据级黄金对比（`xtask parity` 阶段 3）覆盖的是**落库**语义，
+# 为什么需要它：减仓 / 多轮次 / 预演这些**落库**语义在数据层已经有测试覆盖，
 # 而界面上"点减仓/清仓 → 填成交价 → 提交"这条路一直只有「建仓」被手工验过。
 # 这里把整条生命周期走完，并按服务层的口径把关键金额算清楚：
 #   * 建仓：持仓数量 += 股数，`total_cost += amount + fee`（**成本含手续费**）
@@ -29,7 +29,7 @@
 #     标签 <p>，必须按 Y 序取弹窗里的 Edit（`Get-ModalEdits`）；
 #   * 这个工作空间里**同代码的种子成交也在同一个账本**（界面只显示当前轮次那笔，DB 查询会一起捞），
 #     而且种子记录与我们的是同一秒 —— "我们的那笔"只能按"该类型里 created_at 最新"认（`Get-NewestTrade`）；
-#     另外**编辑会触发整个账本的派生资金记录重放**（与 parity 阶段 3 的行为一致），
+#     另外**编辑会触发整个账本的派生资金记录重放**，
 #     所以资金记录也只能按"变动额"认，不能用"条数/相邻两条"这种全局判据；
 #   * 「建仓」按钮在**我的持仓**页签、费用设置在**我的账户**页签、重置在**设置页**——
 #     换页签后再下单，必须先切回去，否则会出现"设置存好了但下单弹窗压根没弹"的假象；
@@ -66,7 +66,7 @@ foreach ($dir in @($smokeHome, (Join-Path $smokeHome 'Desktop'), $OutDir)) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
 }
 
-# 判重按完整路径（原 Electron 版也叫 Transactions.exe）
+# 判重必须按**完整路径**，不能按进程名（本机别的目录下可能有同名 exe）
 $repoPrefix = $repo.TrimEnd('\') + '\'
 $blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
     $path = try { $_.Path } catch { $null }
@@ -617,7 +617,7 @@ try {
             "持仓成本按新价重算 = 成交额 + 手续费（$($posAfterEdit.total_cost)）"
     }
     # 资金记录：**按"变动额"认我们这条**。编辑会触发整个账本的派生资金记录重放
-    # （这与 parity 阶段 3 的行为一致），种子记录的 created_at 会被重写，所以"条数/相邻两条"都不可靠。
+    # 这与数据层的重放行为一致：种子记录的 created_at 会被重写，所以"条数/相邻两条"都不可靠。
     if ($editedTrade) {
         $expectedChange = -(([int64]$editedTrade.amount) + ([int64]$editedTrade.fee))
         $ourFundsAfterEdit = @(Get-FundRecords -LedgerId $ledgerId | Where-Object { ([int64]$_.amount_change) -eq $expectedChange })
@@ -721,7 +721,7 @@ try {
     }
     Assert-FundChain -LedgerId $ledgerId -Stage '减仓后'
 
-    # ---- 清仓：可用手数应预填 2 手（原实现「清仓时预填全仓手数」）----
+    # ---- 清仓：可用手数应预填 2 手（清仓时预填全仓手数）----
     $closeButton = Wait-VisibleButton -Window $window -Name '清仓' -TimeoutSec 15
     Assert-True ([bool]$closeButton) '详情区还有「清仓」按钮'
     if ($closeButton) {

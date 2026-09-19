@@ -1,22 +1,22 @@
 //! tr-ui —— Transactions 的界面层（Leptos CSR，编译为 WASM 后由 Tauri 窗口加载）。
 //!
-//! 这是原 Vue 3 + Ant Design Vue 界面的 Rust 重写。整体结构：
+//! 模块结构与职责：
 //!
-//! | 模块 | 职责 | 对照的原实现 |
-//! |---|---|---|
-//! | [`ipc`] | Tauri 命令调用桥（错误信封、`workspace-required` 事件） | `backend/api/api-client.ts` |
-//! | [`error_handler`] | 通知 + 兜底 / 重新抛出 | `backend/errorHandler.ts` |
-//! | [`notify`] | message / notification 全局队列 | `backend/notification.ts` |
-//! | [`api`] | 按业务域的命令封装 | `backend/api/*.ts` |
-//! | [`store`] | 账本 / 统计 / 外观 的界面级共享状态 | `stores/*.ts` |
-//! | [`format`] | 金额与类型文案（金额换算走 `tr_domain::money`） | `backend/functions.ts` + `constant.ts` |
-//! | [`time`] | 秒级时间戳 → 本地时间字符串 | `backend/functions.ts` 的 `formatTimestamp` |
-//! | [`icons`] | 内联 SVG 图标集（照抄 Ant Design 的 path 数据） | `@ant-design/icons-vue` + `assets/icons/*.svg` |
-//! | [`components::ui`] | 通用组件套件（P5 首批 8 个 + P6-a 增补 16 个） | Ant Design Vue 的等价子集 |
-//! | [`pages`] | 页面（消费记录 / 分类标签 / 应用设置已实现） | `components/*_view/*.vue` |
-//! | [`shell`] | 应用外壳 | `Layout.vue` / `AppLeftBar.vue` / `AppTopBar.vue` / `AppBottomBar.vue` |
+//! | 模块 | 职责 |
+//! |---|---|
+//! | [`ipc`] | Tauri 命令调用桥（错误信封、`workspace-required` 事件） |
+//! | [`error_handler`] | 通知 + 兜底 / 重新抛出 |
+//! | [`notify`] | message / notification 全局队列 |
+//! | [`api`] | 按业务域的命令封装 |
+//! | [`store`] | 账本 / 统计 / 外观 的界面级共享状态 |
+//! | [`format`] | 金额与类型文案（金额换算走 `tr_domain::money`） |
+//! | [`time`] | 秒级时间戳 → 本地时间字符串 |
+//! | [`icons`] | 内联 SVG 图标集 |
+//! | [`components::ui`] | 通用组件套件 |
+//! | [`pages`] | 七个页面（消费记录 / 数据分析 / 股票交易 / 关键事件 / 日记管理 / 分类标签 / 应用设置） |
+//! | [`shell`] | 应用外壳（导航 / 窗口控制 / 底部状态栏 / 工作空间选择） |
 //!
-//! 设计令牌与样式在 `static/css/`（`tokens.css` 为 `_variables.scss` 的纯 CSS 逐条移植）。
+//! 设计令牌与样式在 `static/css/`（`tokens.css` 是颜色与尺寸令牌的唯一来源）。
 //!
 //! 本 crate 只对 wasm32 编译；native 侧是一个空 crate（见 Cargo.toml 说明），
 //! 因此 `cargo check --workspace` 不会引入任何浏览器依赖。

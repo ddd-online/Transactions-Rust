@@ -1,9 +1,9 @@
 /* ============================================
  * 股票交易页（`/stock_view`）—— 四个分栏
- * 对照原 `stock_view/*.vue` 的 scoped 样式；取值全部走 `--transactions-*` 令牌。
+ * 取值全部走 `--transactions-*` 令牌。
  *
- * **A 股红涨绿跌**：原实现在本页作用域内把 `.amount-income` / `.amount-expense`
- * 反向映射（盈 → 红、亏 → 绿）。这里照抄同一覆盖，仅限 `.stock-page` 内部。
+ * **A 股红涨绿跌**：本页作用域内把 `.amount-income` / `.amount-expense`
+ * 反向映射（盈 → 红、亏 → 绿），仅限 `.stock-page` 内部。
  * ============================================ */
 
 .stock-page .amount-income {

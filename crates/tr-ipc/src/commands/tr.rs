@@ -1,18 +1,7 @@
-//! 消费记录命令。对照 Go `kernel/api/transaction_record_controller.go`。
+//! 消费记录命令。
 //!
-//! 入参形状按原 HTTP 语义逐字段对齐（注意 `link`/`unlink` 用的是 **snake_case**，
-//! 因为原实现从 `map[string]any` 里取 `transaction_id`；其余对象用 DTO 的原始字段名）：
-//!
-//! | 原路由 | 命令 |
-//! |---|---|
-//! | `POST /transactions/query` | `tr_query` |
-//! | `POST /transactions/query-chart-data` | `tr_chart_data` |
-//! | `POST /transactions` | `tr_create` |
-//! | `POST /transactions/batch` | `tr_batch_create` |
-//! | `DELETE /transactions/:id` | `tr_delete` |
-//! | `POST /transactions/link` | `tr_link` |
-//! | `POST /transactions/unlink` | `tr_unlink` |
-//! | `GET /transactions/linked/:date` | `tr_linked_by_date` |
+//! 入参形状是固定契约（注意 `link`/`unlink` 用的是 **snake_case**
+//! ——请求体里取 `transaction_id`；其余对象用 DTO 的原始字段名）。
 
 use serde::Deserialize;
 use tauri::State;
@@ -26,7 +15,7 @@ use tr_service::transaction_record;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
-/// `POST /transactions/query`：条件查询（条件项之间 OR，项内 AND）。
+/// 条件查询（条件项之间 OR，项内 AND）。
 #[tauri::command]
 pub fn tr_query(state: State<'_, AppState>, req: TrQueryCondition) -> ApiResult<TrQueryResult> {
     tracing::debug!(
@@ -42,7 +31,7 @@ pub fn tr_query(state: State<'_, AppState>, req: TrQueryCondition) -> ApiResult<
     )?)
 }
 
-/// `POST /transactions/query-chart-data`：图表逐曲线分桶数据。
+/// 图表逐曲线分桶数据。
 #[tauri::command]
 pub fn tr_chart_data(
     state: State<'_, AppState>,
@@ -52,7 +41,7 @@ pub fn tr_chart_data(
     Ok(transaction_record::query_trs_for_chart(&workspace, &req)?)
 }
 
-/// `POST /transactions`：新建一条记录，返回记录 ID。
+/// 新建一条记录，返回记录 ID。
 #[tauri::command]
 pub fn tr_create(state: State<'_, AppState>, req: TransactionRecordDto) -> ApiResult<String> {
     req.validate()?;
@@ -60,9 +49,9 @@ pub fn tr_create(state: State<'_, AppState>, req: TransactionRecordDto) -> ApiRe
     Ok(transaction_record::create_tr(&workspace, &req)?)
 }
 
-/// `POST /transactions/batch`：批量新建，返回成功条数。
+/// 批量新建，返回成功条数。
 ///
-/// 逐条校验，错误文案与 Go 的 `record %d: %s` 一致（下标从 1 起）。
+/// 逐条校验，错误文案是 `record %d: %s`（下标从 1 起）。
 #[tauri::command]
 pub fn tr_batch_create(
     state: State<'_, AppState>,
@@ -86,7 +75,7 @@ pub struct TransactionIdRequest {
     pub id: String,
 }
 
-/// `DELETE /transactions/:id`：删除记录及其标签关联。
+/// 删除记录及其标签关联。
 #[tauri::command]
 pub fn tr_delete(state: State<'_, AppState>, req: TransactionIdRequest) -> ApiResult<()> {
     if req.id.is_empty() {
@@ -104,7 +93,7 @@ pub struct LinkRequest {
     pub date: String,
 }
 
-/// `POST /transactions/link`：关联到关键事件，返回日期（与原实现返回 `date` 一致）。
+/// 关联到关键事件，返回日期。
 #[tauri::command]
 pub fn tr_link(state: State<'_, AppState>, req: LinkRequest) -> ApiResult<String> {
     if req.transaction_id.is_empty() || req.date.is_empty() {
@@ -122,7 +111,7 @@ pub struct UnlinkRequest {
     pub transaction_id: String,
 }
 
-/// `POST /transactions/unlink`：解除关联，返回记录 ID（与原实现返回 `trId` 一致）。
+/// 解除关联，返回记录 ID。
 #[tauri::command]
 pub fn tr_unlink(state: State<'_, AppState>, req: UnlinkRequest) -> ApiResult<String> {
     if req.transaction_id.is_empty() {
@@ -141,7 +130,7 @@ pub struct LinkedByDateRequest {
     pub ledger_id: String,
 }
 
-/// `GET /transactions/linked/:date`：某天已关联的记录（含标签）。
+/// 某天已关联的记录（含标签）。
 #[tauri::command]
 pub fn tr_linked_by_date(
     state: State<'_, AppState>,

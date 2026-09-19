@@ -1,18 +1,16 @@
 //! 股票交易页（`/stock_view`）—— P6-b 完整实现：账户 / 持仓 / 交易历史 / 交易统计 四个分栏。
 //!
-//! ## 对照的原 Vue 文件
+//! ## 页面组成
 //!
-//! | 原文件 | 本文件对应部分 |
+//! | 组成 | 职责 |
 //! |---|---|
-//! | `stock_view/StockTradingView.vue` | [`StockPage`]：四个分栏的外壳（原 `a-tabs`） |
-//! | `stock_view/StockAccountView.vue` | [`account_view`]：总览卡片 + 追加/支取弹窗 + 费用设置 + 资金记录分页 |
-//! | `stock_view/StockPositionView.vue` | [`position_view`]：持仓卡片 + 行情面板 + 本轮复盘 + 下单弹窗 + 成交表 + 影响预演 |
-//! | `stock_view/StockTradeEditModal.vue` | [`TradeEditModal`] / [`TradeDeleteModal`]（编辑成交 / 删除委托 + 影响预演确认） |
-//! | `stock_view/StockTradeRecordView.vue` | [`history_view`]：全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签 |
-//! | `stock_view/StockStatisticsView.vue` | [`statistics_view`]：结算统计卡片 + 自绘 SVG 曲线 + 逐笔结算明细 + 筛选 |
-//! | `stock_view/StockStatisticsRangeFilter.vue` | [`statistics_view`] 内的区间/笔数筛选 |
-//! | `stock_view/StockStatisticsTagFilter.vue` | [`statistics_view`] 内的标签筛选 |
-//! | `stores/stock*Store.ts` | 本文件直接持有信号（不引入 store；与其余页面一致） |
+//! | [`StockPage`] | 四个分栏的外壳（分栏定义见 [`TABS`]） |
+//! | [`account_view`] | 总览卡片 + 追加/支取弹窗 + 费用设置 + 资金记录分页 |
+//! | [`position_view`] | 持仓卡片 + 行情面板 + 本轮复盘 + 下单弹窗 + 成交表 + 影响预演 |
+//! | [`TradeEditModal`] / [`TradeDeleteModal`] | 编辑成交 / 删除委托 + 影响预演确认 |
+//! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签 |
+//! | [`statistics_view`] | 结算统计卡片 + 自绘 SVG 曲线 + 逐笔结算明细 + 区间/笔数/标签筛选 |
+//! | 状态组织 | 本文件直接持有信号（不引入 store；与其余页面一致） |
 //!
 //! ## 单位与命名纪律
 //!
@@ -21,14 +19,14 @@
 //!   `price` 是元（`f64`），后端负责 ×100 四舍五入（见 `tr-ipc/src/commands/stock.rs`）。
 //! * 请求字段 snake_case、响应字段 camelCase —— 逐字照抄命令面，不做归一化。
 //! * **A 股红涨绿跌**：本页作用域内的 `.amount-income` / `.amount-expense` 被 CSS 反向映射
-//!   （盈 → 红、亏 → 绿），与记账域语义相反（原实现同款覆盖，见 `stock.css`）。
+//!   （盈 → 红、亏 → 绿），与记账域语义相反（本页作用域的覆盖写在 `stock.css`）。
 //!
 //! ## 行情降级的硬要求
 //!
 //! `latestPrice` / `prevClose` 为 `None`（行情接口失败）时：
 //! * 现价显示 `-`（[`crate::format::quote_text`]）
 //! * 浮动盈亏 / 当日涨跌显示 `—`（[`crate::format::optional_signed_percent`]）
-//! * 持仓市值按**持仓成本**计入（与原实现一致）
+//! * 持仓市值按**持仓成本**计入
 //! * 全程不 `unwrap`、不 panic
 
 use std::collections::BTreeSet;
@@ -55,10 +53,10 @@ use crate::notify::Notifier;
 use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd};
 
-/// 页面标题（与原 `AppLeftBar.vue` 文案一致）。
+/// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "股票交易";
 
-/// 四个分栏（原 `StockTradingView.vue` 的 `a-tabs`，默认 `account`）。
+/// 四个分栏（默认 `account`）。
 const TABS: [(&str, &str); 4] = [
     ("account", "我的账户"),
     ("position", "我的持仓"),
@@ -66,16 +64,16 @@ const TABS: [(&str, &str); 4] = [
     ("statistics", "交易统计"),
 ];
 
-/// 资金记录每页条数（原 `EMPTY_PAGE` / `loadFundRecords(1)` 的默认 `pageSize = 10`）。
+/// 资金记录每页条数（默认 10 条）。
 const FUND_PAGE_SIZE: i64 = 10;
 
-/// 本轮复盘模板（照抄原 `backend/constant.ts` 的 `StockRoundReviewTemplate`）。
+/// 本轮复盘模板（固定文案，改动即影响界面）。
 const ROUND_REVIEW_TEMPLATE: &str = "判断层\n\n买入理由：\n卖出理由：\n\n改进层\n\n交易心得\n";
 
-/// 复盘占位文案（原实现）。
+/// 复盘占位文案（固定文案，改动即影响界面）。
 const REVIEW_PLACEHOLDER: &str = "写下本轮的操作依据、得失与可改进之处（500 字以内）";
 
-/// 沪深股票代码校验（原实现：沪 60/68、深 00/30 开头）。
+/// 沪深股票代码校验（沪 60/68、深 00/30 开头）。
 fn is_valid_stock_code(code: &str) -> bool {
     let bytes = code.as_bytes();
     if bytes.len() != 6 || !bytes.iter().all(|byte| byte.is_ascii_digit()) {
@@ -84,7 +82,7 @@ fn is_valid_stock_code(code: &str) -> bool {
     matches!(&code[..2], "60" | "68" | "00" | "30")
 }
 
-/// 是否沪市（原 `isShanghaiCode`：60 / 68 开头）—— 过户费只对沪市收取。
+/// 是否沪市（60 / 68 开头）—— 过户费只对沪市收取。
 fn is_shanghai_code(code: &str) -> bool {
     code.starts_with("60") || code.starts_with("68")
 }
@@ -119,7 +117,7 @@ impl FeeEstimate {
     }
 }
 
-/// 按原 `stockFee.ts` 的口径预估费用（整笔委托一次计收）。
+/// 预估本次委托的费用（整笔委托一次计收）。
 fn estimate_fee(amount_cents: i64, is_buy: bool, code: &str, fee: &StockFeeSetting) -> FeeEstimate {
     if amount_cents <= 0 {
         return FeeEstimate::default();
@@ -217,7 +215,7 @@ fn account_view(active: RwSignal<String>) -> AnyView {
     let fee_saving = RwSignal::new(false);
     let mutating = RwSignal::new(false);
 
-    // 费用表单（原实现用字符串输入 + addon-after 单位）
+    // 费用表单（用字符串输入 + addon-after 单位）
     let commission_rate_text = RwSignal::new(String::new());
     let min_commission_text = RwSignal::new(String::new());
     let stamp_duty_text = RwSignal::new(String::new());
@@ -804,7 +802,7 @@ fn amount_modal(
     .into_any()
 }
 
-/// 去掉浮点尾零（原实现的 `String(parseFloat(x.toFixed(n)))`）。
+/// 去掉浮点尾零（保留 `digits` 位小数后去掉末尾的 `0`）。
 fn trim_number(value: f64, digits: usize) -> String {
     if !value.is_finite() {
         return "0".to_string();
@@ -968,7 +966,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
         ledger_id
     });
 
-    // 切回本分栏 → 刷新行情（原 `refreshQuotes`：重取持仓 + 账户总览）
+    // 切回本分栏 → 刷新行情（重取持仓 + 账户总览）
     Effect::new(move |prev: Option<bool>| {
         let is_active = active.get() == "position";
         if is_active && prev == Some(false) && !stores.current_ledger_id.get_untracked().is_empty()
@@ -1069,7 +1067,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                 .map(|item| item.stock_name.clone())
                 .unwrap_or_default(),
         );
-        // 清仓时预填全仓手数（原实现）
+        // 清仓时预填全仓手数
         trade_rows.reset(vec![(
             String::new(),
             if next_type == "close" && lots_label_value > 0 {
@@ -1114,7 +1112,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
             Notifier::global().error(format!("减仓手数不能超过可用手数（{available} 手）"), None);
             return;
         }
-        // 减仓正好等于可用手数 → 视为清仓（原实现）
+        // 减仓正好等于可用手数 → 视为清仓
         if submit_type == "reduce" && available > 0 && total_lots == available {
             submit_type = "close".to_string();
         }
@@ -1207,7 +1205,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
             {
                 Ok(preview) => {
                     if preview.removed_rounds.is_empty() {
-                        // 无失效轮次 → 直接写库（原实现）
+                        // 无失效轮次 → 直接写库
                         match api::stock::trade_update(
                             &ledger_id, &trade.id, price, lots, trade_time,
                         )
@@ -1753,7 +1751,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                         return;
                     }
                     leptos::task::spawn_local(async move {
-                        // 静默失败（原实现 `tryOrFallback(..., '')`）
+                        // 静默失败（查不到名称就保持为空）
                         if let Ok(data) = api::stock::stock_name(&code).await {
                             if trade_name.get_untracked().trim().is_empty()
                                 && !data.stock_name.is_empty()
@@ -1838,7 +1836,7 @@ fn start_delete_order(
     let _ = selected_code;
 }
 
-/// 影响预演里的「失效轮次」段落文案（原实现逐字）。
+/// 影响预演里的「失效轮次」段落固定文案（改动即影响界面）。
 fn removed_rounds_text(impact: &StockTradeImpactDto) -> String {
     if impact.removed_rounds.is_empty() {
         return "不会影响任何一轮的复盘。".to_string();
@@ -2381,7 +2379,7 @@ struct TradeRow {
     realized_pnl: Option<i64>,
 }
 
-/// 按 `orderId` 分组（原 `groupTradesByOrder`：键 = `orderId || id`，组内按 `orderSeq` 升序）。
+/// 按 `orderId` 分组（键 = `orderId || id`，组内按 `orderSeq` 升序）。
 fn group_trades(trades: &[StockTradeDto]) -> Vec<TradeRow> {
     let mut groups: Vec<(String, Vec<StockTradeDto>)> = Vec::new();
     for trade in trades {
@@ -2771,7 +2769,7 @@ fn history_view() -> AnyView {
         if prev.as_deref() == Some(code.as_str()) {
             return code;
         }
-        // 切换股票 → 展开态与草稿全部重置（原 `watch(detail.id)`）
+        // 切换股票 → 展开态与草稿全部重置
         review_editing.set(String::new());
         review_draft.set(String::new());
         collapsed_rounds.set(BTreeSet::new());
@@ -3282,7 +3280,7 @@ fn round_card(
 }
 // ==================================================================== 分栏四：交易统计
 
-/// 统计曲线的指标定义（照抄原 `metricDefs` 的顺序与文案）。
+/// 统计曲线的指标定义（顺序与文案固定，改动即影响界面）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Metric {
     TotalPnl,
@@ -3338,7 +3336,7 @@ impl Metric {
         }
     }
 
-    /// 是否画 y=0 虚线参考线（原实现：`money && signed`）。
+    /// 是否画 y=0 虚线参考线（金额类且可能为负的指标才画）。
     fn has_reference(self) -> bool {
         matches!(self, Metric::TotalPnl | Metric::Expectancy)
     }
@@ -3349,7 +3347,7 @@ impl Metric {
             Metric::TotalPnl => point.total_pnl as f64,
             Metric::WinRate => point.win_rate,
             Metric::AvgWin => point.avg_win as f64,
-            // 平均亏损取负（曲线在 0 轴下方，原实现同款）
+            // 平均亏损取负（曲线在 0 轴下方）
             Metric::AvgLoss => -(point.avg_loss as f64),
             Metric::PnlRatio => point.pnl_ratio.unwrap_or(0.0),
             Metric::Expectancy => point.expectancy as f64,
@@ -3418,7 +3416,7 @@ fn statistics_view() -> AnyView {
         if prev.as_deref() == Some(ledger_id.as_str()) {
             return ledger_id;
         }
-        // 账本切换时重置筛选（原视图内 watch）
+        // 账本切换时重置筛选
         filter_mode.set("all".to_string());
         range_start.set(String::new());
         range_end.set(String::new());

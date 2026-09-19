@@ -1,6 +1,6 @@
-//! 消费记录服务。对照 Go `kernel/service/transaction_record_service.go`。
+//! 消费记录服务：新建 / 批量新建 / 条件查询 / 图表聚合 / 关联关键事件。
 //!
-//! 几个容易踩空、但都按原实现保留的细节：
+//! 几个容易踩空、但必须遵守的细节：
 //! * **统计口径**：`items`（筛选条件）不影响 `trStatistics`——它只按「账本 + 时间范围」汇总
 //! * **分页**：`limit <= 0` 时 `page_size` 取实际返回条数；`page` 仅在 `limit > 0 && offset >= 0` 时推导
 //! * **图表**：先按曲线查桶，再在**全部曲线的最小/最大桶**之间补零生成连续时间轴
@@ -129,7 +129,7 @@ pub fn query_trs_on_condition(
         items.push(dto);
     }
 
-    // 分页推导（与原实现逐行等价）
+    // 分页推导
     let page_size = if condition.limit <= 0 {
         items.len() as i32
     } else {
@@ -275,7 +275,7 @@ fn chart_time_labels(min_bucket: &str, max_bucket: &str, granularity: &str) -> V
         return Vec::new();
     };
 
-    // 与原实现一致：起点晚于终点时返回空
+    // 起点晚于终点时返回空
     if (min_year, min_month) > (max_year, max_month) {
         return Vec::new();
     }
@@ -293,8 +293,7 @@ fn chart_time_labels(min_bucket: &str, max_bucket: &str, granularity: &str) -> V
     labels
 }
 
-/// 解析 `YYYY-MM`；非法（含月份越界、非零填充）时返回 `None`，
-/// 等价 Go `time.Parse("2006-01", ...)` 的失败路径。
+/// 解析 `YYYY-MM`；非法（含月份越界、非零填充）时返回 `None`。
 fn parse_year_month(value: &str) -> Option<(i32, u32)> {
     let (year_part, month_part) = value.split_once('-')?;
     if year_part.len() != 4 || month_part.len() != 2 {
@@ -519,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn pagination_metadata_matches_original_math() {
+    fn pagination_metadata_matches_derived_math() {
         let (workspace, dir) = workspace("page");
         for index in 0..5 {
             create_tr(
@@ -649,7 +648,7 @@ mod tests {
             chart_time_labels("2026-11", "2027-02", "month"),
             vec!["2026-11", "2026-12", "2027-01", "2027-02"]
         );
-        // 非法桶：返回空而不是 panic（等价 Go 的 time.Parse 失败路径）
+        // 非法桶：返回空而不是 panic
         assert!(chart_time_labels("2026-13", "2027-01", "month").is_empty());
         assert!(chart_time_labels("abc", "2027", "year").is_empty());
         // 起止倒置
@@ -721,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn link_missing_transaction_reports_original_message() {
+    fn link_missing_transaction_reports_stable_message() {
         let (workspace, dir) = workspace("link-missing");
         let error = link_to_key_event(&workspace, "absent", "2026-01-01").unwrap_err();
         assert_eq!(error.to_string(), "transaction not found: absent");

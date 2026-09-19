@@ -1,13 +1,12 @@
--- Transactions 工作空间「最新 schema」基线（v0.27.0）
+-- Transactions 工作空间「当前 schema」基线
 --
--- 来源：在参考实现（D:\github\Transactions，Go 0.27.0）上以空目录打开工作空间后
---       由 `sqlite3 transactions.db .schema` 导出的原始 DDL，逐字节复制，未做任何改写。
--- 用途：Rust 版为**全新工作空间**建库时执行本文件，使其库结构与 Go 0.27 建库结果完全一致
+-- 来源：`sqlite3 transactions.db .schema` 输出的原始 DDL，逐字节复制，未做任何改写。
+-- 用途：为**全新工作空间**建库时执行本文件，使库结构与基线逐字节一致
 --       （由 `cargo xtask schema-diff` 校验）。
 --
 -- 纪律（见 AGENTS.md）：本文件只在「数据库文件不存在」时执行一次；
 -- 打开既有工作空间时**绝不**执行任何 DDL/DML，只做只读校验。
--- 本仓库不包含任何 schema 迁移逻辑：旧版本工作空间会被明确拒绝，而不是被就地升级。
+-- 本仓库不包含任何 schema 迁移逻辑：更早格式的工作空间会被明确拒绝，而不是被就地升级。
 
 CREATE TABLE `tbl_billadm_ledger` (`id` text,`name` text NOT NULL,`description` text,`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
 CREATE TABLE `tbl_billadm_transaction_record` (`transaction_id` text,`ledger_id` text NOT NULL,`price` integer NOT NULL,`transaction_type` text NOT NULL,`category` text NOT NULL,`description` text,`flags` text,`key_event_date` varchar(10) DEFAULT "",`transaction_at` integer NOT NULL,`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`transaction_id`));
@@ -50,9 +49,9 @@ CREATE TABLE `tbl_billadm_stock_trade_tag_setting` (`id` text,`ledger_id` varcha
 CREATE UNIQUE INDEX `idx_tbl_billadm_stock_trade_tag_setting_ledger_id` ON `tbl_billadm_stock_trade_tag_setting`(`ledger_id`);
 CREATE TABLE `tbl_billadm_schema_migration` (`id` text,`applied_at` integer,PRIMARY KEY (`id`));
 
--- Go 0.27 的 AutoMigrate + 版本化迁移对**空库**执行后，会把以下 3 条记录登记为已应用
--- （三条迁移 SQL 对空库都是空操作）。Rust 版只复刻建库后的最终状态，
--- 不包含任何迁移执行逻辑，以保证空库 schema 与 Go 版逐字节一致。
+-- 以下 3 条记录是历史迁移的登记（这些迁移对**空库**都是空操作）。
+-- 本仓库只复刻建库后的最终状态，不包含任何迁移执行逻辑，
+-- 以保证新建库与已升级到当前格式的库逐字节一致。
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260101_key_event_ledger_date_composite_unique', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260101_key_event_image_backfill_ledger_id', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260918_stock_trade_backfill_order_id', CAST(strftime('%s','now') AS INTEGER));

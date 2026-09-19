@@ -1,30 +1,23 @@
 //! 数据分析页（`/da_view`）—— P6-b 完整实现。
 //!
-//! ## 对照的原 Vue 文件
+//! ## 组成
 //!
-//! | 原文件 | 本文件对应部分 |
-//! |---|---|
-//! | `da_view/DataAnalysisView.vue` | [`DataAnalysisPage`]：左侧 220px 图表列表 + 右侧图表视图编排 |
-//! | `da_view/TransactionsChartList.vue` | [`chart_list_panel`]：列表项（颜色点组 / 删除气泡 / 新增按钮） |
-//! | `da_view/TransactionsChartView.vue` | [`chart_panel`]：标题 + 粒度 + 曲线表 + 保存 + 图表 + 右侧求和面板 |
-//! | `da_view/TransactionsChart.vue` | [`crate::components::ui::LineChart`]（自绘 SVG 折线图） |
-//! | `da_view/TransactionsChartLines.vue` | [`add_line_modal`] + 曲线表（添加/删除曲线） |
-//! | `backend/chart.ts` | `crate::api::chart::*` |
-//! | `utils/themeColors.ts` | 直接用 CSS 变量（SVG 能读变量，不需要 `getComputedStyle`） |
+//! * [`DataAnalysisPage`]：左侧 220px 图表列表 + 右侧图表视图编排
+//! * [`chart_list_panel`]：列表项（颜色点组 / 删除气泡 / 新增按钮）
+//! * [`chart_panel`]：标题 + 粒度 + 曲线表 + 保存 + 图表 + 右侧求和面板
+//! * [`crate::components::ui::LineChart`]：自绘 SVG 折线图
+//! * [`add_line_modal`] + 曲线表（添加/删除曲线）
+//! * `crate::api::chart::*`：图表的 IPC 调用面
 //!
-//! ## 有意与原实现的差异（详见汇报）
+//! ## 设计取舍
 //!
-//! 1. **图表交互**：原实现用 ECharts，提供图例点击开关系列。原 `DataAnalysisView` 里的
-//!    图表其实**没有图例**（单图多曲线，`legend` 只有 `top:0` 的默认显示）。本页保留
-//!    "图例点击开关"的能力（`visible_series`），比原实现多一点交互。
-//! 2. **没有缩放 / dataZoom**：原实现也没注册 `DataZoomComponent`，属等价。
-//! 3. **新增图表**：原实现硬编码 `chartType: "line"`、`lines: []`（界面上没有图表类型选择器），
-//!    这里保持一致。
-//! 4. **编辑图表标题**：原实现没有标题编辑入口（只有粒度下拉与曲线表），这里补了
-//!    "重命名"（调用同一个 `chart_update`，属行为增强，见汇报）。
-//! 5. **`isPreset` 的取舍**：原 `DataAnalysisView` 给视图硬编码 `:is-preset="false"`，
-//!    导致预设图表也能改曲线。这里按**真实 `isPreset`** 控制（预设图表隐藏"添加曲线/保存修改"），
-//!    见汇报。
+//! 1. **图表交互**：折线图自绘 SVG，图例由图表自身渲染（`ChartConfig` 用默认值，即不隐藏图例）；
+//!    曲线的增删在上面那张曲线表里完成，本页不给图例加点击开关。
+//! 2. **没有缩放**：图表不做缩放 / 平移，整段区间一次画完。
+//! 3. **新增图表**：图表类型固定为折线（界面上没有图表类型选择器），曲线列表从空开始。
+//! 4. **编辑图表标题**：曲线表之外补了"重命名"入口（调用同一个 `chart_update`，属行为增强）。
+//! 5. **`isPreset` 的取舍**：按**真实 `isPreset`** 控制 —— 预设图表隐藏"添加曲线/保存修改"。
+//! 6. **配色直接用 CSS 变量**：曲线与图例的颜色写成 `var(--transactions-*)`，SVG 能直接读变量。
 
 use std::collections::BTreeMap;
 
@@ -48,10 +41,10 @@ use crate::notify::Notifier;
 use crate::store::AppStores;
 use crate::time::today_ymd;
 
-/// 页面标题（与原 `AppLeftBar.vue` 文案一致）。
+/// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "数据分析";
 
-/// 交易类型选项（曲线条件用；文案与 `constant.ts` 一致）。
+/// 交易类型选项（曲线条件用）。
 const TRANSACTION_TYPES: [(&str, &str); 3] = [
     ("income", "收入"),
     ("expense", "支出"),
@@ -72,8 +65,7 @@ fn series_color(transaction_type: &str, index: usize) -> String {
         "transfer" => Some("var(--transactions-color-transfer)"),
         _ => None,
     };
-    // 原实现：仅当所有曲线类型两两不同时才用语义色；这里在无法判定"两两不同"时
-    // 退化为「类型语义色 + 序号兜底」，语义更稳定（见汇报）。
+    // 曲线配色：前三条按交易类型的语义色，第四条起用调色板按序号兜底。
     match (semantic, index) {
         (Some(color), 0) => color.to_string(),
         (Some(color), 1) => color.to_string(),
@@ -104,7 +96,7 @@ pub fn DataAnalysisPage() -> impl IntoView {
     let rename_title = RwSignal::new(String::new());
     let renaming = RwSignal::new(false);
 
-    // 时间范围（原 `TransactionsTimeRangePicker`：默认今天 + 日粒度）
+    // 时间范围（默认今天 + 日粒度）
     let range_mode = RwSignal::new("date".to_string());
     let range_start = RwSignal::new(today_ymd());
     let range_end = RwSignal::new(today_ymd());
@@ -380,7 +372,7 @@ pub fn DataAnalysisPage() -> impl IntoView {
                     <Button
                         size=ButtonSize::Small
                         on_click=move |_| {
-                            // 上一周期：按粒度位移（原 `shiftPeriod` 的极简等价）
+                            // 上一周期：按粒度位移
                             shift_range(range_mode, range_start, range_end, -1);
                         }
                     >
@@ -1178,7 +1170,8 @@ fn visible_type(label: &str, lines: &[ChartLine]) -> String {
         .unwrap_or_default()
 }
 
-/// 「添加曲线」弹窗（原 `TransactionsChartLines.vue` 的表单）。
+/// 「添加曲线」弹窗（固定文案：标题「添加曲线」、ok「确定」、cancel「取消」、宽 500；
+/// 表单为 曲线名称 / 交易类型 / 分类 / 标签 / 标签匹配 / 描述包含 / 包含离群值）。
 #[allow(clippy::too_many_arguments)]
 fn add_line_modal(
     open: RwSignal<bool>,

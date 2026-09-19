@@ -2,7 +2,7 @@
  * 自有组件套件样式（P5 首批 8 个）
  *   button / input / select / modal / tag / tooltip / empty / spin
  *
- * 外观裁决标准：DESIGN.md + 原 `_components.scss` / `index.scss` 的对应规则。
+ * 外观裁决标准：DESIGN.md + base.css 里的基础组件类规则。
  * 全部取值来自 `--transactions-*` 令牌，不写裸 hex。
  * ============================================ */
 
@@ -270,7 +270,7 @@
 }
 
 /* ============================================
- * Textarea —— 多行文本域（对应原 `a-textarea`）
+ * Textarea —— 多行文本域
  * ============================================ */
 
 .ui-textarea {
@@ -465,8 +465,8 @@
   border-radius: var(--transactions-radius-xl);
   /* **不要 `overflow: hidden`**：弹窗里的下拉面板（DatePicker / Select 的 dropdown 都是
    * `position: absolute` 的子元素）会被裁掉 —— 小弹窗（如「关联关键事件」）里日历被裁到
-   * 只剩标题和星期行，日期格子**看不见也点不动**（原 antd 把面板 portal 到 body，所以不受影响，
-   * 这是重写后引入的真实缺陷）。圆角不靠裁剪实现：header/footer 都是透明底、只有一条边框线，
+   * 只剩标题和星期行，日期格子**看不见也点不动**（面板是弹窗的自有子元素，不像第三方组件那样
+   * portal 到 body，所以会被裁掉 —— 这是重写时引入的真实缺陷）。圆角不靠裁剪实现：header/footer 都是透明底、只有一条边框线，
    * body 有内边距，没有任何子元素会画到圆角外。 */
   overflow: visible;
   box-shadow: var(--transactions-shadow-xl);
@@ -745,7 +745,7 @@
  *   checkbox(-group) / progress / drag-sort
  *
  * 与首批同一套取值来源：只用 --transactions-* 令牌，不写裸 hex。
- * 表格底样式沿用 base.css 的 `.table-wrapper`（这是原 `_components.scss` 的表格基座）。
+ * 表格底样式沿用 base.css 的 `.table-wrapper`。
  * ============================================ */
 
 /* ============================================

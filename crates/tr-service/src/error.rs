@@ -1,7 +1,7 @@
 //! 服务层统一错误类型：把底层错误（SQLite、文件、网络）收敛为对外的 [`AppError`]。
 //!
-//! 与原 Go 实现一致：非 `AppError` 的底层错误一律变成 500 + 原始错误文本，
-//! 这样排障信息不会丢失，且前端拿到的 msg 与旧版一致。
+//! 非 `AppError` 的底层错误一律变成 500 + 原始错误文本，
+//! 这样排障信息不会丢失，且前端拿到的 msg 保持稳定。
 
 use tr_domain::error::AppError;
 use tr_store::WorkspaceError;
@@ -22,7 +22,7 @@ impl ServiceError {
     /// 转为对外错误（命令面直接使用）。
     ///
     /// 底层错误统一经 [`std::fmt::Display`] 收敛，而不是各自拼接，
-    /// 这样"查无记录"这类需要与 Go 版逐字一致的文案只有一处定义（见下面 Display 实现）。
+    /// 这样"查无记录"这类文案只有一处定义（见下面 Display 实现）。
     pub fn into_app_error(self) -> AppError {
         match self {
             ServiceError::App(err) => err,
@@ -53,8 +53,8 @@ impl std::fmt::Display for ServiceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServiceError::App(err) => write!(f, "{}", err.msg),
-            // "查无记录"的文案必须与原 Go 版（GORM `ErrRecordNotFound`）一致，
-            // 否则错误信息会通过 IPC 原样展示给用户、并在黄金对比里产生差异。
+            // "查无记录"的文案必须固定为 `record not found`，
+            // 否则错误信息会通过 IPC 原样展示给用户、并造成回归差异。
             ServiceError::Database(err) if tr_store::dao::is_not_found(err) => {
                 write!(f, "record not found")
             }
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_row_message_matches_gorm() {
+    fn missing_row_message_is_record_not_found() {
         let err = ServiceError::from(rusqlite::Error::QueryReturnedNoRows);
         assert_eq!(err.to_string(), "record not found");
         assert_eq!(err.into_app_error().msg, "record not found");

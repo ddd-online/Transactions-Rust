@@ -1,6 +1,6 @@
 # ui-upload.ps1 —— 图片上传的端到端验收（原生文件选择框 + 落盘 + 缩略图 + 入库 + 界面刷新）。
 #
-# 为什么需要它：`docs/ACCEPTANCE.md` 把"添加图片"列在人工清单里，理由是"走原生文件对话框，
+# 为什么需要它："添加图片"原先被列在人工清单里，理由是"走原生文件对话框，
 # UIA 合成不了"。实测下来**能合成**，只是要找对窗口：
 #
 #   WebView2 的文件选择框（`#32770`，标题「打开」）**不是桌面顶层窗口**，
@@ -10,7 +10,7 @@
 #     - 按 app 进程号过滤 → 也找不到（进程号是浏览器进程的）；
 #   正确做法是在**应用窗口的 Descendants** 里找 ClassName='#32770'。
 #
-# 操作方式（与原实现的 `fileInput.click()` 等价的人工动作）：
+# 操作方式（等价于点击隐藏的文件输入框的人工动作）：
 #   1. 鼠标（SetForegroundWindow + 真实 click）点「添加图片」——label 转发给隐藏 input 是有效的；
 #   2. 文件框里那个"文件名"编辑框**不提供 ValuePattern**（整个对话框被暴露成 Pane，
 #      编辑框是 `class='Edit'` 的 Pane，没有任何 pattern），只能点进去再输入绝对路径；
@@ -72,7 +72,7 @@ if (-not $Workspace) { $ws = [System.IO.Path]::GetFullPath((Join-Path $OutDir 'w
 $exeFull = [System.IO.Path]::GetFullPath($Exe)
 # 单实例插件按 identifier 判重：本仓库里**任何**构建在跑都会顶掉本次启动
 # （包括隐藏到托盘的、以及 build\target 下的便携版）。判重按**完整路径**，
-# 不能按进程名——原 Electron 版也叫 Transactions.exe，且在 D:\software 下，与我们的 identifier 无关。
+# 不能按进程名——本机别的目录下可能有同名 exe，与我们的 identifier 无关。
 $repoPrefix = $repo.TrimEnd('\') + '\'
 $running = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
     $path = try { $_.Path } catch { $null }
@@ -510,7 +510,7 @@ try {
             }
         }
     }
-    # ---- 删除事件应当把图片文件一并清理（原清单第 6 项的后半句）----
+    # ---- 删除事件应当把图片文件一并清理 ----
     # 这条只能端到端验：`remove_image_files` 的单测只覆盖"文件不存在时容错"，
     # 而"删事件 → 资产被清掉"要走完整条 UI → 服务层链路。
     Write-Host "`n[ui-upload] 5/5 删除事件应清理图片文件"

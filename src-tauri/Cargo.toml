@@ -19,7 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 
-# devtools：生产构建同样允许开关 DevTools（与原 Electron 版「设置 → 通用 → 开发者工具」一致）。
+# devtools：生产构建同样允许开关 DevTools（对应「设置 → 通用 → 开发者工具」）。
 # tray-icon：系统托盘。image-png/image-ico：图标解码。
 tauri = { version = "2", features = ["devtools", "tray-icon", "image-png", "image-ico"] }
 tauri-plugin-dialog = "2"
@@ -32,5 +32,5 @@ ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzi
 sha2 = "0.10"
 
 tracing = "0.1"
-# chrono：让日志按本地时间格式化（贴近原 logrus 自定义格式）
+# chrono：让日志按本地时间格式化
 tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }

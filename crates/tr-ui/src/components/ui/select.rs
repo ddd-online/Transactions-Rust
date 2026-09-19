@@ -1,9 +1,9 @@
 //! 下拉选择 —— 支持搜索与清空。
 //!
-//! 对齐原 `a-select` 的三个常用形态：
-//! * `show-search` + `option-filter-prop="label"` → `searchable = true`
-//! * `allow-clear` → `allow_clear = true`
-//! * `v-model:value` → `value: RwSignal<String>`
+//! 三个常用能力：
+//! * `searchable = true`：按 `label` 过滤选项
+//! * `allow_clear = true`：右侧清空按钮
+//! * `value: RwSignal<String>`：双向绑定当前值
 //!
 //! 面板是真下拉（绝对定位 + 阴影），带一层透明遮罩负责"点击别处关闭"。
 //! 选项用 `map + collect_view` 渲染：选项量级是"账本/分类/标签"，几十条，无需 keyed diff。

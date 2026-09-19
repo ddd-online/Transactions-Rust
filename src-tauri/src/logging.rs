@@ -1,9 +1,9 @@
 //! 日志：程序目录 `logs/app.log`（5MB 轮转、保留 5 份）+ 工作空间 `transactions.log`。
 //!
-//! 与原实现保持一致的部分：日志文件位置、`transactions.log` 的文件名（写入工作空间，
+//! 契约里固定的部分：日志文件位置、`transactions.log` 的文件名（写入工作空间，
 //! 便于用户随数据一起带走排障信息）、app.log 的轮转阈值与备份份数。
-//! 有意不同的部分：日志行时间戳格式接近但不逐字节相同（原为 logrus 自定义格式，
-//! 这里由 tracing 输出，级别为大写），日志格式不属于数据兼容契约。
+//! 日志行时间戳格式由本实现自行决定（这里由 tracing 输出，级别为大写），
+//! 日志格式不属于数据兼容契约。
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use tracing_subscriber::fmt::MakeWriter;
 
-/// 单文件上限 5MB（与原 main.js 一致）。
+/// 单文件上限 5MB。
 const MAX_LOG_SIZE: u64 = 5 * 1024 * 1024;
-/// 备份份数（与原 main.js 一致）。
+/// 备份份数。
 const MAX_LOG_BACKUPS: u32 = 5;
 const LOG_DIR: &str = "logs";
 const LOG_FILE: &str = "app.log";

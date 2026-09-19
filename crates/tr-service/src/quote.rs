@@ -1,12 +1,11 @@
-//! 行情抓取抽象。对照 Go `kernel/service/stock_service.go` 的 `StockQuoteFetcher`
-//! / `tencentStockQuoteFetcher` / `fetchTencentQuotes` / `fetchStockNameExternal`。
+//! 行情抓取抽象：按股票代码取最新价 / 昨收价，以及查询股票名称。
 //!
 //! 拆成独立模块的理由：服务层（`stock.rs` / `stock_statistics.rs`）只依赖 trait，
 //! 从而可以在没有网络的环境里用 stub 做确定性测试；真实实现（腾讯行情 qt.gtimg.cn）
 //! 集中在这里，并且**解析逻辑与网络分离**（`parse_tencent_quote_payload` 是纯函数，
-//! 可以直接用固定 payload 断言，对应 Go 的 `TestParseTencentQuotePayload`）。
+//! 可以直接用固定 payload 断言）。
 //!
-//! 网络约束（与 Go 版逐条一致）：
+//! 网络约束：
 //! * `http://qt.gtimg.cn/q=<market><code>[,<market><code>...]`，**3 秒超时**；
 //! * 响应是 GBK 编码，需要按 GBK 解码后再按 `~` 切分；
 //! * 停牌（最新价 0）或非法价格视为"该股无行情"，静默跳过；
@@ -21,7 +20,7 @@ use tr_domain::fee::{is_valid_stock_code, market_prefix};
 /// 腾讯行情字段分隔符。
 const FIELD_SEPARATOR: char = '~';
 
-/// 行情请求超时（毫秒）。与原实现的 `http.Client{Timeout: 3 * time.Second}` 一致。
+/// 行情请求超时：3 秒。
 const QUOTE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// 批量行情源：按股票代码返回最新价与昨收价。
@@ -125,7 +124,7 @@ impl StockQuoteFetcher for TencentStockQuoteFetcher {
     }
 }
 
-/// 腾讯行情响应按 GBK 解码。非法字节以替换字符处理（与原实现 `GBK.NewDecoder()` 的容错一致）。
+/// 腾讯行情响应按 GBK 解码。非法字节以替换字符处理。
 fn decode_gbk(payload: &[u8]) -> String {
     let (decoded, _, _) = encoding_rs::GBK.decode(payload);
     decoded.into_owned()
@@ -133,7 +132,7 @@ fn decode_gbk(payload: &[u8]) -> String {
 
 /// 从响应文本里取出第一段 `v_xxx="..."` 的引号内容并按 `~` 切分字段。
 ///
-/// 原实现用正则 `v_(\w+)="([^"]*)"`，这里等价地手工扫描：
+/// 这里手工扫描 `v_xxx="..."` 而不是用正则：
 /// 对合法响应两者结果相同，而手工扫描不会把"正则回溯"这类行为差异带进来。
 fn first_quote_fields(payload: &str) -> Option<Vec<&str>> {
     let mut rest = payload;
@@ -181,7 +180,7 @@ fn all_quote_fields(payload: &str) -> Vec<Vec<&str>> {
 ///
 /// 腾讯字段以 `~` 分隔：名称[1]、代码[2]、最新价[3]、昨收[4]、行情时间[30]（`YYYYMMDDHHMMSS`）。
 /// 字段不足 5 段、代码不合法、价格 <= 0（停牌）或无法解析时跳过该股。
-/// 行情时间缺失/非法时退化为"当前时间"（与 Go 的 `time.Now().Unix()` 兜底一致）。
+/// 行情时间缺失/非法时退化为"当前时间"。
 pub fn parse_tencent_quote_payload(payload: &str) -> HashMap<String, StockQuoteDto> {
     let mut result = HashMap::new();
     for parts in all_quote_fields(payload) {
@@ -212,7 +211,7 @@ pub fn parse_tencent_quote_payload(payload: &str) -> HashMap<String, StockQuoteD
             code.to_string(),
             StockQuoteDto {
                 stock_code: code.to_string(),
-                // 与原实现一致：int64(math.Round(价格元 * 100))
+                // 价格由元换算为整数分：四舍五入
                 latest_price: (latest_yuan * 100.0).round() as i64,
                 prev_close: (prev_close_yuan * 100.0).round() as i64,
                 quote_time,
@@ -232,8 +231,7 @@ pub fn parse_tencent_name(payload: &str) -> String {
 
 /// 解析 `YYYYMMDDHHMMSS`（本地时区语义）为 Unix 秒。非法时返回 `None`。
 ///
-/// 对照 Go `time.ParseInLocation("20060102150405", raw, time.Local)`：日期时间按**本地时区**
-/// 解释。这里先转成 UTC 的 `NaiveDateTime` 再按本地偏移折算，语义与 Go 相同。
+/// 日期时间按**本地时区**解释：先组装 UTC 的 `NaiveDateTime` 再折算为 Unix 秒。
 fn parse_quote_timestamp(raw: &str) -> Option<i64> {
     if raw.len() != 14 || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -255,7 +253,7 @@ fn parse_quote_timestamp(raw: &str) -> Option<i64> {
 mod tests {
     use super::*;
 
-    /// 复刻 Go `TestParseTencentQuotePayload` 的造数：32 段，名称[1]、代码[2]、
+    /// 造数：32 段，名称[1]、代码[2]、
     /// 最新价[3]、昨收[4]、时间[30]，其余为 `-`。
     fn line(code: &str, latest: &str, prev: &str, ts: &str) -> String {
         let mut parts = vec!["-"; 32];

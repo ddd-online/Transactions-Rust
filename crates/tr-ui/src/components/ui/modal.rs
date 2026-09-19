@@ -1,7 +1,7 @@
 //! 模态框 —— 16px 圆角 + 大阴影（`--transactions-radius-xl` + `--transactions-shadow-xl`）。
 //!
-//! 对应原 `a-modal`：标题栏 / 内容区 / 底栏三段式；遮罩从顶部 96px 开始，
-//! 与原实现 `notification.config({ top: 96 })` 的层级观感一致，也不遮挡顶部窗口控制按钮。
+//! 标题栏 / 内容区 / 底栏三段式；遮罩从顶部 96px 开始，
+//! 让浮层与顶部窗口控制按钮保持距离，不遮挡它们。
 //!
 //! `children` 用 [`ChildrenFn`]（可重复调用的 children）：模态内容包在 `Show` 里，
 //! 开关时会重建视图树，因此 children 必须能多次求值。

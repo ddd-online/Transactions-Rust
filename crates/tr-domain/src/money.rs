@@ -1,7 +1,6 @@
 //! 金额换算：**金额一律以整数分存储**，界面层负责分/元换算。
 //!
-//! 对照实现：原前端 `app/src/backend/functions.ts` 的 `centsToYuan` / `yuanToCents`。
-//! 这两个函数是"金额恒为整数分"纪律的守门人，行为必须逐例一致（含负号、`.5` 这类输入）。
+//! 这两个函数是"金额恒为整数分"纪律的守门人，行为是硬契约（含负号、`.5` 这类输入）。
 
 use std::fmt;
 
@@ -26,8 +25,7 @@ impl std::error::Error for MoneyError {}
 
 /// 分 → 元字符串，固定两位小数、**不做千分位分组**。
 ///
-/// 等价于原实现的 `(cents / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2,
-/// maximumFractionDigits: 2, useGrouping: false })`。用整数运算实现，避免浮点误差：
+/// 用整数运算实现，避免浮点误差：
 /// `-5 -> "-0.05"`、`12345 -> "123.45"`、`0 -> "0.00"`。
 pub fn cents_to_yuan(cents: i64) -> String {
     let abs = cents.unsigned_abs();
@@ -39,7 +37,7 @@ pub fn cents_to_yuan(cents: i64) -> String {
     }
 }
 
-/// 元字符串 → 分。等价于原实现的 `yuanToCents`：
+/// 元字符串 → 分：
 /// 允许前导/尾随空格与负号；整数部分可省略（`.5`）；小数最多取 3 位，第 3 位四舍五入到分；
 /// 非数字输入返回 [`MoneyError::InvalidFormat`]。
 pub fn yuan_to_cents(input: &str) -> Result<i64, MoneyError> {
@@ -106,7 +104,7 @@ mod tests {
         assert_eq!(yuan_to_cents("0.5").unwrap(), 50);
         assert_eq!(yuan_to_cents("1.").unwrap(), 100);
         assert_eq!(yuan_to_cents("1").unwrap(), 100);
-        // 空串与原实现一致：整数部分视为 0，结果为 0 分而不是报错
+        // 空串的整数部分视为 0，结果为 0 分而不是报错
         assert_eq!(yuan_to_cents("").unwrap(), 0);
         assert_eq!(yuan_to_cents("   ").unwrap(), 0);
     }

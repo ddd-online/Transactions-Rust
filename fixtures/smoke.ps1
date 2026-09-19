@@ -19,7 +19,7 @@
 #
 # **没被自动化的一步**：首次启动里"选目录 → 主窗口出现"需要走 Windows 原生文件夹对话框。
 # 有人试过用 SendKeys 盲敲回车，但那会在**当前目录**直接建库（可能建到用户自己的目录里），
-# 风险大于收益，因此这一步留给人工点一次（docs/ACCEPTANCE.md 的 0.1）。
+# 风险大于收益，因此这一步留给人工点一次。
 # 本脚本负责证明它两侧的分支都对：未配置→只有初始化窗口；已配置→只有主窗口。
 #
 # 注意：脚本会**强杀**自己启动的进程（用 PID 精确定位），不会动你手动开着的实例；
@@ -31,7 +31,7 @@ param(
     [string]$WorkspaceRoot,
     [ValidateSet('all', 'configured', 'first-run')][string]$Case = 'all',
     [int]$StartupTimeoutSec = 45,
-    # 直接用一个既有工作空间（例如 target\parity\ws-rust）：
+    # 直接用一个既有工作空间（例如 target\ws-rust）：
     # 这样冒烟就不依赖 `cargo xtask seed` 当前是否可用（xtask 可能正被改动）。
     [string]$Workspace
 )
@@ -60,8 +60,8 @@ $appLog = Join-Path (Split-Path -Parent $Exe) 'logs\app.log'
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 build/build.ps1 或 cargo build --release -p transactions）" }
 
-# 只按**完整路径**判重，不要按进程名：原 Electron 版的 exe 也叫 Transactions.exe
-# （本机就装在 D:\software\Transactions\），按名字判重会误伤用户正在用的那个应用。
+# 判重必须按**完整路径**，不能按进程名（本机别的目录下可能有同名 exe），
+# 按名字判重会误伤用户正在用的那个应用。
 $exeFull = [System.IO.Path]::GetFullPath($Exe)
 $sameExe = Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
     $path = try { $_.Path } catch { $null }

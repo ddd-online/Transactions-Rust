@@ -1,5 +1,4 @@
-//! 日记相关 DTO。对照 Go `kernel/service/diary_service.go` 里随服务定义的结构，
-//! 以及 `kernel/api/diary_controller.go` 的响应包装。
+//! 日记相关 DTO：导入扫描、导出结果与写入请求的结构定义。
 
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +14,7 @@ pub struct DiaryFileItem {
     pub path: String,
 }
 
-/// 扫描结果。原控制器返回的是 `{"files": [...]}`。
+/// 扫描结果，形状为 `{"files": [...]}`。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiaryScanResponse {
@@ -45,8 +44,8 @@ pub struct DiaryExportResult {
     pub failed: Vec<DiaryExportFileError>,
 }
 
-/// `PUT /diary/:date` 请求体：日期来自路径，正文与心情来自 body。
-/// 原实现从 `map[string]any` 取值，缺失字段按空串处理，因此这里用 `Option`。
+/// 日记写入请求体：日期、正文与心情。
+/// 缺失字段按空串处理，因此这里用 `Option`。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiaryUpsertRequest {
@@ -75,7 +74,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scan_response_matches_go_shape() {
+    fn scan_response_json_shape() {
         let value = serde_json::to_value(DiaryScanResponse {
             files: vec![DiaryFileItem {
                 date: "2026-01-01".into(),
@@ -88,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn export_result_matches_go_shape() {
+    fn export_result_json_shape() {
         let value = serde_json::to_value(DiaryExportResult {
             total: 3,
             success: 2,

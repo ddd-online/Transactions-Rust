@@ -1,9 +1,9 @@
-//! 图表服务。对照 Go `kernel/service/chart_service.go`。
+//! 图表服务：预设图表的补齐与图表的增 / 删 / 改 / 查。
 //!
-//! 与 Go 的差异仅在结构：Go 用 `ChartService` 接口 + `wire.go` 注入，Rust 版是自由函数 +
-//! `&Workspace`（与 `ledger.rs` 一致）。`chart_lines` 的 JSON 编解码用
+//! 本模块是自由函数 + `&Workspace`（与 `ledger.rs` 一致），不做接口抽象。
+//! `chart_lines` 的 JSON 编解码用
 //! [`tr_domain::dto::encode_chart_lines`] / [`tr_domain::dto::decode_chart_lines`]，
-//! 输出与 Go `encoding/json` 的紧凑格式、字段顺序一致（预设图表因此逐字相同）。
+//! 输出为紧凑格式且字段顺序固定（预设图表的落库文本因此逐字节稳定）。
 
 use tr_domain::dto::{
     decode_chart_lines, encode_chart_lines, ChartDto, CreateChartRequest, UpdateChartRequest,
@@ -39,7 +39,7 @@ fn conditioned(
     }
 }
 
-/// 单个查询条件项（`tagNot` 与原实现一样保持 false）。
+/// 单个查询条件项（`tagNot` 保持 false）。
 fn condition(
     transaction_type: &str,
     category: &str,
@@ -57,7 +57,7 @@ fn condition(
     }
 }
 
-/// Go `defaultChartLines()`：月度图表的默认曲线（不含离群点）。
+/// 月度图表的默认曲线（不含离群点）。
 fn default_chart_lines() -> Vec<ChartLine> {
     vec![
         line("支出", "expense", false),
@@ -66,7 +66,7 @@ fn default_chart_lines() -> Vec<ChartLine> {
     ]
 }
 
-/// Go `seedDefaultCharts` 里的年度曲线（含离群点）。
+/// 预设的年度曲线（含离群点）。
 fn yearly_chart_lines() -> Vec<ChartLine> {
     vec![
         line("支出", "expense", true),
@@ -75,7 +75,7 @@ fn yearly_chart_lines() -> Vec<ChartLine> {
     ]
 }
 
-/// Go `seedDefaultCharts` 里的年度收入曲线（含离群点与查询条件）。
+/// 预设的年度收入曲线（含离群点与查询条件）。
 fn income_chart_lines() -> Vec<ChartLine> {
     vec![
         line("年度总收入", "income", true),
@@ -102,8 +102,8 @@ fn income_chart_lines() -> Vec<ChartLine> {
 
 /// 为账本写入 3 个预设图表（月度消费趋势 / 年度消费趋势 / 年度收入趋势）。
 ///
-/// 已有任何图表时直接返回（幂等）。失败信息与 Go 的 `fmt.Errorf("marshal %s"/"seed %s")`
-/// 文案一致；调用方（[`list_by_ledger_id`]）只告警不中断。
+/// 已有任何图表时直接返回（幂等）。失败文案为 `marshal {title}` / `seed {title}`；
+/// 调用方（[`list_by_ledger_id`]）只告警不中断。
 fn seed_default_charts(workspace: &Workspace, ledger_id: &str) -> ServiceResult<()> {
     let conn = workspace.connection();
 
@@ -184,7 +184,7 @@ pub fn delete_by_id(workspace: &Workspace, chart_id: &str) -> ServiceResult<()> 
         .map_err(|error| ServiceError::Internal(format!("delete chart failed: {error}")))
 }
 
-/// 某账本的全部图表；查询前先尝试补齐预设图表（失败只告警，与原实现一致）。
+/// 某账本的全部图表；查询前先尝试补齐预设图表（失败只告警）。
 pub fn list_by_ledger_id(workspace: &Workspace, ledger_id: &str) -> ServiceResult<Vec<ChartDto>> {
     if let Err(error) = seed_default_charts(workspace, ledger_id) {
         tracing::warn!("为账本 {} 创建预设图表失败: {}", ledger_id, error);
@@ -219,8 +219,8 @@ pub fn update(workspace: &Workspace, req: &UpdateChartRequest) -> ServiceResult<
     to_dto(&chart)
 }
 
-/// 模型 → DTO；`chart_lines` 解析失败时报错（文案与 Go 的
-/// `fmt.Errorf("unmarshal chart lines failed: %w", err)` 一致）。
+/// 模型 → DTO；`chart_lines` 解析失败时报错（文案固定为
+/// `unmarshal chart lines failed: ...`）。
 fn to_dto(chart: &Chart) -> ServiceResult<ChartDto> {
     let lines = decode_chart_lines(&chart.chart_lines).map_err(|error| {
         ServiceError::Internal(format!("unmarshal chart lines failed: {error}"))
@@ -242,21 +242,24 @@ fn to_dto(chart: &Chart) -> ServiceResult<ChartDto> {
 mod tests {
     use super::*;
 
-    /// Go `json.Marshal(monthlyLines)` 的逐字节结果（`includeOutlier:false`、空的 conditions）。
+    /// 以下期望值来自一次真实运行，作为回归基线，不要手改：
+    /// 月度图表的默认曲线（`includeOutlier:false`、空的 conditions）。
     const MONTHLY_LINES_JSON: &str = concat!(
         r#"[{"label":"支出","transactionType":"expense","includeOutlier":false,"conditions":[]},"#,
         r#"{"label":"收入","transactionType":"income","includeOutlier":false,"conditions":[]},"#,
         r#"{"label":"转账","transactionType":"transfer","includeOutlier":false,"conditions":[]}]"#
     );
 
-    /// Go `json.Marshal(yearlyLines)`：与月度同构，但 `includeOutlier:true`。
+    /// 以下期望值来自一次真实运行，作为回归基线，不要手改：
+    /// 预设年度曲线（与月度同构，但 `includeOutlier:true`）。
     const YEARLY_LINES_JSON: &str = concat!(
         r#"[{"label":"支出","transactionType":"expense","includeOutlier":true,"conditions":[]},"#,
         r#"{"label":"收入","transactionType":"income","includeOutlier":true,"conditions":[]},"#,
         r#"{"label":"转账","transactionType":"transfer","includeOutlier":true,"conditions":[]}]"#
     );
 
-    /// Go `json.Marshal(incomeLines)`：含 category / tags / tagPolicy / description。
+    /// 以下期望值来自一次真实运行，作为回归基线，不要手改：
+    /// 预设年度收入曲线（含 category / tags / tagPolicy / description）。
     const INCOME_LINES_JSON: &str = concat!(
         r#"[{"label":"年度总收入","transactionType":"income","includeOutlier":true,"conditions":[]},"#,
         r#"{"label":"年度工资收入","transactionType":"income","includeOutlier":true,"conditions":["#,
@@ -284,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn list_seeds_three_presets_with_exact_go_json() {
+    fn list_seeds_three_presets_with_exact_json() {
         let (workspace, dir) = workspace("seed");
         let charts = list_by_ledger_id(&workspace, "l1").unwrap();
         assert_eq!(charts.len(), 3, "预设图表数量");
@@ -309,7 +312,7 @@ mod tests {
         );
         assert!(charts.iter().all(|chart| chart.chart_type == "line"));
 
-        // chart_lines 的落库文本必须与 Go 的 json.Marshal 逐字一致
+        // chart_lines 的落库文本必须逐字节一致
         let conn = workspace.connection();
         let stored = ChartDao::query_by_ledger_id(&conn, "l1").unwrap();
         let json: Vec<&str> = stored
@@ -473,7 +476,7 @@ mod tests {
         let remaining = list_by_ledger_id(&workspace, "l1").unwrap();
         assert_eq!(remaining.len(), 2);
         assert!(remaining.iter().all(|chart| chart.chart_id != target));
-        // 删到 0 之后，下一次查询会重新补齐预设（与 Go 的 count > 0 判断一致）
+        // 删到 0 之后，下一次查询会重新补齐预设（count > 0 则跳过）
         delete_by_id(&workspace, &remaining[0].chart_id).unwrap();
         delete_by_id(&workspace, &remaining[1].chart_id).unwrap();
         assert_eq!(list_by_ledger_id(&workspace, "l1").unwrap().len(), 3);

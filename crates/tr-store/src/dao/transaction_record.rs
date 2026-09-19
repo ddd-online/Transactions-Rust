@@ -1,7 +1,7 @@
-//! 消费记录 DAO。对照 Go `kernel/dao/transaction_record_dao.go`。
+//! 消费记录 DAO。
 //!
 //! 本文件是"行为等价"要求最高的一处：筛选、排序、统计、图表分桶**全部在 SQL 里完成**，
-//! 且 SQL 的形状要与原实现逐条一致（否则结果集或排序会漂移）。要点：
+//! 且 SQL 的形状必须逐条固定（否则结果集或排序会漂移）。要点：
 //! * 条件项之间是 **OR**，条件项内部是 **AND**；空条件项等价于 `1 = 1`（匹配全部）
 //! * 描述匹配用 `instr(description, ?) > 0`（区分大小写、不把 `%_` 当通配符）
 //! * 标签用子查询：`all` 走 `COUNT(DISTINCT ...) = n`，否则 `EXISTS`，`tag_not` 加 `NOT`
@@ -22,7 +22,7 @@ use super::now_unix;
 
 pub struct TransactionRecordDao;
 
-/// 按交易类型的金额汇总。对照 Go `TrStatistics`。
+/// 按交易类型的金额汇总（income / expense / transfer 三个口径）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TrStatistics {
     pub income: i64,
@@ -30,7 +30,7 @@ pub struct TrStatistics {
     pub transfer: i64,
 }
 
-/// 过滤 + 排序 + 分页 + 统计结果。对照 Go `TrFilterResult`。
+/// 过滤 + 排序 + 分页 + 统计结果。
 #[derive(Debug, Clone, Default)]
 pub struct TrFilterResult {
     pub items: Vec<TransactionRecord>,
@@ -66,8 +66,8 @@ impl TransactionRecordDao {
         Ok(())
     }
 
-    /// 批量新建。原实现用 `CreateInBatches(records, 500)` 分批多行插入；
-    /// 这里在调用方的事务内逐条插入，语义（行集合与时间戳口径）等价。
+    /// 批量新建：在调用方的事务内逐条插入，与"500 条一批的多行插入"在
+    /// 行集合与时间戳口径上完全等价。
     pub fn create_batch(conn: &Connection, records: &[TransactionRecord]) -> rusqlite::Result<()> {
         for record in records {
             Self::create(conn, record)?;
@@ -99,7 +99,7 @@ impl TransactionRecordDao {
     }
 
     /// 更新关键事件关联日期。命中 0 行时返回 `QueryReturnedNoRows`
-    /// （对应 Go 里显式把 `RowsAffected == 0` 转成 `ErrRecordNotFound`）。
+    /// （把"影响 0 行"显式转成"查无记录"）。
     pub fn update_key_event_date(
         conn: &Connection,
         transaction_id: &str,
@@ -165,7 +165,7 @@ impl TransactionRecordDao {
             "SELECT {COLUMNS} FROM tbl_billadm_transaction_record {where_sql} ORDER BY {}",
             build_sort_clause(&condition.sort_fields)
         );
-        // 与原实现一致：offset 需要 LIMIT 才生效（SQLite 里 LIMIT -1 表示不限制）
+        // offset 需要 LIMIT 才生效（SQLite 里 LIMIT -1 表示不限制）
         match (condition.limit > 0, condition.offset > 0) {
             (true, true) => sql.push_str(&format!(
                 " LIMIT {} OFFSET {}",
@@ -241,7 +241,7 @@ impl TransactionRecordDao {
             "SELECT strftime(?, transaction_at, 'unixepoch') AS time, SUM(price) AS amount \
              FROM tbl_billadm_transaction_record WHERE ledger_id = ?",
         );
-        // 等价原实现的 fmt.Sprintf("strftime('%s', ...)", timeFmt)：
+        // 分桶：strftime(<格式串>, transaction_at, 'unixepoch')
         // strftime 的格式串就是粒度（"%Y-%m" / "%Y"）
         let time_format = if granularity == "year" { "%Y" } else { "%Y-%m" };
         let mut args: Vec<Value> = vec![

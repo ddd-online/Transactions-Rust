@@ -1,4 +1,4 @@
-# close-behavior.ps1 —— 验证"关闭按钮行为"三种分支（docs/ACCEPTANCE.md 的 0.7）。
+# close-behavior.ps1 —— 验证"关闭按钮行为"三种分支。
 #
 # 实现对照 `src-tauri/src/shell.rs::request_close`：
 #   closeBehavior = "quit" → 保存窗口尺寸后退出进程

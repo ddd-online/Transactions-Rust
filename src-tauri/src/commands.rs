@@ -4,13 +4,14 @@
 //! 纯数据操作（账本/交易/股票…）放在 `tr-ipc`。两者都由 `main.rs` 的
 //! `generate_handler![]` 统一注册，命令清单因此集中在一处。
 //!
-//! 命名与入参形状对齐原 `electron/src/preload.js` 暴露的 `electronAPI`：
-//! * `window_control`   ← `window-control`
-//! * `dialog_open`      ← `dialog:open`
-//! * `file_save_image`  ← `file:save`
-//! * `app_info`         ← `app`（field: name / version / isDev）
-//! * `config_*`         ← `config:get-*` / `config:set-*`
-//! * `devtools_*`       ← `devtools:get-state` / `devtools:toggle`
+//! 命名与入参形状遵循同一约定（命令名 snake_case、入参统一一个 `req` 结构体），
+//! 界面侧的封装见 `crates/tr-ui/src/api/desktop.rs`：
+//! * `window_control`：窗口控制（action: minimize / maximize / close）
+//! * `dialog_open`：选择文件或目录
+//! * `file_save_image`：把工作空间资产另存到用户选择的位置
+//! * `app_info`：应用信息（field: name / version / isDev）
+//! * `config_*`：配置读写
+//! * `devtools_*`：开发者工具状态与开合
 
 use std::path::PathBuf;
 
@@ -30,7 +31,7 @@ use crate::shell;
 pub struct DesktopState {
     pub config: ConfigStore,
     pub logs: LogSinks,
-    /// 是否开发构建（等价 Electron 的 `!app.isPackaged`）
+    /// 是否开发构建（debug 构建为 true，配置文件名带 -dev）
     pub is_dev: bool,
 }
 
@@ -125,7 +126,7 @@ pub struct AssetUrlRequest {
     pub file_path: String,
 }
 
-/// 把数据库里的相对路径转成 `<img src>` 可用 URL（等价原 `imageUrl.ts`）。
+/// 把数据库里的相对路径转成 `<img src>` 可用 URL。
 #[tauri::command]
 pub fn asset_url(req: AssetUrlRequest) -> ApiResult<String> {
     Ok(assets::asset_url(&req.file_path))
@@ -197,7 +198,7 @@ pub struct SetAppearanceRequest {
     pub appearance: String,
 }
 
-/// 外观：持久化 + 应用到所有窗口（驱动 `prefers-color-scheme`，与原 nativeTheme 行为一致）。
+/// 外观：持久化 + 应用到所有窗口（驱动 `prefers-color-scheme`）。
 #[tauri::command]
 pub fn config_set_appearance(
     app: AppHandle,
@@ -243,13 +244,13 @@ pub fn workspace_set(state: State<'_, DesktopState>, req: WorkspaceDirRequest) -
     Ok(())
 }
 
-/// 打开工作空间（原 `POST /api/v1/workspace`）。
+/// 打开工作空间。
 ///
 /// 一次完成三件事：打开数据库（含格式校验）、把日志切到工作空间目录、记住目录。
-/// 失败时返回原实现的错误文案（含"该工作空间不是最新格式…"的升级提示）。
+/// 失败时返回既定的错误文案（含"该工作空间不是最新格式…"的升级提示）。
 ///
 /// 首次启动时这个命令是**从初始化窗口**发出的：成功后必须立刻切到主窗口
-/// （原实现由渲染进程再发一次 `workspace:init`，见 `electron/src/main.js:396`）。
+/// （界面可以在切换后再发一次 `workspace:init` 兜底）。
 /// 这里由外壳自己完成切换，界面不需要额外调用——初始化窗口只加载与主窗口相同的
 /// `index.html`，"还没配置工作空间"时它展示选择目录的引导，因此切换是外壳的职责。
 #[tauri::command]
@@ -293,9 +294,8 @@ pub fn workspace_open(
 
 /// 初始化窗口 → 主窗口的切换：创建并显示主窗口，然后销毁初始化窗口。
 ///
-/// 对应原实现 `electron/src/main.js:396` 的 `workspace:init`：
-/// `initWindow.close()` + `createMainWindow()`。
-/// 用 `destroy()` 而不是 `close()`：初始化窗口不该走"关闭行为（最小化到托盘）"那套逻辑。
+/// 先显示主窗口，再销毁初始化窗口；用 `destroy()` 而不是 `close()`：
+/// 初始化窗口不该走"关闭行为（最小化到托盘）"那套逻辑。
 /// 幂等：当前窗口不是初始化窗口、或初始化窗口已销毁时是空操作。
 fn transition_from_init(app: &AppHandle, window: &WebviewWindow) {
     if window.label() != shell::INIT_WINDOW {
@@ -306,10 +306,10 @@ fn transition_from_init(app: &AppHandle, window: &WebviewWindow) {
     let _ = window.destroy();
 }
 
-/// 初始化窗口选定工作目录后的切换（保留原 `workspace:init` 命令面）。
+/// 初始化窗口选定工作目录后的切换（保留 `workspace:init` 命令面）。
 ///
-/// 原 Electron 版由渲染进程显式调用；Rust 版已由 [`workspace_open`] 自动完成切换，
-/// 因此这个命令现在是**幂等的补充入口**：主窗口已显示时调用它不会有副作用。
+/// 本实现已由 [`workspace_open`] 自动完成切换，因此这个命令是**幂等的补充入口**：
+/// 主窗口已显示时调用它不会有副作用。
 #[tauri::command]
 pub fn workspace_init(
     app: AppHandle,
@@ -344,7 +344,7 @@ pub struct DialogOpenRequest {
     pub default_path: Option<String>,
 }
 
-/// 返回形状与原 `dialog:open` 一致：`{ canceled, filePaths, error? }`。
+/// 返回形状：`{ canceled, filePaths, error? }`。
 #[derive(Debug, Serialize)]
 pub struct DialogOpenResponse {
     pub canceled: bool,
@@ -406,7 +406,7 @@ pub struct FileSaveResponse {
     pub error: Option<String>,
 }
 
-/// 把工作空间资产里的图片另存到用户选择的位置（原 `file:save`）。
+/// 把工作空间资产里的图片另存到用户选择的位置。
 #[tauri::command]
 pub async fn file_save_image(
     app: AppHandle,
@@ -502,7 +502,7 @@ pub struct DevToolsToggleRequest {
     pub enabled: bool,
 }
 
-/// 返回操作后的真实状态，并广播给渲染进程校正开关（与原实现一致）。
+/// 返回操作后的真实状态，并广播给界面校正开关。
 #[tauri::command]
 pub fn devtools_toggle(
     app: AppHandle,

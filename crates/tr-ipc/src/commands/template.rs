@@ -1,15 +1,14 @@
-//! 消费模板命令。对照 Go `kernel/api/transaction_template_controller.go`。
+//! 消费模板命令。
 //!
-//! 入参形状按原 HTTP 语义逐字段对齐（模板请求体在 Go 里就是 snake_case）：
-//! * `POST /templates { template_id?, ledger_id, template_name, transaction_type, category, tags, flags, description, sort_order? }`
-//!   → `template_create`
-//! * `GET /templates?ledgerId=xxx` → `template_list { ledgerId }`
-//! * `DELETE /templates/:id` → `template_delete { id }`（同时接受 `templateId`）
-//! * `PATCH /templates/:id/sort { ledgerId, sortOrder }` → `template_update_sort { id, ledgerId, sortOrder }`
+//! 入参形状是固定契约（模板请求体是 snake_case）：
+//! * `template_create`：`{ template_id?, ledger_id, template_name, transaction_type, category, tags, flags, description, sort_order? }`
+//! * `template_list { ledgerId }`
+//! * `template_delete { id }`（同时接受 `templateId`）
+//! * `template_update_sort { id, ledgerId, sortOrder }`
 //!
-//! 原文案：`missing ledgerId`、`missing template id`（均 400）；
+//! 错误文案：`missing ledgerId`、`missing template id`（均 400）；
 //! 模板校验文案（`模板名称不能为空` / `invalid transaction type: xxx` / `分类不能为空`）
-//! 由服务层给出，状态码 500（与 Go 的普通 error 兜底一致）。
+//! 由服务层给出，状态码 500（普通 error 的兜底）。
 
 use serde::Deserialize;
 use tauri::State;
@@ -59,7 +58,7 @@ pub fn template_list(
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct TemplateIdRequest {
-    /// 原路径参数 `:id`（同时接受 `templateId`，方便界面侧沿用 DTO 命名）
+    /// 模板 ID（同时接受 `templateId`，方便界面侧沿用 DTO 命名）
     #[serde(alias = "templateId")]
     pub id: String,
 }
@@ -79,7 +78,7 @@ pub fn template_delete(state: State<'_, AppState>, req: TemplateIdRequest) -> Ap
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct TemplateSortRequest {
-    /// 原路径参数 `:id`（同时接受 `templateId`）
+    /// 模板 ID（同时接受 `templateId`）
     #[serde(alias = "templateId")]
     pub id: String,
     #[serde(rename = "ledgerId")]
@@ -91,8 +90,8 @@ pub struct TemplateSortRequest {
 /// 更新模板排序号。
 #[tauri::command]
 pub fn template_update_sort(state: State<'_, AppState>, req: TemplateSortRequest) -> ApiResult<()> {
-    // 原路由 `/templates/:id/sort` 的 `:id` 不可能为空（空 id 匹配不到该路由）；
-    // Tauri 命令没有路由层，这里显式挡掉，沿用同一条原文案。
+    // 空 id 必须在这里显式挡掉（Tauri 命令没有路由层可以替我们过滤），
+    // 沿用同一条错误文案。
     if req.id.is_empty() {
         return Err(ApiError::from(AppError::bad_request("missing template id")));
     }

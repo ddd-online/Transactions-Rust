@@ -1,12 +1,11 @@
 //! 窗口与系统托盘：无边框主窗口、初始化窗口、托盘菜单、关闭行为。
 //!
-//! 对照原 `electron/src/main.js` 的窗口与托盘部分：
 //! * 主窗口 1400×1000（默认），无边框，尺寸/位置写回 `~/.transactions.json`
 //! * 首次启动（配置里没有工作空间目录）先显示初始化窗口（600×560，不可缩放，无边框）
 //! * 系统托盘：显示主窗口 / 关闭程序；最小化到托盘后任务栏不保留图标
 //! * 关闭行为：`quit` 直接退出、`tray` 隐藏到托盘、未设置时每次询问
-//!   （原实现用带「下次不再提醒」勾选框的对话框，Tauri 的消息框没有勾选框，
-//!   因此这里改为"每次询问"，用户可在设置页把行为固定下来）
+//!   （Tauri 的消息框没有「下次不再提醒」勾选框，因此这里固定为"每次询问"，
+//!   用户可在设置页把行为固定下来）
 
 use std::path::PathBuf;
 
@@ -27,7 +26,7 @@ pub const INIT_WINDOW: &str = "init";
 /// 托盘 id。
 const TRAY_ID: &str = "transactions-tray";
 
-/// 程序所在目录：日志与图标都相对于它（等价 Electron 的 `appPath`）。
+/// 程序所在目录：日志与图标都相对于它。
 pub fn app_directory() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -51,11 +50,11 @@ pub fn create_startup_window(app: &AppHandle) -> tauri::Result<()> {
 /// `disable_drag_drop_handler()` **不能删**（曾经的真实缺陷）：
 /// Tauri 默认 `dragDropEnabled: true`，wry 会 `RegisterDragDrop` 到 WebView2 的宿主 HWND
 /// 并 `SetAllowExternalDrop(false)`；而 Chromium 在 Windows 上**内部拖拽也是走 OLE 拖放**的，
-/// 于是页面的 HTML5 拖拽（`SortableJS` 等价物，本项目用 `components/ui/drag_sort.rs`）
+/// 于是页面的 HTML5 拖拽（见 `components/ui/drag_sort.rs`）
 /// 落点永远收不到 `drop` —— 表现就是"分类/标签/模板拖不动"。
 /// 关掉它之后由 WebView2 自己处理拖放，页内拖拽恢复正常；
-/// 代价是拿不到 `tauri://drag-drop` 原生文件落盘事件，而本项目（与原 Electron 版一样）
-/// 本来就没有这个功能。改动这里请用 `fixtures/ui-drag.ps1` 回归。
+/// 代价是拿不到 `tauri://drag-drop` 原生文件落盘事件，而本项目本来就没有这个功能。
+/// 改动这里请用 `fixtures/ui-drag.ps1` 回归。
 pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     if let Some(existing) = app.get_webview_window(MAIN_WINDOW) {
         let _ = existing.show();
@@ -166,7 +165,7 @@ pub fn show_main_window(app: &AppHandle) {
 
 /// 是否允许 WebView 导航到该 URL。
 ///
-/// 等价原 Electron 版 `main.js` 的 `will-navigate` 守卫（只允许自己的界面与开发服务器）：
+/// 只放行自己的界面与开发服务器域名：
 /// 关掉 Tauri 的拖放处理器之后（见 `create_main_window` 的注释），把文件从资源管理器**拖进窗口**
 /// 会走 WebView2 的默认行为 —— 直接**导航到 `file:///…`**，界面就被整个换掉了。
 /// 这里把非本应用的导航一律拦掉。
@@ -203,16 +202,15 @@ fn logical_bounds(
     )
 }
 
-/// 记录主窗口当前尺寸与位置（等价原 `handleWindowClose` 里的 bounds 合并）。
+/// 记录主窗口当前尺寸与位置（与配置里已存的其它字段合并写回）。
 ///
 /// **单位必须是逻辑像素（DIP）**，这是踩过的坑：
-/// - 原实现用 Electron 的 `mainWindow.getBounds()`（DIP）存、`new BrowserWindow({width,height,x,y})`（DIP）取；
 /// - Windows 上 Tauri 的 `inner_size()` / `outer_position()` 返回的是**物理像素**，
 ///   而 `WebviewWindowBuilder::inner_size()` / `position()` 收的是**逻辑像素**。
-///   直接把物理值存下来、下次当逻辑值用，在 150% 缩放的本机上窗口每次启动都会放大 1.5 倍、
+/// - 直接把物理值存下来、下次当逻辑值用，在 150% 缩放的本机上窗口每次启动都会放大 1.5 倍、
 ///   并且位置越跑越偏（用户实际反馈："每次打开软件都没有保留上次的窗口大小和位置"）。
-/// - 顺带一提，`~/.transactions.json` 是与原 Electron 版**共用**的配置文件，
-///   单位写错还会让两个程序互相污染窗口几何。
+/// - 因此这里必须做物理 → 逻辑换算（纯函数 `logical_bounds` + 4 个单测），
+///   回归：`fixtures/window-bounds.ps1`（启动 → 关闭 → 再启动，尺寸/位置必须一致）。
 pub fn save_window_bounds(app: &AppHandle, window: &WebviewWindow) {
     let state = app.state::<DesktopState>();
     let Ok(size) = window.inner_size() else {
@@ -286,7 +284,7 @@ pub fn attach_main_window_events(app: &AppHandle, window: &WebviewWindow) {
     let main_window = window.clone();
     window.on_window_event(move |event| match event {
         tauri::WindowEvent::CloseRequested { api, .. } => {
-            // 与原实现一致：关闭按钮不直接销毁窗口，先走关闭行为
+            // 关闭按钮不直接销毁窗口，先走关闭行为
             api.prevent_close();
             let state = app_handle.state::<DesktopState>();
             request_close(&app_handle, &main_window, &state);

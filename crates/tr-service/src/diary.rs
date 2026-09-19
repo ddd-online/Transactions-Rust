@@ -1,9 +1,7 @@
-//! 日记服务。对照 Go `kernel/service/diary_service.go`。
+//! 日记服务：日期树（列表/查询）、导入（扫描目录 + 逐文件导入）、导出（按月/年筛选后写 `<date>.md`）。
 //!
-//! 三块能力：日期树（列表/查询）、导入（扫描目录 + 逐文件导入）、导出（按月/年筛选后写 `<date>.md`）。
-//!
-//! 编码回退链与原实现一致：合法 UTF-8 直接用；带 BOM 的 UTF-16 解码；
-//! 否则按 GBK 解码；仍不合法则把非法序列替换为 `?`（对齐 Go 的 `bytes.ToValidUTF8(raw, "?")`）。
+//! 编码回退链：合法 UTF-8 直接用；带 BOM 的 UTF-16 解码；
+//! 否则按 GBK 解码；仍不合法则把非法序列替换为 `?`。
 //! 这条链子是历史日记文件（Windows 记事本保存的 ANSI/UTF-16）能正确导入的关键。
 
 use std::path::Path;
@@ -21,7 +19,7 @@ pub fn list_dates(workspace: &Workspace) -> ServiceResult<Vec<DiaryDateItem>> {
     Ok(entries.into_iter().map(DiaryDateItem::from).collect())
 }
 
-/// 按日期取日记；不存在时报错（与原实现一致，而不是返回空条目）。
+/// 按日期取日记；不存在时报错（而不是返回空条目）。
 pub fn get_by_date(workspace: &Workspace, date: &str) -> ServiceResult<DiaryEntry> {
     Ok(DiaryDao::query_by_date(&workspace.connection(), date)?)
 }
@@ -33,7 +31,7 @@ pub fn upsert(
     content: &str,
     mood: &str,
 ) -> ServiceResult<DiaryEntry> {
-    // 与原实现一致：GORM 在 Create 时会填充创建/更新时间，返回的结构体带着它们
+    // 写入时一并填充创建/更新时间，返回的结构体带着它们
     let now = tr_store::util::now_unix();
     let entry = DiaryEntry {
         id: tr_store::util::new_uuid(),
@@ -84,7 +82,7 @@ pub fn export_to_directory(
     if year > 0 || month > 0 {
         entries.retain(|entry| {
             let Some((entry_year, entry_month)) = parse_year_month(&entry.date) else {
-                return false; // 日期非法：与原实现一致，直接跳过
+                return false; // 日期非法：直接跳过
             };
             if year > 0 && i64::from(entry_year) != year {
                 return false;
@@ -153,7 +151,7 @@ fn parse_diary_file_name(name: &str) -> Option<&str> {
     Some(stem)
 }
 
-/// `YYYY-MM-DD` 严格校验（含闰年），等价 Go `time.Parse("2006-01-02", ...)` 的成败。
+/// `YYYY-MM-DD` 严格校验（含闰年）：格式不合法或日期不存在都算非法。
 fn is_valid_date(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
@@ -213,7 +211,7 @@ fn decode_text(raw: &[u8]) -> String {
     replace_invalid_utf8(raw)
 }
 
-/// 带 BOM 的 UTF-16 解码；无 BOM 返回 `None`（与原实现一致）。
+/// 带 BOM 的 UTF-16 解码；无 BOM 返回 `None`。
 fn decode_utf16(raw: &[u8]) -> Option<String> {
     if raw.len() < 2 {
         return None;
@@ -236,7 +234,7 @@ fn decode_utf16(raw: &[u8]) -> Option<String> {
     Some(String::from_utf16_lossy(&units))
 }
 
-/// 把非法 UTF-8 序列替换为 `?`（对齐 Go `bytes.ToValidUTF8`）。
+/// 把非法 UTF-8 序列替换为 `?`。
 fn replace_invalid_utf8(raw: &[u8]) -> String {
     let mut output = String::new();
     let mut rest = raw;
@@ -433,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn date_validation_matches_go_strictness() {
+    fn date_validation_is_strict() {
         assert!(is_valid_date("2026-01-01"));
         assert!(is_valid_date("2024-02-29"), "闰年 2 月 29 日合法");
         assert!(!is_valid_date("2026-02-29"), "平年 2 月 29 日非法");
@@ -475,7 +473,7 @@ mod tests {
         for file in &scan.files {
             let entry = import_file(&target, &file.path, &file.date).unwrap();
             assert_eq!(entry.date, file.date);
-            // 导出格式是纯 Markdown，只有正文；mood 不随文件走（与原实现一致）
+            // 导出格式是纯 Markdown，只有正文；mood 不随文件走
             assert_eq!(entry.mood, "");
         }
 

@@ -1,30 +1,28 @@
 //! 日记页（`/diary_view`）—— P6-b 完整实现。
 //!
-//! ## 对照的原 Vue 文件
+//! ## 组成
 //!
-//! | 原文件 | 本文件对应部分 |
-//! |---|---|
-//! | `diary_view/DiaryView.vue` | [`DiaryPage`]：工具栏（今天 / 收起全部 / 跳转日期）+ 两栏编排 |
-//! | `diary_view/DiaryTree.vue` | [`DiaryTree`]：年 → 月 → 日三级折叠树（年/月降序、日降序） |
-//! | `diary_view/DiaryEditor.vue` | [`DiaryEditor`]：心情 + 字数 + 编辑/预览切换 + 1500ms 防抖自动保存 + 删除 |
-//! | `stores/diaryStore.ts` | 本文件直接持有信号（与其余页面一致） |
-//! | `utils/markdown.ts` | [`crate::components::ui::Markdown`]（纯 Rust，先转义再拼标签） |
+//! * [`DiaryPage`]：工具栏（今天 / 收起全部 / 跳转日期）+ 两栏编排
+//! * [`DiaryTree`]：年 → 月 → 日三级折叠树（年/月降序、日降序）
+//! * [`DiaryEditor`]：心情 + 字数 + 编辑/预览切换 + 1500ms 防抖自动保存 + 删除
+//! * 状态直接由本文件持有信号（与其余页面一致）
+//! * [`crate::components::ui::Markdown`]：Markdown 渲染（纯 Rust，先转义再拼标签）
 //!
-//! ## 关键行为（逐条照抄原实现）
+//! ## 关键行为
 //!
 //! * **日记不存在也能写**：`diary_get` 对不存在的日期会报错，因此读取失败时按
-//!   "空条目"兜底（原 `loadEntry` 的 `tryOrFallback`），否则新日期永远打不开编辑器。
+//!   "空条目"兜底，否则新日期永远打不开编辑器。
 //! * **自动保存、无保存按钮**：输入或切心情后 1500ms 防抖保存；`Ctrl+S`/`Cmd+S` 立即保存。
-//! * **保存状态不回落 idle**：「已保存」会一直显示（原实现如此）。
+//! * **保存状态不回落 idle**：「已保存」会一直显示，不自动回落到 idle。
 //! * **左右两处字数口径不同**：编辑器按本地草稿的码点数实时算，左树用服务端的 `wordCount`。
 //! * **折叠状态**：首次拿到非空数据时全部年份收起；月份默认全收起；「收起全部」把所有年份收起。
 //!
-//! ## 有意与原实现的差异（详见汇报）
+//! ## 设计取舍
 //!
-//! * **关键词过滤未实现**：原 Go 侧的 `ListDatesByKeyword` 没有路由、没有 UI、IPC 也没有该参数
-//!   （死代码），后端也没有等价命令，因此本页不做过滤（任务单允许在汇报里说明取舍）。
-//! * 编辑/预览是**单栏切换**（与原实现一致，没有分栏）。
-//! * 编辑器的时间防抖用 `set_timeout` + 句柄，切日期时显式清掉（原实现用 `clearTimeout`）。
+//! * **关键词过滤未实现**：本页没有路由、没有 UI、IPC 也没有该参数，后端也没有等价命令，
+//!   因此不做过滤。
+//! * 编辑/预览是**单栏切换**，没有分栏。
+//! * 编辑器的时间防抖用 `set_timeout` + 句柄，切日期时显式清掉。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -39,10 +37,10 @@ use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::time::{format_ymd_cn, split_ymd, today_ymd, weekday_cn};
 
-/// 页面标题（与原 `AppLeftBar.vue` 文案一致）。
+/// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "日记管理";
 
-/// 自动保存防抖时长（原 `setTimeout(() => doSave(), 1500)`）。
+/// 自动保存防抖时长（1500ms）。
 const AUTOSAVE_DEBOUNCE_MS: u64 = 1500;
 
 /// 心情选项（emoji 本身就是入库值；label 只用于 tooltip / `aria-label`）。
@@ -111,7 +109,7 @@ pub fn DiaryPage() -> impl IntoView {
 
     let load_entry = move |date: String| {
         selected_date.set(date.clone());
-        // 原实现：切换日期时把模式重置为预览
+        // 切换日期时把模式重置为预览
         mode.set(false);
         leptos::task::spawn_local(async move {
             match api::diary::get(&date).await {
@@ -121,7 +119,7 @@ pub fn DiaryPage() -> impl IntoView {
                     entry.set(Some(item));
                 }
                 Err(_) => {
-                    // 不存在 → 空条目（可编辑），与原 `tryOrFallback` 的兜底一致
+                    // 不存在 → 空条目（可编辑）
                     draft.set(String::new());
                     mood.set(String::new());
                     entry.set(Some(DiaryEntry {
@@ -213,7 +211,7 @@ pub fn DiaryPage() -> impl IntoView {
         jump_date.set(String::new());
         let today = today_ymd();
         go_to_date(today.clone());
-        // 展开今天所在的年与月（原 `treeRef.goToToday()`）
+        // 展开今天所在的年与月
         if let Some((year, month, _)) = split_ymd(&today) {
             collapsed_years.update(|years| {
                 years.remove(&year);
@@ -363,7 +361,7 @@ struct DayNode {
 /// 年 → 月 → 日的分组结果。
 type TreeMap = BTreeMap<i32, BTreeMap<u32, Vec<DayNode>>>;
 
-/// 把日期列表按年/月分组（年降序、月降序、日降序 —— 与原 `DiaryTree.vue` 一致）。
+/// 把日期列表按年/月分组（年降序、月降序、日降序）。
 fn build_tree(items: &[DiaryDateItem]) -> TreeMap {
     let mut map: TreeMap = BTreeMap::new();
     for item in items {
@@ -399,7 +397,7 @@ fn DiaryTree(
     initialized: RwSignal<bool>,
     on_select: UnsyncCallback<String>,
 ) -> impl IntoView {
-    // 首次拿到非空数据时把所有年份收起（原 `initialized` 只触发一次）
+    // 首次拿到非空数据时把所有年份收起（只触发一次）
     Effect::new(move |_| {
         let items = dates.get();
         if items.is_empty() || initialized.get_untracked() {

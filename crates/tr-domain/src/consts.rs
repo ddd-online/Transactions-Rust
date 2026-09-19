@@ -1,16 +1,16 @@
-//! 全局常量。对照 Go `kernel/constant/constant.go` 与 `models/stock.go` 的常量块。
+//! 全局常量。
 //! 字符串字面量是数据兼容的一部分（数据库中存的是这些值），修改即为破坏性变更。
 
-/// 工作空间内日志文件名（Go `constant.LogName`）。
+/// 工作空间内日志文件名。
 pub const LOG_NAME: &str = "transactions.log";
 
-/// 工作空间数据库文件名（Go `constant.DbName`）。
+/// 工作空间数据库文件名。
 pub const DB_NAME: &str = "transactions.db";
 
-/// `id=all` 的查询语义（Go `constant.All`）。
+/// `id=all` 的查询语义。
 pub const ALL: &str = "all";
 
-/// 所有数据表共用前缀（GORM 表名）。
+/// 所有数据表共用前缀。
 pub const TABLE_PREFIX: &str = "tbl_billadm_";
 
 // ---------- 交易类型 ----------
@@ -19,7 +19,7 @@ pub const TRANSACTION_TYPE_INCOME: &str = "income";
 pub const TRANSACTION_TYPE_EXPENSE: &str = "expense";
 pub const TRANSACTION_TYPE_TRANSFER: &str = "transfer";
 
-/// 合法的交易类型集合（校验用，顺序与原实现一致：income / expense / transfer）。
+/// 合法的交易类型集合（校验用，顺序为 income / expense / transfer）。
 pub const TRANSACTION_TYPES: [&str; 3] = [
     TRANSACTION_TYPE_INCOME,
     TRANSACTION_TYPE_EXPENSE,
@@ -56,7 +56,7 @@ pub const STOCK_TAG_WEIPAN: &str = "尾盘";
 pub const STOCK_TAG_ZHUIZHANG: &str = "追涨";
 pub const STOCK_TAG_XULI: &str = "蓄力";
 
-/// 新账本默认可用交易标签（有序）。对照 Go `models.DefaultStockTradeTags()`。
+/// 新账本默认可用交易标签（有序）。
 pub fn default_stock_trade_tags() -> Vec<String> {
     vec![
         STOCK_TAG_ANALYSIS.to_string(),
@@ -67,11 +67,11 @@ pub fn default_stock_trade_tags() -> Vec<String> {
     ]
 }
 
-/// 标签匹配策略：任一命中（Go `dto.Any`）。
+/// 标签匹配策略：任一命中。
 pub const TAG_POLICY_ANY: &str = "any";
-/// 标签匹配策略：全部命中（Go `constant.All`）。
+/// 标签匹配策略：全部命中。
 pub const TAG_POLICY_ALL: &str = "all";
-/// 标签匹配：取反（Go `dto.Not`）。
+/// 标签匹配：取反。
 pub const TAG_POLICY_NOT: &str = "not";
 
 #[cfg(test)]

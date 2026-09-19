@@ -1,14 +1,14 @@
-//! 日记域命令。对照原 `app/src/backend/api/diary.ts` 与 `diary_controller.go`。
+//! 日记域命令。
 //!
-//! | 原路由 | 命令 | 入参 |
-//! |---|---|---|
-//! | `GET /diary/dates` | `diary_list_dates` | `{}`（空请求体） |
-//! | `GET /diary/:date` | `diary_get` | `{ date }` |
-//! | `PUT /diary/:date` | `diary_upsert` | [`DiaryUpsertRequest`]（`date` + `content`/`mood`） |
-//! | `DELETE /diary/:date` | `diary_delete` | `{ date }` |
-//! | `POST /diary/import/scan` | `diary_import_scan` | `{ directory }` |
-//! | `POST /diary/import/file` | `diary_import_file` | `{ path, date }` |
-//! | `POST /diary/export` | `diary_export` | [`DiaryExportRequest`]（`directory` + `year`/`month`） |
+//! | 命令 | 入参 |
+//! |---|---|
+//! | `diary_list_dates` | `{}`（空请求体） |
+//! | `diary_get` | `{ date }` |
+//! | `diary_upsert` | [`DiaryUpsertRequest`]（`date` + `content`/`mood`） |
+//! | `diary_delete` | `{ date }` |
+//! | `diary_import_scan` | `{ directory }` |
+//! | `diary_import_file` | `{ path, date }` |
+//! | `diary_export` | [`DiaryExportRequest`]（`directory` + `year`/`month`） |
 //!
 //! 日记是**工作空间级**数据，不与账本绑定（因此入参里没有 `ledgerId`）。
 

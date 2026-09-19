@@ -1,38 +1,25 @@
 //! 分类标签页（类型卡片 + 分类 / 标签两栏联动 + 拖拽排序）。
 //!
-//! 对照的原 Vue 文件清单（只读参考 `D:\github\Transactions`）：
+//! 页面结构（固定）：顶部工具栏（类型卡片 + 当前账本）+ 左栏分类 / 右栏标签。
 //!
-//! | 原文件 | 本页对应部分 |
-//! |---|---|
-//! | `components/settings_view/TransactionsCategoryTagSetting.vue` | 页面壳、工具栏的类型卡片、初始化默认分类、三个弹窗、全部文案与 error 前缀 |
-//! | `components/settings_view/CategoryColumn.vue` | 左栏（分类列表 / 拖拽 / 删除 / 两种空态） |
-//! | `components/settings_view/TagColumn.vue` | 右栏（标签列表 / 拖拽 / 删除 / 两种空态） |
-//! | `hooks/useCategoryTags.ts` | `api::category::list` / `api::tag::list` 的取数口径与错误前缀 |
-//! | `hooks/useListDragSort.ts` | 拖拽语义：拖动结束后把**新顺序**交给调用方，逐项 `*_update_sort` |
+//! 本实现的**设计取舍**（均有理由，不改变对外契约）：
 //!
-//! 与原文的**有意差异**（均有理由，不改变对外契约）：
-//!
-//! 1. **账本缺失时的引导**：原文各栏只用 `hasLedger` 禁用按钮，没有专门的引导文案。
-//!    这里额外照抄原项目既有的「请先选择账本」（`DataAnalysisView.vue`）作为账本缺失提示，
+//! 1. **账本缺失时的引导**：各栏除了禁用按钮，还额外给出「请先选择账本」提示，
 //!    避免出现"按钮全灰但不知道为什么"的死界面。
-//! 2. **类型卡片不预取**：原文 `.type-card` 用 `themeColors` 在运行时算颜色，这里改用
-//!    `--transactions-color-{expense,income,transfer}` 令牌 + `color-mix`（令牌是设计系统
+//! 2. **类型卡片不预取颜色**：卡片颜色由
+//!    `--transactions-color-{expense,income,transfer}` 令牌 + `color-mix` 得出（令牌是设计系统
 //!    的唯一取值来源，禁止裸 hex）。
-//! 3. **分类重排的本地写回**：原文 `reorderCategories` 直接改 Vue 响应式对象的 `sortOrder`
-//!    字段再赋回数组。本实现把新顺序整体 `set` 回信号（等价效果），并**只对 `sortOrder`
-//!    确实变化的项**发请求——与原文 `if (category.sortOrder !== i)` 一致。
-//! 4. **删除确认用第三个 `Modal`**：原文第三弹窗的 ok 是 `ok-type="danger"`，这里对应
-//!    `Modal` 的 `ok_danger=true`（已由组件补丁提供）。任务单曾建议用 `Popconfirm`，
-//!    但原文与后续补充规格都要求 `Modal`，故按原文实现。
-//! 5. **工具栏右侧加当前账本**：原文工具栏只有类型卡片（账本名在全局左侧栏显示）；
-//!    本仓库的页面内不显示账本，故在工具栏右侧补一个账本胶囊（`current_ledger_name()`），
-//!    与 `pages/transactions.rs` 的 `.tr-ledger-chip` 同一手法。
+//! 3. **分类重排的本地写回**：新顺序整体 `set` 回信号，并**只对 `sortOrder`
+//!    确实变化的项**发请求。
+//! 4. **删除确认用 `Modal`**：对应 `Modal` 的 `ok_danger=true`（已由组件补丁提供），
+//!    不用 `Popconfirm`。
+//! 5. **工具栏右侧加当前账本**：本仓库的页面内不显示账本，故在工具栏右侧补一个账本胶囊
+//!    （`current_ledger_name()`），与 `pages/transactions.rs` 的 `.tr-ledger-chip` 同一手法。
 //!
-//! 行为要点（逐条对齐原文）：
-//! * watch `[ledgerId, activeType]` → 清空选中分类与标签 → `loadCategories()` +
-//!   `checkHasAnyCategories()`
-//! * `loadCategories()` 会把**每个分类**的标签一次性查出来缓存；切换分类不再发请求
-//! * 空名称静默返回（原文 `if (!name) return;`），重名分别提示「该分类已存在」「该标签已存在」
+//! 行为要点：
+//! * 账本 id 或交易类型变化 → 清空选中分类与标签 → 重新取分类并检查账本内是否已有分类
+//! * 取分类时会把**每个分类**的标签一次性查出来缓存；切换分类不再发请求
+//! * 空名称静默返回，重名分别提示「该分类已存在」「该标签已存在」
 
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
@@ -48,50 +35,50 @@ use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::store::AppStores;
 
-/// 页面标题（原 `router.ts` / `AppLeftBar.vue` 文案）。
+/// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "分类标签";
 
-/// 交易类型顺序（原 `TransactionsCategoryTagSetting.vue` 的 `transactionTypes`）。
+/// 交易类型顺序（支出 / 收入 / 转账，顺序即渲染顺序）。
 const TRANSACTION_TYPES: [(&str, &str); 3] = [
     ("expense", "支出"),
     ("income", "收入"),
     ("transfer", "转账"),
 ];
 
-/// 名称最长 20 字（原 `a-input :maxlength="20"`）。
+/// 名称最长 20 字（输入框 `maxlength`）。
 const NAME_MAX_LENGTH: u32 = 20;
 
 // ------------------------------------------------------------------ 文案常量
 //
-// 全部逐字照抄原 Vue 组件，集中在此便于对照。
+// 全部是固定文案，集中在此便于统一修改。
 
-/// 「添加分类」（`CategoryColumn.vue`）
+/// 「添加分类」
 const TEXT_ADD_CATEGORY: &str = "添加分类";
-/// 「添加标签」（`TagColumn.vue`）
+/// 「添加标签」
 const TEXT_ADD_TAG: &str = "添加标签";
-/// 分类栏标题（`CategoryColumn.vue`）
+/// 分类栏标题
 const TEXT_COLUMN_CATEGORY: &str = "分类";
-/// 标签栏兜底标题（`TagColumn.vue` 的 `{{ selectedCategory || '标签' }}`）
+/// 标签栏兜底标题（未选中分类时才显示）
 const TEXT_COLUMN_TAG: &str = "标签";
 
 /// 新增分类弹窗标题
 const TEXT_MODAL_ADD_CATEGORY: &str = "新增分类";
 /// 新增标签弹窗标题
 const TEXT_MODAL_ADD_TAG: &str = "新增标签";
-/// 删掉分类弹窗标题（原 `:title` 三元表达式的分类分支）
+/// 删掉分类弹窗标题
 const TEXT_MODAL_DELETE_CATEGORY: &str = "删除分类";
-/// 删掉标签弹窗标题（三元表达式的标签分支）
+/// 删掉标签弹窗标题
 const TEXT_MODAL_DELETE_TAG: &str = "删除标签";
 
-/// 初始化空态主文案（`CategoryColumn.vue`）
+/// 初始化空态主文案
 const TEXT_EMPTY_INIT: &str = "当前账本暂无分类标签";
-/// 当前类型无分类、但账本里有分类（`CategoryColumn.vue`）
+/// 当前类型无分类、但账本里有分类
 const TEXT_EMPTY_CATEGORY: &str = "暂无分类";
-/// 选中了分类但该分类下没有标签（`TagColumn.vue`）
+/// 选中了分类但该分类下没有标签
 const TEXT_EMPTY_TAG: &str = "暂无标签";
-/// 没有选中分类时的引导（`TagColumn.vue`）
+/// 没有选中分类时的引导
 const TEXT_EMPTY_TAG_GUIDE: &str = "选择分类查看标签";
-/// 账本缺失引导（原 `DataAnalysisView.vue` 的 `message.error('请先选择账本')`，有意差异 1）
+/// 账本缺失引导（固定文案，见设计取舍 1）
 const TEXT_EMPTY_LEDGER: &str = "请先选择账本";
 /// 账本缺失时页头副标题的占位（对齐 `pages/transactions.rs` 的「未选择账本」）
 const TEXT_NO_LEDGER: &str = "未选择账本";
@@ -109,14 +96,14 @@ const TEXT_CATEGORY_DELETED: &str = "分类已删除";
 /// 标签删除成功
 const TEXT_TAG_DELETED: &str = "标签已删除";
 
-/// 初始化按钮文案（`CategoryColumn.vue`）
+/// 初始化按钮文案
 const TEXT_INIT_BUTTON: &str = "初始化分类标签";
-/// 初始化进行中（`CategoryColumn.vue`）
+/// 初始化进行中
 const TEXT_INIT_LOADING: &str = "初始化中…";
 /// 初始化失败时 `getErrorMessage(error) || '初始化失败'` 的兜底
 const TEXT_INIT_FAILED_FALLBACK: &str = "初始化失败";
 
-/// 错误前缀：初始化（原文 `handleInitialize`）
+/// 错误前缀：初始化
 const ERR_INITIALIZE: &str = "初始化分类标签失败";
 /// 错误前缀：创建分类
 const ERR_CREATE_CATEGORY: &str = "创建分类失败";
@@ -126,12 +113,12 @@ const ERR_CREATE_TAG: &str = "创建标签失败";
 const ERR_DELETE_CATEGORY: &str = "删除分类失败";
 /// 错误前缀：删除标签
 const ERR_DELETE_TAG: &str = "删除标签失败";
-/// 错误前缀：分类排序（原文 `reorderCategories`）
+/// 错误前缀：分类排序
 const ERR_SORT_CATEGORY: &str = "更新分类排序失败";
-/// 错误前缀：标签排序（原文 `reorderTags`）
+/// 错误前缀：标签排序
 const ERR_SORT_TAG: &str = "更新标签排序失败";
 
-/// 删除确认弹窗的目标类型（原 `deleteTarget.type`）。
+/// 删除确认弹窗的目标类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CtrDeleteKind {
     Category,
@@ -147,9 +134,9 @@ pub fn CategoryTagPage() -> impl IntoView {
     let active_type = RwSignal::new(TRANSACTION_TYPES[0].0.to_string());
     let selected_category = RwSignal::new(String::new());
     let categories = RwSignal::new(Vec::<CategoryDto>::new());
-    // 每个分类名 → 该分类下的标签（原文 `loadCategories()` 里缓存在 `category.tags`）
+    // 每个分类名 → 该分类下的标签（取分类时一次性缓存）
     let tag_cache = RwSignal::new(std::collections::BTreeMap::<String, Vec<TagDto>>::new());
-    // 账本里是否存在任意类型的分类（原文 `hasAnyCategories`）
+    // 账本里是否存在任意类型的分类
     let has_any_categories = RwSignal::new(false);
     let init_loading = RwSignal::new(false);
 
@@ -159,20 +146,20 @@ pub fn CategoryTagPage() -> impl IntoView {
     let open_tag_modal = RwSignal::new(false);
     let tag_name = RwSignal::new(String::new());
 
-    // ---- 删除确认弹窗（原 `openDeleteModal` + `deleteTarget`） ----
+    // ---- 删除确认弹窗 ----
     let open_delete_modal = RwSignal::new(false);
     let delete_kind = RwSignal::new(CtrDeleteKind::Category);
     let delete_target_name = RwSignal::new(String::new());
     let delete_message = RwSignal::new(String::new());
 
-    // ---- 拖拽状态：分类栏与标签栏各一份（原组件每列各自 `useListDragSort`） ----
+    // ---- 拖拽状态：分类栏与标签栏各一份 ----
     let category_drag = DragSortState::new();
     let tag_drag = DragSortState::new();
 
     // ================================================================ 联动
 
-    // watch `[ledgerId, activeType]`（`immediate: true`）：
-    // 清空选中分类与标签 → loadCategories() + checkHasAnyCategories()。
+    // 账本 id 或交易类型变化时（首次挂载也一样）：
+    // 清空选中分类与标签 → 重新取分类并检查账本内是否已有分类。
     Effect::new(move |previous: Option<(String, String)>| {
         let ledger_id = stores.current_ledger_id.get();
         let transaction_type = active_type.get();
@@ -189,7 +176,7 @@ pub fn CategoryTagPage() -> impl IntoView {
         (ledger_id, transaction_type)
     });
 
-    // loadCategories()：先取分类，再为每个分类取标签并缓存。
+    // 先取分类，再为每个分类取标签并缓存。
     // 分类列表与标签缓存都从信号里现读，所以账本/类型一变就会重跑。
     Effect::new(move |_previous: Option<()>| {
         let ledger_id = stores.current_ledger_id.get();
@@ -320,7 +307,7 @@ pub fn CategoryTagPage() -> impl IntoView {
         });
     };
 
-    // 选中某个分类（原文 `selectCategory(name)`：选中 + 从缓存取标签）。
+    // 选中某个分类（标签列表由渲染层从 `tag_cache` 取）。
     // 选中态由 `selected_category` 驱动，标签列表由渲染层从 `tag_cache` 取。
     let select_category = move |name: String| {
         if selected_category.get_untracked() != name {
@@ -343,7 +330,7 @@ pub fn CategoryTagPage() -> impl IntoView {
 
     let confirm_add_category = move || {
         let name = category_name.get_untracked().trim().to_string();
-        // 原文：`if (!name) return;`（静默返回，不提示）
+        // 空名称静默返回，不提示
         if name.is_empty() {
             return;
         }
@@ -377,7 +364,7 @@ pub fn CategoryTagPage() -> impl IntoView {
 
     // ---- 新增标签 ----
     let open_add_tag = move || {
-        // 原 `TagColumn.vue` 的按钮在未选分类时 disabled
+        // 未选分类时按钮禁用
         if selected_category.get_untracked().is_empty() {
             return;
         }
@@ -488,8 +475,9 @@ pub fn CategoryTagPage() -> impl IntoView {
     };
 
     // ---- 拖拽排序 ----
-    // 原文语义：重排数组 → 逐项比较 `sortOrder !== i` 才发 `*_update_sort` → 本地写回新顺序。
-    // 这里把新顺序整体写回信号（等价于原文改对象的 `sortOrder` 字段），并把"需要更新"的
+    // 拖拽结束后：重排数组 → 逐项比较新旧下标，只有下标变化的项才发 `*_update_sort`
+    // → 本地写回新顺序。
+    // 这里把新顺序整体写回信号，并把"需要更新"的
     // 项按新下标作为载荷发出。
 
     let reorder_categories = move |from: usize, to: usize| {
@@ -588,7 +576,7 @@ pub fn CategoryTagPage() -> impl IntoView {
                 }
             }
             if let Some(message) = error_message {
-                // 原文：`message.error(getErrorMessage(error) || '初始化失败')`
+                // 失败时优先用错误消息，空则用兜底文案
                 let text = if message.is_empty() {
                     TEXT_INIT_FAILED_FALLBACK.to_string()
                 } else {
@@ -809,7 +797,7 @@ pub fn CategoryTagPage() -> impl IntoView {
             </header>
 
             <div class="page-body">
-                // 工具栏：类型卡片（原 `.type-nav`）+ 当前账本
+                // 工具栏：类型卡片 + 当前账本
                 <div class="ct-toolbar">
                     <div class="ct-toolbar-left">{type_nav_view}</div>
                     <div class="ct-toolbar-right">
@@ -906,7 +894,7 @@ pub fn CategoryTagPage() -> impl IntoView {
                 </div>
             </Modal>
 
-            // ---- 删除确认弹窗（标题随分类/标签切换，正文是 deleteTarget.message） ----
+            // ---- 删除确认弹窗（标题随分类/标签切换，正文是待删除项的消息） ----
             <Modal
                 open=Signal::derive(move || open_delete_modal.get())
                 title=delete_modal_title(delete_kind.get())
@@ -930,9 +918,8 @@ type SortChange = (usize, String);
 
 /// 重排列表并算出"需要落库的项"。
 ///
-/// 对应 `useListDragSort.ts` 的 `onReorder(oldIndex, newIndex)`：
-/// `list.splice(oldIndex, 1)` → `list.splice(newIndex, 0, moved)`，随后**全量重排**
-/// `sortOrder`，但只对 `sortOrder !== i` 的项发请求（原文 `if (category.sortOrder !== i)`）。
+/// 做法：先把被拖动的项从 `from` 取出、插到 `to`，随后**全量重排**
+/// `sortOrder`，但只把 `sortOrder` 与新下标不一致的项放进结果（调用方据此发请求）。
 ///
 /// 返回 `(新顺序, 需要落库的项)`；下标越界或原位返回 `None`。
 fn reorder_with_changes<T, F>(
@@ -979,7 +966,7 @@ impl SortOrder for TagDto {
     }
 }
 
-/// 交易类型 → 中文标签（原文 `TransactionTypeToLabel`）。
+/// 交易类型 → 中文标签。
 fn type_label(value: &str) -> &'static str {
     TRANSACTION_TYPES
         .iter()
@@ -988,7 +975,7 @@ fn type_label(value: &str) -> &'static str {
         .unwrap_or("支出")
 }
 
-/// 删除弹窗标题（原 `:title="deleteTarget.type === 'category' ? '删除分类' : '删除标签'"`）。
+/// 删除弹窗标题（分类 / 标签两个固定分支）。
 fn delete_modal_title(kind: CtrDeleteKind) -> String {
     match kind {
         CtrDeleteKind::Category => TEXT_MODAL_DELETE_CATEGORY.to_string(),
@@ -996,7 +983,7 @@ fn delete_modal_title(kind: CtrDeleteKind) -> String {
     }
 }
 
-/// 取某个分类缓存的标签（未缓存即空数组，与原实现失败兜底 `[]` 一致）。
+/// 取某个分类缓存的标签（未缓存即空数组）。
 fn tags_for(
     cache: &std::collections::BTreeMap<String, Vec<TagDto>>,
     category: &str,
@@ -1007,12 +994,12 @@ fn tags_for(
     cache.get(category).cloned().unwrap_or_default()
 }
 
-/// 纯文字空态（原文三处空态都是单行文案）。
+/// 纯文字空态（三处空态都是单行文案）。
 fn empty_hint(text: &'static str) -> AnyView {
     view! { <div class="ct-column-empty"><span>{text}</span></div> }.into_any()
 }
 
-/// 初始化引导面板（`CategoryColumn.vue` 的 `.column-empty > .empty-init`）。
+/// 初始化引导面板。
 fn init_panel(init_loading: RwSignal<bool>, initialize: impl Fn() + Copy + 'static) -> AnyView {
     view! {
         <div class="ct-column-empty">
@@ -1038,7 +1025,7 @@ fn init_panel(init_loading: RwSignal<bool>, initialize: impl Fn() + Copy + 'stat
     .into_any()
 }
 
-/// `message.error(text)` 等价：只有一句话，无描述（走底部 message 通道）。
+/// 只有一句话、无描述的错误提示（走底部 message 通道）。
 fn notify_error_text(text: impl Into<String>) {
     Notifier::global().error(text, None);
 }

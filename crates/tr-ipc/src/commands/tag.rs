@@ -1,12 +1,12 @@
-//! 标签命令。对照 Go `kernel/api/tag_controller.go`。
+//! 标签命令。
 //!
-//! 入参形状按原 HTTP 语义逐字段对齐：
-//! * `GET /tags?categoryTransactionType=xxx&ledgerId=xxx` → `tag_list { categoryTransactionType, ledgerId }`
-//! * `POST /tags { ledgerId, name, categoryTransactionType, sortOrder }` → `tag_create`
-//! * `DELETE /tags/:name?categoryTransactionType=...&ledgerId=...` → `tag_delete { name, categoryTransactionType, ledgerId }`
-//! * `PATCH /tags/:name/sort { ledgerId, name, categoryTransactionType, sortOrder }` → `tag_update_sort`
+//! 入参形状是固定契约：
+//! * `tag_list { categoryTransactionType, ledgerId }`
+//! * `tag_create { ledgerId, name, categoryTransactionType, sortOrder }`
+//! * `tag_delete { name, categoryTransactionType, ledgerId }`
+//! * `tag_update_sort { ledgerId, name, categoryTransactionType, sortOrder }`
 //!
-//! 缺参数时原文案为 `missing required parameters`（400），与原控制器逐字一致。
+//! 缺参数时的错误文案是 `missing required parameters`（400），**改动即破坏契约**。
 
 use serde::Deserialize;
 use tauri::State;
@@ -27,7 +27,7 @@ pub struct TagListRequest {
     pub ledger_id: String,
 }
 
-/// 查询标签并补齐每个标签的记录数。`ledgerId` 为空时返回空数组（与原实现一致，不报错）。
+/// 查询标签并补齐每个标签的记录数。`ledgerId` 为空时返回空数组，不报错。
 #[tauri::command]
 pub fn tag_list(state: State<'_, AppState>, req: TagListRequest) -> ApiResult<Vec<TagDto>> {
     if req.ledger_id.is_empty() {
@@ -50,7 +50,7 @@ pub fn tag_list(state: State<'_, AppState>, req: TagListRequest) -> ApiResult<Ve
         .collect())
 }
 
-/// 新建标签（返回 `()`，与原接口返回 nil 一致）。
+/// 新建标签（返回 `()`）。
 #[tauri::command]
 pub fn tag_create(state: State<'_, AppState>, req: CreateTagRequest) -> ApiResult<()> {
     let workspace = state.workspace()?;
@@ -66,7 +66,7 @@ pub fn tag_create(state: State<'_, AppState>, req: CreateTagRequest) -> ApiResul
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct TagDeleteRequest {
-    /// 原路径参数 `:name`
+    /// 参数 `name`
     pub name: String,
     #[serde(rename = "categoryTransactionType")]
     pub category_transaction_type: String,

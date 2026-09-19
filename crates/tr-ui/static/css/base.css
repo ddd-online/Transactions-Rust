@@ -1,18 +1,18 @@
 /* ============================================
- * 基础样式：原项目以下文件的纯 CSS 移植（按原文件顺序组织）
- *   app/src/styles/index.scss       → 全局重置、工具类、动画
- *   app/src/styles/_typography.scss → 排版类
- *   app/src/styles/_mixins.scss     → 混合宏的可复用类等价物
- *   app/src/styles/_layout.scss     → 布局类
- *   app/src/styles/_components.scss → 组件类
+ * 基础样式：全局重置 / 排版 / 混合宏等价物 / 布局 / 组件 / 工具类 / 交易类型 / 动画
+ * （按下列顺序组织）
+ *   1. 全局重置与基础 → 重置、工具类、动画
+ *   2. 排版           → 排版类
+ *   3. 混合宏等价物   → 混合宏的可复用类等价物
+ *   4. 布局           → 布局类
+ *   5. 组件           → 组件类
  *
- * 约定：只使用 `--transactions-*` 令牌，不写裸 hex（原文件本身也是如此）。
- * 原文件里针对 Ant Design Vue 的 `.ant-*` 覆盖**有意不移植**：Rust 版界面不再使用
- * Ant Design，那些覆盖所表达的外观已由 `ui.css` 里的自有组件类承担。
+ * 约定：只使用 `--transactions-*` 令牌，不写裸 hex。
+ * 不引入任何第三方组件库，其类名覆盖所表达的外观已由 `ui.css` 里的自有组件类承担。
  * ============================================ */
 
 /* ============================================
- * 1. 全局重置与基础（index.scss）
+ * 1. 全局重置与基础
  * ============================================ */
 
 * {
@@ -53,7 +53,7 @@ textarea {
 }
 
 /* ============================================
- * 2. 排版（_typography.scss）
+ * 2. 排版
  * ============================================ */
 
 /* 内联图标：默认 1em 方形、吃 currentColor（组件里再按需覆盖尺寸） */
@@ -210,7 +210,7 @@ textarea {
   color: var(--transactions-color-transfer);
 }
 
-/* 统计数字（_typography.scss 的 .statistic） */
+/* 统计数字（.statistic） */
 .statistic-value {
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-display);
@@ -250,9 +250,9 @@ textarea {
 }
 
 /* ============================================
- * 3. 混合宏等价物（_mixins.scss）
+ * 3. 混合宏等价物
  *
- * SCSS 的 @mixin 是编译期展开，纯 CSS 没有对应物，因此这里的做法是：
+ * 混合宏（编译期展开）在纯 CSS 里没有对应物，因此这里的做法是：
  *   * `@mixin flex-center` / `flex-between` / `flex-start` / `flex-end` /
  *     `flex-column` / `text-ellipsis` / `page-container` / `section-gap` /
  *     `icon-button` / `nav-button` / `focus-ring` / `card-base` / `card-elevated` /
@@ -464,7 +464,7 @@ textarea {
 }
 
 /* ============================================
- * 4. 布局（_layout.scss）
+ * 4. 布局
  * ============================================ */
 
 .layout-content {
@@ -659,7 +659,7 @@ textarea {
 }
 
 /* ============================================
- * 5. 组件（_components.scss）
+ * 5. 组件
  * ============================================ */
 
 .card {
@@ -974,7 +974,7 @@ textarea {
 }
 
 /* ============================================
- * 6. 工具类（index.scss）
+ * 6. 工具类
  * ============================================ */
 
 .text-primary {
@@ -1024,7 +1024,7 @@ textarea {
   background-color: var(--transactions-color-elevated);
 }
 
-/* 间距工具类（与原 index.scss 的 .m-* / .p-* 一一对应） */
+/* 间距工具类（.m-* / .p-*：方向 × 尺寸） */
 .m-0 {
   margin: 0;
 }
@@ -1158,7 +1158,7 @@ textarea {
 }
 
 /* ============================================
- * 7. 交易类型（index.scss）
+ * 7. 交易类型
  * ============================================ */
 
 .tr-type-income {
@@ -1177,7 +1177,7 @@ textarea {
 }
 
 /* ============================================
- * 8. 动画（index.scss）
+ * 8. 动画
  * ============================================ */
 
 @keyframes tr-fade-in {

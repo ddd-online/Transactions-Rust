@@ -1,4 +1,4 @@
-//! 气泡确认框 —— 对应原 `a-popconfirm`。
+//! 气泡确认框。
 //!
 //! 行为：点击触发元素弹出小气泡（标题 + 可选描述 + 取消/确定），点面板外的透明遮罩关闭。
 //! 浮层用绝对定位 + `--transactions-shadow-lg`，与 `ui-select` 的下拉面板同一套手法。
@@ -27,7 +27,7 @@ pub fn Popconfirm(
     /// 取消按钮文案，默认「取消」
     #[prop(optional, into)]
     cancel_text: Option<String>,
-    /// 是否显示取消按钮（原 `a-popconfirm` 的 `:show-cancel="false"` 用法）
+    /// 是否显示取消按钮（关掉后只留一个确认按钮）
     #[prop(default = true)]
     show_cancel: bool,
     /// 确认回调（气泡会自动关闭）

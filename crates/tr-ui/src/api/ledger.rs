@@ -1,12 +1,12 @@
-//! 账本域命令。对照原 `app/src/backend/api/ledger.ts` 与 `ledger_controller.go`。
+//! 账本域命令。
 //!
-//! | 原路由 | 命令 | 入参 |
-//! |---|---|---|
-//! | `GET /ledgers?id=all\|uuid` | `ledger_list` | `{ id }` |
-//! | `POST /ledgers` | `ledger_create` | `{ name, description }` |
-//! | `GET /ledgers/:id` | `ledger_get` | `{ id }` |
-//! | `PATCH /ledgers/:id` | `ledger_update` | `{ id, name, description }` |
-//! | `DELETE /ledgers/:id` | `ledger_delete` | `{ id }` |
+//! | 命令 | 入参 |
+//! |---|---|
+//! | `ledger_list` | `{ id }`（`all` 或账本 id） |
+//! | `ledger_create` | `{ name, description }` |
+//! | `ledger_get` | `{ id }` |
+//! | `ledger_update` | `{ id, name, description }` |
+//! | `ledger_delete` | `{ id }` |
 
 use serde::Serialize;
 use tr_domain::dto::LedgerDto;

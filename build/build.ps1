@@ -1,7 +1,7 @@
 # build.ps1 —— 一键构建：Rust 界面(WASM) + Tauri 桌面应用(NSIS 安装包)
 #
 # 产物统一落到 build/target/，安装包重命名为 Transactions-x64-v{版本}.exe，
-# 以延续原版本的发布资产命名（更新检查依赖 .exe 结尾的资产）。
+# 该命名是发布资产的固定约定（更新检查依赖 .exe 结尾的资产）。
 #
 # 版本号唯一来源：src-tauri/tauri.conf.json
 

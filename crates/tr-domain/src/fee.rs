@@ -1,14 +1,13 @@
 //! 股票交易费用与费用分摊。
 //!
-//! 对照实现：原后端 `kernel/service/stock_service.go` 的 `roundToCents` / `computeCommission` /
-//! `ComputeBuyFee` / `ComputeSellFee` / `ComputeOrderFee` / `AllocateOrderFee` / `allocateByAmount`，
-//! 以及原前端重复实现同一算法的 `app/src/backend/stockFee.ts`。
+//! 覆盖范围：取整到分 / 佣金（含最低佣金）/ 买入与卖出费用 / 委托级费用 /
+//! 按成交额把委托费用分摊到各笔明细。
 //!
-//! 本模块是"两侧同一份算法"的落点：后端服务层与界面层都调用这里，
-//! 从而在结构上杜绝了原实现里前后端各写一份、需要人工保持同步的问题。
+//! 本模块是"两侧同一份算法"的落点：服务层与界面层都调用这里，
+//! 从而在结构上杜绝前后端各写一份、需要人工保持同步的问题。
 //!
-//! 取整口径：Go `math.Round` 与 Rust `f64::round` 都是"四舍五入、远离零"，
-//! 与原前端的 `Math.round`（负数时朝 +∞ 取整）在正数费用上等价——费用金额恒为正。
+//! 取整口径：`f64::round` 是"四舍五入、远离零"；费用金额恒为正，
+//! 因此正数上的取整结果不存在歧义。
 
 use crate::models::StockFeeSetting;
 
@@ -109,7 +108,7 @@ pub fn allocate_by_amount(total: i64, weights: &[i64]) -> Vec<i64> {
 
     let sum: i64 = weights.iter().sum();
     if sum <= 0 {
-        // 权重不可用时全额落到末项（与原实现一致）
+        // 权重不可用时全额落到末项
         result[weights.len() - 1] = total;
         return result;
     }
@@ -141,7 +140,7 @@ pub fn is_valid_stock_code(stock_code: &str) -> bool {
         || stock_code.starts_with("30")
 }
 
-/// 行情接口使用的市场前缀（沪 `sh`，其余 `sz`），对应 Go `fetchTencentQuotes` 的判定。
+/// 行情接口使用的市场前缀：沪市 `sh`，其余 `sz`。
 pub fn market_prefix(stock_code: &str) -> &'static str {
     if stock_code.starts_with("60") || stock_code.starts_with("68") {
         "sh"
@@ -264,7 +263,7 @@ mod tests {
         assert!(is_valid_stock_code("000001"));
         assert!(is_valid_stock_code("300750"));
         assert!(!is_valid_stock_code("12345"));
-        assert!(!is_valid_stock_code("830799")); // 北交所不在支持范围（与原实现一致）
+        assert!(!is_valid_stock_code("830799")); // 北交所不在支持范围
         assert_eq!(market_prefix("600519"), "sh");
         assert_eq!(market_prefix("000001"), "sz");
     }

@@ -1,20 +1,18 @@
-//! 分类命令。对照 Go `kernel/api/category_controller.go`。
+//! 分类命令。
 //!
-//! 入参形状按原 HTTP 语义逐字段对齐（字段名都以 serde rename 写成原查询/路径/请求体里的名字）：
-//! * `GET /categories?type=all|income|expense|transfer&ledgerId=xxx` → `category_list { type, ledgerId }`
-//! * `POST /categories { ledgerId, name, transactionType, sortOrder }` → `category_create`
-//!   （请求体直接用 [`CreateCategoryRequest`]，字段名与 Go 的 `dto.CreateCategoryRequest` 相同）
-//! * `DELETE /categories/:name?type=...&ledgerId=...` → `category_delete { name, type, ledgerId }`
-//! * `PATCH /categories/:name/sort { ledgerId, name, transactionType, sortOrder }` → `category_update_sort`
-//!   （原实现从路径取 `name`、从请求体取其余字段；Rust 只有一份 `name`）
-//! * `POST /categories/initialize { ledgerId }` → `category_initialize { ledgerId }`
+//! 入参形状是固定契约（字段名都以 serde rename 写成既成的查询/路径/请求体名字）：
+//! * `category_list { type, ledgerId }`——`type` 取 `all|income|expense|transfer`
+//! * `category_create`：请求体直接用 [`CreateCategoryRequest`]（`ledgerId, name, transactionType, sortOrder`）
+//! * `category_delete { name, type, ledgerId }`
+//! * `category_update_sort { ledgerId, name, transactionType, sortOrder }`：`name` 与其余字段同在一个 `req` 里
+//! * `category_initialize { ledgerId }`
 //!
-//! 兼容性说明：分类的删除/列表在原实现里用查询参数名 `type`，而创建/排序的请求体字段名是
+//! 兼容性说明：分类的删除/列表用参数名 `type`，而创建/排序的请求体字段名是
 //! `transactionType`。为避免界面侧两套叫法出错，`type` 字段同时接受 `transactionType`（serde alias），
 //! 语义完全相同。
 //!
-//! 原文案：`missing required parameters`（缺参数，400）、`缺少 ledgerId 参数`（400）、
-//! `invalid request: ...`（Gin 绑定失败，400）——最后一条在 Tauri 里由 serde 在进入命令体之前
+//! 错误文案：`missing required parameters`（缺参数，400）、`缺少 ledgerId 参数`（400）、
+//! `invalid request: ...`（绑定失败，400）——最后一条在 Tauri 里由 serde 在进入命令体之前
 //! 处理，无法复用同一文案（见汇报）。
 
 use serde::Deserialize;
@@ -32,14 +30,14 @@ use crate::AppState;
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct CategoryListRequest {
-    /// 原查询参数 `type`（空字符串与 `all` 等价：不过滤）
+    /// 参数 `type`（空字符串与 `all` 等价：不过滤）
     #[serde(rename = "type", alias = "transactionType")]
     pub transaction_type: String,
     #[serde(rename = "ledgerId")]
     pub ledger_id: String,
 }
 
-/// 查询分类并补齐每个分类的记录数。`ledgerId` 为空时返回空数组（与原实现一致，不报错）。
+/// 查询分类并补齐每个分类的记录数。`ledgerId` 为空时返回空数组，不报错。
 #[tauri::command]
 pub fn category_list(
     state: State<'_, AppState>,
@@ -68,7 +66,7 @@ pub fn category_list(
         .collect())
 }
 
-/// 新建分类（返回 `()`，与原接口返回 nil 一致）。
+/// 新建分类（返回 `()`）。
 #[tauri::command]
 pub fn category_create(state: State<'_, AppState>, req: CreateCategoryRequest) -> ApiResult<()> {
     let workspace = state.workspace()?;
@@ -79,9 +77,9 @@ pub fn category_create(state: State<'_, AppState>, req: CreateCategoryRequest) -
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct CategoryDeleteRequest {
-    /// 原路径参数 `:name`
+    /// 参数 `name`
     pub name: String,
-    /// 原查询参数 `type`（同时接受请求体字段名 `transactionType`）
+    /// 参数 `type`（同时接受请求体字段名 `transactionType`）
     #[serde(rename = "type", alias = "transactionType")]
     pub transaction_type: String,
     #[serde(rename = "ledgerId")]

@@ -1,10 +1,10 @@
-//! 多行文本域 —— 对应原 `a-textarea`。
+//! 多行文本域。
 //!
 //! 双向绑定与 [`crate::components::ui::Input`] 一致（调用方传 `RwSignal<String>`，
 //! 组件内部用 `prop:value` 同步 DOM）。样式在 `ui.css` 的 `.ui-textarea*`。
 //!
-//! 使用场合：关键事件正文（`KeyEventDetail.vue`）、本轮复盘（`StockPositionView.vue` 等）、
-//! 日记正文（`DiaryEditor.vue`；那里还要更细的等宽字体与撑满高度，用 `class` 覆盖）。
+//! 使用场合：关键事件正文、本轮复盘、日记正文
+//! （日记那里还要更细的等宽字体与撑满高度，用 `class` 覆盖）。
 
 use leptos::prelude::*;
 
@@ -19,10 +19,10 @@ pub fn Textarea(
     /// 可见行数（`rows` 属性）
     #[prop(optional)]
     rows: Option<u32>,
-    /// 最大字符数（原 `a-textarea :maxlength`）
+    /// 最大字符数上限
     #[prop(optional)]
     maxlength: Option<u32>,
-    /// 是否允许拖动改变大小（默认不允许，与原组件在编辑区的用法一致）
+    /// 是否允许拖动改变大小（默认不允许：编辑区需要稳定高度）
     #[prop(optional)]
     resizable: bool,
     /// 禁用

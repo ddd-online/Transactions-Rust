@@ -1,26 +1,21 @@
 # AGENTS.md
 
-Transactions 是一款桌面个人记账应用。本仓库是它的**纯 Rust 重写版**：Tauri 2 外壳 + Leptos(WASM) 界面 + rusqlite 内核。
-每个工作空间是一个独立的 SQLite 数据库。
+Transactions 是一款桌面个人记账应用，每个工作空间是一个独立的 SQLite 数据库。
+技术栈：Tauri 2 外壳 + Leptos(WASM) 界面 + rusqlite 存储，全部为 Rust 代码。
 
-参考实现（**只读**）：`D:\github\Transactions`（原 Electron + Vue 3 + Go/Gin 版本，v0.27.0）。
-本仓库的职责是"行为等价 + 数据兼容"地把它重写为纯 Rust 栈。
-
-另见：`PRODUCT.md`（产品定位）、`DESIGN.md`（设计系统，UI 的裁决标准）、
-`docs/ACCEPTANCE.md`（逐页人工验收清单 + 与原实现的有意偏离）、
-`docs/UI-KIT.md`（组件套件清单：28 个文件 / 约 32 个导出组件 ↔ 原 48 个 Vue 组件的对应关系）。
+另见：`PRODUCT.md`（产品定位）、`DESIGN.md`（设计系统，UI 的裁决标准）。
 
 ## 架构
 
 ```
 crates/tr-domain/    # 纯领域层：models / dto / 金额换算 / 费用分摊（native + wasm 双可编，无 I/O）
-crates/tr-store/     # 存储层：最新 schema 建库 + 只读格式校验 + 各 Dao（rusqlite）
+crates/tr-store/     # 存储层：当前 schema 建库 + 只读格式校验 + 各 Dao（rusqlite）
 crates/tr-service/   # 服务层：业务规则（账本/交易/…/股票），不依赖 tauri
 crates/tr-ipc/       # IPC 命令面：全部 #[tauri::command] + 统一错误信封
 crates/tr-ui/        # 界面：Leptos CSR（cdylib，仅编译到 wasm32）+ static/{css,fonts,icons}
 src-tauri/           # 桌面外壳：窗口/托盘/配置/日志/trasset:// 资产协议/更新
-xtask/               # 验证工具：schema-diff（数据兼容护栏）、parity（黄金对比）
-fixtures/            # 最新 schema 基线、种子工作空间、黄金 JSON（**不含真实个人数据**）
+xtask/               # 验证工具：schema-diff（建库护栏）、validate / dump / seed（工作空间工具）
+fixtures/            # schema 基线（fresh.sql）+ 种子与端到端脚本（**不含真实个人数据**）
 ```
 
 分层纪律：
@@ -46,25 +41,10 @@ cargo tauri dev
 cargo tauri build                                 # 产出 NSIS 安装包
 
 # 验证护栏
-cargo xtask schema-diff                           # Rust 建库结构与基线逐条一致
-cargo xtask schema-diff --go-db <path>            # 直接与 Go 0.27 建出的库比对
-cargo xtask validate <workspace-dir>              # 只读校验既有工作空间是否最新格式
-cargo xtask seed <workspace-dir>                  # 新建并播种一份示例数据（人工冒烟/黄金对比用）
-cargo xtask dump <workspace-dir> [--table <name>] # 只读导出业务表为规范化 JSON
-cargo xtask parity normalize|diff <json…>         # 黄金对比的归一化与差异报告
-
-# 数据级黄金对比（一条命令，验收护栏）：
-#   同一批输入分别由 Go 参考实现（HTTP 内核）与 Rust 侧写入两个全新工作空间，
-#   再逐表逐字段比较落库结果；退出码 0 = 一致。
-#   当前覆盖面：阶段 1（新建）+ 2（更新/删除）+ 3（股票减仓/多轮次/预演）+ P1（账本改名、
-#   图表更新、4 个 sort_order、关键事件覆盖写与删除、非法目标预演）——go-driver 里
-#   **66+ 个直接写调用 + 8 次"记一笔"+ 22 次回查**，18 张表全列逐字段比对。
-#   ⚠ 已知的**非确定性来源**（不是 bug，但决定"红了先怀疑谁"）：股票资金记录若在同一秒落多条，
-#   Go 侧（GORM 秒级 `autoCreateTime`）相对顺序可能退化，而 Rust 侧把 `created_at` 拉成严格递增
-#   （见"有意偏离"）。两侧现金链都按录入顺序取前值，顺序一变余额就变；重放会在一秒内重写整批派生
-#   资金记录，所以这类并列**无法完全消除**。脚本会打印同秒组的提示——遇到"差异只出现在
-#   `tbl_billadm_stock_fund_record[*].cash_balance`"的红色，先重跑一次再判断。
-pwsh -File fixtures/parity/run-parity.ps1 [-OutDir target\parity] [-Port 29143]
+cargo xtask schema-diff                           # Rust 建库结构与 fixtures/schema/fresh.sql 逐条一致
+cargo xtask validate <workspace-dir>              # 只读校验既有工作空间是否为当前格式
+cargo xtask seed <workspace-dir>                  # 新建并播种一份示例数据（人工冒烟用）
+cargo xtask dump <workspace-dir> [--table <name>] # 只读导出业务表为规范化 JSON（排障与回归对比）
 
 # 设计令牌护栏：tokens.css 之外不得有硬编码颜色、引用的令牌必须已定义、
 # 深色主题与 prefers-color-scheme 兜底必须覆盖同一组令牌。
@@ -212,29 +192,29 @@ cargo clippy --all-targets -- -D warnings
 - **配置目录可被 `USERPROFILE` 覆盖**：`config.rs` 的 `home_dir()` 先读 `USERPROFILE`（非 Windows 读 `HOME`）。
   `fixtures/smoke.ps1` 正是靠这一点把冒烟启动的实例指向一次性配置目录，
   **不会碰用户真实的 `~/.transactions.json`**；手测 release 版时也可以这么隔离。
-- **别按进程名判断"应用是否在运行"**：原 Electron 版的 exe 也叫 `Transactions.exe`
-  （本机装在 `D:\software\Transactions\`）。判重要按**完整路径**，否则会误判、误杀用户正在用的应用。
+- **别按进程名判断"应用是否在运行"**：本机别的目录下可能也装着同名的 `Transactions.exe`
+  （例如 `D:\software\Transactions\`）。判重要按**完整路径**，不能按进程名，
+  否则会误判、误杀用户正在用的应用。
 - **Tauri 默认会吃掉页内 HTML5 拖拽**（曾经的真实缺陷，"分类/标签/模板拖不动"）：
   Tauri 窗口默认 `dragDropEnabled: true`，wry 于是在 WebView2 宿主 HWND 上 `RegisterDragDrop`
   并 `SetAllowExternalDrop(false)`（`wry-0.55.1/src/webview2/mod.rs:150`）；而 **Chromium 在 Windows 上的
   页内拖拽也走 OLE 拖放**，于是 `drop` 永远到不了页面 —— 现象很有欺骗性：
   `dragstart`/`dragover` 都正常（行会变半透明、插入指示线也会画），只有 `drop` 不触发。
   修法：建窗口时调 `.disable_drag_drop_handler()`（`shell.rs` 的 `create_main_window` / `create_init_window`）。
-  代价是拿不到 `tauri://drag-drop` 原生文件落盘事件——本项目与原 Electron 版都没有这个功能。
+  代价是拿不到 `tauri://drag-drop` 原生文件落盘事件。
   回归：`fixtures/ui-drag.ps1`。
 - **窗口几何的单位是逻辑像素（DIP），不是物理像素**（曾经的真实缺陷，"记不住窗口大小和位置"）：
   Windows 上 `window.inner_size()` / `outer_position()` 返回**物理**像素，
   而 `WebviewWindowBuilder::inner_size()` / `position()` 收的是**逻辑**像素；
-  原 Electron 版两边都是 DIP（`getBounds()` / `new BrowserWindow({...})`），
-  且 `~/.transactions.json` 是**与原版共用**的配置文件。若把物理值原样存回去，
+  界面配置（`~/.transactions.json`）里存的窗口几何**必须是逻辑像素**。若把物理值原样存回去，
   150% 缩放的机器上窗口每次启动都会放大 1.5 倍、位置越跑越偏。
   `save_window_bounds` 现在做物理 → 逻辑换算（纯函数 `logical_bounds` + 4 个单测），
   回归：`fixtures/window-bounds.ps1`（启动 → 关闭 → 再启动，尺寸/位置必须一致）。
 - **关掉拖放处理器之后必须补导航守卫**（`shell.rs` 的 `is_allowed_navigation`）：
   Tauri 的拖放处理器同时也"吃"掉了拖入文件时的默认导航；`disable_drag_drop_handler()` 之后，
   把文件从资源管理器拖进窗口会让 WebView2 **直接导航到 `file:///…`**，界面整个被换掉。
-  原 Electron 版用 `main.js` 里的 `will-navigate` 守卫挡住这类导航（只允许自己的界面），
-  这里等价地只放行 `tauri.localhost` / `localhost` / `127.0.0.1`，其余（file:、外部站点、data:）一律拦截；
+  因此要加一道导航守卫（`shell.rs` 的 `is_allowed_navigation`）挡住这类导航：
+  只放行 `tauri.localhost` / `localhost` / `127.0.0.1`，其余（file:、外部站点、data:）一律拦截；
   `trasset://` 是**子资源**不走导航，所以不受影响。单测覆盖放行/拦截两侧。
 - **两种原生对话框的窗口归属不一样**（找错地方就会"对话框没弹出来"）：
   * **WebView2 自己的文件框**（`<input type=file>`，见 `fixtures/ui-upload.ps1`）：
@@ -248,15 +228,14 @@ cargo clippy --all-targets -- -D warnings
   **它自己的"当前目录"**解析，于是脚本传 `-OutDir target\pkg-diary` 时，导入/导出就落到了别的地方
   （甚至弹「没有找到匹配的项目」）。所有 fixtures 的 `-OutDir` 现在都过 `GetFullPath` 归一化，
   `Select-Directory` 里还有 `IsPathRooted` 断言兜底。排查这类"选错目录"时**先看路径是不是绝对的**。
-- **同一个坑还有第二个受害者：黄金对比里的工作空间路径**（我为此白查了三轮）：`run-parity.ps1 -OutDir`
-  传**相对**路径时，Go 内核是以 `-WorkingDirectory <KernelDir>` 启动的，它按**自己的 cwd** 解析
-  `-workspace`，于是库落到 `<KernelDir>\target\parity-finalX\ws-go`（**污染了只读参照仓库**
-  `D:\github\Transactions\kernel\target\`），而驱动用 `xtask dump <同一相对路径>`（相对**本仓库**）去找它 ——
-  现象极具欺骗性：内核启动正常、前面几十个 HTTP 调用**全绿**（它们只跟内核说话），
+- **同一个坑还有第二个受害者：以"别的目录"为 cwd 的被测进程**（我为此白查了三轮）：
+  脚本把**相对**路径传给以 `-WorkingDirectory <别的目录>` 启动的进程时，它按**自己的 cwd** 解析
+  `-workspace` 这类参数，于是库落到别的地方，而驱动用 `xtask dump <同一相对路径>`（相对**本仓库**）去找它 ——
+  现象极具欺骗性：进程启动正常、前面几十次调用**全绿**（它们只跟进程说话），
   直到第一个落库断言才炸，而且 trap 把真正的原因吞成了 `ScriptHalted`。
-  现在 `run-parity.ps1` / `go-driver.ps1` 入口处都做 `GetFullPath` 归一化；
-  `go-driver.ps1` 的 `Invoke-Dump` 也把 cargo 的 stderr 收进异常（原来写的是 `2>$null`，只剩一句"dump 失败"）。
-  教训：**断言走文件系统、被测进程走另一个 cwd 时，路径必须绝对化**；diff 红之前先确认两侧说的是同一个库。
+  现在所有 fixture 入口处都做 `GetFullPath` 归一化；调 `xtask dump` 时也要把 cargo 的 stderr
+  收进异常（原来写的是 `2>$null`，只剩一句"dump 失败"）。
+  教训：**断言走文件系统、被测进程走另一个 cwd 时，路径必须绝对化**；断言红了先确认两侧说的是同一个库。
 - **选目录的正确姿势**（`fixtures/ui-diary-io.ps1` 的 `Select-Directory`，逐条都踩过）：
   1. 把**绝对路径**粘进底部「文件夹(F):」框（剪贴板粘贴，别逐字符 SendKeys——输入法会把 `\` 变 `、`）；
   2. 回车**进入**该目录，再点「选择文件夹」；**不要**用地址栏（Alt+D）导航——它受"对话框记住的上次
@@ -265,7 +244,7 @@ cargo clippy --all-targets -- -D warnings
   4. 断言也要看**结果**（导出文件落在哪、库里多了哪几行），不要只看"对话框关了没有"。
 - **只读的"行内操作按钮"必须先 hover**（`fixtures/ui-crud.ps1` 的 `Find-RowButton`）：分类/标签行的操作区
   是 `.ct-item-actions { display: none }`，只在 `:hover` 或 `.is-active` 时才 `display: flex`
-  （**与原 `CategoryColumn.vue` 逐字一致，是 parity 不是缺陷**）。`display: none` 的元素**不进 UIA 树**，
+  （**这是刻意的交互约定，不是缺陷**）。`display: none` 的元素**不进 UIA 树**，
   所以"新建的那一行能删、别的行删不了"——因为新建的行是 active。做法：先用真实鼠标把指针移到行中心、
   等 ~0.5s，再按名字查按钮，并用"中心 Y 最近且在该行右侧"来区分同一列里的多个「删除」。
 - **往多行文本域写内容要"两条腿走路"**（写 `fixtures/ui-diary-edit.ps1` 时踩的）：
@@ -360,8 +339,8 @@ cargo clippy --all-targets -- -D warnings
   DatePicker / Select 的下拉都是**绝对定位的子元素**，而 `.ui-modal__content` 原来带
   `overflow: hidden`（只为圆角）——小弹窗（如「关联关键事件」，只有一个表单项）里日历被裁到
   **只剩月份标题和星期行**，日期格子看不见也点不动；中等高度的弹窗（关键事件新增、日记编辑等）
-  则被裁掉一半，看着像"面板画坏了"。原版 antd 把面板 **portal 到 body**，所以不受弹窗裁剪影响，
-  这是重写时引入的偏差。现已改成 `overflow: visible`（圆角不依赖裁剪：header/footer 都是透明底、
+  则被裁掉一半，看着像"面板画坏了"。下拉面板的正确做法是 **portal 到 body**，挂在弹窗内容里就必然受裁剪影响。
+  现已改成 `overflow: visible`（圆角不依赖裁剪：header/footer 都是透明底、
   只有一条边框线，body 有内边距，没有子元素会画到圆角外）。
   排查提示：**UIA 里看不到"被裁掉"**——被裁元素的矩形照样报出来（见下一条），
   只有截图（全屏 PNG）才看得出"元素其实没画出来"。
@@ -377,72 +356,74 @@ cargo clippy --all-targets -- -D warnings
 - **自动更新是自研实现**（`src-tauri/src/updater.rs`），**不用** `tauri-plugin-updater`：
   沿用 GitHub Releases + `asset.digest`(sha256) 校验的既有发布管线，不需要签名密钥与 `latest.json`。
   命令：`update_check` / `update_download`（发 `update:download-progress|complete|error` 事件）/ `update_cancel` / `update_install`；
-  行为（仅 GitHub 域名白名单、已下载复用、`.part` 中转、取消清理、打开安装包后退出）与原 Electron 版逐条一致。
+  行为：仅 GitHub 域名白名单、已下载复用、`.part` 中转、取消清理、打开安装包后退出。
   因此 `tauri.conf.json` 里**不要**加 `plugins.updater`，capabilities 里也不需要 `updater:default`。
 - **更新/行情的 HTTP 客户端不读系统代理**（已知偏差）：`src-tauri/src/updater.rs` 与
   `tr-service/src/quote.rs` 用的是 `ureq`，只按直连走（既不读 WinINET 的 `ProxyEnable/ProxyServer`，
-  也不读 `HTTP(S)_PROXY`）；而原 Electron 版用 `net.request`，走 Chromium 网络栈、**会用系统代理**。
+  也不读 `HTTP(S)_PROXY`）。
   本机实测两个端点直连都能通（`api.github.com`、`qt.gtimg.cn` 均成功，更新检查返回"已是最新版本"），
-  所以当前不影响使用；但若哪天直连被挡（历史上 GitHub 资产下载就失败过），更新检查/下载会失败而原版能过。
+  所以当前不影响使用；但若哪天直连被挡（历史上 GitHub 资产下载就失败过），更新检查/下载会失败。
   **要不要修需要权衡**：直接改成"有系统代理就走代理"会在代理没开时把本来能用的直连也弄坏
-  （ureq 没有 Chromium 那套代理失败回退），所以正确的做法是"环境变量优先 + 系统代理仅在直连失败后回退"
+  （ureq 没有代理失败回退），所以正确的做法是"环境变量优先 + 系统代理仅在直连失败后回退"
   并加单测；截至本轮**刻意未做**，先在文档里记明这个偏差与取舍。
 
 ## 关键约定与陷阱
 
 - **SQL 只允许拼接常量**：列名/表名用 `const …_COLUMNS` 或常量数组（如 `STOCK_TABLES`），
   **值一律走 `?` 占位符**（`instr(description, ?)` 也是占位符）；`ORDER BY` 的字段必须过**白名单**
-  （`build_sort_clause` 只认 `transactionAt/transactionType/price/category`，与原 `TrSortModal` 的 4 项一致），
-  排序方向强制 `asc|desc`。改 DAO 时别把请求里的字符串直接拼进 SQL。
+  （`build_sort_clause` 只认 `transactionAt` / `transactionType` / `price` / `category` 这 4 项，
+  多一项都不认），排序方向强制 `asc|desc`。改 DAO 时别把请求里的字符串直接拼进 SQL。
 - **生产代码里的 `unwrap/expect/panic!` 必须有据可依**：允许的只有锁中毒
   （`.expect("…锁中毒")`）、已校验不变式（月份 `1..=12`、`valid_up_to` 前缀、池在生命周期内有效）、
   以及启动期构建失败（`main.rs`）。新增这类调用前先问"它真的不可失败吗"。
 - **金额恒为整数分**：数据库、IPC、算法全用 `i64` 分；只有展示层做分/元换算
   （`tr_domain::money`）。这两个换算函数的行为是硬契约（含负号、`.5` 输入）。
-- **数据兼容只针对最新 schema（v0.27+）**：`transactions.db` 不存在时用
-  `fixtures/schema/fresh_v0_27.sql` 建库；已存在时**只做只读校验**，
-  **绝不执行任何 DDL/DML 去改结构**。更早版本的工作空间会被明确拒绝（提示先用 0.27 版打开一次）。
-- **本仓库没有迁移代码**，也不要新增：没有 AutoMigrate 等价、没有补列/加索引、
-  没有版本化迁移、没有 `billadm.db` 改名。任何"顺手修复旧库"的代码都属于越界。
-- **IPC 契约**：命令统一只收一个 `req` 结构体参数，字段名与原 HTTP JSON body 逐字段一致。
+- **数据库结构只认当前 schema**：`transactions.db` 不存在时用
+  `fixtures/schema/fresh.sql` 建库；已存在时**只做只读校验**，
+  **绝不执行任何 DDL/DML 去改结构**。更早格式的工作空间会被明确拒绝，
+  用户可见文案是 `该工作空间不是当前格式（格式过旧）：…`，
+  并提示改用其他工作目录、或用支持该格式的旧版本把它升级到当前格式。
+- **本仓库没有迁移代码**，也不要新增：没有自动建表/补列/加索引、
+  没有版本化迁移、没有数据库文件改名。任何"顺手修复旧库"的代码都属于越界。
+- **IPC 契约**：命令统一只收一个 `req` 结构体参数，字段名是**硬契约**——改动即破坏兼容。
   成功时 promise 直接 resolve 为数据本身；失败时 reject 载荷为
   `{"code":-1,"msg":"...","status":500}`。`msg` 是用户可见文案，**改动即破坏契约**。
-- **JSON 字段命名不统一，且必须照抄**：核心记账模型是 snake_case
+- **JSON 字段命名不统一，但必须保持不变**：核心记账模型是 snake_case
   （`ledger.created_at`），关键事件/日记/股票模型是 camelCase（`ledgerId`、`createdAt`），
   DTO 里两种混用（`tr_query_result` 的 `page_size` 与 `trStatistics` 并存）。
   数据库列名恒为 snake_case，列映射在 DAO 层显式书写，不依赖 serde。
 - **金额/时间戳语义**：`transaction_at`、`trade_time` 等是 Unix 秒；
   `%Y-%m` 之类的分桶在 SQL 里用 `strftime(..., 'unixepoch')` 完成，不要在 Rust 侧重算。
 - **图片资产**：布局为 `<workspace>/data/assets/key_events/<date>/<uuid>.<ext>` +
-  `thumb_<uuid>.jpg`，数据库存相对 `data/assets` 的路径。界面通过 `trasset://` 自定义协议访问
-  （原实现走本机 HTTP `/api/v1/static/*`），协议处理器复刻了原路径穿越校验。
-- **后端只接受 JPEG/PNG/GIF/WebP**（与原实现 `util/image.go` 的 `mimeToExt` + `image.Decode` 一致）：
+  `thumb_<uuid>.jpg`，数据库存相对 `data/assets` 的路径。界面通过 `trasset://` 自定义协议访问，
+  协议处理器带路径穿越校验（只允许落在 `data/assets` 下的相对路径）。
+- **后端只接受 JPEG/PNG/GIF/WebP**：
   **HEIC 转换留在界面层**（P5 用 web-sys canvas 交给 WebView2/系统解码器转成 JPEG 再上传），
-  后端不引入 libheif/WIC。缩略图规则不变：宽度 > 300 时按比例缩放到 300（CatmullRom）、JPEG q75。
-- **没有本地网络面**：不监听端口、没有 API 令牌、没有 CORS、没有子进程内核。
-  "后台服务异常→重启"那套机制整体不存在（进程即应用）。
+  后端不引入 libheif/WIC。缩略图规则：宽度 > 300 时按比例缩放到 300（CatmullRom）、JPEG q75。
+- **没有本地网络面**：不监听端口、没有 API 令牌、没有 CORS、没有子进程后端。
+  进程即应用，不需要"后台服务异常→重启"那套机制。
 - **首启动的窗口切换由外壳负责**：`workspaceDir` 为空时启动进入初始化窗口（600×560、不可缩放）。
   初始化窗口与主窗口加载**同一个** `index.html`，界面在"未配置工作空间"时展示选择目录的引导。
-  选完目录后 `workspace_open` 打开数据库，外壳随即 `show_main_window` + `destroy` 初始化窗口
-  （对应原实现 `electron/src/main.js:396` 的 `workspace:init`）。
-  因此**界面不需要、也不要再调 `workspace_init`**：那个命令只是为对齐原命令面而保留的幂等入口。
+  选完目录后 `workspace_open` 打开数据库，外壳随即 `show_main_window` + `destroy` 初始化窗口。
+  因此**界面不需要、也不要再调 `workspace_init`**：那个命令只是保留的幂等入口（不参与首启动流程）。
   曾经踩过的坑：`workspace_init` 全仓无调用点 → 首次启动只在一个不可缩放的 600×560 窗口里
   渲染整个应用，主窗口永远不出现（托盘"显示主窗口"才会补出来，于是变成两个窗口）。
 - **配置文件是用户数据**：`~/.transactions.json`（dev 为 `~/.transactions-dev.json`）
   的键名与位置都不变，并且**读写时必须保留未知键**（`AppConfig.extra`）。
 - **界面无 Node**：仓库里没有 npm/package.json，没有 vendor 的 JS 库。
   图表、Markdown、拖拽排序、日期选择等全部是 Rust 实现（见 `tr-ui`）。
-- **设计令牌**：`--transactions-*` CSS 变量为准，取值来自原项目 `app/src/styles/_variables.scss`
-  （对应 `DESIGN.md` 的调色板；`PRODUCT.md` 历史文本里的 `#4A8E70` 是过时信息）。
-  仅浅色/深色双主题，主题通过 `<html data-theme="light|dark">` 切换。
+- **设计令牌**：`--transactions-*` CSS 变量是颜色/尺寸的唯一来源（对应 `DESIGN.md` 的调色板；
+  `PRODUCT.md` 历史文本里的 `#4A8E70` 是过时信息）。
+  只支持浅色/深色两套主题（两套共用同一组令牌名），主题通过 `<html data-theme="light|dark">` 切换；
+  历史上遗留的令牌允许保留。
 - **供应商文档**：`crates/tr-ui/dist/` 由 trunk 生成，不入库。
 
 ## 发布
 
 **远程仓库**：`https://github.com/ddd-online/Transactions-Rust`（分支 `main`，首次发布 `v0.1.0`）。
-参考实现 `ddd-online/Transactions` 是**另一个程序**（Electron 版），两边的 Release 资产不可互换：
-应用内更新检查与「关于软件」的 GitHub 链接、`build/release.ps1` 的 `$repo` **必须指向本仓库**，
-否则 0.1.0 会去比对 Electron 版的 v0.27.0、提示"有新版本"却下载到别的安装包。改动这三处时一并自检：
+应用内更新检查与「关于软件」的 GitHub 链接、`build/release.ps1` 的 `$repo` **必须指向本仓库
+`ddd-online/Transactions-Rust`**，否则会比对到不相干的版本、提示"有新版本"却下载到错误的安装包。
+改动这三处时一并自检：
 ```powershell
 Select-String -Path src-tauri\src\updater.rs,crates\tr-ui\src\pages\settings.rs,build\release.ps1 -Pattern 'ddd-online'
 ```
@@ -455,4 +436,4 @@ Select-String -Path src-tauri\src\updater.rs,crates\tr-ui\src\pages\settings.rs,
 `Transactions-x64-v{version}.exe`）→ `build/release.ps1`（`gh release create` 上传该 .exe）。
 版本号唯一来源是 `src-tauri/tauri.conf.json`（`Cargo.toml` 的 workspace/`src-tauri` 两处也要同步）；
 应用内更新读 release 的 `tag_name` 与首个 `.exe` 资产的 `digest`。
-许可证以仓库根 `LICENSE` 为准（Apache-2.0，与参考实现一致）。
+许可证以仓库根 `LICENSE` 为准（Apache-2.0）。

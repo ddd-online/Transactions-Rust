@@ -1,6 +1,6 @@
 //! 按钮 —— 统一按钮系统。
 //!
-//! 变体与尺寸逐条对应原 `index.scss` 的 `.ant-btn` 覆盖：
+//! 变体与尺寸：
 //! `primary`（实心主色）/ `secondary`（描边次要）/ `text`（纯文字）/
 //! `text-danger`（文字危险）/ `primary-danger`（实心危险）/ `dashed`（虚线）/ `link`（链接）；
 //! 尺寸 `sm` 28px / `md` 36px / `lg` 44px。

@@ -1,5 +1,5 @@
-//! 股票域命令封装。对照原 `app/src/backend/api/stock.ts` 与
-//! `crates/tr-ipc/src/commands/stock.rs`（后者是**唯一权威**，字段名逐字照抄）。
+//! 股票域命令封装。字段名以 `crates/tr-ipc/src/commands/stock.rs` 为准
+//! （**唯一权威**，逐字照抄）。
 //!
 //! | 命令 | 入参 |
 //! |---|---|
@@ -12,7 +12,7 @@
 //! ## 命名
 //!
 //! 股票域的**请求体是 snake_case**（`ledger_id` / `commission_rate`），
-//! 而**响应是 camelCase**（`commissionRate` / `minCommission`）—— 与原实现一致，不要统一。
+//! 而**响应是 camelCase**（`commissionRate` / `minCommission`）—— 两种混用是既成契约，不要统一。
 //!
 //! ## 单位
 //!
@@ -202,7 +202,7 @@ struct TradeUpdateRequest {
 #[derive(Debug, Serialize)]
 struct OrderDeleteRequest {
     pub ledger_id: String,
-    /// 后端字段名就是 `order_id`（保持 Go 的 `:orderId` 语义但用 snake_case）
+    /// 后端字段名就是 `order_id`（snake_case）
     pub order_id: String,
 }
 
@@ -385,7 +385,7 @@ pub async fn trade_create(
             stock_name: stock_name.to_string(),
             trade_type: trade_type.to_string(),
             trade_time,
-            // 参考实现的下单弹窗没有备注字段，恒发空串
+            // 下单弹窗没有备注字段，恒发空串
             remark: String::new(),
             tag: tag.to_string(),
             fills,

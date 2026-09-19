@@ -1,10 +1,10 @@
-//! 日记 DAO。对照 Go `kernel/dao/diary_dao.go`。
+//! 日记 DAO。
 //!
 //! 三处必须照抄的细节：
 //! 1. `list_dates` / `list_dates_by_keyword` 只 SELECT `date, word_count, mood`
-//!    （原实现如此），其余字段保持零值——返回值随后被映射成 `DiaryDateItem`。
+//!    （只取这三列），其余字段保持零值——返回值随后被映射成 `DiaryDateItem`。
 //! 2. `upsert` 的冲突键是 **`date`（全工作空间唯一）**，冲突时只更新
-//!    `content / word_count / mood`，**不更新 `updated_at`**（原实现的 DoUpdates 列表里没有它）。
+//!    `content / word_count / mood`，**不更新 `updated_at`**（更新列表里没有它）。
 //! 3. 关键词过滤用 `instr(content, ?) > 0`（区分大小写、不把 `%_` 当通配符）。
 
 use rusqlite::{params, Connection};
@@ -104,7 +104,7 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DiaryEntry> {
     })
 }
 
-/// 日期列表专用映射：只填 date / word_count / mood（与原实现的 SELECT 列表一致）。
+/// 日期列表专用映射：只填 date / word_count / mood（与 `DATE_COLUMNS` 的 SELECT 列表一致）。
 fn from_date_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DiaryEntry> {
     Ok(DiaryEntry {
         date: row.get(0)?,
@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(second.content, "第一天改");
         assert_eq!(second.mood, "平静");
         assert_eq!(second.created_at, first.created_at);
-        // 原实现的 DoUpdates 不含 updated_at：更新时间保持首次写入的值
+        // 冲突时更新的列不含 updated_at：更新时间保持首次写入的值
         assert_eq!(second.updated_at, first.updated_at);
 
         let count: i64 = conn

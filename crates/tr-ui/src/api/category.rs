@@ -1,4 +1,4 @@
-//! 分类域命令。对照原 `app/src/backend/api/category.ts` 与 `category_controller.go`。
+//! 分类域命令。
 //!
 //! 注意入参命名**不统一**（照抄 `crates/tr-ipc/src/commands/category.rs`）：
 //! * `category_list` / `category_delete` 用查询参数名 `type`

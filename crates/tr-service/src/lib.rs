@@ -1,6 +1,6 @@
 //! tr-service —— 业务服务层。
 //!
-//! 对照原 Go 版 `kernel/service/*`：api（命令面）→ service（业务规则）→ dao（SQL）→ models。
+//! 调用链：api（命令面）→ service（业务规则）→ dao（SQL）→ models。
 //! 本层不依赖 tauri，因此可以用普通 `cargo test` 对全部业务规则做无界面验证。
 //!
 //! 各业务服务随阶段补齐：

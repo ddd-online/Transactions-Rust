@@ -8,7 +8,7 @@
 target = "index.html"
 dist = "dist"
 release = false
-# 与原项目一致：界面无外部 CDN 依赖，全部离线可用
+# 界面无外部 CDN 依赖，全部离线可用
 #
 # 关闭 wasm-opt 压缩：trunk 0.21 随附的 wasm-opt 123 无法校验 Rust 1.96 生成的
 # bulk-memory 指令（`memory.copy ... requires --enable-bulk-memory-opt`），

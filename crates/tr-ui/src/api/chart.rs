@@ -1,4 +1,4 @@
-//! 图表域命令。对照原 `app/src/backend/api/chart.ts` 与 `chart_controller.go`。
+//! 图表域命令。
 //!
 //! 图表 DTO 是 camelCase（`chartId` / `ledgerId` / `chartType` / `isPreset` / `sortOrder`）。
 //! `chart_delete` 的入参字段名是 `chartId`（命令同时接受 `id`，这里统一发送 `chartId`）。

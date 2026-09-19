@@ -1,8 +1,7 @@
 //! 工作空间：一个目录 = 一个独立 SQLite 数据库，加上 `data/assets` 资产目录。
 //!
-//! 对照原 Go 版 `kernel/workspace/{workspace.go,workspace_manager.go}`。
-//! 连接参数与 Go 版保持一致（WAL / busy_timeout / synchronous=NORMAL / foreign_keys=ON，
-//! 连接池 4），这样两版对同一数据库的并发行为与锁等待语义相同。
+//! 连接参数（WAL / busy_timeout / synchronous=NORMAL / foreign_keys=ON，连接池 4）
+//! 是本模块的硬约定：这组参数决定了对同一数据库的并发行为与锁等待语义，不要随意改动。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -61,7 +60,7 @@ impl Workspace {
         let is_new = !db_path.exists();
 
         let manager = SqliteConnectionManager::file(&db_path).with_init(|conn| {
-            // 与原 Go 版 DSN 上的 _pragma 参数一一对应。
+            // 这四个 PRAGMA 与上方的连接参数约定一一对应。
             // journal_mode 会返回一行结果，因此用 query_row 而不是 execute_batch。
             conn.execute_batch(
                 "PRAGMA busy_timeout = 5000;
@@ -127,7 +126,7 @@ impl Workspace {
 
 /// 已打开工作空间的持有者（进程内单例语义）。
 ///
-/// 与原 Go 版 `WsManager` 一样：再次打开会先关闭上一个。
+/// 进程内单例语义：再次打开会先关闭上一个。
 #[derive(Default)]
 pub struct WsManager {
     workspace: Mutex<Option<Arc<Workspace>>>,

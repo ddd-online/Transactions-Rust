@@ -1,10 +1,10 @@
-//! 消费模板 DAO。对照 Go `kernel/dao/transaction_template_dao.go`。
+//! 消费模板 DAO。
 //!
-//! 与 GORM 的行为对齐点：
-//! * `Create` 自动填充 `created_at` / `updated_at`（GORM 的 autoCreateTime/autoUpdateTime）
-//! * `UpdateSort` 在 GORM 里走 `Update("sort_order", ...)`，模型的 `UpdatedAt` 同样会被刷新，
+//! 行为约定：
+//! * `create` 自动填充 `created_at` / `updated_at`（均为秒级 Unix 秒）
+//! * `update_sort` 只改 `sort_order`，但同样刷新 `updated_at`，
 //!   因此这里一并写 `updated_at`
-//! * 列表排序与原实现一致：`ORDER BY sort_order ASC, created_at DESC`
+//! * 列表排序固定为：`ORDER BY sort_order ASC, created_at DESC`
 
 use rusqlite::{params, Connection};
 
@@ -68,7 +68,7 @@ impl TransactionTemplateDao {
         )
     }
 
-    /// 某账本的全部模板（原实现返回的是指针数组，这里等价为 `Vec<TransactionTemplate>`）。
+    /// 某账本的全部模板（按 `sort_order ASC, created_at DESC`）。
     pub fn query_by_ledger_id(
         conn: &Connection,
         ledger_id: &str,
@@ -81,7 +81,7 @@ impl TransactionTemplateDao {
         rows.collect()
     }
 
-    /// 更新排序号（并刷新 `updated_at`，等价 GORM 的 `Update`）。
+    /// 更新排序号（并刷新 `updated_at`）。
     pub fn update_sort(
         conn: &Connection,
         template_id: &str,

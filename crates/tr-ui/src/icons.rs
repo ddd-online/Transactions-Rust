@@ -1,18 +1,13 @@
 //! 图标集（内联 SVG）。
 //!
-//! 两类来源，都保持与原实现**视觉一致**：
+//! 两类来源：
 //!
-//! 1. 导航/操作图标：原 `AppLeftBar.vue` / `AppTopBar.vue` / `TransactionRecordTable.vue`
-//!    用的是 `@ant-design/icons-vue`（`TagOutlined` / `TransactionOutlined` /
-//!    `LineChartOutlined` / `StockOutlined` / `StarOutlined` / `ReadOutlined` /
-//!    `SettingOutlined` / `BookOutlined` / `DownOutlined` / `PlusOutlined` /
-//!    `DeleteOutlined` / `CloseOutlined` / `SearchOutlined` / `LineOutlined` /
-//!    `BorderOutlined` / `SwitcherOutlined` 等）。这里把它们的 `path` 数据逐条抄下来内联，
-//!    因此形状与 Ant Design 完全一致（`fill` 由 CSS 的 `fill: currentColor` 决定）。
-//! 2. 原项目自绘的 `app/src/assets/icons/*.svg` 已原样复制到 `static/icons/`，
-//!    供需要 `<img src>` 的场合（图片查看器、工具栏等）直接引用；本模块不重复内联。
+//! 1. 导航/操作图标：`path` 数据内联在 [`Icon`] 里，形状固定，
+//!    `fill` 由 CSS 的 `fill: currentColor` 决定（跟随文字颜色）。
+//! 2. 需要 `<img src>` 的场合（图片查看器、工具栏等）直接用 `static/icons/*.svg`，
+//!    本模块不重复内联。
 //!
-//! 之所以内联而不是走 `<img src="icons/*.svg">`：内联 SVG 能直接吃 `currentColor`，
+//! 之所以内联而不是全走 `<img src="icons/*.svg">`：内联 SVG 能直接吃 `currentColor`，
 //! 主题切换、hover 变色都不需要第二套资源。
 
 use leptos::prelude::*;
@@ -21,102 +16,102 @@ use leptos::tachys::view::any_view::{AnyView, IntoAny};
 /// 一个图标：视窗 + 若干 `path` 的 `d` 数据。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
-    // ---- 左侧导航（AppLeftBar.vue 的 navItems） ----
-    /// 分类标签（`TagOutlined`）
+    // ---- 左侧导航 ----
+    /// 分类标签
     Tag,
-    /// 消费记录（`TransactionOutlined`）
+    /// 消费记录
     Transaction,
-    /// 数据分析（`LineChartOutlined`）
+    /// 数据分析
     LineChart,
-    /// 股票交易（`StockOutlined`）
+    /// 股票交易
     Stock,
-    /// 关键事件（`StarOutlined`）
+    /// 关键事件
     Star,
-    /// 日记管理（`ReadOutlined`）
+    /// 日记管理
     Read,
-    /// 应用设置（`SettingOutlined`）
+    /// 应用设置
     Setting,
-    /// 账本（`BookOutlined`）
+    /// 账本
     Book,
-    /// 下拉箭头（`DownOutlined`）
+    /// 下拉箭头
     Down,
-    /// 新增（`PlusOutlined`）
+    /// 新增
     Plus,
-    /// 删除（`DeleteOutlined`）
+    /// 删除
     Trash,
-    /// 搜索（`SearchOutlined`）
+    /// 搜索
     Search,
-    /// 关闭/清空（`CloseOutlined`）
+    /// 关闭/清空
     Close,
-    /// 成功（`CheckCircleOutlined`）
+    /// 成功
     CheckCircle,
-    /// 失败（`CloseCircleOutlined`）
+    /// 失败
     CloseCircle,
-    /// 警告（`ExclamationCircleOutlined`）
+    /// 警告
     WarningCircle,
-    /// 提示（`InfoCircleOutlined`）
+    /// 提示
     InfoCircle,
-    /// 空态（`InboxOutlined`）
+    /// 空态
     Inbox,
-    /// 加载（`LoadingOutlined`）
+    /// 加载
     Loading,
-    /// 上一页（`LeftOutlined` 的等价短线箭头）
+    /// 上一页（短线箭头）
     Left,
-    /// 下一页（`RightOutlined` 的等价短线箭头）
+    /// 下一页（短线箭头）
     Right,
-    /// 时间（`ClockCircleOutlined`）
+    /// 时间
     ClockCircle,
-    /// 勾选（`CheckOutlined`）—— 复选框 / 单选列表
+    /// 勾选 —— 复选框 / 单选列表
     Check,
     // ---- P6-b：关键事件 / 日记 / 股票 / 数据分析 用到的图标 ----
-    /// 编辑（`EditOutlined`）
+    /// 编辑
     Edit,
-    /// 下载 / 另存（`DownloadOutlined`）
+    /// 下载 / 另存
     Download,
-    /// 预览（`EyeOutlined`）
+    /// 预览
     Eye,
-    /// 刷新（`ReloadOutlined`）
+    /// 刷新
     Reload,
-    /// 帮助（`QuestionCircleOutlined`）
+    /// 帮助
     QuestionCircle,
-    /// 展开（`CaretRightOutlined`）
+    /// 展开
     CaretRight,
-    /// 减少（`MinusOutlined`）
+    /// 减少
     Minus,
-    /// 图片（`PictureOutlined`）
+    /// 图片
     Picture,
-    /// 保存（`SaveOutlined`）
+    /// 保存
     Save,
-    /// 日期（`CalendarOutlined`）
+    /// 日期
     Calendar,
-    /// 关联（`LinkOutlined`）
+    /// 关联
     Link,
-    /// 上传（`UploadOutlined`）
+    /// 上传
     Upload,
-    /// 文件（`FileTextOutlined`）
+    /// 文件
     FileText,
-    /// 统计（`BarChartOutlined`）
+    /// 统计
     BarChart,
-    /// 盈利（`RiseOutlined`）
+    /// 盈利
     Rise,
-    /// 亏损（`FallOutlined`）
+    /// 亏损
     Fall,
-    /// 放大（`ZoomInOutlined`）
+    /// 放大
     ZoomIn,
-    /// 缩小（`ZoomOutOutlined`）
+    /// 缩小
     ZoomOut,
-    /// 历史轮次（`HistoryOutlined`）
+    /// 历史轮次
     History,
-    /// 标签集（`TagsOutlined`）
+    /// 标签集
     Tags,
-    /// 新增（圆）（`PlusCircleOutlined`）
+    /// 新增（圆）
     PlusCircle,
-    // ---- 窗口控制（AppTopBar.vue） ----
-    /// 最小化（`LineOutlined`）
+    // ---- 窗口控制 ----
+    /// 最小化
     WindowMinimize,
-    /// 最大化（`BorderOutlined`）
+    /// 最大化
     WindowMaximize,
-    /// 还原（`SwitcherOutlined`）
+    /// 还原
     WindowRestore,
 }
 

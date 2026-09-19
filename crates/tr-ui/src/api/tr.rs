@@ -1,4 +1,4 @@
-//! 消费记录域命令。对照原 `app/src/backend/api/tr.ts` 与 `transaction_record_controller.go`。
+//! 消费记录域命令。
 //!
 //! 入参形状以 `crates/tr-ipc/src/commands/tr.rs` 为准：
 //!

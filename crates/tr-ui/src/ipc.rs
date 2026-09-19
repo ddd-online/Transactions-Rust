@@ -1,19 +1,18 @@
 //! Tauri 命令调用桥。
 //!
-//! 对照原 `app/src/backend/api/api-client.ts`：那里用 axios 调本机 HTTP API 并解析
-//! `{code,msg,data}` 信封；这里改为调用 Tauri IPC（`window.__TAURI__.core.invoke`，
-//! 由 `app.withGlobalTauri = true` 注入），对外语义保持一致：
+//! 调用 Tauri IPC（`window.__TAURI__.core.invoke`，由 `app.withGlobalTauri = true` 注入），
+//! 把后端的 `{code,msg,data}` 信封解析为返回值或 [`IpcError`]，对外语义保持一致：
 //!
 //! * 成功 → 直接返回数据
 //! * 失败 → 抛出 [`IpcError`]；若 `msg == "未打开工作空间"`，额外派发 `workspace-required` 事件
-//!   （等价原实现里 `extractErrorMessage` 的行为，外壳据此打开工作空间选择）
+//!   （外壳据此打开工作空间选择）
 //!
-//! 命令统一只收一个 `req` 参数对象，字段名与原 HTTP JSON body 逐字段一致。
+//! 命令统一只收一个 `req` 参数对象，字段名与 `tr-ipc` 的命令定义逐字段一致。
 //!
 //! ## 错误前缀
 //!
-//! 原实现在 api-client 里把前缀拼进消息（`"{前缀}: {msg}"`），并在
-//! [`crate::error_handler`] 的 `withErrorHandling` 里把同一前缀作为通知标题。
+//! 调用方传入的"前缀"会被拼进消息（`"{前缀}: {msg}"`），
+//! 并在 [`crate::error_handler`] 里把同一前缀作为通知标题。
 //! 这里把"前缀"保留为一条**只读**信息（[`IpcError::prefixed`]），由调用方决定
 //! 是否展示，避免在桥接层里耦合通知。
 
@@ -54,15 +53,14 @@ impl IpcError {
         }
     }
 
-    /// 按原实现的文案规则拼出用户可见错误（`"{前缀}: {msg}"`）。
+    /// 拼出用户可见错误（`"{前缀}: {msg}"`）。
     ///
-    /// 原实现见 `api-client.ts` 的 `extractErrorMessage`：
-    /// 后端有 `msg` 时用 `"{前缀}: {msg}"`，否则退化为 `"{前缀}: {axios message}"`。
+    /// 后端给出了 `msg` 就用它，否则只有前缀。
     pub fn prefixed(&self, prefix: &str) -> String {
         format!("{}: {}", prefix, self.msg)
     }
 
-    /// 等价原 `getErrorMessage(error)`：取出可读信息（就是信封里的 `msg`）。
+    /// 取出可读信息（就是信封里的 `msg`）。
     pub fn message(&self) -> &str {
         &self.msg
     }
@@ -160,7 +158,7 @@ pub async fn call_void_no_args(command: &str) -> Result<(), IpcError> {
 
 /// 批量调用：按给定顺序**串行**发出同构调用，返回值顺序与入参一致。
 ///
-/// 用途：原实现里那些 `Promise.all([...])` 的页面首屏（例如同时取账本+分类+标签）。
+/// 用途：页面首屏的一次性取数（例如同时取账本 + 分类 + 标签）。
 /// 之所以不做并发：wasm 单线程下并发只省往返排队，却需要跨任务回传结果（自建 oneshot
 /// 或 `Promise.all` 的 JS 胶水），复杂度与收益不成比例；串行版本语义更简单，
 /// 且错误逐条可见（不会像 `Promise.all` 一样丢掉已完成项的结果）。
@@ -205,8 +203,8 @@ fn parse_error(error: JsValue) -> IpcError {
     )
 }
 
-/// 派发 `workspace-required` 事件（原实现由 `api-client.ts` 在识别到
-/// `未打开工作空间` 时派发，`Layout.vue` 监听后弹出工作空间选择）。
+/// 派发 `workspace-required` 事件（识别到 `未打开工作空间` 时派发，
+/// 外壳监听后弹出工作空间选择）。
 fn dispatch_workspace_required() {
     let Some(window) = web_sys::window() else {
         return;
@@ -229,9 +227,6 @@ thread_local! {
 ///
 /// 载荷形状与 Tauri 2 一致：`{ event: string, id: number, payload: T }`。
 /// 反序列化失败时只打 `warn` 日志（事件是旁路信号，不应让界面崩掉）。
-///
-/// 与原实现对照：Electron 版的 `window.electronAPI.on('update:download-progress', ...)`
-/// 是同一语义，只是把 `ipcRenderer.on` 换成 Tauri 的事件总线。
 pub fn listen<T, F>(event: &str, callback: F)
 where
     T: DeserializeOwned + 'static,

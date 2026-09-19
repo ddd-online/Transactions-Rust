@@ -1,5 +1,4 @@
 //! 核心记账模型（账本 / 消费记录 / 分类 / 标签 / 模板 / 图表 / 关键事件 / 日记）。
-//! 全部对应 Go `kernel/models/*.go`。
 
 use serde::{Deserialize, Serialize};
 
@@ -56,7 +55,7 @@ pub struct TransactionRecord {
     pub updated_at: i64,
 }
 
-/// 消费记录 ↔ 标签关联。表 `tbl_billadm_transaction_record_tag`（**无主键**，与原表一致）。
+/// 消费记录 ↔ 标签关联。表 `tbl_billadm_transaction_record_tag`（**无主键**，结构保持不变）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TrTag {
@@ -125,7 +124,7 @@ pub struct TransactionTemplate {
     pub updated_at: i64,
 }
 
-/// 图表曲线上的一个查询条件项（与原前端 `QueryConditionItem` 对应）。
+/// 图表曲线上的一个查询条件项。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct QueryConditionItem {

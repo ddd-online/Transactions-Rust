@@ -1,41 +1,13 @@
-//! 股票命令。对照 Go `kernel/api/stock_controller.go` 的 17 个路由。
+//! 股票命令。
 //!
-//! 入参形状逐字段对齐原 HTTP 语义（原实现大量从 `map[string]any` 取 **snake_case** 键，
-//! 因此这里的字段名也全部是 snake_case）：
+//! 入参字段名全部是 **snake_case**（`ledger_id` / `stock_code` / `page_size` …），这是固定契约；
+//! 路径/查询形态的参数一律搬进 `req`（Tauri 命令只有一个入参），
+//! 其中 `code` / `id` / `orderId` 保留大小写原样。
 //!
-//! | 原路由 | 命令 |
-//! |---|---|
-//! | `GET /stock/account/overview?ledger_id=` | `stock_overview` |
-//! | `POST /stock/account/principal` | `stock_principal_set` |
-//! | `POST /stock/account/principal/add` | `stock_principal_add` |
-//! | `POST /stock/account/withdraw` | `stock_withdraw` |
-//! | `GET /stock/account/fee-settings?ledger_id=` | `stock_fee_settings_get` |
-//! | `PUT /stock/account/fee-settings` | `stock_fee_settings_put` |
-//! | `GET /stock/account/fund-records?ledger_id=&page=&page_size=` | `stock_fund_records` |
-//! | `GET /stock/positions?ledger_id=` | `stock_positions` |
-//! | `PUT /stock/positions/:code/review` | `stock_position_review` |
-//! | `GET /stock/trades?ledger_id=&stock_code=` | `stock_trades` |
-//! | `POST /stock/trades` | `stock_trade_create` |
-//! | `PUT /stock/trades/:id` | `stock_trade_update` |
-//! | `DELETE /stock/trade-orders/:orderId?ledger_id=` | `stock_trade_order_delete` |
-//! | `POST /stock/trades/impact` | `stock_trade_impact` |
-//! | `GET /stock/history?ledger_id=` | `stock_history` |
-//! | `GET /stock/history/detail?ledger_id=&stock_code=` | `stock_history_detail` |
-//! | `GET /stock/history/summary?ledger_id=` | `stock_history_summary` |
-//! | `PUT /stock/history/rounds/:id/review` | `stock_round_review` |
-//! | `PUT /stock/history/rounds/:id/tag` | `stock_round_tag` |
-//! | `GET /stock/statistics?ledger_id=&start_month=&end_month=&recent=&tag=` | `stock_statistics` |
-//! | `GET /stock/name?stock_code=` | `stock_name` |
-//! | `POST /stock/reset` | `stock_reset` |
-//!
-//! 路径/查询参数一律搬进 `req`（Tauri 命令只有一个入参），字段名沿用 Go 的名字
-//! （`code` / `id` / `orderId` 等按原样保留大小写）。
-//!
-//! **`recent`**：原实现从 query 取字符串再 `strconv.ParseInt`，非正整数报
+//! **`recent`**：从请求里取字符串再解析，非正整数报
 //! `recent 必须为正整数`。这里用 `Option<String>` 保留"显式传了非法值"与"没传"的差异。
 //!
-//! **价格**：原实现 `int64(math.Round(priceYuan * 100))`，这里等价地写成
-//! `(price_yuan * 100.0).round() as i64`。**不用** `money::yuan_to_cents`——它的入参是
+//! **价格**：`(price_yuan * 100.0).round() as i64`。**不用** `money::yuan_to_cents`——它的入参是
 //! 字符串且小数第三位进位规则不同，会改变边界行为。
 
 use serde::Deserialize;
@@ -53,7 +25,7 @@ use tr_service::stock::{self, TradeFill};
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
-/// 原实现里所有 `map[string]any` 请求体的公共约束：缺失字段等价于零值，
+/// 所有请求体的公共约束：缺失字段等价于零值，
 /// 因此所有请求结构体都带上 `#[serde(default)]`。
 fn require_ledger_id(ledger_id: &str) -> Result<(), ApiError> {
     if ledger_id.is_empty() {
@@ -62,7 +34,7 @@ fn require_ledger_id(ledger_id: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// 价格（元）→ 分，与原实现 `int64(math.Round(priceYuan * 100))` 等价。
+/// 价格（元）→ 分，四舍五入到整数分。
 fn yuan_to_price_cents(price_yuan: f64) -> i64 {
     (price_yuan * 100.0).round() as i64
 }
@@ -90,7 +62,7 @@ pub fn stock_overview(
 #[serde(default)]
 pub struct StockPrincipalRequest {
     pub ledger_id: String,
-    /// 本金（**分**，整数）；原实现从 `map[string]any` 取 `amount` 并强转
+    /// 本金（**分**，整数）
     pub amount: Option<i64>,
 }
 
@@ -167,7 +139,7 @@ pub fn stock_fee_settings_get(
     Ok(stock::get_fee_settings(&workspace, &req.ledger_id)?)
 }
 
-/// 保存费用设置。`commission_rate` 必填（缺省即 0 → 触发"必须大于 0"的错误，与原实现一致）；
+/// 保存费用设置。`commission_rate` 必填（缺省即 0 → 触发"必须大于 0"的错误）；
 /// 其余三项缺省为 0。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -181,14 +153,14 @@ pub struct StockFeeSettingsRequest {
     pub transfer_fee_rate: Option<f64>,
 }
 
-/// `PUT /stock/account/fee-settings`：保存佣金/最低佣金/印花税/过户费。
+/// 保存佣金/最低佣金/印花税/过户费。
 #[tauri::command]
 pub fn stock_fee_settings_put(
     state: State<'_, AppState>,
     req: StockFeeSettingsRequest,
 ) -> ApiResult<StockFeeSetting> {
     require_ledger_id(&req.ledger_id)?;
-    // 原实现在 `commission_rate` 缺失时直接报 `commission_rate is required`
+    // `commission_rate` 缺失时直接报 `commission_rate is required`
     let Some(commission_rate) = req.commission_rate else {
         return Err(AppError::bad_request("commission_rate is required").into());
     };
@@ -216,8 +188,8 @@ pub fn stock_tag_settings_get(
     Ok(stock::get_trade_tags_dto(&workspace, &req.ledger_id)?)
 }
 
-/// 保存可用交易标签（「分析」不可删除）。字段名与原 `dto.StockTradeTagSettingRequest` 相同
-/// （`ledger_id` / `tags`）；同时接受界面侧可能用的驼峰 `ledgerId`，语义完全相同。
+/// 保存可用交易标签（「分析」不可删除）。字段名是 `ledger_id` / `tags`；
+/// 同时接受界面侧可能用的驼峰 `ledgerId`，语义完全相同。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct StockTagSettingsRequest {
@@ -241,10 +213,9 @@ pub fn stock_tag_settings_put(
 
 // ---------- 资金记录 / 持仓 ----------
 
-/// 原实现从 query 取字符串再解析的数值参数。
+/// 数值参数：界面可能传数字字符串（`"2"`）也可能直接传数字（`2`）。
 ///
-/// 原 HTTP 版这些值一定是字符串（`?page=2`），但界面侧可能直接传数字，
-/// 因此这里两种形态都接受；语义与 Go 的解析结果一致。
+/// 两种形态都接受，解析结果一致。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum QueryNumber {
@@ -253,8 +224,8 @@ pub enum QueryNumber {
     Float(f64),
 }
 
-/// `page` / `page_size` 在原实现里从 query 取字符串再用 `parsePositiveInt` 解析；
-/// 这里同时接受数字与数字字符串（`alias` 覆盖 `pageSize` 这种前端驼峰写法）。
+/// `page` / `page_size` 同时接受数字与数字字符串（`alias` 覆盖 `pageSize` 这种前端驼峰写法）；
+/// 非法或缺失时回退默认值。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct StockFundRecordsRequest {
@@ -264,7 +235,7 @@ pub struct StockFundRecordsRequest {
     pub page_size: Option<QueryNumber>,
 }
 
-/// 解析正整数参数，非法或缺失时返回默认值（对照 Go `parsePositiveInt`）。
+/// 解析正整数参数，非法或缺失时返回默认值。
 fn parse_positive_int(raw: Option<&QueryNumber>, default: i64) -> i64 {
     let Some(raw) = raw else {
         return default;
@@ -276,7 +247,7 @@ fn parse_positive_int(raw: Option<&QueryNumber>, default: i64) -> i64 {
             }
             match text.parse::<i64>() {
                 Ok(value) => value,
-                // 与原实现一致：非整数字符串直接回退默认值
+                // 非整数字符串直接回退默认值
                 Err(_) => return default,
             }
         }
@@ -330,7 +301,7 @@ pub async fn stock_positions(
 #[serde(default)]
 pub struct StockPositionReviewRequest {
     pub ledger_id: String,
-    /// 原路径参数 `:code`
+    /// 股票代码
     pub code: String,
     pub review: String,
 }
@@ -374,7 +345,7 @@ pub fn stock_trades(
     )?)
 }
 
-/// 一笔委托内的一笔成交明细（价格单位：**元**，与原 HTTP body 一致）。
+/// 一笔委托内的一笔成交明细（价格单位：**元**）。
 #[derive(Debug, Default, Clone, Copy, Deserialize)]
 #[serde(default)]
 pub struct TradeFillRequest {
@@ -382,7 +353,7 @@ pub struct TradeFillRequest {
     pub lots: f64,
 }
 
-/// `POST /stock/trades`：一笔委托（可含多笔成交明细），返回成交明细数组。
+/// 一笔委托（可含多笔成交明细），返回成交明细数组。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct StockTradeCreateRequest {
@@ -402,8 +373,7 @@ pub struct StockTradeCreateRequest {
 
 /// 解析成交明细：优先 `fills` 数组，缺省回退到单笔 `price`/`lots`。
 ///
-/// 对照 Go `parseTradeFills`：`fills` 元素不是对象时报 `成交明细格式错误`；
-/// 价格一律 `math.Round(priceYuan * 100)` 转分。
+/// `fills` 元素不是对象时报 `成交明细格式错误`；价格一律四舍五入到分。
 fn parse_trade_fills(req: &StockTradeCreateRequest) -> Result<Vec<TradeFill>, ApiError> {
     if !req.fills.is_empty() {
         return Ok(req
@@ -445,12 +415,12 @@ pub fn stock_trade_create(
     )?)
 }
 
-/// `PUT /stock/trades/:id`：编辑一笔成交（按当前费用设置重算整笔委托）。
+/// 编辑一笔成交（按当前费用设置重算整笔委托）。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct StockTradeUpdateRequest {
     pub ledger_id: String,
-    /// 原路径参数 `:id`
+    /// 成交记录 ID
     pub id: String,
     /// 成交价（**元**）
     pub price: f64,
@@ -475,12 +445,12 @@ pub fn stock_trade_update(
     )?)
 }
 
-/// `DELETE /stock/trade-orders/:orderId?ledger_id=`：删除整笔委托。
+/// 删除整笔委托。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct StockTradeOrderDeleteRequest {
     pub ledger_id: String,
-    /// 原路径参数 `:orderId`（保持 Go 的大小写）
+    /// 委托 ID（保持 `orderId` 的大小写）
     #[serde(alias = "order_id")]
     pub order_id: String,
 }
@@ -496,7 +466,7 @@ pub fn stock_trade_order_delete(
     Ok(true)
 }
 
-/// `POST /stock/trades/impact`：预演编辑/删除的影响（**不落库**）。
+/// 预演编辑/删除的影响（**不落库**）。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct StockTradeImpactRequest {
@@ -584,7 +554,7 @@ pub fn stock_history_summary(
 #[serde(default)]
 pub struct StockRoundReviewRequest {
     pub ledger_id: String,
-    /// 原路径参数 `:id`
+    /// 轮次 ID
     pub id: String,
     pub review: String,
 }
@@ -609,7 +579,7 @@ pub fn stock_round_review(
 #[serde(default)]
 pub struct StockRoundTagRequest {
     pub ledger_id: String,
-    /// 原路径参数 `:id`
+    /// 轮次 ID
     pub id: String,
     pub tag: String,
 }
@@ -631,14 +601,14 @@ pub fn stock_round_tag(
 
 // ---------- 统计 / 股票名 / 重置 ----------
 
-/// `GET /stock/statistics` 的筛选参数：`start_month` / `end_month` / `recent` / `tag`。
+/// 统计的筛选参数：`start_month` / `end_month` / `recent` / `tag`。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct StockStatisticsRequest {
     pub ledger_id: String,
     pub start_month: String,
     pub end_month: String,
-    /// 原实现从 query 取字符串再 `ParseInt`；非法值报 `recent 必须为正整数`
+    /// 非法值报 `recent 必须为正整数`
     pub recent: Option<QueryNumber>,
     pub tag: String,
 }
@@ -666,7 +636,7 @@ pub fn stock_statistics(
         match parsed {
             None => {}
             Some(value) if value > 0 => recent = value,
-            // 原实现：解析失败或 <= 0 一律报 `recent 必须为正整数`
+            // 解析失败或 <= 0 一律报 `recent 必须为正整数`
             _ => return Err(AppError::bad_request("recent 必须为正整数").into()),
         }
     }
@@ -696,7 +666,7 @@ pub async fn stock_name(
     if req.stock_code.is_empty() {
         return Err(AppError::bad_request("stock_code is required").into());
     }
-    // 与原实现一致：`stock_code` 为空才报错，**不**要求 ledger_id
+    // `stock_code` 为空才报错，**不**要求 ledger_id
     let workspace = state.workspace()?;
     tauri::async_runtime::spawn_blocking(move || {
         stock::lookup_stock_name(&workspace, &req.stock_code).map_err(ApiError::from)
@@ -719,7 +689,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_positive_int_matches_go_fallback_rules() {
+    fn parse_positive_int_fallback_rules() {
         // 缺失 / 空串 / 非法 / < 1 → 默认值
         assert_eq!(parse_positive_int(None, 10), 10);
         assert_eq!(
@@ -748,8 +718,8 @@ mod tests {
     }
 
     #[test]
-    fn request_bodies_deserialize_with_go_field_names() {
-        // 原实现从 `map[string]any` 取 snake_case 键：ledger_id / price / lots / trade_time
+    fn request_bodies_deserialize_with_documented_field_names() {
+        // 全部是 snake_case 键：ledger_id / price / lots / trade_time
         let body: StockTradeCreateRequest = serde_json::from_str(
             r#"{"ledger_id":"l1","stock_code":"605258","stock_name":"协和电子",
                  "trade_type":"open","trade_time":1700000000,
@@ -759,7 +729,7 @@ mod tests {
         assert_eq!(body.ledger_id, "l1");
         assert_eq!(body.fills.len(), 1);
         assert_eq!(body.fills[0].price, 38.06);
-        // 价格（元）→ 分：与原实现 `int64(math.Round(priceYuan*100))` 一致
+        // 价格（元）→ 分：四舍五入到整数分
         let fills = parse_trade_fills(&body).unwrap();
         assert_eq!(fills[0].price_cents, 3806);
         assert_eq!(fills[0].lots, 2);
@@ -775,7 +745,7 @@ mod tests {
         assert_eq!(fills[0].price_cents, 1001, "10.005 元四舍五入到 1001 分");
         assert_eq!(fills[0].lots, 10);
 
-        // 缺参等价于零值（原实现的 map 取值语义）
+        // 缺参等价于零值
         let empty: StockTradeCreateRequest = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.stock_code, "");
         assert!(empty.fills.is_empty());
@@ -814,17 +784,17 @@ mod tests {
     }
 
     #[test]
-    fn price_conversion_rounds_like_go() {
+    fn price_conversion_rounds_to_cents() {
         assert_eq!(yuan_to_price_cents(10.0), 1000);
         assert_eq!(yuan_to_price_cents(38.06), 3806);
         assert_eq!(yuan_to_price_cents(36.61), 3661);
-        // 浮点边界：10.005 在 f64 里略小于 10.005，Go 的 math.Round 结果与这里一致
+        // 浮点边界：10.005 在 f64 里略小于 10.005，因此四舍五入得到 1001 分
         assert_eq!(yuan_to_price_cents(10.005), 1001);
         assert_eq!(yuan_to_price_cents(0.005), 1);
     }
 
     #[test]
-    fn missing_ledger_id_reports_go_message() {
+    fn missing_ledger_id_reports_the_documented_message() {
         let error = require_ledger_id("").unwrap_err();
         assert_eq!(error.msg, "ledger_id is required");
         assert_eq!(error.status, 400);

@@ -1,12 +1,12 @@
-//! 通用工具：UUID 生成等。对照 Go `kernel/util/{uuid,string}.go`。
+//! 通用工具：UUID 生成等。
 
-/// 生成 UUID v4 字符串（与原实现 `google/uuid` 的 `NewString()` 同格式）。
+/// 生成 UUID v4 字符串（标准带连字符的小写十六进制格式，长度 36）。
 /// 用于所有主键：账本、交易、模板、关键事件、图片、股票交易与轮次。
 pub fn new_uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// 当前 Unix 秒。等价 GORM 的 `autoCreateTime:unix` / `autoUpdateTime:unix`，
+/// 当前 Unix 秒（各表 `created_at` / `updated_at` 都写这个秒级时间戳）。
 /// 服务层构造返回值时也需要它（例如日记保存后返回带时间戳的条目）。
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now()
@@ -15,13 +15,13 @@ pub fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// Unicode 字符数（不是字节数）。对照 Go `utf8.RuneCountInString`，
+/// Unicode 字符数（不是字节数）。
 /// 用于日记字数与关键事件标题截断——两者都必须按字符计。
 pub fn char_count(text: &str) -> i64 {
     text.chars().count() as i64
 }
 
-/// 按**字符**截断到最多 `max` 个字符（对照 Go `util.TruncateString` 的按 rune 截断语义）。
+/// 按**字符**截断到最多 `max` 个字符（按 Unicode 标量值截断，不会切开多字节字符）。
 pub fn truncate_chars(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }

@@ -14,7 +14,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
-# 许可证以仓库根 LICENSE 为准（Apache-2.0，与参考实现一致）；此处曾误写 MIT。
+# 许可证以仓库根 LICENSE 为准（Apache-2.0）。
 license = "Apache-2.0"
 repository = "https://github.com/ddd-online/Transactions-Rust"
 

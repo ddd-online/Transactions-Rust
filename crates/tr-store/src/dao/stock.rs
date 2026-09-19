@@ -1,18 +1,19 @@
-//! 股票域 DAO。对照 Go `kernel/dao/stock_dao.go` 的全部方法。
+//! 股票域 DAO。
 //!
-//! 要点（与原实现的 SQL 形状逐条对齐）：
+//! 要点（SQL 形状与落库口径逐条固定下来，不要随意改动）：
 //! * 表名列名恒为 snake_case（`tbl_billadm_stock_*`），列映射在此显式书写，不依赖 serde；
 //! * 单行查询（账户 / 费用设置 / 标签设置 / 持仓 / 交易 / 历史集合 / 轮次）都补
-//!   `ORDER BY id LIMIT 1`：GORM 的 `First` 会追加 `ORDER BY <primaryKey>`，
-//!   补上它才能保证唯一索引被破坏时两版取到同一行；
-//! * 时间戳由 DAO 写入（等价 GORM 的 `autoCreateTime:unix` / `autoUpdateTime:unix`），
+//!   `ORDER BY id LIMIT 1`（按主键升序取第一行），
+//!   补上它才能保证唯一索引被破坏时取到的行是确定的；
+//! * 时间戳由 DAO 写入（`created_at` / `updated_at` 都是秒级 Unix 秒），
 //!   服务层构造的返回值因此不需要自己补时间；
-//! * `create_trade` 写 `remark`：Go 侧是 GORM `Create(trade)`，**非零值字段参与 INSERT**
-//!   （零值才被省略、退回列默认值 ''），所以带备注的建仓/加仓/清仓备注必须落库。
-//!   这一条曾被误读成"GORM 一律不写 remark"，黄金对比因此抓到 4 行 remark 差异。
+//! * `create_trade` 写 `remark`：只 INSERT 非零值字段，**零值列退回 SQL 默认值**，
+//!   所以带备注的建仓/加仓/清仓备注必须落库。
+//!   这一条曾被误读成"一律不写 remark"，落库回归对比因此抓到 4 行 remark 差异。
 //!
-//! `reset_by_ledger_id` 用**一条** `DELETE` 覆盖全部股票表：原实现逐表删除并额外探测
-//! `tbl_billadm_stock_journal`（0.27 schema 里已不存在该表，见 AGENTS.md 的"无迁移"纪律）。
+//! `reset_by_ledger_id` 用**一条** `DELETE` 覆盖全部股票表：历史遗留表
+//! `tbl_billadm_stock_journal`（已下线功能）在当前 schema 里已不存在，且本仓库不做迁移，
+//! 因此这里不再逐表探测或删除它（见 AGENTS.md 的"无迁移"纪律）。
 
 use rusqlite::{params, params_from_iter, Connection};
 
@@ -43,7 +44,7 @@ const ROUND_COLUMNS: &str =
     "id, ledger_id, stock_code, history_id, round_no, opened_at, closed_at, \
      tag, review, created_at";
 
-/// 重置时清空的股票表（顺序与原实现一致，避免外键/触发器顺序差异）。
+/// 重置时清空的股票表（这个顺序是有意的：避免外键/触发器顺序差异）。
 const STOCK_TABLES: [&str; 8] = [
     "tbl_billadm_stock_fund_record",
     "tbl_billadm_stock_fee_setting",
@@ -58,7 +59,7 @@ const STOCK_TABLES: [&str; 8] = [
 impl StockDao {
     // ---------- 账户 ----------
 
-    /// 取某账本的账户；不存在返回 `QueryReturnedNoRows`（GORM `ErrRecordNotFound`）。
+    /// 取某账本的账户；不存在返回 `QueryReturnedNoRows`。
     pub fn get_account(conn: &Connection, ledger_id: &str) -> rusqlite::Result<StockAccount> {
         conn.query_row(
             &format!(
@@ -134,7 +135,7 @@ impl StockDao {
         Ok(())
     }
 
-    /// 只更新四个费率字段（原实现用 `Updates(map[string]any{...})`，同样是部分更新）。
+    /// 只更新四个费率字段（部分更新，不动其它列）。
     pub fn update_fee_setting(
         conn: &Connection,
         setting: &StockFeeSetting,
@@ -200,13 +201,14 @@ impl StockDao {
 
     /// 新增一条资金记录。
     ///
-    /// **`created_at` 单调递增**：GORM 的 `autoCreateTime:unix` 只有秒级精度，
+    /// **`created_at` 单调递增**：时间戳只有秒级精度，
     /// 同一秒内录入的多条记录时间戳完全相同；而资金链重算按 `created_at ASC, id ASC`
     /// 取「录入顺序」，id 是随机 UUID，排序会变得不确定。因此这里在 SQL 里取
-    /// `MAX(now, 本账本已有最大 created_at + 1)`，让录入顺序确定。原实现在这一秒级
-    /// 边界上的行为本身不稳定，锁定顺序不改变任何可观察的业务口径。
+    /// `MAX(now, 本账本已有最大 created_at + 1)`，让录入顺序确定（秒级时间戳会并列，
+    /// 必须严格递增才能让录入顺序可复现；这一秒级边界上的并列本身不稳定，
+    /// 锁定顺序不改变任何可观察的业务口径）。
     ///
-    /// 服务层在重放时显式给出 `created_at`（复刻原记录的录入位置），此时原样采用。
+    /// 服务层在重放时显式给出 `created_at`（复刻被重放记录的录入位置），此时原样采用。
     pub fn create_fund_record(conn: &Connection, record: &StockFundRecord) -> rusqlite::Result<()> {
         if record.created_at > 0 {
             conn.execute(
@@ -274,7 +276,7 @@ impl StockDao {
         )
     }
 
-    /// 资金记录分页（`page` 从 1 起，与原实现一致不做边界钳制）。
+    /// 资金记录分页（`page` 从 1 起，不做边界钳制）。
     pub fn query_fund_records(
         conn: &Connection,
         ledger_id: &str,
@@ -340,7 +342,7 @@ impl StockDao {
 
     /// 按录入顺序（`created_at ASC, id ASC`）返回全部资金记录。
     ///
-    /// 重算现金链时**必须**用这个顺序，而不是按日期排序：原实现的链条规则是
+    /// 重算现金链时**必须**用这个顺序，而不是按日期排序：链条规则是
     /// 「每条记录的前值 = 已存在记录里 (日期 → 创建时间 → ID) 最大一条的余额」，
     /// 补录历史日期的交易时两者结果不同（见 `recalculate_cash_chain`）。
     pub fn list_fund_records_in_insert_order(
@@ -458,7 +460,7 @@ impl StockDao {
     // ---------- 交易 ----------
 
     pub fn create_trade(conn: &Connection, trade: &StockTrade) -> rusqlite::Result<()> {
-        // 与原实现一致：Go 的 GORM `Create(trade)` 只省略**零值**字段（退回列默认值），
+        // 只 INSERT 非零值字段：零值列退回 SQL 默认值，
         // 非空 `remark` 会照写；空备注写 '' 与列默认值等价。
         conn.execute(
             "INSERT INTO tbl_billadm_stock_trade \
@@ -582,7 +584,7 @@ impl StockDao {
         Ok(())
     }
 
-    /// 按 ID 集合删除交易（空集合直接返回，与原实现一致）。
+    /// 按 ID 集合删除交易（空集合直接返回）。
     pub fn delete_trades_by_ids(conn: &Connection, ids: &[String]) -> rusqlite::Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -674,7 +676,7 @@ impl StockDao {
         Ok(())
     }
 
-    /// 列表按 `updated_at DESC, created_at DESC`（与 Go 的 `Order(...)` 一致）。
+    /// 列表按 `updated_at DESC, created_at DESC`。
     pub fn list_trade_histories(
         conn: &Connection,
         ledger_id: &str,
@@ -715,7 +717,7 @@ impl StockDao {
         Ok(())
     }
 
-    /// 存在交易记录的股票代码列表（不做排序，历史回填使用；原实现是 pluck + distinct）。
+    /// 存在交易记录的股票代码列表（不做排序，历史回填使用；SQL 是去重的 `stock_code` 列表）。
     pub fn list_trade_stocks(conn: &Connection, ledger_id: &str) -> rusqlite::Result<Vec<String>> {
         let mut statement = conn.prepare(
             "SELECT DISTINCT stock_code FROM tbl_billadm_stock_trade WHERE ledger_id = ?1",
@@ -919,7 +921,7 @@ impl StockDao {
             [stock_code],
             |row| row.get(0),
         )?;
-        // 原实现把空名称显式转成 ErrRecordNotFound，让上层回退到外部行情接口。
+        // 空名称按"查无记录"处理，让上层回退到外部行情接口。
         match name {
             Some(name) if !name.is_empty() => Ok(name),
             _ => Err(rusqlite::Error::QueryReturnedNoRows),
@@ -928,7 +930,7 @@ impl StockDao {
 
     // ---------- 删除与重置 ----------
 
-    /// 删除某账本的全部股票数据（逐表删除，顺序与原实现一致）。
+    /// 删除某账本的全部股票数据（逐表删除，顺序见 [`STOCK_TABLES`]）。
     pub fn delete_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
         for table in STOCK_TABLES {
             conn.execute(
@@ -941,8 +943,8 @@ impl StockDao {
 
     /// 「重置」：在**单个事务**里清空某账本的全部股票表。
     ///
-    /// 原实现逐表 `DELETE` 并探测 `tbl_billadm_stock_journal`（已下线功能的遗留表）；
-    /// 最新 schema 里没有该表，且本仓库不做迁移，因此这里不探测。
+    /// 逐表 `DELETE` 清空；历史遗留表 `tbl_billadm_stock_journal`（已下线功能）
+    /// 在当前 schema 里已不存在，且本仓库不做迁移，因此这里不探测也不删除它。
     pub fn reset_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
         for table in STOCK_TABLES {
             conn.execute(
@@ -1142,7 +1144,8 @@ mod tests {
 
         StockDao::create_trade(&conn, &trade("t1", "o1", 1, 100)).unwrap();
         let loaded = StockDao::get_trade(&conn, "t1").unwrap();
-        // 原实现 GORM `Create` 省略的是**零值**字段；非空备注照写（黄金对比抓到过这条差异）
+        // 只 INSERT 非零值字段：零值列退回 SQL 默认值；非空备注照写
+        // （这条差异曾经被落库回归对比抓到过，不要改回去）
         assert_eq!(loaded.remark, "不应落库的备注");
         assert!(loaded.created_at > 0);
         assert_eq!(loaded.realized_pnl, None);
@@ -1158,7 +1161,7 @@ mod tests {
 
     /// 池化连接必须能看到**其它连接**刚提交的写入。
     ///
-    /// 黄金对比里 `rebuild_trades` 读到的是上一次写入前的快照（少一行），
+    /// 落库回归对比里 `rebuild_trades` 读到的是上一次写入前的快照（少一行），
     /// 导致「卖出数量超过持仓」——根因是 WAL 下连接被复用后仍固定旧快照。
     #[test]
     fn pooled_connection_sees_writes_from_other_connections() {
