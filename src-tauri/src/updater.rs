@@ -3,10 +3,11 @@
 //! 本实现的行为清单：
 //! * 只认 GitHub 的 latest release、跳过 prerelease、取第一个 `.exe` 资产
 //! * 检查更新超时 15s（下载另给 1800s），下载地址只允许 GitHub 域名
-//! * 下载到 `%TEMP%`，已存在则直接复用；流式写入 `<file>.part` 再改名
+//! * 下载到 `%TEMP%`，已存在则**先核对 digest 再复用**；流式写入 `<file>.part` 再改名
 //! * 用 GitHub 提供的 `asset.digest`（`sha256:...`）校验完整性，缺失则跳过校验
 //! * 取消时清理临时文件与已下载文件
 //! * 打开安装包后退出应用
+//!
 //! 事件名：`update:download-progress|complete|error`。
 //!
 //! **为什么不用 `tauri-plugin-updater`**：本项目的发布管线只上传普通 `.exe` 资产（没有签名与 `latest.json`），
@@ -339,9 +340,17 @@ fn download_and_verify(
         .unwrap_or("transactions-update.exe");
     let target = std::env::temp_dir().join(file_name);
 
-    // 已下载完成的文件直接复用
+    // 复用 `%TEMP%` 里的旧文件之前**必须核对 digest**：文件名只带版本号
+    // （`Transactions-x64-v{版本}.exe`），而同一个 tag 的资产是允许被重新上传的
+    // （真实事故：v0.2.0 的资产曾经就是 0.1.0 的安装包，修好后重新上传 —— 若这里直接复用，
+    // 用户点「立即更新」装上的还是那份旧包，现象就是"更新完界面还是旧版"）。
+    // 不匹配（或读不出来）就删掉重下，绝不把旧字节当新版装出去。
     if target.exists() {
-        return Ok(target);
+        if file_digest_matches(&target, expected_digest) {
+            return Ok(target);
+        }
+        tracing::warn!("update:download 复用的缓存文件校验不通过，已删除并重新下载");
+        let _ = std::fs::remove_file(&target);
     }
 
     let part = part_path_of(&target);
@@ -421,6 +430,27 @@ fn download_and_verify(
 
 fn part_path_of(target: &std::path::Path) -> PathBuf {
     PathBuf::from(format!("{}.part", target.display()))
+}
+
+/// 复用已下载文件前的校验：有期望 digest 就必须一致，没有（release 未提供 digest）则放行。
+/// 文件读不出来（权限 / 被占用）按"不可复用"处理，调用方会删掉它重新下载。
+fn file_digest_matches(path: &std::path::Path, expected_digest: Option<&str>) -> bool {
+    if normalize_digest(expected_digest).is_none() {
+        return true;
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => hasher.update(&buffer[..read]),
+            Err(_) => return false,
+        }
+    }
+    digest_matches(expected_digest, &format!("{:x}", hasher.finalize()))
 }
 
 /// 规范化 GitHub 的 `digest` 字段：`sha256:ABCD…` → 小写十六进制串。
@@ -514,6 +544,37 @@ mod tests {
         assert!(part_path_of(&target)
             .to_string_lossy()
             .ends_with("a.exe.part"));
+    }
+
+    /// 复用 `%TEMP%` 缓存前的 digest 校验（真实事故的回归）：
+    /// v0.2.0 的资产曾经就是 0.1.0 的安装包，而缓存文件名只带版本号 ——
+    /// 修好发布后重新上传的资产与缓存里的旧字节同名不同内容，**不复核就会把旧包再装一遍**。
+    #[test]
+    fn cached_file_is_reused_only_when_digest_matches() {
+        let path =
+            std::env::temp_dir().join(format!("tr-updater-cache-{}.bin", std::process::id()));
+        std::fs::write(&path, b"bogus-package").expect("写测试缓存文件");
+        let actual = format!("{:x}", Sha256::digest(b"bogus-package"));
+
+        // 一致（前缀与大小写都不敏感）→ 复用
+        assert!(file_digest_matches(
+            &path,
+            Some(&format!("sha256:{}", actual.to_uppercase()))
+        ));
+        // 不一致 → 不复用（调用方会删掉它重新下载）
+        let wrong = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(!file_digest_matches(&path, Some(wrong)));
+        // 没有期望 digest → 放行（与下载完成后的校验语义一致）
+        assert!(file_digest_matches(&path, None));
+        assert!(file_digest_matches(&path, Some("")));
+        assert!(file_digest_matches(&path, Some("sha256:")));
+        // 读不出来（文件不存在）→ 不复用
+        assert!(!file_digest_matches(
+            &path.with_extension("missing"),
+            Some(&actual)
+        ));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     fn release(tag: &str, prerelease: bool, assets: serde_json::Value) -> serde_json::Value {
