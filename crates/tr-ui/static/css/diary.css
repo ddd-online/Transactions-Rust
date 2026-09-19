@@ -3,7 +3,8 @@
  * 布局：工具栏 + 两栏（260px 日期树 / 自适应编辑器）。
  * ============================================ */
 
-.diary-toolbar-left {
+/* 日记工具栏（今天 / 全部收起 / 跳转日期）：外边距由 `.page-toolbar` 统一给 */
+.diary-tools {
   display: flex;
   align-items: center;
   gap: var(--transactions-space-md);
@@ -13,11 +14,13 @@
   width: 160px;
 }
 
+/* 两栏 = 同一张纸上的两列：一条竖直发丝线分栏（与分类标签/关键事件同一手法）。
+ * 内边距下放给两栏自己，竖线才能从卡片顶贯通到底。 */
 .diary-body {
   flex: 1;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
-  gap: var(--transactions-space-md);
+  column-gap: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -26,11 +29,11 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  padding: var(--transactions-space-lg);
 }
 
 .diary-panel--left {
   border-right: 1px solid var(--transactions-color-divider);
-  padding-right: var(--transactions-space-sm);
 }
 
 /* ---------------- 日期树 ---------------- */
@@ -313,29 +316,13 @@
   tab-size: 4;
 }
 
-.diary-editor__preview {
-  height: 100%;
-  overflow-y: auto;
-  padding: var(--transactions-space-md);
-}
-
-.diary-editor__footer {
+.diary-tools-right {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding-top: var(--transactions-space-sm);
-  border-top: 1px solid var(--transactions-color-divider);
-  flex-shrink: 0;
-  min-height: var(--transactions-btn-height-md);
+  gap: var(--transactions-space-md);
 }
 
-.diary-editor__footer-left,
-.diary-editor__footer-right {
-  display: flex;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-}
-
+/* 已保存状态 + 删除按钮现在跟在**页面工具栏**右侧（编辑器底部那条栏已删除） */
 .diary-save-status {
   font-size: var(--transactions-size-text-caption);
 }
@@ -359,6 +346,10 @@
 }
 
 /* 预览区里的 Markdown 元素样式复用 `.md-body`（见 key_event.css） */
-.diary-markdown {
-  min-width: 0;
+
+/* 右栏（编辑器）的底部内边距去掉：编辑框的留白由 `.diary-editor__body` 的上下各 12px 决定，
+ * 再叠上 `.diary-panel` 的 16px 下内边距 → 底部 28px、顶部只有 12px，看着"下边距更大"。
+ * 左栏（日期树）保留原内边距。 */
+.diary-panel--right {
+  padding-bottom: 0;
 }

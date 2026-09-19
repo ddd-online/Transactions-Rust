@@ -350,7 +350,7 @@ pub fn DatePicker(
                     <div class="ui-date-picker__footer">
                         <button
                             type="button"
-                            class="ui-btn ui-btn--link ui-btn--sm"
+                            class="ui-btn ui-btn--secondary ui-btn--sm"
                             on:click=move |_| {
                                 let now = today();
                                 let picked = now.to_string_padded();
@@ -385,6 +385,11 @@ pub fn DateRangePicker(
     /// 允许清空
     #[prop(optional)]
     allow_clear: bool,
+    /// **内联模式**：直接铺开日历，不渲染「触发器 + 自己的浮层」。
+    /// 供页面把区间选择器嵌进**自己的浮层**里用（消费记录的时间范围面板）——
+    /// 否则浮层里还套一个触发器，用户要连点两次才能看到日历。
+    #[prop(optional)]
+    inline: bool,
     /// 禁用
     #[prop(optional, into)]
     disabled: Option<Signal<bool>>,
@@ -400,7 +405,7 @@ pub fn DateRangePicker(
     let visible = RwSignal::new(month_of(&start.get_untracked()));
     let placeholder = placeholder.unwrap_or_else(|| "请选择时间范围".to_string());
 
-    let display = move || {
+    let display = Signal::derive(move || {
         let from = start.get();
         let to = end.get();
         if from.is_empty() && to.is_empty() {
@@ -410,7 +415,7 @@ pub fn DateRangePicker(
         } else {
             format!("{from} ~ {to}")
         }
-    };
+    });
 
     let mut classes = String::from("ui-date-picker ui-date-range-picker");
     if let Some(extra) = class.as_deref() {
@@ -419,49 +424,53 @@ pub fn DateRangePicker(
     }
 
     view! {
-        <div class=classes class:is-open=move || open.get()>
-            <button
-                type="button"
-                class="ui-date-picker__trigger"
-                disabled=move || disabled.get()
-                on:click=move |_| {
-                    if disabled.get_untracked() {
-                        return;
-                    }
-                    if !open.get_untracked() {
-                        visible.set(month_of(&start.get_untracked()));
-                    }
-                    open.update(|v| *v = !*v);
-                }
-            >
-                <span class="ui-date-picker__icon">{icons::icon(Icon::ClockCircle)}</span>
-                <span
-                    class="ui-date-picker__value"
-                    class:is-placeholder=move || start.get().is_empty() && end.get().is_empty()
-                >
-                    {display}
-                </span>
-                <Show when=move || allow_clear && (!start.get().is_empty() || !end.get().is_empty())>
-                    <span
-                        class="ui-input__clear"
-                        role="button"
-                        title="清空"
-                        on:click=move |ev| {
-                            ev.stop_propagation();
-                            start.set(String::new());
-                            end.set(String::new());
-                            if let Some(callback) = on_change {
-                                callback.run((String::new(), String::new()));
-                            }
+        <div class=classes class:is-open=move || open.get() class:is-inline=inline>
+            <Show when=move || !inline>
+                <button
+                    type="button"
+                    class="ui-date-picker__trigger"
+                    disabled=move || disabled.get()
+                    on:click=move |_| {
+                        if disabled.get_untracked() {
+                            return;
                         }
+                        if !open.get_untracked() {
+                            visible.set(month_of(&start.get_untracked()));
+                        }
+                        open.update(|v| *v = !*v);
+                    }
+                >
+                    <span class="ui-date-picker__icon">{icons::icon(Icon::ClockCircle)}</span>
+                    <span
+                        class="ui-date-picker__value"
+                        class:is-placeholder=move || start.get().is_empty() && end.get().is_empty()
                     >
-                        {icons::icon(Icon::CloseCircle)}
+                        {move || display.get()}
                     </span>
-                </Show>
-            </button>
+                    <Show when=move || allow_clear && (!start.get().is_empty() || !end.get().is_empty())>
+                        <span
+                            class="ui-input__clear"
+                            role="button"
+                            title="清空"
+                            on:click=move |ev| {
+                                ev.stop_propagation();
+                                start.set(String::new());
+                                end.set(String::new());
+                                if let Some(callback) = on_change {
+                                    callback.run((String::new(), String::new()));
+                                }
+                            }
+                        >
+                            {icons::icon(Icon::CloseCircle)}
+                        </span>
+                    </Show>
+                </button>
+            </Show>
 
-            <Show when=move || open.get()>
-                <div class="ui-select__backdrop" on:click=move |_| open.set(false)></div>
+            <Show when=move || inline || open.get()>
+                <Show when=move || !inline>
+                    <div class="ui-select__backdrop" on:click=move |_| open.set(false)></div>
+                </Show>
                 <div class="ui-date-picker__dropdown">
                     <CalendarPanel
                         visible=visible
@@ -480,35 +489,41 @@ pub fn DateRangePicker(
                             } else if picked.as_str() < current_start.as_str() {
                                 start.set(picked.clone());
                                 end.set(current_start.clone());
-                                open.set(false);
+                                // 内联模式不收起：面板本身由调用方控制，收起来反而让人看不到结果
+                                if !inline {
+                                    open.set(false);
+                                }
                                 if let Some(callback) = on_change {
                                     callback.run((picked, current_start));
                                 }
                             } else {
                                 end.set(picked.clone());
-                                open.set(false);
+                                if !inline {
+                                    open.set(false);
+                                }
                                 if let Some(callback) = on_change {
                                     callback.run((current_start, picked));
                                 }
                             }
                         })
                     />
-                    <div class="ui-date-picker__footer">
-                        <span class="ui-date-picker__hint">"先点开始，再点结束"</span>
-                        <button
-                            type="button"
-                            class="ui-btn ui-btn--link ui-btn--sm"
-                            on:click=move |_| {
-                                start.set(String::new());
-                                end.set(String::new());
-                                if let Some(callback) = on_change {
-                                    callback.run((String::new(), String::new()));
+                    <Show when=move || !inline>
+                        <div class="ui-date-picker__footer">
+                            <button
+                                type="button"
+                                class="ui-btn ui-btn--secondary ui-btn--sm"
+                                on:click=move |_| {
+                                    start.set(String::new());
+                                    end.set(String::new());
+                                    if let Some(callback) = on_change {
+                                        callback.run((String::new(), String::new()));
+                                    }
                                 }
-                            }
-                        >
-                            "清除"
-                        </button>
-                    </div>
+                            >
+                                "清除"
+                            </button>
+                        </div>
+                    </Show>
                 </div>
             </Show>
         </div>

@@ -10,246 +10,35 @@
  * 取值只用 `--transactions-*` 令牌，禁止裸 hex / rgb。
  * ============================================ */
 
+
+
 /* ============================================
- * 1. 时间范围选择器
- *    高 32px 的横向 flex，gap 8px
+ * 2. 工具栏里带图标/角标的按钮（排序 / 筛选）
+ *    形状与字号全部来自 `.ui-btn`，这里只加图标位与筛选计数徽标
  * ============================================ */
 
-.tr-time {
-  display: flex;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-  height: 32px;
-}
-
-.tr-time__nav {
+.tr-btn-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--transactions-radius-sm);
-  background: none;
-  color: var(--transactions-color-icon);
-  cursor: pointer;
-  transition: all var(--transactions-transition-fast);
+  width: 14px;
+  height: 14px;
 }
 
-.tr-time__nav:hover {
-  background-color: var(--transactions-color-hover-bg);
-  color: var(--transactions-color-icon-hover);
-}
-
-.tr-time__nav:focus-visible {
-  outline: 2px solid var(--transactions-color-primary);
-  outline-offset: 2px;
-}
-
-.tr-time__field {
-  position: relative;
-  display: inline-flex;
-}
-
-.tr-time__trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-  height: 32px;
-  min-width: 190px;
-  padding: 0 var(--transactions-space-sm);
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-sm);
-  background-color: var(--transactions-color-major-background);
-  color: var(--transactions-color-text-major);
-  font-family: var(--transactions-font-mono);
-  font-size: var(--transactions-size-text-caption);
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  transition: border-color var(--transactions-transition-fast);
-}
-
-.tr-time__trigger:hover {
-  border-color: var(--transactions-color-primary);
-}
-
-.tr-time__field.is-open .tr-time__trigger {
-  border-color: var(--transactions-color-primary);
-}
-
-.tr-time__value {
-  flex: 1;
-  text-align: left;
-  white-space: nowrap;
-}
-
-.tr-time__panel {
-  position: absolute;
-  z-index: 1050;
-  top: calc(100% + var(--transactions-space-xs));
-  left: 0;
-  min-width: 280px;
-  padding: var(--transactions-space-md);
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-md);
-  background-color: var(--transactions-color-elevated);
-  box-shadow: var(--transactions-shadow-lg);
-}
-
-/* 面板内嵌的区间选择器：去掉自带的下拉定位，直接作为面板内容 */
-.tr-time__panel .ui-date-range-picker .ui-date-picker__dropdown {
-  position: static;
-  margin-top: 0;
-  padding: 0;
-  border: none;
-  background: none;
-  box-shadow: none;
-}
-
-.tr-time__panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--transactions-space-sm);
-  margin-bottom: var(--transactions-space-sm);
-}
-
-.tr-time__panel-title {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body-sm);
-  font-weight: 500;
-  color: var(--transactions-color-text-major);
-}
-
-.tr-time__grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--transactions-space-xs);
-}
-
-.tr-time__grid--year {
-  grid-template-columns: repeat(3, 1fr);
-}
-
-.tr-time__cell {
-  height: 32px;
-  padding: 0 var(--transactions-space-sm);
-  border: 1px solid transparent;
-  border-radius: var(--transactions-radius-sm);
-  background: none;
-  color: var(--transactions-color-text-major);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  cursor: pointer;
-  transition: all var(--transactions-transition-fast);
-}
-
-.tr-time__cell:hover {
-  background-color: var(--transactions-color-hover-bg);
-}
-
-.tr-time__cell.is-active {
-  border-color: var(--transactions-color-primary);
-  background-color: var(--transactions-color-active-bg);
-  color: var(--transactions-color-primary);
-  font-weight: var(--transactions-weight-medium);
-}
-
-.tr-time__presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--transactions-space-xs);
-  margin-top: var(--transactions-space-md);
-  padding-top: var(--transactions-space-sm);
-  border-top: 1px solid var(--transactions-color-divider);
-}
-
-.tr-time__preset {
-  padding: var(--transactions-space-2xs) var(--transactions-space-sm);
-  border: none;
-  border-radius: var(--transactions-radius-sm);
-  background: none;
-  color: var(--transactions-color-primary);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  cursor: pointer;
-  transition: background-color var(--transactions-transition-fast);
-}
-
-.tr-time__preset:hover {
-  background-color: var(--transactions-color-primary-tint);
-}
-
-/* ============================================
- * 2. 悬浮按钮（.float-primary / .float-secondary / .float-sort）
- * ============================================ */
-
-.tr-float-primary {
-  right: 40px;
-  bottom: 72px;
-}
-
-.tr-float-secondary {
-  right: 100px;
-  bottom: 72px;
-  border: 1px solid var(--transactions-color-window-border);
-  background-color: var(--transactions-color-minor-background);
-  color: var(--transactions-color-text-major);
-  box-shadow: var(--transactions-shadow-sm);
-}
-
-.tr-float-secondary:hover {
-  border-color: var(--transactions-color-border-l2);
-  background-color: var(--transactions-color-major-background);
-  box-shadow: var(--transactions-shadow-md);
-}
-
-.tr-float-sort {
-  right: 160px;
-  bottom: 72px;
-  border: 1px solid var(--transactions-color-window-border);
-  background-color: var(--transactions-color-minor-background);
-  color: var(--transactions-color-text-major);
-  box-shadow: var(--transactions-shadow-sm);
-}
-
-.tr-float-sort:hover {
-  border-color: var(--transactions-color-border-l2);
-  background-color: var(--transactions-color-major-background);
-  box-shadow: var(--transactions-shadow-md);
-}
-
-.tr-float-primary:active,
-.tr-float-secondary:active,
-.tr-float-sort:active {
-  transform: scale(0.94);
-}
-
-.tr-float-sort-icon,
-.tr-float-secondary svg {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* 已添加筛选条件的计数徽标 */
-.tr-float-badge {
-  position: absolute;
-  top: -2px;
-  right: -2px;
+/* 已添加筛选条件的计数（跟在「筛选」文案后面，不再像悬浮按钮那样贴角） */
+.tr-btn-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-width: 18px;
   height: 18px;
+  margin-left: calc(-1 * var(--transactions-space-2xs));
   padding: 0 var(--transactions-space-xs);
-  border: 2px solid var(--transactions-color-major-background);
   border-radius: var(--transactions-radius-full);
   background-color: var(--transactions-color-primary);
   color: var(--transactions-color-text-inverse);
   font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-small);
+  font-size: var(--transactions-size-text-caption);
   font-weight: var(--transactions-weight-semibold);
   line-height: 1;
 }
@@ -279,42 +68,6 @@
   align-items: center;
   justify-content: center;
   gap: var(--transactions-space-xs);
-}
-
-.tr-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: var(--transactions-radius-sm);
-  background: none;
-  color: var(--transactions-color-icon);
-  font-size: var(--transactions-size-text-body);
-  cursor: pointer;
-  transition: all var(--transactions-transition-fast);
-}
-
-.tr-action:hover:not(:disabled) {
-  background-color: var(--transactions-color-hover-bg);
-  color: var(--transactions-color-icon-hover);
-}
-
-.tr-action:focus-visible {
-  outline: 2px solid var(--transactions-color-primary);
-  outline-offset: 2px;
-}
-
-.tr-action:disabled {
-  color: var(--transactions-color-text-disabled);
-  cursor: not-allowed;
-}
-
-.tr-action--danger:hover:not(:disabled) {
-  background-color: var(--transactions-color-danger-hover-bg);
-  color: var(--transactions-color-expense);
 }
 
 .tr-sync {
@@ -427,33 +180,9 @@
 }
 
 /* 金额输入：前缀「￥」+ 输入框 */
-.tr-modal-price {
-  display: flex;
-  align-items: center;
-  width: 100%;
-}
-
-.tr-modal-price-prefix {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 36px;
-  padding: 0 var(--transactions-space-md);
-  border: 1px solid var(--transactions-color-window-border);
-  border-right: none;
-  border-radius: var(--transactions-radius-md) 0 0 var(--transactions-radius-md);
-  background-color: var(--transactions-color-minor-background);
-  color: var(--transactions-color-text-secondary);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body);
-}
-
+/* 金额输入框：去掉左侧的「¥」前缀后就是一个普通输入框，不再需要拼接圆角 */
 .tr-modal-price .ui-input {
   flex: 1;
-}
-
-.tr-modal-price .ui-input__control {
-  border-radius: 0 var(--transactions-radius-md) var(--transactions-radius-md) 0;
 }
 
 /* 弹窗底栏（`Modal` 的 footer 被关掉，按钮放在内容里） */
@@ -760,15 +489,6 @@
  * ============================================ */
 
 @media (max-width: 720px) {
-  .tr-time {
-    flex-wrap: wrap;
-    height: auto;
-  }
-
-  .tr-time__trigger {
-    min-width: 0;
-  }
-
   .tr-filter__row {
     flex-direction: column;
     gap: var(--transactions-space-md);

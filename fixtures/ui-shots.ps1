@@ -59,7 +59,7 @@ public class TrShot {
 '@ -Language CSharp
 
 $UIA = [System.Windows.Automation.AutomationElement]
-$pages = @('消费记录', '数据分析', '股票交易', '关键事件', '日记管理', '分类标签', '应用设置')
+$pages = @('消费记录', '数据分析', '股票交易', '关键事件', '日记', '分类标签', '应用设置')
 $failures = New-Object System.Collections.Generic.List[string]
 $rows = New-Object System.Collections.Generic.List[object]
 

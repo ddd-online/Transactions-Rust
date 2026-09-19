@@ -326,11 +326,11 @@ try {
     Write-Host "`n[ui-upload] 1/4 建事件"
     Assert-True (Invoke-Element (Find-First $window '关键事件')) '打开「关键事件」页'
     Start-Sleep -Seconds 2
-    Assert-True (Invoke-Element (Find-First $window '添加事件')) '打开「添加事件」弹窗'
+    Assert-True (Invoke-Element (Find-First $window '新增事件')) '打开「新增事件」弹窗'
     Start-Sleep -Milliseconds 1500
     $title = "图片上传冒烟 $(Get-Date -Format 'HH:mm:ss')"
     Assert-True (Set-Value (Find-First $window '事件名称（可选）') $title) "填入事件名称（$title）"
-    Invoke-Element (Find-ByName $window '确认' | Select-Object -Last 1) | Out-Null
+    Invoke-Element (Find-ByName $window '新增' | Select-Object -Last 1) | Out-Null
 
     # 等弹窗真正消失（否则后续点击会落在遮罩上）
     $deadline = (Get-Date).AddSeconds(15)

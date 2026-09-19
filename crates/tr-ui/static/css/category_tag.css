@@ -9,23 +9,7 @@
  * --transactions-color-{expense,income,transfer}），不出现裸 hex / rgb。
  * ============================================ */
 
-/* ========== 工具栏：类型卡片 + 账本 + 初始化 ========== */
-
-.ct-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--transactions-space-md);
-  flex-wrap: wrap;
-  margin-bottom: var(--transactions-space-md);
-}
-
-.ct-toolbar-left,
-.ct-toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-}
+/* ========== 工具栏（在 `.page-toolbar` 里）：只有交易类型卡片 ========== */
 
 /* 交易类型导航（.type-nav）：三张卡片，激活色随类型语义色 */
 .ct-type-nav {
@@ -96,33 +80,11 @@
   white-space: nowrap;
 }
 
-/* 账本胶囊 */
-.ct-ledger-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--transactions-space-xs);
-  height: 28px;
-  padding: 0 var(--transactions-space-sm);
-  font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-secondary);
-  background-color: var(--transactions-color-minor-background);
-  border-radius: var(--transactions-radius-full);
-}
-
-.ct-ledger-chip-icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  color: var(--transactions-color-icon);
-}
-
-.ct-ledger-chip-icon svg {
-  width: 100%;
-  height: 100%;
-}
-
 /* ========== 主体：240px 分类栏 + 1fr 标签栏 ========== */
 
+/* 两栏是**同一张纸上的两列**，不是两张卡：
+ * 底色透明（卡片本身不填色），靠一条竖直发丝线分栏 ——
+ * 之前两栏各自是"白底 + 描边 + 12px 圆角"，正好套在外层白卡里，视觉上成了双层卡片。 */
 .ct-main {
   flex: 1;
   display: grid;
@@ -137,17 +99,16 @@
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
-  background-color: var(--transactions-color-major-background);
-  border: 1px solid var(--transactions-color-divider);
 }
 
+/* 左栏（分类）与右栏（标签）之间：一条贯通的竖线 */
 .ct-column--categories {
-  border-radius: var(--transactions-radius-lg) 0 0 var(--transactions-radius-lg);
-  border-right: none;
+  border-right: 1px solid var(--transactions-color-divider);
+  padding: var(--transactions-space-lg);
 }
 
 .ct-column--tags {
-  border-radius: 0 var(--transactions-radius-lg) var(--transactions-radius-lg) 0;
+  padding: var(--transactions-space-lg);
 }
 
 .ct-column-header {
@@ -241,40 +202,13 @@
   border-radius: var(--transactions-radius-md);
 }
 
-.ct-drag-handle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  margin-right: 2px;
+/* 拖拽把手：统一用 `ui.css` 的 `.ui-drag-handle` + 图标集 `Icon::DragHandle`。
+ * 以前这里是用 radial-gradient 画的 6 点阵（1.3px 的点在 1x 下发虚），已删除。
+ *
+ * ⚠ 用 `:where()` 把这条耦合规则的**权重降到 0**：否则它的 (0,3,0) 会压过
+ * `.ui-drag-handle:hover` 的 (0,2,0)，导致"鼠标压在手把上却不变主色"（实测踩过）。 */
+:where(.ct-list-item:hover) .ui-drag-handle {
   color: var(--transactions-color-text-secondary);
-  cursor: grab;
-  touch-action: none;
-  transition: color var(--transactions-transition-fast);
-}
-
-.ct-drag-handle:hover {
-  color: var(--transactions-color-primary);
-}
-
-.ct-drag-handle:active {
-  cursor: grabbing;
-}
-
-/* 6 个圆点：用 radial-gradient 画点阵，纯令牌上色 */
-.ct-drag-handle-dots {
-  display: block;
-  width: 12px;
-  height: 14px;
-  background-image: radial-gradient(
-    circle at 3px 3px,
-    currentColor 1.3px,
-    transparent 1.5px
-  );
-  background-size: 6px 4px;
-  opacity: 0.85;
 }
 
 .ct-item-main {
@@ -303,7 +237,7 @@
   border-radius: var(--transactions-radius-full);
 }
 
-/* 行内操作：默认隐藏，hover / 选中时出现（`.item-actions`） */
+/* 行内操作：默认隐藏，hover / 选中时出现（按钮本体样式见 ui.css 的 .ui-icon-btn） */
 .ct-item-actions {
   display: none;
   flex-shrink: 0;
@@ -313,46 +247,6 @@
 .ct-list-item:hover .ct-item-actions,
 .ct-list-item.is-active .ct-item-actions {
   display: flex;
-}
-
-.ct-action-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  color: var(--transactions-color-text-secondary);
-  background: transparent;
-  border: none;
-  border-radius: var(--transactions-radius-sm);
-  cursor: pointer;
-  transition: all var(--transactions-transition-fast);
-}
-
-.ct-action-icon-svg {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-}
-
-.ct-action-icon-svg svg {
-  width: 100%;
-  height: 100%;
-}
-
-.ct-action-icon:hover:not(:disabled) {
-  color: var(--transactions-color-negative);
-  background-color: var(--transactions-color-danger-hover-bg);
-}
-
-.ct-action-icon:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.ct-action-icon:focus-visible {
-  outline: 2px solid var(--transactions-color-primary);
-  outline-offset: 2px;
 }
 
 /* ========== 空态 ========== */
@@ -415,8 +309,7 @@
 @media (prefers-reduced-motion: reduce) {
   .ct-type-card,
   .ct-list-item,
-  .ct-drag-handle,
-  .ct-action-icon {
+  .ui-drag-handle {
     transition: none;
   }
 }

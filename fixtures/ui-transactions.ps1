@@ -8,9 +8,9 @@
 #     它的名称走 `template_name` 这个子弹窗输入框，类型/分类/标签/描述全部取当前表单；
 #   * 「排序」是页面上唯一的排序入口（`TrSortModal` 的 4 个字段 + 升降序），
 #     排序字段要过白名单、方向要强制 asc/desc，改坏了页面顺序会悄悄变形；
-#   * 「筛选」是页面上唯一的条件查询入口（悬浮按钮 →「筛选消费记录」弹窗 → 条件列表 → 确认），
-#     连同「共 N 条记录」一起验：筛完必须只剩唯一那条。⚠ 那个悬浮按钮**带角标（children），
-#     可访问名不是 title**，只能按 class `tr-float-secondary` 找。
+#   * 「筛选」是页面上唯一的条件查询入口（工具栏按钮 →「筛选条件」弹窗 → 条件列表 → 确认），
+#     连同「共 N 条」一起验：筛完必须只剩唯一那条。按钮上的文案会被角标（「筛选 3」）改写，
+#     所以界面给它写了 `aria_label`，脚本按可访问名「筛选」找。
 #
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/ui-transactions.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
@@ -123,15 +123,40 @@ function Wait-Like { param($Root, [string]$Pattern, [int]$TimeoutSec = 25)
 function Invoke-Element { param($Element)
     if (-not $Element) { return $false }
     $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        $pattern.Invoke(); return $true
+    # UIA 的 InvokePattern 在元素刚重渲染过时会抛"无法识别的错误"（句柄过期），
+    # 那不是"按钮不可点"；失败时退回真实鼠标点击。
+    try {
+        if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+            $pattern.Invoke(); return $true
+        }
+    } catch {
+        Write-Host "    InvokePattern 失败，改用鼠标点击：$($_.Exception.Message)" -ForegroundColor DarkYellow
     }
     $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -gt 0) {
-        [TrTr]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-        return $true
+    if (-not [double]::IsFinite($rect.X) -or $rect.Width -le 0) { return $false }
+    [TrTr]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    return $true
+}
+
+# 弹窗主按钮：屏幕上有多个同名元素（页面入口 / 隐藏面板），只点**可见且在窗口内**的最后一个。
+# 之前那版按"同名取最后一个"会拿到屏幕上没显示的元素，点它毫无反应（假绿）。
+function Invoke-ButtonByName { param($Window, [string]$Name)
+    $windowRect = $Window.Current.BoundingRectangle
+    $visible = @()
+    foreach ($element in @(Find-All $Window $Name)) {
+        if ($element.Current.IsOffscreen) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if (-not [double]::IsFinite($rect.X) -or -not [double]::IsFinite($rect.Y)) { continue }
+        if ($rect.Width -le 0 -or $rect.Height -le 0) { continue }
+        if ($rect.Y -lt $windowRect.Y -or ($rect.Y + $rect.Height) -gt ($windowRect.Y + $windowRect.Height)) { continue }
+        if ($rect.X -lt $windowRect.X -or ($rect.X + $rect.Width) -gt ($windowRect.X + $windowRect.Width)) { continue }
+        $visible += $element
     }
-    return $false
+    if ($visible.Count -eq 0) {
+        Write-Host "    没有可见的「$Name」按钮（同名元素 $((Find-All $Window $Name).Count) 个）" -ForegroundColor DarkYellow
+        return $false
+    }
+    return (Invoke-Element $visible[$visible.Count - 1])
 }
 function Click-Element { param($Element)
     if (-not $Element) { return $false }
@@ -228,8 +253,7 @@ function Add-Record { param($Window, [string]$Description, [string]$Amount)
     $okDesc = Set-Value (Wait-Element -Root $Window -Name '描述消费内容') $Description
     $okAmount = Set-Value (Wait-Element -Root $Window -Name '0.00') $Amount
     Start-Sleep -Milliseconds 800
-    $confirm = Find-All $Window '确认'
-    if ($confirm.Count -gt 0) { Invoke-Element $confirm[$confirm.Count - 1] | Out-Null }
+    Invoke-ButtonByName -Window $Window -Name '保存' | Out-Null
     Start-Sleep -Seconds 3
     return ($okDesc -and $okAmount)
 }
@@ -322,8 +346,7 @@ try {
     if ($amountInput) { Assert-True (Set-Value $amountInput.Element '88.88') '把金额改成 88.88' }
     if ($descInput) { Assert-True (Set-Value $descInput.Element $editedDesc) '把描述改成新名字' }
     Start-Sleep -Milliseconds 800
-    $confirm = Find-All $window '确认'
-    if ($confirm.Count -gt 0) { Invoke-Element $confirm[$confirm.Count - 1] | Out-Null }
+    Invoke-ButtonByName -Window $window -Name '保存' | Out-Null
     Start-Sleep -Seconds 4
 
     $recordsAfter = @(Read-Table 'tbl_billadm_transaction_record')
@@ -358,10 +381,8 @@ try {
             if ($tplNameInput) {
                 Assert-True (Set-Value $tplNameInput $templateName) '填入模板名称'
                 Start-Sleep -Milliseconds 600
-                # 子弹窗的确认按钮是「保存」（记账弹窗自己的是「确认」，不会混）
-                $saveTplOk = Wait-Element -Root $window -Name '保存' -TimeoutSec 10
-                Assert-True ([bool]$saveTplOk) '找到「保存」'
-                if ($saveTplOk) { Invoke-Element $saveTplOk | Out-Null }
+                # 两个弹窗的主按钮都叫「保存」（子弹窗在上层），按"可见且在窗口内"取最后一个
+                Assert-True (Invoke-ButtonByName -Window $window -Name '保存') '点子弹窗「保存」'
                 Start-Sleep -Seconds 3
             }
         }
@@ -440,8 +461,8 @@ try {
             "金额最大的排在第一（期望 $($todayMax / 100.0)，实际 $($amountsOnScreen[0])）"
     }
     # ================= 5/5 筛选与统计条 =================
-    # 「共 N 条记录」要与库里当前账本的条数一致，再用关键词筛出唯一那条。
-    Write-Host "`n[tr] 5/5 筛选：按关键词筛出唯一那条，并核对「共 N 条记录」"
+    # 「共 N 条」要与库里当前账本的条数一致，再用关键词筛出唯一那条。
+    Write-Host "`n[tr] 5/5 筛选：按关键词筛出唯一那条，并核对「共 N 条」"
     $ledgerId = ($editedRows | Select-Object -First 1).ledger_id
     Assert-True ([bool]$ledgerId) "从改后的记录上反推当前账本（$ledgerId）"
     $ledgerRows = @($recordsAfter | Where-Object { $_.ledger_id -eq $ledgerId })
@@ -449,10 +470,10 @@ try {
     $deadline = (Get-Date).AddSeconds(10)
     do {
         $totalText = Get-Elements $window | ForEach-Object { $_.Current.Name } |
-            Where-Object { $_ -and $_ -like '共 * 条记录' } | Select-Object -First 1
+            Where-Object { $_ -and $_ -match '^共 \d+ 条$' } | Select-Object -First 1
         if (-not $totalText) { Start-Sleep -Milliseconds 400 }
     } while (-not $totalText -and (Get-Date) -lt $deadline)
-    Assert-True ([bool]$totalText) "页面上有「共 N 条记录」（$totalText）"
+    Assert-True ([bool]$totalText) "页面上有「共 N 条」（$totalText）"
     if ($totalText) {
         $shown = [int]($totalText -replace '[^\d]', '')
         # 页面默认带**时间范围**筛选（种子里那些更早的记录不在范围内），所以只断言
@@ -461,26 +482,16 @@ try {
             "统计条落在合理范围（页面 $shown 条 / 该账本共 $($ledgerRows.Count) 条）"
     }
 
-    # 打开筛选（悬浮按钮）→ 关键词 = 那笔唯一描述 → 添加条件 → 确认
-    # ⚠ 这个悬浮按钮**带 children（角标），可访问名不是 title**（UIA 里只有「排序」「记一笔」有名字），
-    # 所以按 class `tr-float-secondary` 找。
-    $filterButton = $null
-    foreach ($element in @(Get-Elements $window)) {
-        if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
-        if ($element.Current.IsOffscreen) { continue }
-        if ($element.Current.ClassName -notlike '*tr-float-secondary*') { continue }
-        $rect = $element.Current.BoundingRectangle
-        if ($rect.Width -le 0) { continue }
-        $filterButton = $element
-        break
-    }
-    Assert-True ([bool]$filterButton) '找到悬浮按钮「筛选条件」（class=tr-float-secondary）'
+    # 打开筛选（工具栏按钮「筛选」）→ 关键词 = 那笔唯一描述 → 添加条件 → 确认
+    # 文案与角标（「筛选 3」）会改写可访问名，所以按钮上写了 aria_label="筛选"，按名字找即可。
+    $filterButton = Wait-Element -Root $window -Name '筛选' -TimeoutSec 10
+    Assert-True ([bool]$filterButton) '找到工具栏按钮「筛选」'
     if ($filterButton) { Invoke-Element $filterButton | Out-Null }
     Start-Sleep -Seconds 2
-    Assert-True ([bool](Wait-Element -Root $window -Name '筛选消费记录' -TimeoutSec 10)) '弹窗「筛选消费记录」已打开'
+    Assert-True ([bool](Wait-Element -Root $window -Name '筛选条件' -TimeoutSec 10)) '弹窗「筛选条件」已打开'
     Assert-True (Set-Value (Wait-Element -Root $window -Name '输入关键词') $editedDesc) "「描述包含」填 $editedDesc"
     Start-Sleep -Milliseconds 600
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '+ 添加筛选条件' -TimeoutSec 10)) '点「+ 添加筛选条件」'
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '+ 添加条件' -TimeoutSec 10)) '点「+ 添加条件」'
     Start-Sleep -Milliseconds 800
     # 注：这里**不要**断言"弹窗里出现了这条关键词"——背后表格行本来就含这个描述，会假绿；
     # 真正的判据是"确认后只剩 1 条"（下面）。
@@ -493,7 +504,7 @@ try {
     $deadline = (Get-Date).AddSeconds(12)
     do {
         $filteredText = Get-Elements $window | ForEach-Object { $_.Current.Name } |
-            Where-Object { $_ -and $_ -like '共 * 条记录' } | Select-Object -First 1
+            Where-Object { $_ -and $_ -match '^共 \d+ 条$' } | Select-Object -First 1
         if ($filteredText -notlike '共 1 条*') { Start-Sleep -Milliseconds 400 }
     } while ($filteredText -notlike '共 1 条*' -and (Get-Date) -lt $deadline)
     Assert-True ($filteredText -like '共 1 条*') "筛选后只剩 1 条（实际 '$filteredText'）"

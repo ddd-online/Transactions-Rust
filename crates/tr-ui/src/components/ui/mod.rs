@@ -11,7 +11,7 @@
 //!
 //! 表格与分页（消费记录 / 分类标签 / 模板列表）、表单与表单项、标签页（设置页 5 个分栏）、
 //! 分段控制器（交易类型 / 外观）、开关（离群值 / 开发者工具）、二次确认、日期与日期区间选择、
-//! 下拉菜单（行内「更多」）、气泡卡片（条件小结 / 说明浮层）、悬浮按钮（右下角「记一笔」）、
+//! 下拉菜单（行内「更多」）、气泡卡片（条件小结 / 说明浮层）、
 //! 抽屉（筛选面板）、分割线、复选框与复选框组、进度条（更新下载）、
 //! 拖拽排序项（分类 / 标签 / 模板排序）。
 //!
@@ -31,7 +31,6 @@ mod drag_sort;
 mod drawer;
 mod dropdown;
 mod empty;
-mod float_button;
 mod form;
 mod image_picker;
 mod input;
@@ -49,9 +48,10 @@ mod table;
 mod tabs;
 mod tag;
 mod textarea;
+pub(crate) mod time_range_picker;
 mod tooltip;
 
-pub use button::{Button, ButtonSize, ButtonVariant};
+pub use button::{Button, ButtonSize, ButtonVariant, IconButton, IconButtonVariant};
 pub use chart::{ChartConfig, ChartPoint, ChartSeries, ChartValueKind, LineChart};
 pub use checkbox::{Checkbox, CheckboxGroup, CheckboxOption};
 pub use date_picker::{add_months, parse_ymd, today, DatePicker, DateRangePicker, Ymd};
@@ -60,7 +60,6 @@ pub use drag_sort::{DragSortItem, DragSortState};
 pub use drawer::Drawer;
 pub use dropdown::{Dropdown, DropdownItem};
 pub use empty::Empty;
-pub use float_button::FloatButton;
 pub use form::{Form, FormItem, FormLayout};
 pub use image_picker::{
     blob_to_data_url, convert_heic_to_jpeg, is_heic, read_as_data_url, FileStatus, ImagePicker,
@@ -80,5 +79,7 @@ pub use switch::Switch;
 pub use table::{Table, TableAlign, TableColumn};
 pub use tabs::{TabItem, TabPane, Tabs};
 pub use tag::{Tag, TagKind};
+// 时间范围选择器：消费记录页与数据分析页共用
 pub use textarea::Textarea;
+pub use time_range_picker::TimeRangePicker;
 pub use tooltip::Tooltip;

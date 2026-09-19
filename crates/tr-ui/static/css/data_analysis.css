@@ -1,65 +1,28 @@
 /* ============================================
  * 数据分析页（`/da_view`）
- * 布局：工具栏 + 左 220px 图表列表 + 右侧图表视图。
+ * 布局：工具栏（共享的时间范围选择器）+ 左 220px 图表列表 + 右侧图表视图。
  * ============================================ */
 
-.da-time {
-  display: flex;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-}
-
-.da-time__range {
-  font-family: var(--transactions-font-mono);
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-secondary);
-  font-variant-numeric: tabular-nums;
-  margin-left: var(--transactions-space-sm);
-}
-
-.da-time__modes {
-  display: inline-flex;
-  border: 1px solid var(--transactions-color-border-l2);
-  border-radius: var(--transactions-radius-md);
-  overflow: hidden;
-}
-
-.da-time__mode {
-  border: none;
-  background: none;
-  padding: 0 var(--transactions-space-md);
-  height: 30px;
-  font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-secondary);
-  cursor: pointer;
-  transition: background-color var(--transactions-transition-fast),
-    color var(--transactions-transition-fast);
-}
-
-.da-time__mode:hover {
-  background: var(--transactions-color-hover-bg);
-}
-
-.da-time__mode.is-active {
-  background: var(--transactions-color-active-bg);
-  color: var(--transactions-color-primary);
-}
+/* 工具栏：直接用共享的 `TimeRangePicker`（`.ui-time*` 见 ui.css），这里不再有本页专属样式。 */
 
 .da-main {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: var(--transactions-space-lg);
+  gap: var(--transactions-space-region);
 }
 
+/* 左栏（图表列表）与右侧图表区之间：一条**贯通竖线**。
+ * 原来两栏只隔 16px 空白，列表与图表在视觉上糊成一片、读不出"这是两个区域"。
+ * 与「分类标签」两栏用的是同一条分隔线令牌 + 同一种手法（发丝线，不是卡中卡）。 */
 .da-sidebar {
   flex: 0 0 220px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-sm);
+  padding-right: var(--transactions-space-lg);
   border-right: 1px solid var(--transactions-color-divider);
-  padding-right: var(--transactions-space-sm);
   overflow-y: auto;
 }
 
@@ -115,14 +78,7 @@
   white-space: nowrap;
 }
 
-.da-list__dots {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
+/* 曲线合计里仍用得到的小色点（侧栏项上的那排点已移除，见 `da_list` 的注释） */
 .da-list__dot {
   display: inline-block;
   width: 8px;
@@ -131,34 +87,14 @@
   flex-shrink: 0;
 }
 
-.da-list__dot.is-empty {
-  background: transparent;
-  border: 1px dashed var(--transactions-color-text-disabled);
-}
-
+/* 列表项上的删除按钮：只在 hover / 选中时出现（组件本体样式见 ui.css 的 .ui-icon-btn） */
 .da-list__delete {
   display: none;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: var(--transactions-radius-sm);
-  background: none;
-  color: var(--transactions-color-text-secondary);
-  cursor: pointer;
-  flex-shrink: 0;
 }
 
 .da-list__item:hover .da-list__delete,
 .da-list__item.is-active .da-list__delete {
   display: inline-flex;
-}
-
-.da-list__delete:hover {
-  color: var(--transactions-color-expense);
-  background: var(--transactions-color-danger-hover-bg);
 }
 
 .da-content {
@@ -182,6 +118,9 @@
   flex-direction: column;
   gap: var(--transactions-space-md);
   min-width: 0;
+  /* 撑满分栏高度：画布吃掉多余空间，把「曲线配置」**压到卡片下沿**
+   * （`.da-main` 的底部内边距已经去掉，所以表格最后一行正好贴卡片底边） */
+  flex: 1;
 }
 
 .da-chart__header {
@@ -189,6 +128,9 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--transactions-space-sm);
+  /* 标题（+ 粒度/重命名）之下一条发丝线，把标题带与图表区分开 */
+  padding-bottom: var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
 }
 
 .da-chart__title {
@@ -205,24 +147,50 @@
   min-width: 100px;
 }
 
+/* 图表头右侧的两个控件**同尺寸**：粒度下拉与「重命名」都按小号按钮（28px）对齐。
+ * 实测原来下拉是 36px（md）、按钮是 28px（sm），并排高度差 8px、宽度差 3px。 */
+.da-chart__meta .ui-select,
+.da-chart__meta .ui-select__trigger,
+.da-chart__meta .ui-btn {
+  height: var(--transactions-btn-height-sm);
+  min-width: 64px;
+}
+
+.da-chart__meta .ui-select,
+.da-chart__meta .ui-select__trigger {
+  width: auto;
+  font-size: var(--transactions-btn-font-size-sm);
+}
+
 .da-chart__body {
   display: flex;
   gap: var(--transactions-space-lg);
   min-width: 0;
+  /* 吃掉图表列的剩余高度：否则空间全堆在「曲线配置」**下面**，
+   * 表格贴不到卡片下沿（实测差 134px） */
+  flex: 1;
+  min-height: 0;
 }
 
+/* 图表画布：只是一块绘图区，**不再套白卡**（卡片里的白卡就是"卡中卡"）。
+ * 图表的边界靠它自己的坐标轴与网格线表达，不需要再加一圈描边。 */
 .da-chart__canvas {
+  /* 撑满图表列剩余高度 → 图表自适应高宽（plotters 按实测尺寸渲染） */
   flex: 1;
   min-width: 0;
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-lg);
-  background: var(--transactions-color-major-background);
-  padding: var(--transactions-space-md);
+  min-height: 0;
+  padding: var(--transactions-space-sm) 0;
+  /* 弹性列：空态/加载态靠 `flex: 1` 撑满画布，才能真正在区域内居中 */
+  display: flex;
+  flex-direction: column;
 }
 
 .da-chart__loading,
 .da-chart__empty {
-  min-height: 320px;
+  /* 只给 min-height 是不够的：画布比它高时，空态会贴在顶部、"看着没居中"。
+   * 撑满画布 + 内部居中，才是区域内水平垂直居中。 */
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -233,6 +201,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-sm);
+  /* 与图表区之间一条发丝线（这一列是并排的独立信息区，不是图的一部分） */
+  padding-left: var(--transactions-space-lg);
+  border-left: 1px solid var(--transactions-color-divider);
 }
 
 .da-chart__sums-title {
@@ -269,6 +240,21 @@
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-sm);
+  /* 底部对齐卡片下沿：表格最后一行不额外留白（单元格自带内边距） */
+  margin-bottom: 0;
+  /* **不许被压扁**：图表区变高时不许把「曲线配置」（以及它的空态）挤掉——
+   * 宁可让画布溢出，也不能让这块消失。 */
+  flex-shrink: 0;
+}
+
+/* 曲线配置为空时：给一个真正的空态（图标 + 标题 + 说明），不是一个灰字单元格。
+ * `min-height` 保证它在任何剩余空间下都看得见。 */
+.da-chart__lines-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  padding: var(--transactions-space-xl) 0;
 }
 
 .da-chart__lines-head {
@@ -294,15 +280,6 @@
   font-size: var(--transactions-size-text-body-sm);
 }
 
-.da-type-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 var(--transactions-space-sm);
-  border-radius: var(--transactions-radius-sm);
-  font-size: var(--transactions-size-text-caption);
-  background: var(--transactions-color-hover-bg);
-}
-
 .da-line-switch {
   display: flex;
   align-items: center;
@@ -317,12 +294,10 @@
     flex-direction: column;
   }
 
+  /* 窄宽度下改为上下两段：分隔靠间距，回到"区域之间"的节奏 */
   .da-sidebar {
     flex: 0 0 auto;
-    border-right: none;
-    border-bottom: 1px solid var(--transactions-color-divider);
-    padding-right: 0;
-    padding-bottom: var(--transactions-space-sm);
+    padding-bottom: var(--transactions-space-region);
   }
 
   .da-chart__body {

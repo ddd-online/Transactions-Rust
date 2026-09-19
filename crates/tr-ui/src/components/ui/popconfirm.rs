@@ -1,6 +1,6 @@
 //! 气泡确认框。
 //!
-//! 行为：点击触发元素弹出小气泡（标题 + 可选描述 + 取消/确定），点面板外的透明遮罩关闭。
+//! 行为：点击触发元素弹出小气泡（标题 + 可选描述 + 取消/确认），点面板外的透明遮罩关闭。
 //! 浮层用绝对定位 + `--transactions-shadow-lg`，与 `ui-select` 的下拉面板同一套手法。
 //!
 //! ```
@@ -21,7 +21,7 @@ pub fn Popconfirm(
     /// 补充说明
     #[prop(optional, into)]
     description: Option<String>,
-    /// 确认按钮文案，默认「确定」
+    /// 确认按钮文案，默认「确认」；删除类请传「删除」
     #[prop(optional, into)]
     ok_text: Option<String>,
     /// 取消按钮文案，默认「取消」
@@ -39,7 +39,7 @@ pub fn Popconfirm(
     children: Children,
 ) -> impl IntoView {
     let open = RwSignal::new(false);
-    let ok_text = ok_text.unwrap_or_else(|| "确定".to_string());
+    let ok_text = ok_text.unwrap_or_else(|| "确认".to_string());
     let cancel_text = cancel_text.unwrap_or_else(|| "取消".to_string());
 
     let mut classes = String::from("ui-popconfirm");
@@ -72,7 +72,7 @@ pub fn Popconfirm(
                         // 而 `cancel_text` 一旦被闭包 move 进去就会让整段退化成 `FnOnce`。
                         <button
                             type="button"
-                            class="ui-btn ui-btn--secondary ui-btn--sm"
+                            class="ui-btn ui-btn--secondary"
                             class:is-hidden=move || !show_cancel
                             on:click=move |_| open.set(false)
                         >
@@ -80,7 +80,7 @@ pub fn Popconfirm(
                         </button>
                         <button
                             type="button"
-                            class="ui-btn ui-btn--primary ui-btn--sm"
+                            class="ui-btn ui-btn--primary"
                             on:click=move |_| {
                                 open.set(false);
                                 if let Some(callback) = on_confirm {

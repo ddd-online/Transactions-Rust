@@ -126,11 +126,18 @@ function Wait-Gone { param($Root, [string]$Name, [int]$TimeoutSec = 15)
 function Invoke-Element { param($Element)
     if (-not $Element) { return $false }
     $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        $pattern.Invoke(); return $true
+    # UIA 的 InvokePattern 在元素刚被重新渲染过时会抛 "无法识别的错误"（实测：弹窗刚打开就点确认、
+    # 列表刚刷新就点行内按钮），这不是"按钮不可点"，而是句柄过期。失败时退回**真实鼠标点击**。
+    try {
+        if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+            $pattern.Invoke(); return $true
+        }
+    } catch {
+        Write-Host "    InvokePattern 失败，改用鼠标点击：$($_.Exception.Message)" -ForegroundColor DarkYellow
     }
     $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -gt 0) {
+    if (-not [double]::IsFinite($rect.X) -or -not [double]::IsFinite($rect.Y)) { return $false }
+    if ($rect.Width -gt 0 -and $rect.Height -gt 0) {
         [TrCrud]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
         return $true
     }
@@ -148,8 +155,46 @@ function Click-Element { param($Element)
     if (-not $Element) { return $false }
     $rect = $Element.Current.BoundingRectangle
     if ($rect.Width -le 0) { return $false }
+    # 点之前先把窗口拉到前台：鼠标点击是按**屏幕坐标**投递的，本机的应用窗口常常只占屏幕一部分
+    # （实测窗口不在前台时点击落到别的窗口上，"点了没反应"）。另外确认目标落在窗口矩形内。
+    $window = $Element | Get-ParentWindow
+    if ($window) {
+        $wr = $window.Current.BoundingRectangle
+        [TrCrud]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        if ($rect.X -lt $wr.X -or ($rect.X + $rect.Width) -gt ($wr.X + $wr.Width) -or
+            $rect.Y -lt $wr.Y -or ($rect.Y + $rect.Height) -gt ($wr.Y + $wr.Height)) {
+            Write-Host "    目标元素不在窗口矩形内，跳过点击：$rect vs $wr" -ForegroundColor DarkYellow
+            return $false
+        }
+    }
     [TrCrud]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
     return $true
+}
+# 从任意元素往上找顶层窗口（`ControlViewWalker` 到根）
+function Get-ParentWindow { param($Element)
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $node = $Element
+    while ($node) {
+        $parent = $walker.GetParent($node)
+        if (-not $parent) { return $node }
+        $node = $parent
+    }
+    return $null
+}
+# 按名字找**输入框**：本项目的表单在弹窗里用 `<p class="modal-form-label">` 做标签，
+# 它与输入框的 UIA 名可能**同名**（例如「图表名称」），按名字取第一个会拿到标签（Text），
+# `Set-Value` 对它必然失败。所以判据要写在 ControlType/ClassName 上。
+function Wait-EditLike { param($Window, [string]$Name, [int]$TimeoutSec = 15)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        foreach ($el in @(Get-Elements $Window)) {
+            $isEdit = ($el.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
+                ($el.Current.ClassName -eq 'Edit')
+            if ($isEdit -and $el.Current.Name -eq $Name -and -not $el.Current.IsOffscreen) { return $el }
+        }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    return $null
 }
 # 拿到**主窗口**而不是"属于该进程的第一个窗口"：启动期会先出现初始化窗口（600×560，
 # 没有侧栏），随后才切成主窗口。抓到前者的话，后面所有按名字的查找都会落空
@@ -225,11 +270,58 @@ function Find-RowButton { param($Window, [string]$RowName, [string]$ButtonName)
     return $pick.Element
 }
 
-# 弹窗里的确认按钮：与页面入口同名时取**最后一个**（弹窗在 DOM 末尾）
+# 弹窗里的确认按钮。
+#
+# ⚠ 不要只按"同名取最后一个"来点：页面入口与弹窗确认键经常同名（「新增分类」页签按钮
+# 与弹窗里的「新增」只是不同名），而 UIA 树里还会留下**屏幕上没显示**的同名元素
+# （未展开的面板、别的分栏里的按钮），对它们 Invoke 会静默无效或直接抛
+# "Invoke 无法识别的错误"——现象是"点了确认但库里没有新行"。
+# 这里只认**真正可见**且矩形落在窗口内的候选，再取在 DOM 中靠后的那个（弹窗在末尾）。
 function Invoke-ModalButton { param($Window, [string]$Name)
-    $all = Find-All $Window $Name
-    if ($all.Count -eq 0) { return $false }
-    return (Invoke-Element $all[$all.Count - 1])
+    $windowRect = $Window.Current.BoundingRectangle
+    $visible = @()
+    foreach ($element in @(Find-All $Window $Name)) {
+        if ($element.Current.IsOffscreen) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if (-not [double]::IsFinite($rect.X) -or -not [double]::IsFinite($rect.Y)) { continue }
+        if ($rect.Width -le 0 -or $rect.Height -le 0) { continue }
+        if ($rect.Y -lt $windowRect.Y -or ($rect.Y + $rect.Height) -gt ($windowRect.Y + $windowRect.Height)) { continue }
+        if ($rect.X -lt $windowRect.X -or ($rect.X + $rect.Width) -gt ($windowRect.X + $windowRect.Width)) { continue }
+        $visible += $element
+    }
+    if ($visible.Count -eq 0) {
+        $allCount = (Find-All $Window $Name).Count
+        Write-Host "    弹窗里没有可见的「$Name」按钮（同名元素 $allCount 个）" -ForegroundColor DarkYellow
+        return $false
+    }
+    return (Invoke-Element $visible[$visible.Count - 1])
+}
+
+# 弹窗主按钮（确认键）的可访问名会随文案调整而变（「确认」/「新增」/「保存」/「添加」…），
+# 而页面入口可能正好同名。这里按"**可见 + 在窗口内 + 落在窗口下半部**"筛（弹窗居中，
+# 其底部按钮必然在视口下半部），再取最靠下的一个 —— 这样改文案不会让用例变成假红/假绿。
+function Invoke-ModalPrimaryButton { param($Window)
+    $windowRect = $Window.Current.BoundingRectangle
+    $candidates = @()
+    foreach ($name in @('确认', '新增', '添加', '保存', '创建')) {
+        foreach ($element in @(Find-All $Window $name)) {
+            if ($element.Current.IsOffscreen) { continue }
+            $rect = $element.Current.BoundingRectangle
+            if (-not [double]::IsFinite($rect.X) -or -not [double]::IsFinite($rect.Y)) { continue }
+            if ($rect.Width -le 0 -or $rect.Height -le 0) { continue }
+            if ($rect.Y -lt $windowRect.Y -or ($rect.Y + $rect.Height) -gt ($windowRect.Y + $windowRect.Height)) { continue }
+            if ($rect.X -lt $windowRect.X -or ($rect.X + $rect.Width) -gt ($windowRect.X + $windowRect.Width)) { continue }
+            if (($rect.Y + $rect.Height / 2) -lt ($windowRect.Y + $windowRect.Height * 0.45)) { continue }
+            $candidates += [pscustomobject]@{ Element = $element; Name = $name; Y = $rect.Y }
+        }
+    }
+    if ($candidates.Count -eq 0) {
+        Write-Host '    找不到弹窗主按钮（确认/新增/添加/保存）' -ForegroundColor DarkYellow
+        return $false
+    }
+    $pick = $candidates | Sort-Object Y | Select-Object -Last 1
+    Write-Host "    点弹窗主按钮「$($pick.Name)」" -ForegroundColor DarkGray
+    return (Invoke-Element $pick.Element)
 }
 
 function Read-Table { param([string]$Table)
@@ -298,10 +390,10 @@ try {
     $before = @(Read-Table 'tbl_billadm_category' | Where-Object { $_.name -eq $categoryName })
     Assert-True ($before.Count -eq 0) "初始没有同名分类（$categoryName）"
 
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '添加分类')) '点「添加分类」'
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增分类')) '点「新增分类」'
     Start-Sleep -Milliseconds 800
     Assert-True (Set-Value (Wait-Element -Root $window -Name '输入分类名称') $categoryName) '填入分类名称'
-    Invoke-ModalButton -Window $window -Name '确认' | Out-Null
+    Invoke-ModalPrimaryButton -Window $window | Out-Null
     Start-Sleep -Seconds 3
 
     $after = @(Read-Table 'tbl_billadm_category' | Where-Object { $_.name -eq $categoryName })
@@ -330,10 +422,10 @@ try {
         Invoke-Element $categoryRow | Out-Null
         Start-Sleep -Seconds 2
     }
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '添加标签')) '点「添加标签」'
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增标签')) '点「新增标签」'
     Start-Sleep -Milliseconds 800
     Assert-True (Set-Value (Wait-Element -Root $window -Name '输入标签名称') $tagName) '填入标签名称'
-    Invoke-ModalButton -Window $window -Name '确认' | Out-Null
+    Invoke-ModalPrimaryButton -Window $window | Out-Null
     Start-Sleep -Seconds 3
     $tagAfter = @(Read-Table 'tbl_billadm_tag' | Where-Object { $_.name -eq $tagName })
     Assert-True ($tagAfter.Count -eq 1) "库里出现新标签（$tagName）"
@@ -356,8 +448,10 @@ try {
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增图表')) '点「新增图表」'
     Start-Sleep -Milliseconds 800
-    Assert-True (Set-Value (Wait-Element -Root $window -Name '请输入图表名称') $chartTitle) '填入图表名称'
-    Invoke-ModalButton -Window $window -Name '确定' | Out-Null
+    # ⚠ 用 Wait-EditLike：弹窗里的「图表名称」既是标签（Text）也是输入框（Edit）
+    $chartInput = Wait-EditLike -Window $window -Name '图表名称'
+    Assert-True (Set-Value $chartInput $chartTitle) '填入图表名称'
+    Invoke-ModalPrimaryButton -Window $window | Out-Null
     Start-Sleep -Seconds 3
 
     $chartAfter = @(Read-Table 'tbl_billadm_chart' | Where-Object { $_.title -eq $chartTitle })
@@ -367,13 +461,16 @@ try {
     Assert-True ([bool]$chartDeleteButton) '找到图表「删除图表」按钮'
     if ($chartDeleteButton) {
         Click-Element $chartDeleteButton | Out-Null
-        Start-Sleep -Milliseconds 1200
-        # 这是 Popconfirm 气泡：确认按钮文案「删除」
-        $popButtons = Find-All $window '删除'
-        Assert-True ($popButtons.Count -gt 0) '确认气泡已弹出'
-        if ($popButtons.Count -gt 0) {
-            Invoke-Element $popButtons[$popButtons.Count - 1] | Out-Null
-        }
+        # 气泡的**确认键**按"可见且在窗口内"轮询（UIA 树是惰性建立的，固定 sleep 后查一次会查空）。
+        # ⚠ 不断言"气泡标题可见"：浮层节点的 UIA 可见性本身就不稳定，断言它会把这条用例变成随机红。
+        # 真正的判据在下面：确认后库里那一行必须消失。
+        $deadline = (Get-Date).AddSeconds(6)
+        $popButtons = @()
+        do {
+            $popButtons = @(Find-All $window '删除' | Where-Object { -not $_.Current.IsOffscreen })
+            if ($popButtons.Count -eq 0) { Start-Sleep -Milliseconds 300 }
+        } while ($popButtons.Count -eq 0 -and (Get-Date) -lt $deadline)
+        if ($popButtons.Count -gt 0) { Invoke-Element $popButtons[$popButtons.Count - 1] | Out-Null }
         Start-Sleep -Seconds 3
     }
     $chartGone = @(Read-Table 'tbl_billadm_chart' | Where-Object { $_.title -eq $chartTitle })
@@ -383,10 +480,10 @@ try {
     Write-Host "`n[crud] 4/4 关键事件：建事件 → 改颜色 → 写描述 → 删除"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '关键事件')) '打开「关键事件」页'
     Start-Sleep -Seconds 2
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '添加事件')) '点「添加事件」'
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增事件')) '点「新增事件」'
     Start-Sleep -Milliseconds 1000
     Assert-True (Set-Value (Wait-Element -Root $window -Name '事件名称（可选）') $eventTitle) '填入事件名称'
-    Invoke-ModalButton -Window $window -Name '确认' | Out-Null
+    Invoke-ModalPrimaryButton -Window $window | Out-Null
     Start-Sleep -Seconds 3
 
     $events = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.title -eq $eventTitle })
@@ -467,8 +564,8 @@ try {
     Start-Sleep -Milliseconds 1000
     Assert-True (Set-Value (Wait-Element -Root $window -Name '请输入模板名称') $templateName) '填入模板名称'
     # 分类是必填的（前端与后端都会挡）：点开 Select 再选一个已有分类
-    $categoryPicker = Wait-Element -Root $window -Name '请选择分类'
-    Assert-True ([bool]$categoryPicker) '找到「请选择分类」下拉'
+    $categoryPicker = Wait-Element -Root $window -Name '选择消费分类'
+    Assert-True ([bool]$categoryPicker) '找到「选择消费分类」下拉'
     if ($categoryPicker) {
         Invoke-Element $categoryPicker | Out-Null
         Start-Sleep -Milliseconds 800

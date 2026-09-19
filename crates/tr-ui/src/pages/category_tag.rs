@@ -4,7 +4,7 @@
 //!
 //! 本实现的**设计取舍**（均有理由，不改变对外契约）：
 //!
-//! 1. **账本缺失时的引导**：各栏除了禁用按钮，还额外给出「请先选择账本」提示，
+//! 1. **账本缺失时的引导**：各栏除了禁用按钮，还额外给出「请先选择工作空间」提示，
 //!    避免出现"按钮全灰但不知道为什么"的死界面。
 //! 2. **类型卡片不预取颜色**：卡片颜色由
 //!    `--transactions-color-{expense,income,transfer}` 令牌 + `color-mix` 得出（令牌是设计系统
@@ -13,8 +13,7 @@
 //!    确实变化的项**发请求。
 //! 4. **删除确认用 `Modal`**：对应 `Modal` 的 `ok_danger=true`（已由组件补丁提供），
 //!    不用 `Popconfirm`。
-//! 5. **工具栏右侧加当前账本**：本仓库的页面内不显示账本，故在工具栏右侧补一个账本胶囊
-//!    （`current_ledger_name()`），与 `pages/transactions.rs` 的 `.tr-ledger-chip` 同一手法。
+//! 5. **工具栏只有交易类型卡片**：当前账本由侧栏顶部的账本按钮显示，页面里不再重复一遍。
 //!
 //! 行为要点：
 //! * 账本 id 或交易类型变化 → 清空选中分类与标签 → 重新取分类并检查账本内是否已有分类
@@ -27,7 +26,8 @@ use tr_domain::dto::{CategoryDto, TagDto};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, DragSortItem, DragSortState, Input, Modal,
+    Button, ButtonSize, ButtonVariant, DragSortItem, DragSortState, IconButton, IconButtonVariant,
+    Input, Modal,
 };
 use crate::error_handler::{get_error_message, notify_error};
 use crate::format;
@@ -52,10 +52,10 @@ const NAME_MAX_LENGTH: u32 = 20;
 //
 // 全部是固定文案，集中在此便于统一修改。
 
-/// 「添加分类」
-const TEXT_ADD_CATEGORY: &str = "添加分类";
-/// 「添加标签」
-const TEXT_ADD_TAG: &str = "添加标签";
+/// 「新增分类」
+const TEXT_ADD_CATEGORY: &str = "新增分类";
+/// 「新增标签」
+const TEXT_ADD_TAG: &str = "新增标签";
 /// 分类栏标题
 const TEXT_COLUMN_CATEGORY: &str = "分类";
 /// 标签栏兜底标题（未选中分类时才显示）
@@ -71,7 +71,7 @@ const TEXT_MODAL_DELETE_CATEGORY: &str = "删除分类";
 const TEXT_MODAL_DELETE_TAG: &str = "删除标签";
 
 /// 初始化空态主文案
-const TEXT_EMPTY_INIT: &str = "当前账本暂无分类标签";
+const TEXT_EMPTY_INIT: &str = "暂无分类标签";
 /// 当前类型无分类、但账本里有分类
 const TEXT_EMPTY_CATEGORY: &str = "暂无分类";
 /// 选中了分类但该分类下没有标签
@@ -79,9 +79,7 @@ const TEXT_EMPTY_TAG: &str = "暂无标签";
 /// 没有选中分类时的引导
 const TEXT_EMPTY_TAG_GUIDE: &str = "选择分类查看标签";
 /// 账本缺失引导（固定文案，见设计取舍 1）
-const TEXT_EMPTY_LEDGER: &str = "请先选择账本";
-/// 账本缺失时页头副标题的占位（对齐 `pages/transactions.rs` 的「未选择账本」）
-const TEXT_NO_LEDGER: &str = "未选择账本";
+const TEXT_EMPTY_LEDGER: &str = "请先选择工作空间";
 
 /// 「该分类已存在」
 const TEXT_CATEGORY_EXISTS: &str = "该分类已存在";
@@ -191,7 +189,7 @@ pub fn CategoryTagPage() -> impl IntoView {
                 Ok(list) => list,
                 Err(error) => {
                     let prefix = format!(
-                        "查询 {} 消费类型失败",
+                        "查询 {} 消费分类失败",
                         format::transaction_type_text(&transaction_type)
                     );
                     notify_error(&prefix, &error);
@@ -262,7 +260,7 @@ pub fn CategoryTagPage() -> impl IntoView {
                 Ok(list) => list,
                 Err(error) => {
                     let prefix = format!(
-                        "查询 {} 消费类型失败",
+                        "查询 {} 消费分类失败",
                         format::transaction_type_text(&transaction_type)
                     );
                     notify_error(&prefix, &error);
@@ -413,16 +411,14 @@ pub fn CategoryTagPage() -> impl IntoView {
     // ---- 删除 ----
     let confirm_delete_category = move |name: String| {
         delete_kind.set(CtrDeleteKind::Category);
-        delete_message.set(format!(
-            "确定删除分类「{name}」及其所有标签？此操作不可恢复。"
-        ));
+        delete_message.set(format!("确定删除分类「{name}」？"));
         delete_target_name.set(name);
         open_delete_modal.set(true);
     };
 
     let confirm_delete_tag = move |name: String| {
         delete_kind.set(CtrDeleteKind::Tag);
-        delete_message.set(format!("确定删除标签「{name}」？此操作不可恢复。"));
+        delete_message.set(format!("确定删除标签「{name}」？"));
         delete_target_name.set(name);
         open_delete_modal.set(true);
     };
@@ -590,17 +586,6 @@ pub fn CategoryTagPage() -> impl IntoView {
 
     // ================================================================ 渲染
 
-    let ledger_name = move || {
-        let name = stores.current_ledger_name();
-        if name.is_empty() {
-            TEXT_NO_LEDGER.to_string()
-        } else {
-            name
-        }
-    };
-
-    let selected_type_label = move || type_label(&active_type.get()).to_string();
-
     // ---- 工具栏：交易类型卡片 ----
     let type_nav_view = move || {
         let segments = TRANSACTION_TYPES.to_vec();
@@ -670,8 +655,8 @@ pub fn CategoryTagPage() -> impl IntoView {
                                     }
                                     on:click=move |_| select_category(select_name.clone())
                                 >
-                                    <span class="ct-drag-handle" title="拖动排序">
-                                        <span class="ct-drag-handle-dots"></span>
+                                    <span class="ui-drag-handle" title="拖动排序">
+                                        {icons::icon(Icon::DragHandle)}
                                     </span>
                                     <div class="ct-item-main">
                                         <span class="ct-item-name">{name}</span>
@@ -683,19 +668,15 @@ pub fn CategoryTagPage() -> impl IntoView {
                                         class="ct-item-actions"
                                         on:click=move |ev| ev.stop_propagation()
                                     >
-                                        <button
-                                            type="button"
-                                            class="ct-action-icon"
-                                            title="删除"
-                                            aria-label="删除"
-                                            on:click=move |_| {
+                                        <IconButton
+                                            variant=IconButtonVariant::Danger
+                                            label="删除"
+                                            on_click=move |_| {
                                                 confirm_delete_category(delete_click_name.clone())
                                             }
                                         >
-                                            <span class="ct-action-icon-svg">
-                                                {icons::icon(Icon::Trash)}
-                                            </span>
-                                        </button>
+                                            {icons::icon(Icon::Trash)}
+                                        </IconButton>
                                     </div>
                                 </div>
                             </DragSortItem>
@@ -735,8 +716,8 @@ pub fn CategoryTagPage() -> impl IntoView {
                         view! {
                             <DragSortItem index=index state=state on_drop=on_drop class="ct-drag-item">
                                 <div class="ct-list-item">
-                                    <span class="ct-drag-handle" title="拖动排序">
-                                        <span class="ct-drag-handle-dots"></span>
+                                    <span class="ui-drag-handle" title="拖动排序">
+                                        {icons::icon(Icon::DragHandle)}
                                     </span>
                                     <div class="ct-item-main">
                                         <span class="ct-item-name">{name}</span>
@@ -745,19 +726,15 @@ pub fn CategoryTagPage() -> impl IntoView {
                                         </Show>
                                     </div>
                                     <div class="ct-item-actions">
-                                        <button
-                                            type="button"
-                                            class="ct-action-icon"
-                                            title="删除"
-                                            aria-label="删除"
-                                            on:click=move |_| {
+                                        <IconButton
+                                            variant=IconButtonVariant::Danger
+                                            label="删除"
+                                            on_click=move |_| {
                                                 confirm_delete_tag(delete_click_name.clone())
                                             }
                                         >
-                                            <span class="ct-action-icon-svg">
-                                                {icons::icon(Icon::Trash)}
-                                            </span>
-                                        </button>
+                                            {icons::icon(Icon::Trash)}
+                                        </IconButton>
                                     </div>
                                 </div>
                             </DragSortItem>
@@ -783,29 +760,14 @@ pub fn CategoryTagPage() -> impl IntoView {
             <header class="page-header">
                 <div class="page-header-text">
                     <h1 class="page-title">{PAGE_TITLE}</h1>
-                    <p class="page-subtitle">
-                        {move || {
-                            format!(
-                                "账本：{} · 分类与标签按「{}」类型管理",
-                                ledger_name(),
-                                selected_type_label(),
-                            )
-                        }}
-                    </p>
                 </div>
                 <div class="app-top-bar-spacer"></div>
             </header>
 
             <div class="page-body">
-                // 工具栏：类型卡片 + 当前账本
-                <div class="ct-toolbar">
-                    <div class="ct-toolbar-left">{type_nav_view}</div>
-                    <div class="ct-toolbar-right">
-                        <span class="ct-ledger-chip">
-                            <span class="ct-ledger-chip-icon">{icons::icon(Icon::Book)}</span>
-                            {move || ledger_name()}
-                        </span>
-                    </div>
+                <div class="page-toolbar">
+                    // 工具栏：只有交易类型卡片（当前账本由侧栏顶部的账本按钮显示，这里不再重复）
+                    {type_nav_view}
                 </div>
 
                 // 主体：240px 分类栏 + 1fr 标签栏
@@ -815,7 +777,7 @@ pub fn CategoryTagPage() -> impl IntoView {
                             <span class="ct-column-title">{TEXT_COLUMN_CATEGORY}</span>
                             <span class="ct-column-count">{move || categories.get().len()}</span>
                             <Button
-                                variant=ButtonVariant::Secondary
+                                variant=ButtonVariant::Primary
                                 size=ButtonSize::Small
                                 class="ct-add-btn"
                                 disabled=Signal::derive(move || {
@@ -964,15 +926,6 @@ impl SortOrder for TagDto {
     fn sort_order(&self) -> i32 {
         self.sort_order
     }
-}
-
-/// 交易类型 → 中文标签。
-fn type_label(value: &str) -> &'static str {
-    TRANSACTION_TYPES
-        .iter()
-        .find(|(key, _)| *key == value)
-        .map(|(_, label)| *label)
-        .unwrap_or("支出")
 }
 
 /// 删除弹窗标题（分类 / 标签两个固定分支）。

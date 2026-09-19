@@ -33,3 +33,6 @@ Thumbs.db
 # 含 vendored JS/数据（约 2 MB），与「界面无 Node、不 vendor JS 库」的约定不符，故不入库。
 /.dsh/
 /.agents/
+
+# impeccable 的本地验证截图（设计契约 .impeccable/surfaces/ 保留）
+/.impeccable/review/

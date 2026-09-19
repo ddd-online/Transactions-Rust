@@ -50,8 +50,8 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            // 默认窗口尺寸
-            width: 1400,
+            // 默认窗口尺寸 = 主窗口的最小尺寸（见 `shell.rs` 的 `min_inner_size`）
+            width: 1500,
             height: 1000,
             x: None,
             y: None,
@@ -155,7 +155,9 @@ mod tests {
     #[test]
     fn defaults_match_documented_initial_values() {
         let config = AppConfig::default();
-        assert_eq!(config.width, 1400);
+        // 与 `shell.rs` 的 `min_inner_size(1500, 1000)` 保持一致：
+        // 默认尺寸低于最小尺寸时，窗口一启动就会被系统夹到最小尺寸，配置里写的值就没意义了。
+        assert_eq!(config.width, 1500);
         assert_eq!(config.height, 1000);
         assert_eq!(config.appearance, "system");
         assert!(config.workspace_dir.is_empty());
@@ -231,11 +233,11 @@ mod tests {
     #[test]
     fn missing_or_broken_file_falls_back_to_defaults() {
         let missing = temp_path("missing");
-        assert_eq!(AppConfig::load(&missing).width, 1400);
+        assert_eq!(AppConfig::load(&missing).width, 1500);
 
         let broken = temp_path("broken");
         std::fs::write(&broken, "{ not json").unwrap();
-        assert_eq!(AppConfig::load(&broken).width, 1400);
+        assert_eq!(AppConfig::load(&broken).width, 1500);
         std::fs::remove_file(&broken).ok();
     }
 }

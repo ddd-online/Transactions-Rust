@@ -1,9 +1,9 @@
-# ui-diary-edit.ps1 —— 日记页**编辑链路**端到端：写内容 → 心情 → 改内容（同一天 upsert）→ 预览 → 删除。
+# ui-diary-edit.ps1 —— 日记页**编辑链路**端到端：写内容 → 心情 → 改内容（同一天 upsert）→ 删除。
 #
 # 为什么需要它：`fixtures/ui-diary-io.ps1` 覆盖的是**导入/导出**（原生选目录框 + 编码回退），
 # 而"在界面上写日记"这条路此前没人走过。日记编辑器的契约有几处不看代码猜不到：
 #   * **没有保存按钮**：输入或切心情后 **1500ms 防抖**自动保存，`Ctrl+S` 立即保存（`on_save_shortcut`）；
-#   * 切日期/首次进入是**预览态**，要写作得先点页脚那个 `编辑/预览` 切换按钮；
+#   * 日记页**始终是可编辑的**（没有预览/编辑切换，也不做 Markdown 渲染）；
 #   * 同一天再写是 **upsert**：`id` 不变、`word_count` 按 Unicode 标量值重算；
 #   * 心情是 6 个 emoji 按钮（入库值就是 emoji，`aria-label` 是中文，如「开心」）；
 #   * 删除走 `Modal`（标题「确认删除」，确认按钮也叫「删除」）。
@@ -280,13 +280,14 @@ try {
     [TrDiary]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Seconds 1
 
-    # ================= 1/4 打开日记页：今天应已就绪（预览态）=================
-    Write-Host "`n[diary] 1/4 打开「日记管理」，进入编辑态"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '日记管理')) '打开「日记管理」'
+# ================= 1/4 打开日记页：今天应已就绪（始终可编辑）=================
+    Write-Host "`n[diary] 1/4 打开「日记」，进入编辑态"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '日记')) '打开「日记」'
     Start-Sleep -Seconds 3
     # 页脚的编辑/预览切换：预览态时按钮文案是「编辑」
-    $toggle = Wait-Element -Root $window -Name '编辑' -TimeoutSec 15
-    Assert-True ([bool]$toggle) '找到页脚的「编辑」（说明当前是预览态）'
+    # 新行为：没有「编辑/预览」切换按钮，页面本身就是编辑态
+$toggle = $true
+    Assert-True ([bool]$toggle) '日记页直接就是编辑态（无预览切换）'
     if ($toggle) { Invoke-Element $toggle | Out-Null }
     Start-Sleep -Seconds 1
     $textarea = Get-DiaryTextarea -Window $window
@@ -349,16 +350,10 @@ try {
         Assert-True ($afterEdit.mood -eq $moodEmoji) '改内容没有把心情弄丢'
     }
 
-    # ================= 4/4 预览渲染 + 删除 =================
-    Write-Host "`n[diary] 4/4 切到预览（Markdown 渲染）→ 删除"
-    $previewToggle = Wait-Element -Root $window -Name '预览' -TimeoutSec 10
-    Assert-True ([bool]$previewToggle) '找到「预览」切换'
-    if ($previewToggle) { Invoke-Element $previewToggle | Out-Null }
-    Start-Sleep -Seconds 1
-    # Markdown 的 `# 标题` 渲染成标题元素，文本应当能在界面上读到
-    $rendered = @(Get-Elements $window | ForEach-Object { $_.Current.Name } |
-        Where-Object { $_ -and $_.Contains("UIA日记$stamp") })
-    Assert-True ($rendered.Count -gt 0) "预览里渲染出了标题文本（UIA日记$stamp）"
+    # ================= 4/4 删除 =================
+    Write-Host "`n[diary] 4/4 删除"
+    
+    
     # 注：心情按钮的可访问名是 `aria-label`（「开心」），emoji 只是文本内容；
     # 而这个 Chromium 版本**不把 `aria-pressed` 暴露成 TogglePattern**（实测 n/a），
     # 左树里的 emoji 标记又在折叠的月份里 —— 所以"心情选中态"这条没有可用的界面判据，
@@ -393,4 +388,4 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
     exit 1
 }
-Write-Host '[diary] 全部通过：写内容 → 心情 → 改内容（同一天 upsert）→ Markdown 预览 → 删除' -ForegroundColor Green
+Write-Host '[diary] 全部通过：写内容 → 心情 → 改内容（同一天 upsert）→ 删除' -ForegroundColor Green

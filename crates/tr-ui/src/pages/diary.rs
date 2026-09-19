@@ -4,9 +4,9 @@
 //!
 //! * [`DiaryPage`]：工具栏（今天 / 收起全部 / 跳转日期）+ 两栏编排
 //! * [`DiaryTree`]：年 → 月 → 日三级折叠树（年/月降序、日降序）
-//! * [`DiaryEditor`]：心情 + 字数 + 编辑/预览切换 + 1500ms 防抖自动保存 + 删除
+//! * [`DiaryEditor`]：心情 + 字数 + **始终可编辑**（无预览/Markdown 渲染）+ 1500ms 防抖自动保存 + 删除
 //! * 状态直接由本文件持有信号（与其余页面一致）
-//! * [`crate::components::ui::Markdown`]：Markdown 渲染（纯 Rust，先转义再拼标签）
+//! * 正文按**纯文本**呈现（换行原样保留）：日记页不做 Markdown 渲染
 //!
 //! ## 关键行为
 //!
@@ -21,7 +21,7 @@
 //!
 //! * **关键词过滤未实现**：本页没有路由、没有 UI、IPC 也没有该参数，后端也没有等价命令，
 //!   因此不做过滤。
-//! * 编辑/预览是**单栏切换**，没有分栏。
+//! * 单栏编辑区，没有分栏。
 //! * 编辑器的时间防抖用 `set_timeout` + 句柄，切日期时显式清掉。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,7 +30,7 @@ use leptos::prelude::*;
 use tr_domain::models::{DiaryDateItem, DiaryEntry};
 
 use crate::api;
-use crate::components::ui::{Button, ButtonSize, ButtonVariant, DatePicker, Modal, Textarea};
+use crate::components::ui::{Button, ButtonVariant, DatePicker, Modal, Textarea};
 use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
@@ -38,7 +38,7 @@ use crate::notify::Notifier;
 use crate::time::{format_ymd_cn, split_ymd, today_ymd, weekday_cn};
 
 /// 页面标题（固定文案，改动即影响界面）。
-pub const PAGE_TITLE: &str = "日记管理";
+pub const PAGE_TITLE: &str = "日记";
 
 /// 自动保存防抖时长（1500ms）。
 const AUTOSAVE_DEBOUNCE_MS: u64 = 1500;
@@ -92,7 +92,6 @@ pub fn DiaryPage() -> impl IntoView {
     let entry = RwSignal::new(Option::<DiaryEntry>::None);
     let draft = RwSignal::new(String::new());
     let mood = RwSignal::new(String::new());
-    let mode = RwSignal::new(true); // true = 编辑，false = 预览
     let save_status = RwSignal::new(SaveStatus::Idle);
     let saving = RwSignal::new(false);
     let delete_open = RwSignal::new(false);
@@ -109,8 +108,6 @@ pub fn DiaryPage() -> impl IntoView {
 
     let load_entry = move |date: String| {
         selected_date.set(date.clone());
-        // 切换日期时把模式重置为预览
-        mode.set(false);
         leptos::task::spawn_local(async move {
             match api::diary::get(&date).await {
                 Ok(item) => {
@@ -252,43 +249,67 @@ pub fn DiaryPage() -> impl IntoView {
     view! {
         <section class="page diary-page">
             <header class="page-header">
-                <div class="diary-toolbar-left">
-                    <Button size=ButtonSize::Small on_click=move |_| go_to_today()>
-                        "今天"
-                    </Button>
-                    <Button
-                        size=ButtonSize::Small
-                        on_click=move |_| {
-                            let years = dates
-                                .get_untracked()
-                                .iter()
-                                .filter_map(|item| {
-                                    split_ymd(&item.date).map(|(year, _, _)| year)
-                                })
-                                .collect::<BTreeSet<_>>();
-                            collapsed_years.set(years);
-                            expanded_months.set(BTreeSet::new());
-                        }
-                    >
-                        "收起全部"
-                    </Button>
-                    <div class="diary-jump">
-                        <DatePicker value=jump_date placeholder="跳转到日期" />
-                    </div>
-                    <Button
-                        size=ButtonSize::Small
-                        on_click=move |_| {
-                            let date = jump_date.get_untracked();
-                            go_to_date(date);
-                        }
-                    >
-                        "跳转"
-                    </Button>
+                <div class="page-header-text">
+                    <h1 class="page-title">{PAGE_TITLE}</h1>
                 </div>
                 <div class="app-top-bar-spacer"></div>
             </header>
 
             <div class="page-body">
+                <div class="page-toolbar">
+                    <div class="diary-tools">
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            on_click=move |_| go_to_today()
+                        >
+                            "今天"
+                        </Button>
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            on_click=move |_| {
+                                let years = dates
+                                    .get_untracked()
+                                    .iter()
+                                    .filter_map(|item| {
+                                        split_ymd(&item.date).map(|(year, _, _)| year)
+                                    })
+                                    .collect::<BTreeSet<_>>();
+                                collapsed_years.set(years);
+                                expanded_months.set(BTreeSet::new());
+                            }
+                        >
+                            "全部收起"
+                        </Button>
+                        <div class="diary-jump">
+                            <DatePicker value=jump_date placeholder="选择日期" />
+                        </div>
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            on_click=move |_| {
+                                let date = jump_date.get_untracked();
+                                go_to_date(date);
+                            }
+                        >
+                            "跳转日期"
+                        </Button>
+                    </div>
+
+                    // 已保存状态与「删除」跟着工具栏走（原来在编辑器底部的那条栏里）
+                    <div class="diary-tools-right">
+                        <span class=move || {
+                            format!("diary-save-status {}", save_status.get().class())
+                        }>{move || save_status.get().label()}</span>
+                        <button
+                            type="button"
+                            class="ui-btn ui-btn--text-danger ui-btn--sm"
+                            on:click=move |_| delete_open.set(true)
+                        >
+                            <span class="ui-btn__icon">{icons::icon(Icon::Trash)}</span>
+                            "删除"
+                        </button>
+                    </div>
+                </div>
+
                 <div class="diary-body">
                     <div class="diary-panel diary-panel--left">
                         <DiaryTree
@@ -305,8 +326,6 @@ pub fn DiaryPage() -> impl IntoView {
                             entry=entry
                             draft=draft
                             mood=mood
-                            mode=mode
-                            save_status=save_status
                             on_schedule_save=UnsyncCallback::new(move |()| schedule_save())
                             on_save_now=UnsyncCallback::new(move |()| {
                                 timer.update_value(|slot| {
@@ -317,7 +336,6 @@ pub fn DiaryPage() -> impl IntoView {
                                 do_save();
                             })
                             on_mood=UnsyncCallback::new(move |_| schedule_save())
-                            on_delete=UnsyncCallback::new(move |()| delete_open.set(true))
                         />
                     </div>
                 </div>
@@ -337,7 +355,7 @@ pub fn DiaryPage() -> impl IntoView {
                 <p class="workspace-picker-text">
                     {move || match entry.get() {
                         Some(current) => {
-                            format!("确定要删除「{}」的日记吗？此操作不可恢复。", current.date)
+                            format!("确定要删除「{}」的日记吗？", current.date)
                         }
                         None => String::new(),
                     }}
@@ -582,18 +600,16 @@ fn DiaryTree(
 
 // ==================================================================== 编辑器
 
-/// 右栏：日记编辑器（心情 + 字数 + 编辑/预览 + 自动保存 + 删除）。
+/// 右栏：日记编辑器（心情 + 字数 + **始终可编辑** + 1500ms 防抖自动保存 + 删除）。
 #[component]
 fn DiaryEditor(
     entry: RwSignal<Option<DiaryEntry>>,
     draft: RwSignal<String>,
     mood: RwSignal<String>,
-    mode: RwSignal<bool>,
-    save_status: RwSignal<SaveStatus>,
+
     on_schedule_save: UnsyncCallback<()>,
     on_save_now: UnsyncCallback<()>,
     on_mood: UnsyncCallback<()>,
-    on_delete: UnsyncCallback<()>,
 ) -> impl IntoView {
     view! {
         <Show
@@ -604,7 +620,7 @@ fn DiaryEditor(
                         <span class="diary-editor__empty-icon">"📖"</span>
                         <span class="diary-editor__empty-text">"选择左侧日期开始写作"</span>
                         <span class="diary-editor__empty-hint">
-                            "或点击工具栏「今天」开始今天的日记"
+                            "或点上方「今天」写今天的日记"
                         </span>
                     </div>
                 }
@@ -662,66 +678,21 @@ fn DiaryEditor(
                     </div>
                 </div>
 
+                // 永远是可编辑的文本域：不做 Markdown 渲染、也没有"预览/编辑"切换。
+                // 正文按纯文本看待（换行原样保留），输入即触发 1500ms 防抖自动保存。
                 <div class="diary-editor__body">
-                    <Show
-                        when=move || mode.get()
-                        fallback=move || {
-                            view! {
-                                <div class="diary-editor__preview">
-                                    <crate::components::ui::Markdown
-                                        source=Signal::derive(move || draft.get())
-                                        class="diary-markdown"
-                                    />
-                                </div>
-                            }
-                        }
-                    >
-                        <div class="diary-editor__textarea-wrap">
-                            <Textarea
-                                value=draft
-                                placeholder="写下今天的日记…"
-                                class="diary-textarea"
-                                on_input=UnsyncCallback::new(move |_| on_schedule_save.run(()))
-                                on_save_shortcut=on_save_now
-                            />
-                        </div>
-                    </Show>
+                    <div class="diary-editor__textarea-wrap">
+                        <Textarea
+                            value=draft
+                            placeholder="写下今天的日记…"
+                            class="diary-textarea"
+                            on_input=UnsyncCallback::new(move |_| on_schedule_save.run(()))
+                            on_save_shortcut=on_save_now
+                        />
+                    </div>
                 </div>
 
-                <div class="diary-editor__footer">
-                    <div class="diary-editor__footer-left">
-                        <button
-                            type="button"
-                            class="ui-btn ui-btn--text ui-btn--sm"
-                            title="Ctrl+S 保存"
-                            on:click=move |_| mode.update(|value| *value = !*value)
-                        >
-                            <span class="ui-btn__icon">
-                                {move || {
-                                    if mode.get() {
-                                        icons::icon(Icon::Eye)
-                                    } else {
-                                        icons::icon(Icon::Edit)
-                                    }
-                                }}
-                            </span>
-                            {move || if mode.get() { "预览" } else { "编辑" }}
-                        </button>
-                    </div>
-                    <div class="diary-editor__footer-right">
-                        <span class=move || {
-                            format!("diary-save-status {}", save_status.get().class())
-                        }>{move || save_status.get().label()}</span>
-                        <button
-                            type="button"
-                            class="ui-btn ui-btn--text-danger ui-btn--sm"
-                            on:click=move |_| on_delete.run(())
-                        >
-                            <span class="ui-btn__icon">{icons::icon(Icon::Trash)}</span>
-                            "删除"
-                        </button>
-                    </div>
-                </div>
+
             </div>
         </Show>
     }

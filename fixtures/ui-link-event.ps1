@@ -1,7 +1,7 @@
-# ui-link-event.ps1 —— 「关联到关键事件 / 解除关联」端到端（界面 + 数据库）。
+# ui-link-event.ps1 —— 「关联关键事件 / 解除关联」端到端（界面 + 数据库）。
 #
 # 覆盖点：
-#   * 记一笔 → 行内「关联到关键事件」→ 弹窗里用 **DatePicker** 选日期（本项目第一次自动化这个组件：
+#   * 记一笔 → 行内「关联关键事件」→ 弹窗里用 **DatePicker** 选日期（本项目第一次自动化这个组件：
 #     触发器是按钮、日期格子是 `<button class="ui-date-picker__cell">`，可访问名就是"日"数字）→ 确认关联；
 #   * 断言 `tbl_billadm_transaction_record.key_event_date` 写成所选日期；
 #     该日期若还没有事件，后端会**懒创建**一条空事件 → 一并断言；
@@ -376,10 +376,10 @@ try {
     if ($rows.Count -lt 1) { throw '没有源记录，无法继续' }
     Assert-True ([string]::IsNullOrEmpty($rows[0].key_event_date)) '初始没有关联（key_event_date 为空）'
 
-    # ================= 2/3 关联到关键事件 =================
-    Write-Host "`n[link] 2/3 关联到关键事件：选 $linkDate（当月第 $linkDay 天）"
-    $linkButton = Find-RowButton -Window $window -RowText $description -ButtonName '关联到关键事件'
-    Assert-True ([bool]$linkButton) '找到「关联到关键事件」按钮'
+    # ================= 2/3 关联关键事件 =================
+    Write-Host "`n[link] 2/3 关联关键事件：选 $linkDate（当月第 $linkDay 天）"
+    $linkButton = Find-RowButton -Window $window -RowText $description -ButtonName '关联关键事件'
+    Assert-True ([bool]$linkButton) '找到「关联关键事件」按钮'
     if (-not $linkButton) { throw '找不到关联按钮' }
     Click-Element $linkButton | Out-Null
     Start-Sleep -Seconds 2

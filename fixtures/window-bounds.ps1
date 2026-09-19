@@ -150,9 +150,12 @@ function Get-WindowScale {
 }
 
 # ---- 场景 1：配置里的逻辑尺寸要能还原成正确的物理窗口 ----
-$logicalWidth = 1000
-$logicalHeight = 700
-Write-Host "`n[bounds] 1/3 用逻辑尺寸 ${logicalWidth}×${logicalHeight} 启动"
+# ⚠ 必须**大于等于主窗口的最小尺寸**（1500×1000 逻辑像素，见 `src-tauri/src/shell.rs`
+#   的 `min_inner_size`）：写一个比最小尺寸还小的值，窗口会被系统夹到最小尺寸，
+#    这里的"物理 ≈ 逻辑 × 缩放"断言就会因为夹取而失真。
+$logicalWidth = 1600
+$logicalHeight = 1100
+Write-Host "`n[bounds] 1/4 用逻辑尺寸 ${logicalWidth}×${logicalHeight} 启动"
 Write-Config -Width $logicalWidth -Height $logicalHeight -X 120 -Y 90
 $process = Start-App
 try {
@@ -172,7 +175,7 @@ try {
     # 这条专门抓"把逻辑值当物理值用"（那样会小 1/scale）
     Assert-True ($rect.Width -gt ($logicalWidth * 1.15)) '窗口没有被当成物理像素而缩小（DPI 方向没搞反）'
 
-    Write-Host "`n[bounds] 2/3 关闭应用后检查写回的配置"
+    Write-Host "`n[bounds] 2/4 关闭应用后检查写回的配置"
     $exitedNormally = Stop-App -Window $window -Process $process
     Assert-True $exitedNormally '关闭后进程正常退出（走的是保存 + 退出路径）'
     $saved = Read-Config
@@ -180,7 +183,7 @@ try {
     Assert-True ([Math]::Abs([int]$saved.width - $logicalWidth) -le 8) "写回的宽度仍是逻辑像素（$($saved.width) ≈ $logicalWidth，不是 $([int]$expectedWidth)）"
     Assert-True ([Math]::Abs([int]$saved.height - $logicalHeight) -le 8) "写回的高度仍是逻辑像素（$($saved.height) ≈ $logicalHeight）"
 
-    Write-Host "`n[bounds] 3/3 再启动一次，尺寸应与第一次一致"
+    Write-Host "`n[bounds] 3/4 再启动一次，尺寸应与第一次一致"
     $process = Start-App
     $window = Get-AppWindow -Process $process
     if (-not $window) { throw '第二次启动也没拿到窗口' }
@@ -190,6 +193,40 @@ try {
     Assert-True ([Math]::Abs($rect2.Width - $rect.Width) -le 40) "两次启动窗口宽度一致（$([int]$rect.Width) → $([int]$rect2.Width)）"
     Assert-True ([Math]::Abs($rect2.Height - $rect.Height) -le 40) "两次启动窗口高度一致（$([int]$rect.Height) → $([int]$rect2.Height)）"
     Assert-True ([Math]::Abs($rect2.X - $rect.X) -le 40 -and [Math]::Abs($rect2.Y - $rect.Y) -le 40) "两次启动窗口位置一致（$([int]$rect.X),$([int]$rect.Y) → $([int]$rect2.X),$([int]$rect2.Y)）"
+}
+finally {
+    if ($process -and -not $process.HasExited) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        $process.WaitForExit(5000) | Out-Null
+    }
+}
+
+# ---- 场景 4：低于最小尺寸的配置会被夹到最小尺寸（1500×1000 逻辑像素）----
+$minWidth = 1500
+$minHeight = 1000
+Write-Host "`n[bounds] 4/4 写入比最小尺寸更小的配置（1200×800），窗口应被夹到 ${minWidth}×${minHeight}"
+Write-Config -Width 1200 -Height 800 -X 120 -Y 90
+$process = Start-App
+try {
+    $window = Get-AppWindow -Process $process
+    if (-not $window) { throw '夹取场景里没拿到窗口' }
+    Start-Sleep -Seconds 2
+    $dpiInfo = Get-WindowScale -Window $window -Process $process
+    $scale = $dpiInfo.Scale
+    $rect = $window.Current.BoundingRectangle
+    Write-Host ("  实际窗口: {0}×{1}（期望至少 {2}×{3} 物理像素）" -f `
+        [int]$rect.Width, [int]$rect.Height, [int]($minWidth * $scale), [int]($minHeight * $scale))
+    Assert-True ($rect.Width -ge ($minWidth * $scale) - 60) `
+        "窗口宽度被夹到最小宽（$([int]$rect.Width) ≥ $([int]($minWidth * $scale))）"
+    Assert-True ($rect.Height -ge ($minHeight * $scale) - 60) `
+        "窗口高度被夹到最小高（$([int]$rect.Height) ≥ $([int]($minHeight * $scale))）"
+
+    $exitedNormally = Stop-App -Window $window -Process $process
+    Assert-True $exitedNormally '夹取场景关闭后进程正常退出'
+    $saved = Read-Config
+    Write-Host ("  配置写回: {0}×{1}" -f $saved.width, $saved.height)
+    Assert-True ([int]$saved.width -ge ($minWidth - 8)) "写回的宽度不小于最小宽（$($saved.width)）"
+    Assert-True ([int]$saved.height -ge ($minHeight - 8)) "写回的高度不小于最小高（$($saved.height)）"
 }
 finally {
     if ($process -and -not $process.HasExited) {

@@ -181,6 +181,82 @@
   width: var(--transactions-btn-height-lg);
 }
 
+/* ---- IconButton：全仓唯一的图标动作按钮 ----
+ * 28px 正方形 / 6px 圆角 / 透明底；悬停浅底 + 图标转深，危险类转危险色。
+ * 唯一的紧凑档是 `--compact`（20px），只给缩略图角标这类极小控件。
+ * 叠在图片上的（`--on-media`）自带毛玻璃底，保证在任意图片上都看得见。 */
+.ui-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--ui-icon-btn-size, var(--transactions-icon-btn-size));
+  height: var(--ui-icon-btn-size, var(--transactions-icon-btn-size));
+  padding: 0;
+  border: none;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-icon);
+  font-size: var(--transactions-size-text-body);
+  line-height: 1;
+  cursor: pointer;
+  transition: all var(--transactions-transition-fast);
+}
+
+.ui-icon-btn:hover:not(:disabled) {
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-icon-hover);
+}
+
+.ui-icon-btn:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.ui-icon-btn:disabled {
+  color: var(--transactions-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.ui-icon-btn--danger:hover:not(:disabled) {
+  background-color: var(--transactions-color-danger-hover-bg);
+  color: var(--transactions-color-expense);
+}
+
+/* 描边变体：给**工具条里独立站立**的图标按钮用（例如消费记录时间范围两侧的翻页箭头）。
+ * 行内动作（表格行、卡片角标）保持无边框：那里按钮成组出现、旁边就是内容，
+ * 加边框会变吵。取值与次级按钮同一套（`window-border` + 8px 圆角），因此与旁边的
+ * 「刷新/排序/筛选」和日期字段视觉权重一致。 */
+.ui-icon-btn--bordered {
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-major-background);
+}
+
+.ui-icon-btn--bordered:hover:not(:disabled) {
+  border-color: var(--transactions-color-border-l2);
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-icon-hover);
+}
+
+.ui-icon-btn--compact {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--transactions-radius-full);
+  font-size: var(--transactions-size-text-caption);
+}
+
+.ui-icon-btn--on-media {
+  background-color: var(--transactions-color-overlay-scrim);
+  color: var(--transactions-color-text-inverse);
+  backdrop-filter: blur(2px);
+}
+
+.ui-icon-btn--on-media:hover:not(:disabled) {
+  background-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+}
+
 .ui-btn__icon {
   display: inline-flex;
   align-items: center;
@@ -449,9 +525,13 @@
   inset: 0;
   z-index: 1000;
   display: flex;
-  align-items: flex-start;
+  /* 弹窗**水平垂直居中**：`center` + 内容 `margin: auto`。
+   * 上下留 40px：窗口顶部有 48px 的自绘标题栏，居中后弹窗不会被它压住；
+   * 弹窗比可视区还高时 `margin: auto` 会把内容顶到可滚动区顶部（配合 mask 的 overflow-y），
+   * 既不会把顶部裁掉，也仍然能滚到底。 */
+  align-items: center;
   justify-content: center;
-  padding: 96px var(--transactions-space-lg) var(--transactions-space-3xl);
+  padding: 40px var(--transactions-space-lg);
   overflow-y: auto;
   background-color: var(--transactions-color-hover-bg);
   animation: tr-fade-in var(--transactions-transition-fast);
@@ -460,6 +540,11 @@
 .ui-modal__content {
   width: 520px;
   max-width: 100%;
+  /* 居中用 `margin: auto`（配合 mask 的 `align-items: center`）；弹窗比可视区还高时
+   * 由 mask 的 `overflow-y: auto` 接管滚动，顶部不会被裁掉。 */
+  margin: auto;
+  /* 超长弹窗在视口内滚动，而不是把遮罩撑长 */
+  max-height: calc(100vh - 80px);
   background-color: var(--transactions-color-major-background);
   border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-xl);
@@ -741,7 +826,7 @@
 /* ============================================
  * P6-a 增补组件（16 个）
  *   table / pagination / form / tabs / segmented / switch / popconfirm /
- *   date-picker / dropdown / popover / float-button / drawer / divider /
+ *   date-picker / dropdown / popover / drawer / divider /
  *   checkbox(-group) / progress / drag-sort
  *
  * 与首批同一套取值来源：只用 --transactions-* 令牌，不写裸 hex。
@@ -859,17 +944,20 @@
  * Tabs / TabPane
  * ============================================ */
 
+/* 页签 = 工具条里的**一组胶囊**（与侧栏导航项同一套状态语言）。
+ *
+ * **不带下分隔线**：工具条本身就有底边发丝线，再给 `.ui-tabs` 加一条会与它贴成双线；
+ * 而且激活态原来是一条 2px 吸底横线，正好压在那条双线上，视觉最脏。
+ * 现在激活态改用「主色 tint 底 + 主色文字 + 500 字重」，靠**色块**表达选中，
+ * 与 `.nav-btn.active` 一致，也与卡片内其它分区（靠色与线分层、不画框）同一套语言。 */
 .ui-tabs {
   display: flex;
   align-items: center;
   gap: var(--transactions-space-xs);
-  border-bottom: 1px solid var(--transactions-color-divider);
-  padding-bottom: var(--transactions-space-2xs);
   flex-wrap: wrap;
 }
 
 .ui-tabs__tab {
-  position: relative;
   display: inline-flex;
   align-items: center;
   height: 34px;
@@ -890,19 +978,9 @@
 }
 
 .ui-tabs__tab.is-active {
+  background-color: var(--transactions-color-active-bg);
   color: var(--transactions-color-primary);
-  font-weight: 600;
-}
-
-.ui-tabs__tab.is-active::after {
-  content: '';
-  position: absolute;
-  left: var(--transactions-space-md);
-  right: var(--transactions-space-md);
-  bottom: calc(-1 * var(--transactions-space-2xs) - 1px);
-  height: 2px;
-  border-radius: var(--transactions-radius-full);
-  background-color: var(--transactions-color-primary);
+  font-weight: var(--transactions-weight-medium);
 }
 
 .ui-tabs__tab:focus-visible {
@@ -1214,46 +1292,6 @@
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body-sm);
   color: var(--transactions-color-text-secondary);
-}
-
-/* ============================================
- * FloatButton
- * ============================================ */
-
-.ui-float-button {
-  position: fixed;
-  right: var(--transactions-space-xl);
-  bottom: calc(var(--transactions-size-footer-height) + var(--transactions-space-xl));
-  z-index: 900;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  padding: 0;
-  border: none;
-  border-radius: var(--transactions-radius-full);
-  background-color: var(--transactions-color-primary);
-  color: var(--transactions-color-text-inverse);
-  box-shadow: var(--transactions-shadow-lg);
-  cursor: pointer;
-  transition: all var(--transactions-transition-normal);
-}
-
-.ui-float-button:hover {
-  background-color: var(--transactions-color-primary-hover);
-  transform: translateY(-2px);
-  box-shadow: var(--transactions-shadow-xl);
-}
-
-.ui-float-button svg {
-  width: 20px;
-  height: 20px;
-}
-
-.ui-float-button:focus-visible {
-  outline: 2px solid var(--transactions-color-primary);
-  outline-offset: 2px;
 }
 
 /* ============================================
@@ -1681,22 +1719,58 @@
 .ui-date-picker__footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--transactions-space-md);
   margin-top: var(--transactions-space-sm);
   padding-top: var(--transactions-space-sm);
   border-top: 1px solid var(--transactions-color-divider);
 }
 
-.ui-date-picker__hint {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-tertiary);
-}
-
 /* ============================================
  * DragSort —— 列表拖拽排序
  * ============================================ */
+
+/* 把手 = 一条**抓取带**，不是一个小方块。
+ *
+ * 两条列表（分类标签的分类/标签行、应用设置的消费模板行）共用这一个类，
+ * 图形来自图标集 `Icon::DragHandle`（同一份 2×3 圆点），不再各画一套：
+ *   * 宽度 24px、**最小高度取图标按钮的 28px 标准** —— 不用瞄准一个 20px 的方框；
+ *   * 静止时用 `text-disabled`（在场但不抢内容），行 hover 升到 `text-secondary`，
+ *     直接 hover 把手用主色，正在拖动时保持主色 → "抓住的是它"；
+ *   * 光标 grab/grabbing 与 `.ui-drag-item` 一致（整行本来就可拖，这里是强化暗示）。
+ * 不允许再用 CSS 画的点阵或页面内联 SVG 代替本图标。
+ *
+ * ⚠ 这里**故意不写 `touch-action: none`**：它是给触屏手势用的，而本应用是 Windows 桌面、
+ * 鼠标 HTML5 拖拽；反而实测会让"从把手上起手拖动"偶发不进入拖拽（`ui-drag.ps1` 的注释记过这条）。 */
+.ui-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  flex-shrink: 0;
+  width: 24px;
+  min-height: var(--transactions-icon-btn-size);
+  color: var(--transactions-color-text-disabled);
+  cursor: grab;
+  transition: color var(--transactions-transition-fast);
+}
+
+.ui-drag-handle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ui-drag-handle:hover {
+  color: var(--transactions-color-primary);
+}
+
+.ui-drag-handle:active {
+  cursor: grabbing;
+}
+
+.ui-drag-item.is-dragging .ui-drag-handle {
+  color: var(--transactions-color-primary);
+}
 
 .ui-drag-item {
   position: relative;
@@ -1748,7 +1822,6 @@
   .ui-switch__handle,
   .ui-checkbox__box,
   .ui-progress__bar,
-  .ui-float-button,
   .ui-date-picker__trigger,
   .ui-date-picker__cell,
   .ui-date-picker__nav,
@@ -1759,5 +1832,348 @@
   .ui-drawer__mask,
   .ui-drawer__content {
     animation: none;
+  }
+}
+
+/* ============================================
+ * 时间范围选择器（共享组件 `TimeRangePicker`）
+ *    原来长在 `transactions.css`（类名 `.tr-time*`）：现在消费记录页与数据分析页共用。
+ *    与工具条其余控件同高（36px = 输入框 / 按钮 md），gap 8px
+ * ============================================ */
+
+.ui-time {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  height: var(--transactions-btn-height-md);
+}
+
+/* 翻页箭头是图标按钮，但在工具条里要与 36px 的区间字段对齐 */
+.ui-time .ui-icon-btn {
+  --ui-icon-btn-size: var(--transactions-btn-height-md);
+}
+
+.ui-time__field {
+  position: relative;
+  display: inline-flex;
+}
+
+.ui-time__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  /* 与工具栏其它控件同高：按钮 36 / 翻页图标按钮 36 / 粒度分段 36（36 = 30 + 2×2 + 2×1）
+   * 之前这里是硬编码的 32px，混在 36px 的控件里明显矮一截。 */
+  height: var(--transactions-btn-height-md);
+  min-width: 190px;
+  padding: 0 var(--transactions-space-sm);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-major-background);
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: border-color var(--transactions-transition-fast);
+}
+
+.ui-time__trigger:hover {
+  border-color: var(--transactions-color-primary);
+}
+
+.ui-time__field.is-open .ui-time__trigger {
+  border-color: var(--transactions-color-primary);
+}
+
+.ui-time__value {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ui-time__panel {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  left: 0;
+  min-width: 280px;
+  padding: var(--transactions-space-md);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-elevated);
+  box-shadow: var(--transactions-shadow-lg);
+}
+
+/* 面板内嵌的区间选择器：去掉自带的下拉定位，直接作为面板内容 */
+.ui-time__panel .ui-date-range-picker .ui-date-picker__dropdown {
+  position: static;
+  margin-top: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+.ui-time__panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.ui-time__panel-title {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: 500;
+  color: var(--transactions-color-text-major);
+}
+
+.ui-time__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--transactions-space-xs);
+}
+
+.ui-time__grid--month {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.ui-time__grid--year {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.ui-time__cell {
+  height: 32px;
+  padding: 0 var(--transactions-space-sm);
+  border: 1px solid transparent;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  cursor: pointer;
+  transition:
+    background-color var(--transactions-transition-fast),
+    border-color var(--transactions-transition-fast),
+    color var(--transactions-transition-fast);
+}
+
+.ui-time__cell:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+/* 区间（月 → 月 / 年 → 年）：两端实心主色、中间主色 tint ——
+ * 与日粒度日历（`.ui-date-picker__cell`）同一套语言，三个粒度看起来是同一个控件。 */
+.ui-time__cell.is-start,
+.ui-time__cell.is-end {
+  border-color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.ui-time__cell.is-in-range {
+  border-color: transparent;
+  background-color: var(--transactions-color-primary-tint);
+  color: var(--transactions-color-primary);
+}
+
+.ui-time__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-xs);
+  margin-top: var(--transactions-space-md);
+  padding-top: var(--transactions-space-sm);
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+.ui-time__preset {
+  padding: var(--transactions-space-2xs) var(--transactions-space-sm);
+  border: none;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-primary);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  cursor: pointer;
+  transition: background-color var(--transactions-transition-fast);
+}
+
+.ui-time__preset:hover {
+  background-color: var(--transactions-color-primary-tint);
+}
+
+/* 当前区间就是这一项：实心 tint + 500 字重，一眼看出"这个区间来自哪个快捷项" */
+.ui-time__preset.is-active {
+  background-color: var(--transactions-color-active-bg);
+  font-weight: var(--transactions-weight-medium);
+}
+
+/* 小屏：时间范围选择器让箭头与区间框换行（原来在 transactions.css 的「小屏收敛」里） */
+@media (max-width: 720px) {
+  .ui-time {
+    flex-wrap: wrap;
+    height: auto;
+  }
+
+  .ui-time__trigger {
+    min-width: 0;
+  }
+}
+
+/* ============================================
+ * 折线图（共享组件 `LineChart`）
+ *
+ * 分两层：
+ *   * `.chart__plot` 里是 **plotters 生成的 SVG**（网格 / Y 轴刻度 / 轴线 / 参考线 / 折线），
+ *     它的颜色由 Rust 解析令牌后写进 SVG，**不再由 CSS 上色** ——
+ *     所以原来 `.chart__grid` / `.chart__axis` / `.chart__reference` / `.chart__ytick` /
+ *     `.chart__line` 这几条规则已删除（plotters 的元素没有类名）。
+ *   * `.chart__overlay` 是叠层：X 轴类目标签、悬停竖线、命中点。
+ *     这几样自己画是有意的，见 `chart.rs` 的模块注释。
+ *
+ * 这些样式原先放在 `stock.css`（共享组件穿着股票页的文件）—— 现在归到 ui.css。
+ * ============================================ */
+
+/* 图表根：**填满所在容器**（容器高度由页面给：分栏里是 `flex: 1`，内容流里是固定高度）。
+ * 不填满的话，画布只能靠 min-height，图表就不跟着区域长高。 */
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-sm);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 图例由 charts-rs 画在 SVG 内（`.chart__legend*` 那一套 HTML 图例已删除）；
+ * 只剩 tooltip 行首的色点还用这个类。 */
+.chart__legend-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* 画布：图表**按它的实测尺寸渲染**（见 chart.rs 的 `watch_canvas_size`），
+ * 所以这里必须给一个确定的高度来源：分栏内靠 `flex: 1` 撑满，内容流里靠下面的 min-height。 */
+.chart__canvas {
+  position: relative;
+  width: 100%;
+  /* 图例之下全部给画布（图表按画布实测尺寸渲染） */
+  flex: 1;
+  min-height: 200px;
+}
+
+/* plotters 的图层**绝对定位铺满画布**：它不参与布局 ——
+ * 否则 SVG 的固有高度会反过来决定容器高度（量尺寸 → 渲染 → 尺寸又变），
+ * 宽高比不匹配时还会在右侧或下方留白。 */
+.chart__plot {
+  position: absolute;
+  inset: 0;
+}
+
+.chart__plot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 叠层与 plotters 层**同一个 viewBox**，因此坐标可以直接复用 */
+.chart__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.chart__cursor {
+  stroke: var(--transactions-color-border-l3);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+/* 参考线（如盈亏 0 轴）：贯穿绘图区的虚线 */
+.chart__reference {
+  stroke: var(--transactions-color-window-border);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.chart__xtick {
+  fill: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-caption);
+  font-family: var(--transactions-font-mono);
+}
+
+.chart__dot {
+  stroke: var(--transactions-color-major-background);
+  stroke-width: 1.5;
+}
+
+.chart__tooltip {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  min-width: 160px;
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background: var(--transactions-color-major-background);
+  box-shadow: var(--transactions-shadow-lg);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.chart__tooltip-title {
+  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+  margin-bottom: var(--transactions-space-xs);
+}
+
+.chart__tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  line-height: var(--transactions-height-snug);
+}
+
+.chart__tooltip-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart__tooltip-value {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--transactions-color-text-major);
+}
+
+.chart__empty {
+  text-align: center;
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+  padding: var(--transactions-space-lg);
+}
+
+/* charts-rs 的入场动画用 `stroke-dasharray:1 / stroke-dashoffset:1` 描出折线：
+ * 减动效时必须把它复位，否则线会**一直是隐藏状态**。 */
+@media (prefers-reduced-motion: reduce) {
+  .chart__plot svg path {
+    animation: none !important;
+    stroke-dasharray: none !important;
+    stroke-dashoffset: 0 !important;
   }
 }

@@ -55,6 +55,9 @@
   /* Backgrounds — 冷灰层级 */
   --transactions-color-bg-base: #f9fafb;
   --transactions-color-major-background: #ffffff;
+  /* 页面内容卡片的表层面。浅色下就是纯白（页面底色是 #f9fafb 的浅灰，层次由它撑起来）；
+   * 深色下需要单独抬高一点，否则白卡片与页面底几乎同色（见下方 dark 覆盖）。 */
+  --transactions-color-card-surface: #ffffff;
   --transactions-color-major-warm: #f9fafb;
   --transactions-color-minor-background: #f3f4f6;
   --transactions-color-sidebar-fill: #f3f4f6;
@@ -83,6 +86,8 @@
   --transactions-color-hover-bg: rgba(15, 17, 21, 0.06);
   --transactions-color-active-bg: rgba(57, 100, 254, 0.10);
   --transactions-color-danger-hover-bg: rgba(220, 38, 38, 0.10);
+  /* 叠在图片上的浮层控件底：浅色主题下也必须是"暗底 + 亮图标"才看得清 */
+  --transactions-color-overlay-scrim: rgba(15, 17, 21, 0.55);
 
   /* Chat bubble（DSH specific-bubble） */
   --transactions-color-bubble: #eef0f4;
@@ -183,6 +188,26 @@
   --transactions-btn-font-size-sm: 13px;
   --transactions-btn-font-size-md: 14px;
   --transactions-btn-font-size-lg: 16px;
+  /* 图标动作按钮（IconButton）：全仓唯一尺寸 */
+  --transactions-icon-btn-size: 28px;
+
+  /* ---------- 间距节奏（页面布局用语义名，不用裸的 space-*） ----------
+   * 三级节奏：区域内紧凑 8 / 控件簇 12 / 区域之间 16。
+   * 页面与面板之间的"大分隔"一律用 region，避免每个页面各写一个值。 */
+  --transactions-space-row: 12px;
+  --transactions-space-region: 16px;
+
+  /* ---------- 顶部容器（左右两侧共用） ----------
+   * 侧栏「账本选择器容器」与内容区「标题容器（含窗口三按钮）」必须**等高**，
+   * 于是侧栏导航组与页面工具栏都从同一条水平线开始 —— 这是左右顶对齐的结构保证，
+   * 而不是靠各自写一个 margin 去凑。
+   * 48px：容器底边就是那条横贯全窗口的分隔线；
+   * 线下方由 `.sidebar-nav` / `.page-toolbar` 各自留 8px，把导航组与工具栏推下去同一段距离。
+   * 注意：容器里最高的内容是标题文字（见 base.css 的 .page-title），改字号别超过这个高度。 */
+  --transactions-size-top-band: 48px;
+
+  /* 顶部容器分隔线到下方内容之间的距离 */
+  --transactions-space-top-gap: 8px;
 
   /* 动效专用缓动：落地感（exponential ease-out），用于“数据落定”类进场 */
   --transactions-ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -223,6 +248,7 @@
 
   --transactions-color-bg-base: #0f1115;
   --transactions-color-major-background: #16181d;
+  --transactions-color-card-surface: #1c1f26;
   --transactions-color-major-warm: #0f1115;
   --transactions-color-minor-background: #14161a;
   --transactions-color-sidebar-fill: #14161a;
@@ -248,6 +274,9 @@
   --transactions-color-active-bg: rgba(57, 100, 254, 0.22);
   --transactions-color-danger-hover-bg: rgba(248, 113, 113, 0.14);
 
+  /* 叠在图片上的浮层控件底：两套深色定义保持一致，图片前始终可读 */
+  --transactions-color-overlay-scrim: rgba(15, 17, 21, 0.55);
+
   --transactions-color-bubble: #24282f;
 
   --transactions-color-markdown-code-block: #1d2026;
@@ -256,8 +285,7 @@
   --transactions-color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.40);
 
   --transactions-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
-  --transactions-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
-  --transactions-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --transactions-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);  --transactions-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
   --transactions-shadow-xl: 0 16px 40px rgba(0, 0, 0, 0.55);
   --transactions-shadow-focus: 0 0 0 2px rgba(57, 100, 254, 0.45);
   --transactions-shadow-lv1: 0 1px 2px rgba(0, 0, 0, 0.30);
@@ -313,6 +341,7 @@
 
     --transactions-color-bg-base: #0f1115;
     --transactions-color-major-background: #16181d;
+    --transactions-color-card-surface: #1c1f26;
     --transactions-color-major-warm: #0f1115;
     --transactions-color-minor-background: #14161a;
     --transactions-color-sidebar-fill: #14161a;
@@ -337,6 +366,9 @@
     --transactions-color-hover-bg: rgba(255, 255, 255, 0.08);
     --transactions-color-active-bg: rgba(57, 100, 254, 0.22);
     --transactions-color-danger-hover-bg: rgba(248, 113, 113, 0.14);
+
+    /* 叠在图片上的浮层控件底：两套深色定义保持一致，图片前始终可读 */
+    --transactions-color-overlay-scrim: rgba(15, 17, 21, 0.55);
 
     --transactions-color-bubble: #24282f;
 

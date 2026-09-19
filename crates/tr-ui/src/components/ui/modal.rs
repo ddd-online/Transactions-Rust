@@ -32,7 +32,7 @@ pub fn Modal(
     /// 是否显示底部按钮栏，默认 `true`
     #[prop(optional)]
     footer: Option<bool>,
-    /// 确认按钮文案，默认「确定」（同样接受闭包：编辑成交弹窗会在保存中改文案）
+    /// 确认按钮文案，默认「确认」；标题已给出动作时传具体动词（如「新增」「保存」）
     #[prop(optional, into)]
     ok_text: Option<Signal<String>>,
     /// 取消按钮文案，默认「取消」
@@ -54,7 +54,7 @@ pub fn Modal(
 ) -> impl IntoView {
     let ok_loading = ok_loading.unwrap_or_else(|| Signal::derive(|| false));
     let show_footer = footer.unwrap_or(true);
-    let ok_text = ok_text.unwrap_or_else(|| Signal::derive(|| "确定".to_string()));
+    let ok_text = ok_text.unwrap_or_else(|| Signal::derive(|| "确认".to_string()));
     let cancel_text = cancel_text.unwrap_or_else(|| Signal::derive(|| "取消".to_string()));
     // 宽度是静态 prop，样式串一次算好即可（避免依赖动态 style 的 trait 推断）
     let content_style = width
@@ -63,7 +63,18 @@ pub fn Modal(
 
     view! {
         <Show when=move || open.get()>
-            <div class="ui-modal__mask">
+            <div
+                class="ui-modal__mask"
+                on:click=move |ev| {
+                    // 点遮罩空白处关闭；内容区的点击会冒泡到这里，但那时 `target`
+                    // 是内容里的元素，所以不会误关（见 [`is_mask_self_click`]）
+                    if is_mask_self_click(&ev) {
+                        if let Some(callback) = on_close {
+                            callback.run(());
+                        }
+                    }
+                }
+            >
                 <div class="ui-modal__content" style=content_style.clone()>
                     <div class="ui-modal__header">
                         <h3 class="ui-modal__title">{move || title.get()}</h3>
@@ -90,7 +101,7 @@ pub fn Modal(
                     >
                         <button
                             type="button"
-                            class="ui-btn ui-btn--secondary ui-btn--sm"
+                            class="ui-btn ui-btn--secondary"
                             on:click=move |_| {
                                 if let Some(callback) = on_close {
                                     callback.run(());
@@ -101,7 +112,7 @@ pub fn Modal(
                         </button>
                         <button
                             type="button"
-                            class="ui-btn ui-btn--sm"
+                            class="ui-btn ui-btn--primary"
                             class:ui-btn--primary=!ok_danger
                             class:ui-btn--primary-danger=ok_danger
                             disabled=move || ok_loading.get()
@@ -122,5 +133,17 @@ pub fn Modal(
                 </div>
             </div>
         </Show>
+    }
+}
+
+/// 点击目标是否就是遮罩**本身**（而不是从弹窗内容冒泡上来的点击）。
+///
+/// 用 `Object.is(target, currentTarget)` 判定，而不是给内容挂 `stop_propagation`：
+/// 本仓库有过一次"`stop_propagation` 吃掉 `Popconfirm` 捕获阶段触发"的真实缺陷
+/// （见 AGENTS.md），能不打断事件传播就不打断。抽屉的遮罩复用同一个判定。
+pub(super) fn is_mask_self_click(ev: &leptos::ev::MouseEvent) -> bool {
+    match (ev.target(), ev.current_target()) {
+        (Some(target), Some(current)) => js_sys::Object::is(target.as_ref(), current.as_ref()),
+        _ => false,
     }
 }

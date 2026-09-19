@@ -56,12 +56,12 @@ if ($sameExe) { throw "同一个可执行文件已有实例在运行（PID $($sa
 # 用 `-Discover` 生成的清单来维护这张表（发现缺失标记时先跑 Discover 看真实文案）。
 # 标记刻意选"页面结构/常驻控件"而不是随数据变化的文案，换工作空间也能过。
 $markers = [ordered]@{
-    '消费记录' = @('记一笔', '排序', '每页条数', '刷新')
+    '消费记录' = @('记一笔', '排序', '筛选', '每页条数')
     '数据分析' = @('新增图表', '曲线合计', '月度消费趋势')
-    '股票交易' = @('我的账户', '我的持仓', '交易历史', '交易统计', '追加本金')
-    '关键事件' = @('添加事件', '上一年', '下一年')
-    '日记管理' = @('今天', '收起全部', '跳转到日期', '心情')
-    '分类标签' = @('添加分类', '添加标签', '分类', '标签')
+    '股票交易' = @('账户', '持仓', '成交记录', '交易统计', '追加本金')
+    '关键事件' = @('新增事件', '上一年', '下一年')
+    '日记' = @('今天', '全部收起', '跳转日期', '心情')
+    '分类标签' = @('新增分类', '新增标签', '分类', '标签')
     '应用设置' = @('工作空间', '外观', '关闭行为', '开发者工具')
 }
 
@@ -273,8 +273,9 @@ function Invoke-WriteFlow {
     Assert-True $okDesc "填入了描述（$WriteDescription）"
     Assert-True $okAmount "填入了金额（$WriteAmount）"
 
-    if (-not (Invoke-ByName -Window $window -Name '确认' -TimeoutSec 10)) {
-        $failures.Add("找不到「确认」按钮")
+    # 记一笔弹窗的确认键是「保存」（见 ui-transactions.ps1 的同款断言）
+    if (-not (Invoke-ByName -Window $window -Name '保存' -TimeoutSec 10)) {
+        $failures.Add("找不到「保存」按钮")
         return
     }
     Start-Sleep -Seconds 3
@@ -289,6 +290,86 @@ function Assert-True {
     param([bool]$Condition, [string]$Message)
     if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
     else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
+}
+
+# 账本菜单的回归：**必须用真实鼠标点**菜单项。
+#
+# 为什么单独立这一条：菜单弹层是 `.ledger-menu`（曾写成 z-index:900），而它自带的全屏点击捕获层
+# 用的是 `.ui-select__backdrop`（z-index:1040）—— 捕获层盖在菜单上，于是"菜单弹出来了，
+# 但「创建账本」点了没反应"（点击被捕获层吃掉，还顺手把菜单关掉）。
+# 用 UIA 的 InvokePattern 点**测不出来**这个缺陷（它绕过命中测试），只有真实鼠标点击才暴露。
+# 按 class 找**可见**的按钮（账本按钮/菜单项的可访问名是动态的：当前账本名 / 菜单文案，
+# 只有 class 是稳定的；`FindAll` 的嵌套括号容易写坏，这里收敛成一个 helper）。
+function Find-VisibleButtonByClass {
+    param($Window, [string]$ClassPart, [int]$TimeoutSec = 12)
+    $buttonType = New-Object System.Windows.Automation.PropertyCondition(
+        $UIA::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $all = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonType)
+        foreach ($el in @($all)) {
+            if ($el.Current.ClassName -like "*$ClassPart*" -and -not $el.Current.IsOffscreen) { return $el }
+        }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
+
+function Invoke-LedgerMenuChecks {
+    param($Session)
+    $window = $Session.Window
+    Write-Host "`n[ui-smoke] 账本菜单：真实鼠标点「创建账本」" -ForegroundColor Cyan
+
+    $ledgerBtn = Find-VisibleButtonByClass -Window $window -ClassPart 'ledger-btn'
+    Assert-True ([bool]$ledgerBtn) '找到账本切换按钮（class=ledger-btn）'
+    if (-not $ledgerBtn) { return }
+
+    $invoke = $null
+    if ($ledgerBtn.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) {
+        $invoke.Invoke()
+    } else {
+        Set-CursorAndClick $ledgerBtn.Current.BoundingRectangle | Out-Null
+    }
+    Start-Sleep -Seconds 2
+
+    $create = Find-VisibleButtonByClass -Window $window -ClassPart 'ledger-menu-create'
+    Assert-True ([bool]$create) '账本下拉里出现菜单项「创建账本」'
+    if (-not $create) { return }
+
+    # ⚠ 必须是**真实鼠标点击**：UIA 的 InvokePattern 绕过命中测试，测不出"被捕获层盖住"
+    Set-CursorAndClick $create.Current.BoundingRectangle | Out-Null
+    Start-Sleep -Seconds 2
+
+    $title = $null
+    $nameInput = $null
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $editType = New-Object System.Windows.Automation.PropertyCondition(
+            $UIA::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+        $nameInput = $null
+        foreach ($el in @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editType))) {
+            if ($el.Current.Name -eq '请输入账本名称') { $nameInput = $el; break }
+        }
+        if ($nameInput) { $title = $true }
+        if (-not $title) { Start-Sleep -Milliseconds 500 }
+    } while (-not $title -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$title) '真实鼠标点击打开了「创建账本」弹窗（此处曾因浮层 z-index 失效）'
+
+    # 弹窗居中：输入框中心应与窗口中心重合（弹窗固定在视口中央）
+    if ($nameInput) {
+        $winRect = $window.Current.BoundingRectangle
+        $inputRect = $nameInput.Current.BoundingRectangle
+        $offset = [Math]::Abs(($inputRect.X + $inputRect.Width / 2) - ($winRect.X + $winRect.Width / 2))
+        Assert-True ($offset -le 30) ("弹窗水平居中（输入框中心偏差 {0:N0}px）" -f $offset)
+    }
+
+    # 收尾：点「取消」关掉弹窗，别把状态留给后面的用例
+    $cancelType = New-Object System.Windows.Automation.PropertyCondition(
+        $UIA::NameProperty, '取消')
+    foreach ($el in @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cancelType))) {
+        if (-not $el.Current.IsOffscreen) { Set-CursorAndClick $el.Current.BoundingRectangle | Out-Null; break }
+    }
+    Start-Sleep -Seconds 1
 }
 
 $session = $null
@@ -307,6 +388,7 @@ if ($WriteFlow) {
     $session = $null
     try {
         $session = Start-AppSession -WorkspaceDir $writeWs
+        Invoke-LedgerMenuChecks -Session $session
         Invoke-WriteFlow -Session $session
     }
     finally { Stop-AppSession $session }

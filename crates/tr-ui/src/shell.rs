@@ -13,13 +13,11 @@
 //! * 没有"内核状态指示灯"：Rust 版没有子进程内核，进程即应用，该指示灯无对应语义
 //! * 没有内核重启后的恢复逻辑（同上），只有工作空间切换
 
-use std::collections::BTreeMap;
-
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
 
 use crate::api;
-use crate::components::ui::{Button, ButtonSize, ButtonVariant, Input, Modal};
+use crate::components::ui::{IconButton, IconButtonVariant, Input, Modal};
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
 use crate::notify::{Notice, NoticeKind, Notifier};
@@ -76,7 +74,7 @@ impl Page {
             Page::DataAnalysis => "数据分析",
             Page::Stock => "股票交易",
             Page::KeyEvent => "关键事件",
-            Page::Diary => "日记管理",
+            Page::Diary => "日记",
             Page::CategoryTag => "分类标签",
             Page::Settings => "应用设置",
         }
@@ -139,6 +137,9 @@ pub fn App() -> impl IntoView {
     notifier.install();
     let stores = AppStores::new();
     stores.install();
+    // 「关于软件」的更新状态同理：信号必须建在**根 owner** 下，否则会挂在页签组件上，
+    // 切走再切回时已 dispose → 该面板整块空白（见 `init_update_state` 的注释）。
+    crate::pages::settings::init_update_state();
 
     let current_page = RwSignal::new(Page::Transactions);
     let workspace_modal_open = RwSignal::new(false);
@@ -198,25 +199,22 @@ pub fn App() -> impl IntoView {
                             Page::Settings => view! { <SettingsPage /> }.into_any(),
                         }}
                     </div>
-                    <footer class="app-footer">
-                        <StatusBar
-                            current_page=current_page
-                            workspace_modal_open=workspace_modal_open
-                        />
-                    </footer>
+                    // 外壳**没有**全局底部栏：底部的收支统计只属于消费记录页，
+                    // 由该页把它渲染在功能卡片内部（这样卡片能一直触达窗口底边）。
+                    // 工作空间与账本名也不再占用底栏 —— 账本在侧栏顶部、工作空间在设置页。
                 </main>
             </div>
 
             <Modal
                 open=workspace_modal_open
-                title="新建或打开工作目录"
+                title="新建或打开工作空间"
                 ok_text="选择目录…"
                 ok_loading=workspace_picking
                 on_close=move || workspace_modal_open.set(false)
                 on_ok=move || pick_workspace(workspace_modal_open, workspace_picking)
             >
                 <p class="workspace-picker-text">
-                    "请选择一个目录作为工作空间：该目录下会创建 transactions.db 数据库与 data/assets 资产目录。"
+                    "选择一个目录作为工作空间，应用会在其中创建 transactions.db 数据库与 data/assets 资产目录。"
                 </p>
                 <div class="workspace-picker-path">
                     {move || {
@@ -225,7 +223,7 @@ pub fn App() -> impl IntoView {
                     }}
                 </div>
                 <p class="workspace-picker-text">
-                    "若目录里已有当前格式的 transactions.db，会直接打开（只读校验，不做任何迁移）。"
+                    "若目录里已有当前格式的 transactions.db，会直接打开（只读校验，不做迁移）。"
                 </p>
             </Modal>
         </div>
@@ -257,14 +255,14 @@ fn pick_workspace(modal_open: RwSignal<bool>, picking: RwSignal<bool>) {
     picking.set(true);
     leptos::task::spawn_local(async move {
         let default_path = stores.workspace_dir.get_untracked();
-        match api::desktop::dialog_open("新建或打开工作目录", &default_path).await {
+        match api::desktop::dialog_open("新建或打开工作空间", &default_path).await {
             Ok(response) => {
                 if let Some(path) = response.first_path() {
                     open_workspace(path.to_string()).await;
                     modal_open.set(false);
                 }
             }
-            Err(error) => notify_error("选择工作目录", &error),
+            Err(error) => notify_error("选择工作空间", &error),
         }
         picking.set(false);
     });
@@ -349,107 +347,128 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
     view! {
         <div class="app-left-bar">
             <div class="sidebar-ledger">
-                <button
-                    type="button"
-                    class="ledger-btn"
-                    title="切换账本"
-                    on:click=move |_| menu_open.update(|open| *open = !*open)
-                >
-                    <span class="ledger-btn-icon">{icons::icon(Icon::Book)}</span>
-                    <span class="ledger-btn-name">{current_ledger_name}</span>
-                    <span class="ledger-btn-arrow">{icons::icon(Icon::Down)}</span>
-                </button>
+                // 账本切换：触发器 + 下拉菜单共用一个定位锚点，
+                // 菜单因此**贴齐触发器**、只隔 4px，不会像以前那样压在触发器上。
+                <div class="ledger-anchor">
+                    <button
+                        type="button"
+                        class="ledger-btn"
+                        class:is-open=move || menu_open.get()
+                        title="切换账本"
+                        aria-haspopup="menu"
+                        aria-expanded=move || if menu_open.get() { "true" } else { "false" }
+                        on:click=move |_| menu_open.update(|open| *open = !*open)
+                        on:keydown=move |ev| {
+                            if ev.key() == "Escape" {
+                                menu_open.set(false);
+                            }
+                        }
+                    >
+                        <span class=move || {
+                            format!(
+                                "ledger-dot ledger-dot--{}",
+                                ledger_tone(&stores.current_ledger_id.get()),
+                            )
+                        }></span>
+                        <span class="ledger-btn-name">{current_ledger_name}</span>
+                        <span class="ledger-btn-arrow">{icons::icon(Icon::Down)}</span>
+                    </button>
 
-                <Show when=move || menu_open.get()>
-                    <div class="ledger-menu-layer">
-                        <div
-                            class="ui-select__backdrop"
-                            on:click=move |_| menu_open.set(false)
-                        ></div>
-                        <div class="ledger-menu">
-                            <button
-                                type="button"
-                                class="ledger-menu-item ledger-menu-create"
-                                on:click=move |_| {
-                                    menu_open.set(false);
-                                    create_open.set(true);
-                                }
-                            >
-                                <span class="ledger-btn-icon">{icons::icon(Icon::Plus)}</span>
-                                <span>"创建账本"</span>
-                            </button>
-                            <div class="ledger-menu-divider"></div>
-                            {move || {
-                                let ledgers = stores.ledgers.get();
-                                let current = stores.current_ledger_id.get();
-                                if ledgers.is_empty() {
-                                    view! {
-                                        <div class="ledger-menu-empty">
-                                            {move || {
-                                                if stores.ledgers_loading.get() {
-                                                    "正在加载账本…"
-                                                } else {
-                                                    "暂无账本"
+                    <Show when=move || menu_open.get()>
+                        <div class="ledger-menu-layer">
+                            <div
+                                class="ui-select__backdrop"
+                                on:click=move |_| menu_open.set(false)
+                            ></div>
+                            <div class="ledger-menu" role="menu">
+                                {move || {
+                                    let ledgers = stores.ledgers.get();
+                                    let current = stores.current_ledger_id.get();
+                                    if ledgers.is_empty() {
+                                        view! {
+                                            <div class="ledger-menu-empty">
+                                                {move || {
+                                                    if stores.ledgers_loading.get() {
+                                                        "正在加载账本…"
+                                                    } else {
+                                                        "暂无账本"
+                                                    }
+                                                }}
+                                            </div>
+                                        }
+                                            .into_any()
+                                    } else {
+                                        ledgers
+                                            .into_iter()
+                                            .map(|ledger| {
+                                                let id = ledger.id.clone();
+                                                let name = ledger.name.clone();
+                                                let is_active = id == current;
+                                                let tone = ledger_tone(&id);
+                                                let select_id = id.clone();
+                                                let delete_id = id.clone();
+                                                let delete_name = name.clone();
+                                                view! {
+                                                    <div class="ledger-menu-row" class:is-active=is_active>
+                                                        <button
+                                                            type="button"
+                                                            class="ledger-menu-name"
+                                                            role="menuitem"
+                                                            on:click=move |_| {
+                                                                stores.select_ledger(select_id.clone());
+                                                                menu_open.set(false);
+                                                            }
+                                                        >
+                                                            <span class=format!(
+                                                                "ledger-dot ledger-dot--{tone}",
+                                                            )></span>
+                                                            <span class="ledger-menu-name-text">{name}</span>
+                                                        </button>
+                                                        <IconButton
+                                                            variant=IconButtonVariant::Danger
+                                                            label="删除账本"
+                                                            class="ledger-menu-delete"
+                                                            on_click=move |_| {
+                                                                delete_target
+                                                                    .set(
+                                                                        Some((
+                                                                            delete_id.clone(),
+                                                                            delete_name.clone(),
+                                                                        )),
+                                                                    );
+                                                                menu_open.set(false);
+                                                            }
+                                                        >
+                                                            {icons::icon(Icon::Trash)}
+                                                        </IconButton>
+                                                    </div>
                                                 }
-                                            }}
-                                        </div>
+                                            })
+                                            .collect_view()
+                                            .into_any()
                                     }
-                                        .into_any()
-                                } else {
-                                    ledgers
-                                        .into_iter()
-                                        .map(|ledger| {
-                                            let id = ledger.id.clone();
-                                            let name = ledger.name.clone();
-                                            let is_active = id == current;
-                                            let select_id = id.clone();
-                                            let delete_id = id.clone();
-                                            let delete_name = name.clone();
-                                            view! {
-                                                <div
-                                                    class="ledger-menu-item"
-                                                    class:active=is_active
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        class="ledger-menu-name"
-                                                        style="background: none; border: none; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer;"
-                                                        on:click=move |_| {
-                                                            stores.select_ledger(select_id.clone());
-                                                            menu_open.set(false);
-                                                        }
-                                                    >
-                                                        {name}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        class="ledger-menu-delete"
-                                                        title="删除账本"
-                                                        aria-label="删除账本"
-                                                        on:click=move |ev| {
-                                                            ev.stop_propagation();
-                                                            delete_target
-                                                                .set(
-                                                                    Some((
-                                                                        delete_id.clone(),
-                                                                        delete_name.clone(),
-                                                                    )),
-                                                                );
-                                                            menu_open.set(false);
-                                                        }
-                                                    >
-                                                        {icons::icon(Icon::Trash)}
-                                                    </button>
-                                                </div>
-                                            }
-                                        })
-                                        .collect_view()
-                                        .into_any()
-                                }
-                            }}
+                                }}
+                                <div class="ledger-menu-divider"></div>
+                                // 「创建账本」放在列表**下方**（发丝线隔开）：这一列首先是"选一个账本"，
+                                // 新建是次要动作；放顶部会让每次打开都先看到动作而不是内容。
+                                <button
+                                    type="button"
+                                    class="ledger-menu-create"
+                                    role="menuitem"
+                                    on:click=move |_| {
+                                        menu_open.set(false);
+                                        create_open.set(true);
+                                    }
+                                >
+                                    <span class="ledger-menu-create-icon">
+                                        {icons::icon(Icon::Plus)}
+                                    </span>
+                                    <span>"创建账本"</span>
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                </Show>
+                    </Show>
+                </div>
             </div>
 
             <nav class="sidebar-nav" aria-label="主导航">
@@ -496,7 +515,7 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
                 <p class="workspace-picker-text">
                     {move || match delete_target.get() {
                         Some((_, name)) => {
-                            format!("确定要删除账本「{name}」吗？此操作不可恢复。")
+                            format!("确定要删除账本「{name}」吗？")
                         }
                         None => String::new(),
                     }}
@@ -504,6 +523,20 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
             </Modal>
         </div>
     }
+}
+
+/// 账本的**身份色**索引（0..8）。
+///
+/// DESIGN.md 的 "Ledger identity" 给了八个自然色、说它们"给每个账本一个稳定身份"，
+/// 但此前从未被使用过。这里用账本 id 做 FNV-1a 哈希取色：同一个账本永远同一个颜色，
+/// **纯展示、不落库**（换版本、换机器都一样，因为只依赖 id）。
+fn ledger_tone(id: &str) -> usize {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (hash % 8) as usize
 }
 
 /// 一个导航按钮。
@@ -696,83 +729,9 @@ fn notice_kind_icon(kind: NoticeKind) -> Icon {
     }
 }
 
-// ---------------------------------------------------------------- 底部状态栏
-
-/// 底部状态栏：左侧状态文案（未选工作空间时给一个补选入口），
-/// 右侧在「消费记录」页显示收支统计。
-#[component]
-fn StatusBar(current_page: RwSignal<Page>, workspace_modal_open: RwSignal<bool>) -> impl IntoView {
-    let stores = AppStores::global();
-
-    let status_text = move || {
-        if stores.ledgers_loading.get() {
-            return "正在加载账本…".to_string();
-        }
-        let workspace = stores.workspace_dir.get();
-        if workspace.is_empty() {
-            return "未选择工作空间".to_string();
-        }
-        let ledger = stores.current_ledger_name();
-        if ledger.is_empty() {
-            workspace
-        } else {
-            format!("{workspace} · {ledger}")
-        }
-    };
-
-    view! {
-        <div class="app-footer-bar">
-            <div class="app-footer-left">
-                <span class="app-footer-status app-footer-status--mono" title=status_text>
-                    {status_text}
-                </span>
-                // 没选工作空间时给一个补选入口（否则用户只能重启应用才能再弹出选择框）
-                <Show when=move || stores.workspace_dir.get().is_empty()>
-                    <Button
-                        variant=ButtonVariant::Secondary
-                        size=ButtonSize::Small
-                        on_click=move || workspace_modal_open.set(true)
-                    >
-                        "选择工作目录…"
-                    </Button>
-                </Show>
-            </div>
-            <div class="app-footer-right">
-                <Show when=move || current_page.get() == Page::Transactions>
-                    <StatisticsFooter statistics=stores.statistics />
-                </Show>
-            </div>
-        </div>
-    }
-}
-
-/// 收支统计：收入 / 支出 / 转账，分转元。
-#[component]
-fn StatisticsFooter(statistics: RwSignal<BTreeMap<String, i64>>) -> impl IntoView {
-    let value = move |key: &'static str| statistics.with(|map| map.get(key).copied().unwrap_or(0));
-
-    view! {
-        <div class="statistics-footer">
-            <div class="statistics-footer-item">
-                <span class="statistics-footer-item-label">"收入"</span>
-                <span class="statistics-footer-item-value income">
-                    {move || crate::format::amount(value("income"))}
-                </span>
-            </div>
-            <div class="statistics-footer-divider"></div>
-            <div class="statistics-footer-item">
-                <span class="statistics-footer-item-label">"支出"</span>
-                <span class="statistics-footer-item-value expense">
-                    {move || crate::format::amount(value("expense"))}
-                </span>
-            </div>
-            <div class="statistics-footer-divider"></div>
-            <div class="statistics-footer-item">
-                <span class="statistics-footer-item-label">"转账"</span>
-                <span class="statistics-footer-item-value transfer">
-                    {move || crate::format::amount(value("transfer"))}
-                </span>
-            </div>
-        </div>
-    }
-}
+// ---------------------------------------------------------------- 底部（已内嵌到页面）
+//
+// 外壳不再持有全局底部栏：
+//   * 工作空间与账本名不再常驻屏幕（账本在侧栏顶部，工作空间在设置页）；
+//   * 收支统计只属于「消费记录」页，由 `pages/transactions.rs` 渲染在功能卡片内部，
+//     于是卡片能一直触达窗口底边。见该文件里的 `StatisticsFooter`。

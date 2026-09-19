@@ -313,15 +313,15 @@ try {
 
     # ================= 1/3 任选日期新建 =================
     Write-Host "[ke] 1/3 用 DatePicker 选 $eventDate 并新建「$titleA」"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '添加事件' -TimeoutSec 15)) '点「添加事件」'
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增事件' -TimeoutSec 15)) '点「新增事件」'
     Start-Sleep -Seconds 2
-    Assert-True ([bool](Wait-Element -Root $window -Name '添加事件' -TimeoutSec 8)) '弹窗「添加事件」已打开'
+    Assert-True ([bool](Wait-Element -Root $window -Name '新增事件' -TimeoutSec 8)) '弹窗「新增事件」已打开'
     $picked = Select-Date -Window $window -Day $day
     Assert-True ($picked -eq $eventDate) "日期选择器选中 $eventDate（实际 '$picked'）"
     Assert-True (Set-Value (Wait-Element -Root $window -Name '事件名称（可选）') $titleA) "填入事件名称「$titleA」"
     Start-Sleep -Milliseconds 600
-    $confirmAdd = @(Find-All $window '确认' | Where-Object { -not $_.Current.IsOffscreen })
-    Assert-True ($confirmAdd.Count -gt 0) '找到弹窗「确认」'
+    $confirmAdd = @(Find-All $window '新增' | Where-Object { -not $_.Current.IsOffscreen })
+    Assert-True ($confirmAdd.Count -gt 0) '找到弹窗「新增」'
     if ($confirmAdd.Count -gt 0) { Invoke-Element $confirmAdd[$confirmAdd.Count - 1] | Out-Null }
     Start-Sleep -Seconds 3
 
@@ -337,13 +337,13 @@ try {
 
     # ================= 2/3 同一天再建一次：upsert =================
     Write-Host "[ke] 2/3 同一天（$eventDate）再建一次，标题换成「$titleB」"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '添加事件' -TimeoutSec 15)) '再次点「添加事件」'
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增事件' -TimeoutSec 15)) '再次点「新增事件」'
     Start-Sleep -Seconds 2
     $pickedAgain = Select-Date -Window $window -Day $day
     Assert-True ($pickedAgain -eq $eventDate) "再次选中同一天 $eventDate（实际 '$pickedAgain'）"
     Assert-True (Set-Value (Wait-Element -Root $window -Name '事件名称（可选）') $titleB) "填入新标题「$titleB」"
     Start-Sleep -Milliseconds 600
-    $confirmAgain = @(Find-All $window '确认' | Where-Object { -not $_.Current.IsOffscreen })
+    $confirmAgain = @(Find-All $window '新增' | Where-Object { -not $_.Current.IsOffscreen })
     if ($confirmAgain.Count -gt 0) { Invoke-Element $confirmAgain[$confirmAgain.Count - 1] | Out-Null }
     Start-Sleep -Seconds 3
 

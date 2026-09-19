@@ -58,48 +58,11 @@
   flex-direction: column;
 }
 
-/* 底部状态栏 */
-.app-footer {
-  height: var(--transactions-size-footer-height);
-  background-color: var(--transactions-color-bg-base);
-  flex-shrink: 0;
-  border-top: 1px solid var(--transactions-color-border-l1);
-}
-
-.app-footer-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 100%;
-  width: 100%;
-  padding: 0 var(--transactions-space-lg);
-}
-
-.app-footer-bar > * {
-  -webkit-app-region: no-drag;
-}
-
-.app-footer-left,
-.app-footer-right {
-  display: flex;
-  align-items: center;
-  gap: var(--transactions-space-md);
-  min-width: 0;
-}
-
-.app-footer-status {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.app-footer-status--mono {
-  font-family: var(--transactions-font-mono);
-  font-variant-numeric: tabular-nums;
-}
+/* 说明：外壳**没有**全局底部栏了。
+ * 以前这里有一条常驻的 `.app-footer`（左：工作空间 + 账本名；右：消费记录的收支统计），
+ * 现在工作空间与账本名不再常驻屏幕（账本在侧栏顶部、工作空间在设置页），
+ * 收支统计搬进「消费记录」页的卡片底栏（`.page-footer-bar`）。
+ * 于是卡片能一直触达窗口底边；相关样式随之删除，不要再加回来。 */
 
 /* ============================================
  * 左侧导航
@@ -112,10 +75,35 @@
   width: 100%;
 }
 
-/* 账本切换区域 —— 顶部锚点，充裕呼吸空间 */
+/* 账本切换容器 —— 顶部容器（与右侧「标题 + 窗口三按钮」等高、同起点），内容垂直居中。
+ * 底边一条发丝线把它与下方内容分开，与页面顶部的分隔线**同一条水平线**。 */
 .sidebar-ledger {
   position: relative;
-  padding: var(--transactions-space-lg);
+  display: flex;
+  align-items: center;
+  height: var(--transactions-size-top-band);
+  padding-left: var(--transactions-space-md);
+  padding-right: var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+/* ============================================
+ * 账本选择器
+ *
+ * 三件事：
+ *  1) **触发器与侧栏导航项同一套外壳**（无边框 + hover 填充 + 展开时主色 tint）。
+ *     原来它是个"白底描边的输入框"，展开后与菜单叠成两个盒子，看着像套娃；
+ *     侧栏里其它行都是无边框的，它也应该是。
+ *  2) **菜单贴齐触发器**（同一个定位锚点，只隔 4px）。原来是 `top: 100% - 16px`，
+ *     菜单正好压在触发器下沿上，接缝看起来是坏的。
+ *  3) **每行带账本身份色点**（DESIGN.md 的 Ledger identity，此前从未被使用）。
+ * ============================================ */
+
+/* 触发器 + 菜单的定位锚点：菜单相对**触发器**定位，而不是相对顶部容器，
+   这样不必用魔法数字去补容器居中造成的偏移。 */
+.ledger-anchor {
+  position: relative;
+  width: 100%;
 }
 
 .ledger-btn {
@@ -123,21 +111,29 @@
   align-items: center;
   gap: var(--transactions-space-sm);
   width: 100%;
-  height: 32px;
+  height: 34px;                      /* 与 .nav-btn 同高（侧栏按钮统一尺寸） */
   padding: 0 var(--transactions-space-md);
-  border: 1px solid var(--transactions-color-window-border);
+  border: none;
   border-radius: var(--transactions-radius-md);
-  background: var(--transactions-color-major-background);
+  background: none;
   cursor: pointer;
   font-family: inherit;
   font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-medium);
   color: var(--transactions-color-text-major);
-  transition: all var(--transactions-transition-fast);
+  text-align: left;
+  transition: background-color var(--transactions-transition-fast),
+    color var(--transactions-transition-fast);
 }
 
 .ledger-btn:hover {
-  border-color: var(--transactions-color-border-l2);
-  background: var(--transactions-color-hover-bg);
+  background-color: var(--transactions-color-hover-bg);
+}
+
+/* 展开中 = 侧栏导航项的"选中"语言：主色 tint + 主色文字 */
+.ledger-btn.is-open {
+  background-color: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
 }
 
 .ledger-btn:focus-visible {
@@ -145,16 +141,42 @@
   outline-offset: 2px;
 }
 
-.ledger-btn-icon {
-  display: inline-flex;
-  color: var(--transactions-color-primary);
+/* 账本身份色点：8 个自然色（DESIGN.md 的 Ledger identity），由账本 id 稳定哈希选色。
+ * 只做展示、不落库，浅色/深色各自有一套取值（见 tokens.css）。 */
+.ledger-dot {
   flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-ledger-forest);
 }
 
-.ledger-btn-icon svg {
-  width: 16px;
-  height: 16px;
-  fill: currentColor;
+.ledger-dot--1 {
+  background-color: var(--transactions-ledger-amber);
+}
+
+.ledger-dot--2 {
+  background-color: var(--transactions-ledger-slate-blue);
+}
+
+.ledger-dot--3 {
+  background-color: var(--transactions-ledger-vermillion);
+}
+
+.ledger-dot--4 {
+  background-color: var(--transactions-ledger-warm-brown);
+}
+
+.ledger-dot--5 {
+  background-color: var(--transactions-ledger-ochre);
+}
+
+.ledger-dot--6 {
+  background-color: var(--transactions-ledger-moss);
+}
+
+.ledger-dot--7 {
+  background-color: var(--transactions-ledger-camel);
 }
 
 .ledger-btn-name {
@@ -167,8 +189,9 @@
 
 .ledger-btn-arrow {
   display: inline-flex;
-  color: var(--transactions-color-text-secondary);
   flex-shrink: 0;
+  color: currentColor;
+  opacity: 0.7;
 }
 
 .ledger-btn-arrow svg {
@@ -177,88 +200,105 @@
   fill: currentColor;
 }
 
-/* 账本下拉菜单的定位层：本身不参与定位（static），
-   让 .ledger-menu 的绝对定位继续相对最近的定位祖先 .sidebar-ledger 计算 */
+/* 定位层本身不参与定位（static），让 `.ledger-menu` 相对 `.ledger-anchor` 计算 */
 .ledger-menu-layer {
   position: static;
+  /* 与 .ledger-menu 同层：静态定位下 z-index 不生效，写在这里只是让"整块浮层"的意图可读 */
+  z-index: 1050;
 }
 
-/* 下拉菜单 */
+/* 下拉菜单：与全站下拉（Select / Dropdown / DatePicker）同一套外观 */
 .ledger-menu {
   position: absolute;
-  z-index: 900;
-  top: calc(100% - var(--transactions-space-md));
-  left: var(--transactions-space-lg);
-  right: var(--transactions-space-lg);
+  /* **必须高于 `.ui-select__backdrop`（1040）**：菜单里那层全屏透明捕获层用的是那个类，
+   * 它一旦盖在菜单上，切账本/删账本这些项就全部点不动 ——
+   * 现象是"菜单弹出来了，但点了没反应"（实测：点击被 backdrop 吃掉并顺手关掉菜单）。
+   * 取值与其它浮层一致 = 1050。 */
+  z-index: 1050;
+  top: calc(100% + var(--transactions-space-xs));
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-2xs);
-  min-width: 180px;
   padding: var(--transactions-space-xs);
   background: var(--transactions-color-major-background);
   border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-md);
-  box-shadow: var(--transactions-shadow-lg);
+  box-shadow: var(--transactions-shadow-md);
 }
 
-.ledger-menu-item {
+/* 一行账本：名字（整行可点）+ 右侧图标槽（对勾 / 删除，同一位置互换） */
+.ledger-menu-row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--transactions-space-sm);
-  padding: var(--transactions-space-sm) var(--transactions-space-md);
   border-radius: var(--transactions-radius-sm);
-  cursor: pointer;
-  font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-major);
-  transition: background var(--transactions-transition-fast);
-  border: none;
-  background: none;
-  font-family: inherit;
-  text-align: left;
-  width: 100%;
+  transition: background-color var(--transactions-transition-fast);
 }
 
-.ledger-menu-item:hover {
-  background: var(--transactions-color-hover-bg);
+.ledger-menu-row:hover {
+  background-color: var(--transactions-color-hover-bg);
 }
 
-.ledger-menu-item.active {
-  background: var(--transactions-color-active-bg);
+/* 当前账本：主色 tint + 主色文字 + 对勾 */
+.ledger-menu-row.is-active {
+  background-color: var(--transactions-color-active-bg);
+}
+
+.ledger-menu-row.is-active .ledger-menu-name {
   color: var(--transactions-color-primary);
-  font-weight: 500;
-}
-
-.ledger-menu-create {
-  color: var(--transactions-color-primary);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 .ledger-menu-name {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
   flex: 1;
+  min-width: 0;
+  height: 32px;
+  /* 右侧给删除按钮留位：图标槽 = 4px 内缩 + 28px 按钮 + 4px 间隙。
+   * 留位而不是让它压住文字，也让悬停时文字不跳（图标是绝对定位的）。 */
+  padding: 0
+    calc(
+      var(--transactions-space-xs) + var(--transactions-icon-btn-size) + var(--transactions-space-xs)
+    )
+    0 var(--transactions-space-md);
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-major);
+  text-align: left;
+}
+
+.ledger-menu-name-text {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ledger-menu-delete {
-  display: inline-flex;
-  align-items: center;
-  padding: 0;
-  border: none;
-  background: none;
-  cursor: pointer;
-  color: var(--transactions-color-expense);
+/* 删除按钮**绝对定位、不占布局宽度**：让它参与布局的话，静止时就白白吃掉 28px ——
+ * 侧栏只有 200px 宽，账本名会被截成「刘敬威的…」（实测踩过）。 */
+.ledger-menu-row .ledger-menu-delete {
+  position: absolute;
+  top: 50%;
+  right: var(--transactions-space-xs);
+  transform: translateY(-50%);
   opacity: 0;
   transition: opacity var(--transactions-transition-fast);
 }
 
-.ledger-menu-delete svg {
-  width: 12px;
-  height: 12px;
-  fill: currentColor;
-}
-
-.ledger-menu-item:hover .ledger-menu-delete {
+/* 悬停（或键盘聚焦）时才现身。用统一的 IconButton（危险态只在 hover 时变红）——
+ * 以前这里直接写死 Expense 红，那违反 DESIGN.md 的「Semantic Silo Rule」：
+ * 收支语义色只能出现在交易/股票数据上，不能出现在导航与外壳上。 */
+.ledger-menu-row:hover .ledger-menu-delete,
+.ledger-menu-row .ledger-menu-delete:focus-visible {
   opacity: 1;
 }
 
@@ -268,18 +308,53 @@
   background-color: var(--transactions-color-divider);
 }
 
+/* 「创建账本」：列表下方的次要动作，主色文字 */
+.ledger-menu-create {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  width: 100%;
+  height: 32px;
+  padding: 0 var(--transactions-space-md);
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-sm);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-primary);
+  text-align: left;
+  transition: background-color var(--transactions-transition-fast);
+}
+
+.ledger-menu-create:hover {
+  background-color: var(--transactions-color-primary-tint);
+}
+
+.ledger-menu-create-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.ledger-menu-create-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 .ledger-menu-empty {
   padding: var(--transactions-space-sm) var(--transactions-space-md);
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-secondary);
 }
 
-/* 导航 —— 紧凑核心区域，底部留呼吸空间 */
+/* 导航组：从顶部容器下沿 + 8px 开始，与右侧工具栏同一条顶线 */
 .sidebar-nav {
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-2xs);
-  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  padding: var(--transactions-space-top-gap) var(--transactions-space-md);
   padding-bottom: var(--transactions-space-md);
 }
 
@@ -372,9 +447,10 @@
   z-index: 800;
   top: 0;
   right: 0;
-  height: var(--transactions-size-header-height);
+  height: var(--transactions-size-top-band);
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   padding-right: var(--transactions-space-md);
   -webkit-app-region: drag;
 }
@@ -435,12 +511,13 @@
  *   * 有 description → notification（右上角，top 96px）
  * ============================================ */
 
+/* 底部提示条：贴在窗口底部上方一点（以前是浮在全局底栏之上，底栏已移除） */
 .notice-stack-message {
   position: fixed;
   z-index: 1200;
   left: 50%;
   transform: translateX(-50%);
-  bottom: var(--transactions-size-footer-height);
+  bottom: var(--transactions-space-xl);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -571,25 +648,73 @@
  * 页面通用（pages/）
  * ============================================ */
 
+/* 页面容器。**顶部不留内边距**：页头（顶部容器）必须从窗口顶端开始，
+ * 才能与侧栏的账本容器**同一起点、同一高度**（两者高度用同一个令牌），
+ * 于是两侧下方的「功能卡片 / 导航组」落在同一条水平线上 —— 这是左右顶对齐的关键一环。
+ * 页面自己**不再给左右内边距**：卡片的左右间隔由 `.page-body` 的 margin 给，
+ * 这样"卡片四周间隔"只有一个来源，不会出现页面内边距 + 卡片 margin 叠加。 */
 .page {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 100%;
-  padding: var(--transactions-space-xl);
-  padding-top: var(--transactions-space-md);
-  background-color: var(--transactions-color-major-background);
-  overflow-y: auto;
+  padding: 0;
+  background-color: var(--transactions-color-bg-base);
+  overflow: hidden;
 }
 
+/* ---------------------------------------------------------------- 页面三段式
+ *
+ * 每个功能页都长这样（顺序固定）：
+ *
+ *   .page
+ *     ├─ .page-header      标题（左上角）；右上角由外壳的窗口控制按钮占据
+ *     ├─ .page-toolbar     工具栏（本页的操作：时间范围 / 年份 / 页签 ……）
+ *     └─ 内容              表格 / 图表 / 面板
+ *
+ * 三者共用同一条左/右边界：左簇与下方内容的左边缘齐平、右簇与右边缘齐平
+ * （`.page` 统一给 24px 内边距，工具栏与内容都不再各自缩进）。
+ *
+ * `-webkit-app-region: drag` 让页头与工具栏的空白处可以拖动窗口；
+ * 里面的按钮必须写 `no-drag`（下面的 `> *` 规则统一兜住）。
+ */
+
+/* 页头 = 顶部容器：标题在左，右上角由外壳的窗口控制按钮占据。
+ * 高度与侧栏的「账本选择器容器」**共用同一个令牌**，于是两侧之下的
+ * 「工具栏 / 导航组」自然落在同一条水平线上。
+ * **左右不外扩**：标题的左边缘与下方功能卡片的左边缘对齐（都用 `space-region` = 16px），
+ * 右侧同理 —— 以前这里是 24px 并用负外边距撑满窗口，标题会比卡片多缩进 8px。
+ * 底边一条发丝线把标题区与下方内容分开。 */
 .page-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--transactions-space-md);
-  padding-right: var(--transactions-space-md);
-  margin-bottom: var(--transactions-space-lg);
+  height: var(--transactions-size-top-band);
+  padding: 0 var(--transactions-space-region);
+  border-bottom: 1px solid var(--transactions-color-divider);
   -webkit-app-region: drag;
+}
+
+/* 工具栏（卡片里的第一行）：横向排本页的操作。
+ * 上下内边距**对称**（各 8px），配合 `align-items: center` 让控件在工具栏里垂直居中。
+ * 左右 16px 与下方内容容器一致，所以工具栏控件与内容左边缘齐平。
+ * 底边一条发丝线：它是"页头带"的下沿，页签型页面的**激活下划线就压在这条线上**，
+ * 所以这条线必须留（且用 divider 而不是更重的 window-border）。 */
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  gap: var(--transactions-space-md);
+  padding: var(--transactions-space-sm) var(--transactions-space-lg);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  -webkit-app-region: drag;
+}
+
+.page-toolbar > * {
+  -webkit-app-region: no-drag;
 }
 
 .page-header-actions {
@@ -610,11 +735,85 @@
   margin: var(--transactions-space-xs) 0 0 0;
 }
 
+/* 功能卡片 = 工具栏 + 内容，一起装在这一张"纸"里：
+ *
+ *   .page
+ *     ├─ .page-header   功能标题（左上角）+ 窗口三按钮（右上角）  ← 顶部容器
+ *     └─ .page-body     功能卡片（容器，不是"卡片"）
+ *          ├─ .page-toolbar   本页的操作  ← 与页头同色的带，页签下划线压在它的底线上
+ *          └─ 内容            表格 / 图表 / 面板
+ *
+ * **卡片不填色**：只靠一圈发丝线与圆角把内容框住，底色沿用画布。
+ * 这样里面的分区再也不会出现"白卡里套白卡"——分层一律交给发丝线与软灰色块。
+ * 四周间隔：上 8px、左右 16px、下 16px。卡片自己不留内边距，内边距下放给
+ * 工具栏与各页内容容器，整行的东西（表头、设置行）才能通到卡片边缘。 */
+/* 功能卡片 = 工具栏 + 内容 (+ 可选底栏)，一起装在这一张"纸"里：
+ *
+ *   .page
+ *     ├─ .page-header   功能标题（左上角）+ 窗口三按钮（右上角）  ← 顶部容器
+ *     └─ .page-body     功能卡片（容器，不是"卡片"）
+ *          ├─ .page-toolbar    本页的操作  ← 与页头同色的带，页签下划线压在它的底线上
+ *          ├─ 内容             表格 / 图表 / 面板
+ *          └─ .page-footer-bar 可选底栏（只有消费记录页有）
+ *
+ * **卡片不填色**：只靠一圈发丝线与圆角把内容框住，底色沿用画布。
+ * 这样里面的分区再也不会出现"白卡里套白卡"——分层一律交给发丝线与软灰色块。
+ * 四周间隔：上 8px（紧贴顶部容器）、左右 16px、**下 16px**（与左右同档，卡片不贴窗口底）。 */
 .page-body {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  margin: var(--transactions-space-sm) var(--transactions-space-region) var(--transactions-space-region);
+  border: 1px solid var(--transactions-color-border-l1);
+  border-radius: var(--transactions-radius-lg);
+  overflow: hidden;
+}
+
+/* 卡片自己的底栏（只有消费记录页有）：左侧结果条数、右侧收支合计。
+ * 它是卡片内的最后一行，底边与卡片底边重合 —— 卡片因此能一直触达窗口底边。
+ * 顶边一条发丝线把它与列表分开；左右内边距与工具栏/内容一致。 */
+.page-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-md);
+  flex-shrink: 0;
+  padding: var(--transactions-space-sm) var(--transactions-space-lg);
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+/* 底栏只放一个动作时贴右（与卡片内其它主动作同一列） */
+.page-footer-bar--end {
+  justify-content: flex-end;
+}
+
+/* 卡片内的内容容器内边距（各页在自己文件里只需要管排布）。
+ *
+ * 多栏网格（`.ct-main` / `.key-event-body` / `.diary-body`）不在列表里：
+ * 它们的内边距下放给各栏自己，栏目分隔线才能从卡片顶贯通到底。
+ *
+ * 逐页的例外（都是"让内容贴到卡片边上"的诉求，一律在下面按页写清理由）：
+ *   * `.tr-body` **四边都不留**：消费记录的表格要**通到卡片边缘**（表头底边线、
+ *     行分隔线从卡片左边一路到右边），内缩交给单元格自己的 padding；
+ *     分页行与空态各自带内边距。
+ *   * `.da-main` **不留底部**：数据分析的「曲线配置」表格要对齐卡片下沿。
+ *   * `.stock-tab-body` **不留顶部**：股票各分栏紧跟工具栏，否则顶上空一大截。 */
+.da-main,
+.st-panes {
+  padding: var(--transactions-space-lg);
+}
+
+.da-main {
+  padding-bottom: 0;
+}
+
+.stock-tab-body {
+  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
+}
+
+.tr-body {
+  padding: 0;
 }
 
 /* 占位页（P6 阶段逐页替换） */
@@ -652,13 +851,14 @@
  * 消费记录页
  * ============================================ */
 
+/* 消费记录页工具栏：底边线与外边距由 `.page-toolbar` 统一给，这里只管左右两簇的排布 */
 .tr-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--transactions-space-md);
-  padding-bottom: var(--transactions-space-lg);
+  flex: 1;
 }
 
 .tr-toolbar-left,
@@ -666,20 +866,6 @@
   display: flex;
   align-items: center;
   gap: var(--transactions-space-md);
-}
-
-.tr-ledger-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-  height: var(--transactions-btn-height-md);
-  padding: 0 var(--transactions-space-md);
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-md);
-  background-color: var(--transactions-color-major-background);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-major);
 }
 
 .tr-body {
@@ -695,13 +881,15 @@
   overflow: auto;
 }
 
+/* 分页行：贴卡片右侧（条数与收支合计已经移到卡片底栏，这里只剩翻页控件）。
+ * 表格现在通到卡片边缘，所以这一行（以及它的左右下内边距）自己带着。 */
 .tr-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: var(--transactions-space-md);
-  padding-top: var(--transactions-space-lg);
+  padding: var(--transactions-space-lg);
 }
 
 .tr-footer-total {
@@ -883,13 +1071,16 @@
   background-color: var(--transactions-color-hover-bg);
 }
 
-/* 空态引导（empty-guide） */
+/* 空态引导（empty-guide）
+ * `height: 100%` 是必需的：父容器 `.tr-content` 是**块级滚动容器**（不是 flex），
+ * 不给高度的话这一块只有内容那么高，"justify-content: center" 就没有垂直居中的参照。 */
 .empty-guide {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: var(--transactions-space-md);
+  height: 100%;
   padding: var(--transactions-space-3xl);
   text-align: center;
 }

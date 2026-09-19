@@ -58,9 +58,9 @@ pub const PAGE_TITLE: &str = "股票交易";
 
 /// 四个分栏（默认 `account`）。
 const TABS: [(&str, &str); 4] = [
-    ("account", "我的账户"),
-    ("position", "我的持仓"),
-    ("trade", "交易历史"),
+    ("account", "账户"),
+    ("position", "持仓"),
+    ("trade", "成交记录"),
     ("statistics", "交易统计"),
 ];
 
@@ -175,7 +175,10 @@ pub fn StockPage() -> impl IntoView {
             </header>
 
             <div class="page-body">
-                <Tabs active=active items=items />
+                <div class="page-toolbar">
+                    <Tabs active=active items=items />
+                </div>
+
                 <div class="stock-tab-body">
                     <TabPane active=active key="account">
                         {account_view(active)}
@@ -212,14 +215,7 @@ fn account_view(active: RwSignal<String>) -> AnyView {
     let fund_page_signal = RwSignal::new(1_i32);
     let records_loading = RwSignal::new(false);
     let fee_settings = RwSignal::new(Option::<StockFeeSetting>::None);
-    let fee_saving = RwSignal::new(false);
     let mutating = RwSignal::new(false);
-
-    // 费用表单（用字符串输入 + addon-after 单位）
-    let commission_rate_text = RwSignal::new(String::new());
-    let min_commission_text = RwSignal::new(String::new());
-    let stamp_duty_text = RwSignal::new(String::new());
-    let transfer_fee_text = RwSignal::new(String::new());
 
     // 本金 / 支取弹窗
     let principal_open = RwSignal::new(false);
@@ -260,6 +256,8 @@ fn account_view(active: RwSignal<String>) -> AnyView {
         });
     };
 
+    // 费用设置只**读取**：编辑入口在「应用设置 → 股票交易」，
+    // 这里读回来是给下单弹窗估算费用用的（不再在本页渲染表单）。
     let load_fee_settings = move || {
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() {
@@ -267,13 +265,7 @@ fn account_view(active: RwSignal<String>) -> AnyView {
         }
         leptos::task::spawn_local(async move {
             match api::stock::fee_settings_get(&ledger_id).await {
-                Ok(data) => {
-                    commission_rate_text.set(trim_number(data.commission_rate * 10_000.0, 4));
-                    min_commission_text.set(trim_number(data.min_commission as f64 / 100.0, 2));
-                    stamp_duty_text.set(trim_number(data.stamp_duty_rate * 100.0, 3));
-                    transfer_fee_text.set(trim_number(data.transfer_fee_rate * 100.0, 3));
-                    fee_settings.set(Some(data));
-                }
+                Ok(data) => fee_settings.set(Some(data)),
                 Err(error) => notify_error("查询交易费用设置失败", &error),
             }
         });
@@ -367,71 +359,6 @@ fn account_view(active: RwSignal<String>) -> AnyView {
         });
     };
 
-    let save_fee_settings = move || {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            return;
-        }
-        let commission: f64 = match commission_rate_text.get_untracked().trim().parse() {
-            Ok(value) => value,
-            Err(_) => {
-                Notifier::global().error("请输入大于 0 的佣金费率".to_string(), None);
-                return;
-            }
-        };
-        if commission.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
-            Notifier::global().error("请输入大于 0 的佣金费率".to_string(), None);
-            return;
-        }
-        let min_commission: f64 = match min_commission_text.get_untracked().trim().parse() {
-            Ok(value) => value,
-            Err(_) => {
-                Notifier::global().error("请输入不小于 0 的最低佣金".to_string(), None);
-                return;
-            }
-        };
-        if min_commission < 0.0 {
-            Notifier::global().error("请输入不小于 0 的最低佣金".to_string(), None);
-            return;
-        }
-        let stamp: f64 = stamp_duty_text
-            .get_untracked()
-            .trim()
-            .parse()
-            .unwrap_or(-1.0);
-        let transfer: f64 = transfer_fee_text
-            .get_untracked()
-            .trim()
-            .parse()
-            .unwrap_or(-1.0);
-        if stamp < 0.0 || transfer < 0.0 {
-            Notifier::global().error("印花税与过户费需不小于 0".to_string(), None);
-            return;
-        }
-        fee_saving.set(true);
-        leptos::task::spawn_local(async move {
-            // 元 → 分（最低佣金）
-            let min_commission_cents =
-                tr_domain::money::yuan_to_cents(&min_commission.to_string()).unwrap_or(0);
-            match api::stock::fee_settings_put(
-                &ledger_id,
-                commission / 10_000.0,
-                min_commission_cents,
-                stamp / 100.0,
-                transfer / 100.0,
-            )
-            .await
-            {
-                Ok(data) => {
-                    fee_settings.set(Some(data));
-                    Notifier::global().success("费用设置已保存".to_string(), None);
-                }
-                Err(error) => notify_error("保存费用设置失败", &error),
-            }
-            fee_saving.set(false);
-        });
-    };
-
     let page_snapshot = move || fund_page.get();
     let total_pages = Signal::derive(move || {
         let snapshot = page_snapshot();
@@ -446,6 +373,7 @@ fn account_view(active: RwSignal<String>) -> AnyView {
                     <h3 class="stock-overview__title">"总资产"</h3>
                     <div class="stock-overview__actions">
                         <Button
+                            variant=ButtonVariant::Secondary
                             size=ButtonSize::Small
                             loading=Signal::derive(move || mutating.get())
                             on_click=move |_| {
@@ -511,10 +439,10 @@ fn account_view(active: RwSignal<String>) -> AnyView {
                                 "浮动盈亏 = Σ（最新价 × 股数 − 持仓总成本（含买入手续费））；未卖出持仓的账面盈亏",
                             ),
                             (
-                                "总盈亏",
+                                "已实现盈亏",
                                 format::signed_yuan(data.realized_pnl),
                                 format::pnl_class(data.realized_pnl),
-                                "总盈亏为已实现盈亏（卖出净盈亏合计）；不含持仓浮动盈亏",
+                                "已实现盈亏为卖出净盈亏合计；不含持仓浮动盈亏",
                             ),
                             (
                                 "累计支取",
@@ -591,7 +519,7 @@ fn account_view(active: RwSignal<String>) -> AnyView {
                         <table class="stock-table">
                             <thead>
                                 <tr>
-                                    <th class="is-center" style="width: 110px;">"日期"</th>
+                                    <th class="is-center" style="width: 150px;">"日期"</th>
                                     <th style="min-width: 180px;">"事件"</th>
                                     <th class="is-right" style="width: 130px;">"金额变化"</th>
                                     <th class="is-right" style="width: 130px;">"现金余额"</th>
@@ -606,7 +534,8 @@ fn account_view(active: RwSignal<String>) -> AnyView {
                                             <tr>
                                                 <td colspan="5">
                                                     <Empty
-                                                        title="暂无资金变化记录 — 追加本金或买入/卖出后，每一笔资金变动都会显示在这里"
+                                                        title="暂无资金记录"
+                                                        description="追加本金或买入/卖出后，每一笔资金变动都会显示在这里"
                                                     />
                                                 </td>
                                             </tr>
@@ -625,59 +554,15 @@ fn account_view(active: RwSignal<String>) -> AnyView {
                         </table>
                     </div>
                     <div class="stock-panel__footer">
-                        <span class="stock-panel__total">
-                            {move || format!("共 {} 条", fund_page.get().total)}
-                        </span>
-                        <Pagination
-                            page=fund_page_signal
-                            total_pages=total_pages
-                            disabled=Signal::derive(move || records_loading.get())
-                        />
+                    <span class="stock-panel__total">
+                    {move || format!("共 {} 条", fund_page.get().total)}
+                    </span>
+                    <Pagination
+                    page=fund_page_signal
+                    total_pages=total_pages
+                    disabled=Signal::derive(move || records_loading.get())
+                    />
                     </div>
-                </div>
-
-                <div class="stock-panel stock-panel--fee">
-                    <div class="stock-panel__head">
-                        <h4 class="stock-panel__title">"交易费用设置"</h4>
-                        <Button
-                            variant=ButtonVariant::Primary
-                            size=ButtonSize::Small
-                            loading=Signal::derive(move || fee_saving.get())
-                            on_click=move |_| save_fee_settings()
-                        >
-                            "保存"
-                        </Button>
-                    </div>
-                    <div class="stock-fee-form">
-                        <FeeField
-                            label="佣金费率".to_string()
-                            unit="万分之".to_string()
-                            placeholder="如 2.354".to_string()
-                            value=commission_rate_text
-                        />
-                        <FeeField
-                            label="最低佣金".to_string()
-                            unit="元/委托".to_string()
-                            placeholder="如 5".to_string()
-                            value=min_commission_text
-                        />
-                        <FeeField
-                            label="印花税".to_string()
-                            unit="%".to_string()
-                            placeholder="如 0.05".to_string()
-                            value=stamp_duty_text
-                        />
-                        <FeeField
-                            label="过户费".to_string()
-                            unit="%".to_string()
-                            placeholder="如 0.001".to_string()
-                            value=transfer_fee_text
-                        />
-                    </div>
-                    <p class="stock-fee-form__hint">
-                        "佣金：委托成交总额 × 费率，不足最低佣金时按最低佣金收取（买卖双向）；\
-                         一笔委托分多笔成交时，费用按委托成交总额计算一次，再按各笔成交金额比例分摊。"
-                    </p>
                 </div>
             </div>
 
@@ -747,25 +632,6 @@ fn fund_row(record: StockFundRecordDto) -> AnyView {
     .into_any()
 }
 
-/// 一个带单位后缀的费用输入项。
-#[component]
-fn FeeField(
-    label: String,
-    unit: String,
-    placeholder: String,
-    value: RwSignal<String>,
-) -> impl IntoView {
-    view! {
-        <div class="stock-fee-field">
-            <span class="stock-fee-field__label">{label}</span>
-            <div class="stock-fee-field__control">
-                <Input value=value placeholder=placeholder />
-                <span class="stock-fee-field__unit">{unit}</span>
-            </div>
-        </div>
-    }
-}
-
 /// 追加本金 / 支取弹窗（同一套字段，只有文案不同）。
 #[allow(clippy::too_many_arguments)]
 fn amount_modal(
@@ -791,7 +657,7 @@ fn amount_modal(
         >
             <div class="modal-form-item">
                 <p class="modal-form-label">{label}</p>
-                <Input value=amount placeholder="请输入金额（支持两位小数）" />
+                <Input value=amount placeholder="请输入金额" />
             </div>
             <div class="modal-form-item">
                 <p class="modal-form-label">"发生日期"</p>
@@ -800,20 +666,6 @@ fn amount_modal(
         </Modal>
     }
     .into_any()
-}
-
-/// 去掉浮点尾零（保留 `digits` 位小数后去掉末尾的 `0`）。
-fn trim_number(value: f64, digits: usize) -> String {
-    if !value.is_finite() {
-        return "0".to_string();
-    }
-    let text = format!("{value:.digits$}");
-    let text = text.trim_end_matches('0').trim_end_matches('.');
-    if text.is_empty() {
-        "0".to_string()
-    } else {
-        text.to_string()
-    }
 }
 
 // ==================================================================== 分栏二：持仓
@@ -907,7 +759,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                 Ok(items) => trades.set(items),
                 Err(error) => {
                     trades.set(Vec::new());
-                    notify_error("查询交易历史失败", &error);
+                    notify_error("查询成交记录失败", &error);
                 }
             }
             trades_loading.set(false);
@@ -976,6 +828,18 @@ fn position_view(active: RwSignal<String>) -> AnyView {
         is_active
     });
 
+    // 选中变化 → 刷新该股行情（原先靠工具栏的「刷新行情」按钮；现在点卡片即刷新）。
+    // 守卫写法与本文件其他 Effect 一致：值没变就直接返回，避免重复请求。
+    Effect::new(move |prev: Option<String>| {
+        let code = selected_code.get();
+        if prev.as_deref() == Some(code.as_str()) {
+            return code;
+        }
+        if !code.is_empty() {
+            load_positions(Some(code.clone()));
+        }
+        code
+    });
     // 编辑成交后重取该股成交（写入计数即触发）
     Effect::new(move |prev: Option<u32>| {
         let revision = reload_trades.get();
@@ -1142,11 +1006,11 @@ fn position_view(active: RwSignal<String>) -> AnyView {
             .await
             {
                 Ok(_) => {
-                    Notifier::global().success("交易已记录".to_string(), None);
+                    Notifier::global().success("委托已记录".to_string(), None);
                     trade_open.set(false);
                     load_positions(Some(code.clone()));
                 }
-                Err(error) => notify_error("记录交易失败", &error),
+                Err(error) => notify_error("记录委托失败", &error),
             }
             trade_mutating.set(false);
         });
@@ -1317,7 +1181,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                         if positions_loading.get() {
                                             "正在加载持仓…"
                                         } else {
-                                            "暂无持仓"
+                                            "暂无持仓，先点下方「建仓」"
                                         }
                                     }}
                                 </div>
@@ -1399,7 +1263,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                                             </span>
                                                         </div>
                                                         <div class="stock-position-card__row">
-                                                            <span class="stock-position-card__label">"浮盈"</span>
+                                                            <span class="stock-position-card__label">"浮动盈亏"</span>
                                                             <span class=format!("stock-position-card__value {float_class}")>
                                                                 {format::signed_yuan(float_pnl.unwrap_or(0))}
                                                             </span>
@@ -1414,8 +1278,13 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                                         <div class="stock-position-card__row is-muted">
                                                             <span class="stock-position-card__label">"现价"</span>
                                                             <span class="stock-position-card__value">"—"</span>
-                                                            <span class="stock-position-card__label">"浮盈"</span>
+                                                            <span class="stock-position-card__rate">"—"</span>
+                                                        </div>
+
+                                                        <div class="stock-position-card__row is-muted">
+                                                            <span class="stock-position-card__label">"浮动盈亏"</span>
                                                             <span class="stock-position-card__value">"—"</span>
+                                                            <span class="stock-position-card__rate">"—"</span>
                                                         </div>
                                                     }
                                                         .into_any()
@@ -1427,15 +1296,6 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                             }}
                         </div>
                     </Show>
-                    <div class="stock-panel__footer">
-                        <Button
-                            variant=ButtonVariant::Primary
-                            block=true
-                            on_click=move |_| open_trade("open")
-                        >
-                            "建仓"
-                        </Button>
-                    </div>
                 </div>
 
                 <div class="stock-panel stock-panel--detail">
@@ -1504,6 +1364,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                         "清仓"
                                     </Button>
                                     <Button
+                                        variant=ButtonVariant::Secondary
                                         size=ButtonSize::Small
                                         // 同上：这里写 selected_code 会让「减仓」弹窗弹不出来
                                         on_click=move |_| open_trade("reduce")
@@ -1511,7 +1372,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                         "减仓"
                                     </Button>
                                     <Button
-                                        variant=ButtonVariant::Primary
+                                        variant=ButtonVariant::Secondary
                                         size=ButtonSize::Small
                                         // 同上
                                         on_click=move |_| open_trade("add")
@@ -1543,7 +1404,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                             </span>
                                         </div>
                                         <div class="stock-quote__cell">
-                                            <span class="stock-quote__label">"当前盈亏"</span>
+                                            <span class="stock-quote__label">"浮动盈亏"</span>
                                             <span class=format!("stock-quote__value {float_class}")>
                                                 {format!("{} {}", format::signed_yuan(float_pnl.unwrap_or(0)), format::optional_signed_percent(float_rate))}
                                             </span>
@@ -1559,19 +1420,6 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                 }
                                     .into_any()
                             }}
-
-                            <div class="stock-panel__footer stock-detail__toolbar">
-                                <Button
-                                    size=ButtonSize::Small
-                                    loading=Signal::derive(move || positions_loading.get())
-                                    on_click=move |_| {
-                                        load_positions(Some(selected_code.get_untracked()))
-                                    }
-                                >
-                                    <span class="ui-btn__icon">{icons::icon(Icon::Reload)}</span>
-                                    "刷新行情"
-                                </Button>
-                            </div>
 
                             <div class="stock-review">
                                 <div class="stock-review__head">
@@ -1660,6 +1508,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                         />
                                         <div class="stock-review__actions">
                                             <Button
+                                                variant=ButtonVariant::Secondary
                                                 size=ButtonSize::Small
                                                 disabled=Signal::derive(move || review_saving.get())
                                                 on_click=move |_| {
@@ -1698,7 +1547,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                                 <th class="is-right" style="width: 110px;">"成交价"</th>
                                                 <th class="is-center" style="width: 90px;">"手数"</th>
                                                 <th class="is-right" style="width: 120px;">"成交金额"</th>
-                                                <th style="min-width: 220px;">"手续费"</th>
+                                                <th style="min-width: 220px;">"费用"</th>
                                                 <th class="is-right" style="width: 120px;">"资金变动"</th>
                                                 <th class="is-center" style="width: 110px;">"操作"</th>
                                             </tr>
@@ -1976,12 +1825,12 @@ fn edit_modal(
                                 .collect_view()}
                         </div>
                         <div class="modal-form-item">
-                            <p class="modal-form-label">"成交价（元/股）"</p>
+                            <p class="modal-form-label">"成交价"</p>
                             <Input value=price placeholder="成交价（元/股）" />
                         </div>
                         <div class="modal-form-item">
                             <p class="modal-form-label">"手数"</p>
-                            <Input value=lots placeholder="手数" />
+                            <Input value=lots placeholder="手数（手）" />
                         </div>
                         <div class="modal-form-item">
                             <p class="modal-form-label">"委托时间（同步到本委托全部成交）"</p>
@@ -2117,7 +1966,7 @@ fn trade_modal(
     view! {
         <Modal
             open=Signal::derive(move || open.get())
-            title=move || { let label = format::trade_type_label(&trade_type.get()); format!("记录{label}") }
+            title=move || { let label = format::trade_type_label(&trade_type.get()); format!("委托{label}") }
             width=560
             ok_text=move || format::trade_type_label(&trade_type.get())
             cancel_text="取消"
@@ -2351,7 +2200,14 @@ fn trade_modal(
                 </div>
             </div>
             <p class="stock-trade-form__hint">
-                {move || format!("默认标签：{}", default_tag.get())}
+                {move || {
+                    let default = default_tag.get();
+                    if default.is_empty() {
+                        "清仓时需选择交易标签".to_string()
+                    } else {
+                        format!("清仓时默认使用标签「{default}」")
+                    }
+                }}
             </p>
         </Modal>
     }
@@ -2461,7 +2317,7 @@ fn trade_table_rows(
                 return view! {
                     <tr>
                         <td colspan="8">
-                            <Empty title="暂无交易历史" />
+                            <Empty title="暂无成交记录" />
                         </td>
                     </tr>
                 }
@@ -2823,10 +2679,9 @@ fn history_view() -> AnyView {
         <div class="stock-history">
             <Show when=move || !histories.get().is_empty() || summary.get().stock_count.is_positive()>
                 <div class="stock-summary-bar">
-                    <span class="stock-summary-bar__title">"全部已清仓股票"</span>
                     <div class="stock-summary-bar__cells">
                         <SummaryCell
-                            label="总盈亏".to_string()
+                            label="已实现盈亏".to_string()
                             value=Signal::derive(move || format::signed_yuan(summary.get().total_pnl))
                             class=Signal::derive(move || {
                                 format::pnl_class(summary.get().total_pnl).to_string()
@@ -2862,9 +2717,6 @@ fn history_view() -> AnyView {
 
             <div class="stock-history__grid">
                 <div class="stock-panel stock-panel--list">
-                    <div class="stock-panel__head">
-                        <h4 class="stock-panel__title">"已清仓股票"</h4>
-                    </div>
                     <Show
                         when=move || !histories.get().is_empty()
                         fallback=move || {
@@ -2960,7 +2812,7 @@ fn history_view() -> AnyView {
                                 </span>
                                 <div class="stock-summary-bar__cells">
                                     <SummaryCell
-                                        label="总盈亏".to_string()
+                                        label="已实现盈亏".to_string()
                                         value=Signal::derive(move || format::signed_yuan(data.total_pnl))
                                         class=Signal::derive(move || {
                                             format::pnl_class(data.total_pnl).to_string()
@@ -3252,6 +3104,7 @@ fn round_card(
                             />
                             <div class="stock-review__actions">
                                 <Button
+                                    variant=ButtonVariant::Secondary
                                     size=ButtonSize::Small
                                     disabled=Signal::derive(move || review_saving.get())
                                     on_click=move |_| {
@@ -3456,7 +3309,7 @@ fn statistics_view() -> AnyView {
                             <div class="stock-empty">
                                 <Empty
                                     title="还没有结算记录"
-                                    description="股票清仓后，这一轮从建仓到清仓的完整交易会自动成为一笔结算；完成第 1 笔结算后即可看到逐笔累计的统计与曲线。"
+                                    description="股票清仓后，这一轮从建仓到清仓会生成一笔结算；完成第一笔结算后即可看到统计与曲线。"
                                 />
                             </div>
                         </div>
@@ -3473,7 +3326,7 @@ fn statistics_view() -> AnyView {
                                     options=vec![
                                         SegmentedOption::new("all", "全部"),
                                         SegmentedOption::new("range", "按时间"),
-                                        SegmentedOption::new("recent", "最近N笔"),
+                                        SegmentedOption::new("recent", "最近 N 笔"),
                                     ]
                                     on_change=UnsyncCallback::new(move |next: String| {
                                         filter_mode.set(next.clone());
@@ -3549,7 +3402,7 @@ fn statistics_view() -> AnyView {
                             view! {
                                 <div class="stock-stats-overview">
                                     <div class="stock-stats-overview__lead">
-                                        <span class="stock-stats-overview__label">"总盈亏"</span>
+                                        <span class="stock-stats-overview__label">"已实现盈亏"</span>
                                         <span class=format!(
                                             "stock-stats-overview__value {}",
                                             format::pnl_class(latest.total_pnl),
@@ -3583,7 +3436,7 @@ fn statistics_view() -> AnyView {
                                                 format::ratio_text(latest.pnl_ratio)
                                             })
                                             class=Signal::derive(String::new)
-                                            sub=Signal::derive(|| "平均盈利 ÷ 平均亏损".to_string())
+                                            sub=Signal::derive(|| "盈利均值 ÷ 亏损均值".to_string())
                                         />
                                         <StatKpi
                                             label="期望值".to_string()
@@ -3593,7 +3446,7 @@ fn statistics_view() -> AnyView {
                                             class=Signal::derive(move || {
                                                 format::pnl_class(latest.expectancy).to_string()
                                             })
-                                            sub=Signal::derive(|| "平均每笔".to_string())
+                                            sub=Signal::derive(|| "每笔均值".to_string())
                                         />
                                         <StatKpi
                                             label="最大回撤".to_string()
@@ -3654,6 +3507,7 @@ fn statistics_view() -> AnyView {
                                                 format!("{} 笔亏损", latest.loss_count)
                                             })
                                         />
+
                                     </div>
                                 </div>
 
@@ -3746,11 +3600,11 @@ fn statistics_view() -> AnyView {
                                     }}
                                 </div>
 
-                                <div class="stock-chart-block">
+                                    <div class="stock-chart-block">
                                     <div class="stock-panel__head">
                                         <h4 class="stock-panel__title">"逐笔结算明细"</h4>
                                         <span class="stock-panel__hint">
-                                            "按结算时间倒序排列，每一行 = 结算到第 N 笔时的累计结果"
+                                            "按结算日期倒序；每一行 = 结算到该笔时的累计结果"
                                         </span>
                                     </div>
                                     <div class="stock-table-wrap">

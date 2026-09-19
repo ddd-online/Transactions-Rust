@@ -52,6 +52,65 @@ textarea {
   font-size: inherit;
 }
 
+/* ------------------------------------------------------------------ 浏览器自带的"表面"
+ * 滚动条 / 选区 / 光标是界面里**唯一不属于设计系统**的部分，
+ * 它们全部由浏览器默认值决定（原生滚动条 17px、带上下箭头、灰色轨道），
+ * 也是"这页是设计过的还是拼起来的"最便宜的那个信号。这里一律从调色板取色。
+ *
+ * 滚动条**全站统一**（不再是一个可选 class）：
+ * 原来有个 `.u-custom-scrollbar` mixin，但全仓**一个使用者都没有**，
+ * 所以此前所有滚动容器都是原生外观。
+ *
+ * ⚠ **只用 `::-webkit-scrollbar`，绝不写 `scrollbar-width`**：
+ * 实测（WebView2 / Chrome 153）两者同时存在时，`scrollbar-width` 会让 webkit 伪元素**整体失效**，
+ * 滚动条退回 11px 的原生细条 —— 原来的 mixin 正是两个都写，那套 5px 圆角样式从未真正生效过
+ * （实测占用：原生 17px / `scrollbar-width:thin` 11px / 只有 webkit 6px）。
+ *
+ * 尺寸：6px 槽位 + 1px 透明边框 + `background-clip: content-box` = **4px 实心滑块**，
+ * 比原生窄 11px；轨道透明，指针进入该滚动区域时滑块加深，拖动时用主色。
+ * ------------------------------------------------------------------ */
+
+:where(*)::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+:where(*)::-webkit-scrollbar-track,
+:where(*)::-webkit-scrollbar-corner {
+  background-color: transparent;
+}
+
+:where(*)::-webkit-scrollbar-thumb {
+  border: 1px solid transparent;
+  border-radius: var(--transactions-radius-full);
+  background-color: var(--transactions-color-scrollbar-thumb);
+  background-clip: content-box;
+}
+
+/* `:hover` 只命中祖先，所以这条的语义是"指针在这个滚动区域里"（进入哪个区域，哪个区域的滑块醒来） */
+:where(*):hover::-webkit-scrollbar-thumb,
+:where(*)::-webkit-scrollbar-thumb:hover {
+  background-color: var(--transactions-color-scrollbar-thumb-hover);
+}
+
+/* 正在拖动：主色，明确"你正在移动它" */
+:where(*)::-webkit-scrollbar-thumb:active {
+  background-color: var(--transactions-color-primary);
+}
+
+/* 选区：用"选中"的既有配对（主色底 + 反色字），与日历选中格子同一套语言 */
+::selection {
+  background-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+}
+
+/* 光标：与主色一致，输入框里能一眼找到插入点 */
+input,
+textarea,
+[contenteditable="true"] {
+  caret-color: var(--transactions-color-primary);
+}
+
 /* ============================================
  * 2. 排版
  * ============================================ */
@@ -256,8 +315,10 @@ textarea {
  *   * `@mixin flex-center` / `flex-between` / `flex-start` / `flex-end` /
  *     `flex-column` / `text-ellipsis` / `page-container` / `section-gap` /
  *     `icon-button` / `nav-button` / `focus-ring` / `card-base` / `card-elevated` /
- *     `custom-scrollbar` / `drag-region` / `no-drag-region` / `noise-texture`
+ *     `drag-region` / `no-drag-region` / `noise-texture`
  *     —— 逐条翻译成 `.u-*` 工具类（可组合），或直接内联进使用它的组件类。
+ *   * `@mixin custom-scrollbar` 的语义**已提升为全站默认**（见第 1 节「浏览器自带的表面」）：
+ *     它原来的 `.u-custom-scrollbar` 一个使用者都没有，写成了可选类反而等于没做。
  *   * `@mixin input-focus` 的语义由 `ui.css` 的 `.ui-input:focus-within` 承担。
  *   * `@mixin button-reset` 的语义由 `ui.css` 的 `.ui-btn` 承担。
  * ============================================ */
@@ -303,31 +364,6 @@ textarea {
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* @mixin custom-scrollbar —— 5px 冷灰滑块，悬浮时才加深 */
-.u-custom-scrollbar {
-  scrollbar-width: thin;
-}
-
-.u-custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
-}
-
-.u-custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-  margin-block: var(--transactions-space-xs);
-}
-
-.u-custom-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--transactions-color-scrollbar-thumb);
-  border-radius: 8px;
-  transition: background 0.3s ease;
-}
-
-.u-custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: var(--transactions-color-scrollbar-thumb-hover);
 }
 
 /* @mixin page-container */
@@ -625,13 +661,14 @@ textarea {
   padding-top: var(--transactions-space-xl);
 }
 
-/* 页面标题 */
+/* 页面标题：**不留下外边距** —— 标题与工具栏之间的间距统一由 `.page-header` 给
+ * （原来这里还有 16px，和 `.page-header` 的间距叠加，中间会空出 24px） */
 .page-title {
   font-family: var(--transactions-font-display);
   font-size: var(--transactions-size-text-display-sm);
   font-weight: 500;
   color: var(--transactions-color-text-major);
-  margin: 0 0 var(--transactions-space-lg) 0;
+  margin: 0;
   letter-spacing: -0.01em;
 }
 

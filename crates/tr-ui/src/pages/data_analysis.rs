@@ -32,7 +32,8 @@ use tr_domain::models::ChartLine;
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, CheckboxGroup,
-    CheckboxOption, Divider, Input, LineChart, Modal, Popconfirm, Select, SelectOption, Spin,
+    CheckboxOption, Divider, Empty, IconButton, IconButtonVariant, Input, LineChart, Modal,
+    Popconfirm, Select, SelectOption, Spin, Tag, TagKind, TimeRangePicker,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -52,7 +53,7 @@ const TRANSACTION_TYPES: [(&str, &str); 3] = [
 ];
 
 /// 时间粒度选项。
-const GRANULARITIES: [(&str, &str); 2] = [("year", "年度"), ("month", "月度")];
+const GRANULARITIES: [(&str, &str); 2] = [("year", "年"), ("month", "月")];
 
 /// 标签匹配策略。
 const TAG_POLICIES: [(&str, &str); 2] = [("any", "任意"), ("all", "全部")];
@@ -213,7 +214,7 @@ pub fn DataAnalysisPage() -> impl IntoView {
         let ledger_id = stores.current_ledger_id.get_untracked();
         let title = create_title.get_untracked().trim().to_string();
         if ledger_id.is_empty() {
-            Notifier::global().error("请先选择账本".to_string(), None);
+            Notifier::global().error("尚未选择账本".to_string(), None);
             return;
         }
         if title.is_empty() {
@@ -368,33 +369,19 @@ pub fn DataAnalysisPage() -> impl IntoView {
     view! {
         <section class="page da-page">
             <header class="page-header">
-                <div class="da-time">
-                    <Button
-                        size=ButtonSize::Small
-                        on_click=move |_| {
-                            // 上一周期：按粒度位移
-                            shift_range(range_mode, range_start, range_end, -1);
-                        }
-                    >
-                        "上一周期"
-                    </Button>
-                    <SegmentMode mode=range_mode start=range_start end=range_end />
-                    <Button
-                        size=ButtonSize::Small
-                        on_click=move |_| {
-                            shift_range(range_mode, range_start, range_end, 1);
-                        }
-                    >
-                        "下一周期"
-                    </Button>
-                    <span class="da-time__range">
-                        {move || format!("{} ~ {}", range_start.get(), range_end.get())}
-                    </span>
+                <div class="page-header-text">
+                    <h1 class="page-title">{PAGE_TITLE}</h1>
                 </div>
                 <div class="app-top-bar-spacer"></div>
             </header>
 
             <div class="page-body">
+                <div class="page-toolbar">
+                    // 时间范围选择器**与消费记录页同一个共享组件**（`TimeRangePicker`）：
+                    // 从前这里自己做了「上一期 / 日-月-年分度 / 下一期」三件套，两页行为不一致。
+                    <TimeRangePicker mode=range_mode start=range_start end=range_end />
+                </div>
+
                 <div class="da-main">
                     <aside class="da-sidebar">
                         <Button
@@ -430,19 +417,19 @@ pub fn DataAnalysisPage() -> impl IntoView {
                                         let is_active = id == selected.get();
                                         let click_id = id.clone();
                                         let delete_chart_value = chart.clone();
-                                        let dots = chart
-                                            .lines
-                                            .iter()
-                                            .map(|line| {
-                                                transaction_type_color(&line.transaction_type)
-                                            })
-                                            .collect::<Vec<_>>();
+                                        // 侧栏项**不再显示曲线颜色点**（一行三四个小圆点纯属视觉噪音，
+                                        // 颜色信息由图例与"曲线合计"承担）
                                         let title = chart.title.clone();
                                         // 标题会同时进 `title` 属性与文本节点，各留一份克隆
                                         let title_for_attr = title.clone();
                                         let title_for_label = title.clone();
-                                        let confirm_title =
-                                            format!("删除图表「{title}」？此操作不可恢复。");
+                                        let confirm_title = format!("删除图表「{title}」？");
+                                        // 回调先建好（`UnsyncCallback` 是 Copy）：`view!` 的 children
+                                        // 可能多次求值，直接 move 捕获 `ChartDto` 会让闭包退化成 FnOnce。
+                                        let delete_click = UnsyncCallback::new({
+                                            let chart = delete_chart_value.clone();
+                                            move |()| delete_chart(chart.clone())
+                                        });
                                         view! {
                                             <div
                                                 class="da-list__item"
@@ -464,28 +451,6 @@ pub fn DataAnalysisPage() -> impl IntoView {
                                                 >
                                                     {title_for_label.clone()}
                                                 </span>
-                                                <span class="da-list__dots">
-                                                    {if dots.is_empty() {
-                                                        view! {
-                                                            <span class="da-list__dot is-empty"></span>
-                                                        }
-                                                            .into_any()
-                                                    } else {
-                                                        dots.into_iter()
-                                                            .map(|color| {
-                                                                view! {
-                                                                    <span
-                                                                        class="da-list__dot"
-                                                                        style=format!(
-                                                                            "background: {color}",
-                                                                        )
-                                                                    ></span>
-                                                                }
-                                                            })
-                                                            .collect_view()
-                                                            .into_any()
-                                                    }}
-                                                </span>
                                                 <Popconfirm
                                                     title=confirm_title
                                                     ok_text="删除"
@@ -494,14 +459,19 @@ pub fn DataAnalysisPage() -> impl IntoView {
                                                         delete_chart(delete_chart_value.clone())
                                                     }
                                                 >
-                                                    <button
-                                                        type="button"
+                                                    <IconButton
+                                                        variant=IconButtonVariant::Danger
+                                                        compact=true
+                                                        label="删除图表"
                                                         class="da-list__delete"
-                                                        aria-label="删除图表"
-                                                        on:click=move |event| event.stop_propagation()
+                                                        // **不要 stop_propagation**：Popconfirm 的触发挂在
+                                                        // 捕获阶段，这里再吞一次会把气泡自己的开关抵消掉
+                                                        // （点了删除什么都不弹）。列表项的"点按钮别选中整行"
+                                                        // 由 Popconfirm 捕获阶段那一次 stopPropagation 负责。
+                                                        on_click=delete_click
                                                     >
                                                         {icons::icon(Icon::Trash)}
-                                                    </button>
+                                                    </IconButton>
                                                 </Popconfirm>
                                             </div>
                                         }
@@ -510,14 +480,14 @@ pub fn DataAnalysisPage() -> impl IntoView {
                                     .into_any()
                             }}
                         </div>
-                    </aside>
+                        </aside>
 
                     <div class="da-content">
                         {move || {
                             let Some(chart) = current_chart() else {
                                 return view! {
                                     <div class="da-empty">
-                                        <crate::components::ui::Empty title="请选择一个图表" />
+                                        <crate::components::ui::Empty title="请选择左侧图表，或点上方「新增图表」" />
                                     </div>
                                 }
                                     .into_any();
@@ -558,7 +528,7 @@ pub fn DataAnalysisPage() -> impl IntoView {
                 open=Signal::derive(move || create_open.get())
                 title="新增图表"
                 width=420
-                ok_text="确定"
+                ok_text="新增"
                 cancel_text="取消"
                 ok_loading=Signal::derive(move || creating.get())
                 on_close=move || create_open.set(false)
@@ -566,7 +536,7 @@ pub fn DataAnalysisPage() -> impl IntoView {
             >
                 <div class="modal-form-item">
                     <p class="modal-form-label">"图表名称"</p>
-                    <Input value=create_title placeholder="请输入图表名称" />
+                    <Input value=create_title placeholder="图表名称" />
                 </div>
                 <div class="modal-form-item">
                     <p class="modal-form-label">"时间粒度"</p>
@@ -576,7 +546,7 @@ pub fn DataAnalysisPage() -> impl IntoView {
                             .iter()
                             .map(|(value, label)| SelectOption::new(*value, *label))
                             .collect()
-                        placeholder="请选择时间粒度"
+                        placeholder="选择时间粒度"
                     />
                 </div>
             </Modal>
@@ -585,7 +555,7 @@ pub fn DataAnalysisPage() -> impl IntoView {
                 open=Signal::derive(move || rename_open.get())
                 title="重命名图表"
                 width=420
-                ok_text="确定"
+                ok_text="重命名"
                 cancel_text="取消"
                 ok_loading=Signal::derive(move || renaming.get())
                 on_close=move || rename_open.set(false)
@@ -593,7 +563,7 @@ pub fn DataAnalysisPage() -> impl IntoView {
             >
                 <div class="modal-form-item">
                     <p class="modal-form-label">"图表名称"</p>
-                    <Input value=rename_title placeholder="请输入图表名称" />
+                    <Input value=rename_title placeholder="图表名称" />
                 </div>
             </Modal>
         </section>
@@ -601,98 +571,6 @@ pub fn DataAnalysisPage() -> impl IntoView {
 }
 
 /// 时间粒度切换（日 / 月 / 年）。
-#[component]
-fn SegmentMode(
-    mode: RwSignal<String>,
-    start: RwSignal<String>,
-    end: RwSignal<String>,
-) -> impl IntoView {
-    view! {
-        <div class="da-time__modes">
-            {[("date", "日"), ("month", "月"), ("year", "年")]
-                .iter()
-                .map(|(value, label)| {
-                    let value = value.to_string();
-                    let value_for_click = value.clone();
-                    view! {
-                        <button
-                            type="button"
-                            class="da-time__mode"
-                            class:is-active=move || mode.get() == value
-                            on:click=move |_| {
-                                mode.set(value_for_click.clone());
-                                let (from, to) = normalize_range(
-                                    &start.get_untracked(),
-                                    &value_for_click,
-                                );
-                                start.set(from);
-                                end.set(to);
-                            }
-                        >
-                            {*label}
-                        </button>
-                    }
-                })
-                .collect_view()}
-        </div>
-    }
-}
-
-/// 按粒度对齐区间（月 → 当月 1 号 ~ 月末；年 → 1/1 ~ 12/31）。
-fn normalize_range(anchor: &str, mode: &str) -> (String, String) {
-    let (year, month, day) = crate::time::split_ymd(anchor).unwrap_or((1970, 1, 1));
-    match mode {
-        "month" => (
-            format!("{year:04}-{month:02}-01"),
-            format!("{year:04}-{month:02}-{:02}", days_in_month(year, month)),
-        ),
-        "year" => (format!("{year:04}-01-01"), format!("{year:04}-12-31")),
-        _ => (
-            format!("{year:04}-{month:02}-{day:02}"),
-            format!("{year:04}-{month:02}-{day:02}"),
-        ),
-    }
-}
-
-/// 某年某月的天数（用 JS「下月第 0 天」技巧，自动处理闰年）。
-fn days_in_month(year: i32, month: u32) -> u32 {
-    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32, 0);
-    date.get_date()
-}
-
-/// 按粒度前后位移一个周期。
-fn shift_range(
-    mode: RwSignal<String>,
-    start: RwSignal<String>,
-    end: RwSignal<String>,
-    direction: i32,
-) {
-    let current_mode = mode.get_untracked();
-    let anchor = start.get_untracked();
-    let (year, month, day) = crate::time::split_ymd(&anchor).unwrap_or((1970, 1, 1));
-    let next_anchor = match current_mode.as_str() {
-        "year" => format!("{:04}-{month:02}-{day:02}", year + direction),
-        "month" => {
-            let total = year * 12 + (month as i32 - 1) + direction;
-            let next_year = total.div_euclid(12);
-            let next_month = total.rem_euclid(12) as u32 + 1;
-            format!("{next_year:04}-{next_month:02}-01")
-        }
-        _ => {
-            let seconds =
-                crate::time::ymd_to_seconds(&anchor).unwrap_or(0) + i64::from(direction) * 86_400;
-            format::short_date(&crate::time::format_timestamp(seconds, "YYYY-MM-DD"))
-                .len()
-                .to_string()
-                .replace(|_| true, "")
-                + &crate::time::format_timestamp(seconds, "YYYY-MM-DD")
-        }
-    };
-    let (from, to) = normalize_range(&next_anchor, &current_mode);
-    start.set(from);
-    end.set(to);
-}
-
 /// 「YYYY-MM-DD」区间 → 闭区间 Unix 秒（起点 00:00:00、终点 23:59:59）。
 fn time_range_seconds(start: &str, end: &str) -> Vec<i64> {
     let Some(from) = crate::time::ymd_to_seconds(start) else {
@@ -733,6 +611,23 @@ fn chart_panel(
     let data_for_chart = data.clone();
     let data_for_sums = data;
 
+    // 画布里是否真有可画的数据（后端会把区间**补零对齐**，全 0 等于没有数据）。
+    // 空态与「曲线合计」的显隐共用同一条判据：没有数据时合计列全是 0，
+    // 留着只会把画布挤窄、让空态看着偏左 —— 隐藏它，空态才能在整个右侧区域里居中。
+    let has_values = {
+        let data = data_for_chart.clone();
+        Signal::derive(move || {
+            let Some(data) = data.clone() else {
+                return false;
+            };
+            let visible = lines.get();
+            data.lines
+                .iter()
+                .filter(|line| visible.iter().any(|item| item.label == line.label))
+                .any(|line| line.data.iter().any(|point| point.amount != 0))
+        })
+    };
+
     // 新增曲线表单
     let new_label = RwSignal::new(String::new());
     let new_type = RwSignal::new("income".to_string());
@@ -768,7 +663,7 @@ fn chart_panel(
                 ),
                 Err(error) => {
                     category_options.set(Vec::new());
-                    notify_error(&format!("查询 {transaction_type} 消费类型失败"), &error);
+                    notify_error(&format!("查询 {transaction_type} 消费分类失败"), &error);
                 }
             }
         });
@@ -815,6 +710,7 @@ fn chart_panel(
                         on_change=move |value: String| on_granularity.run(value)
                     />
                     <Button
+                        variant=ButtonVariant::Secondary
                         size=ButtonSize::Small
                         on_click=move |_| on_rename.run(())
                     >
@@ -849,10 +745,15 @@ fn chart_panel(
                             })
                             .cloned()
                             .collect();
-                        if response_lines.is_empty() {
+                        // 一条线都没返回、或返回的线全是 0（后端补零对齐），都算"没有数据"：
+                        // 不该画成贴着轴的平线（看着像"图坏了"），而是给空态。
+                        if !has_values.get() {
                             return view! {
                                 <div class="da-chart__empty">
-                                    <crate::components::ui::Empty title="暂无数据" />
+                                    <crate::components::ui::Empty
+                                        title="暂无数据"
+                                        description="这个时间范围里没有可统计的记录，换一个范围试试"
+                                    />
                                 </div>
                             }
                                 .into_any();
@@ -910,38 +811,50 @@ fn chart_panel(
                     }}
                 </div>
 
-                <aside class="da-chart__sums">
-                    <h4 class="da-chart__sums-title">"曲线合计"</h4>
-                    {move || {
-                        let Some(data) = data_for_sums.clone() else {
+                {let sums_data = data_for_sums.clone();
+                    move || {
+                        // 没有可画的数据时整列隐藏（合计全是 0）：留着只会把画布挤窄、
+                        // 让空态看着偏左。`has_values` 与画布空态是同一条判据。
+                        if !has_values.get() {
+                            return ().into_any();
+                        }
+                        let Some(data) = sums_data.clone() else {
                             return ().into_any();
                         };
-                        data.lines
-                            .iter()
-                            .map(|line| {
-                                let total: i64 = line.data.iter().map(|point| point.amount).sum();
-                                view! {
-                                    <div class="da-chart__sum-row">
-                                        <span
-                                            class="da-list__dot"
-                                            style=format!(
-                                                "background: {}",
-                                                transaction_type_color(
-                                                    &visible_type(&line.label, &lines.get_untracked()),
-                                                ),
-                                            )
-                                        ></span>
-                                        <span class="da-chart__sum-label">{line.label.clone()}</span>
-                                        <span class="da-chart__sum-value">
-                                            {format::amount(total)}
-                                        </span>
-                                    </div>
-                                }
-                            })
-                            .collect_view()
+                        view! {
+                            <aside class="da-chart__sums">
+                                <h4 class="da-chart__sums-title">"曲线合计"</h4>
+                                {data
+                                    .lines
+                                    .iter()
+                                    .map(|line| {
+                                        let total: i64 =
+                                            line.data.iter().map(|point| point.amount).sum();
+                                        view! {
+                                            <div class="da-chart__sum-row">
+                                                <span
+                                                    class="da-list__dot"
+                                                    style=format!(
+                                                        "background: {}",
+                                                        transaction_type_color(
+                                                            &visible_type(&line.label, &lines.get_untracked()),
+                                                        ),
+                                                    )
+                                                ></span>
+                                                <span class="da-chart__sum-label">
+                                                    {line.label.clone()}
+                                                </span>
+                                                <span class="da-chart__sum-value">
+                                                    {format::amount(total)}
+                                                </span>
+                                            </div>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </aside>
+                        }
                             .into_any()
                     }}
-                </aside>
             </div>
 
             <Divider />
@@ -952,7 +865,7 @@ fn chart_panel(
                     <Show when=move || !is_preset>
                         <div class="da-chart__lines-actions">
                             <Button
-                                variant=ButtonVariant::Primary
+                                variant=ButtonVariant::Secondary
                                 size=ButtonSize::Small
                                 on_click=move |_| {
                                     new_label.set(String::new());
@@ -971,6 +884,7 @@ fn chart_panel(
                                 "添加曲线"
                             </Button>
                             <Button
+                                variant=ButtonVariant::Secondary
                                 size=ButtonSize::Small
                                 on_click={
                                     // 在 `Show` 的 children 内克隆：children 是 `Fn`，
@@ -1006,10 +920,19 @@ fn chart_panel(
                         {move || {
                             let items = lines.get();
                             if items.is_empty() {
+                                // 空态：图标 + 标题 + 说明（原来只是一个灰字单元格）。
+                                // 预设图表的曲线由系统提供，只有自建图表才提示去添加。
+                                let hint = if is_preset {
+                                    "预设图表的曲线由系统提供".to_string()
+                                } else {
+                                    "点右上角「添加曲线」建一条".to_string()
+                                };
                                 return view! {
                                     <tr>
-                                        <td colspan="5" class="is-muted">
-                                            "暂无数据"
+                                        <td colspan="5">
+                                            <div class="da-chart__lines-empty">
+                                                <Empty title="还没有曲线" description=hint />
+                                            </div>
                                         </td>
                                     </tr>
                                 }
@@ -1034,28 +957,25 @@ fn chart_panel(
                                                 parts.push(item.description.clone());
                                             }
                                             if parts.is_empty() {
-                                                "无".to_string()
+                                                "不限".to_string()
                                             } else {
                                                 parts.join(" / ")
                                             }
                                         }
-                                        None => "无".to_string(),
+                                        None => "不限".to_string(),
                                     };
                                     let label = line.label.clone();
                                     view! {
                                         <tr>
                                             <td>{label}</td>
                                             <td class="is-center">
-                                                <span
-                                                    class="da-type-tag"
-                                                    style=format!(
-                                                        "color: {}; background: {}",
-                                                        transaction_type_color(&line.transaction_type),
-                                                        transaction_type_color(&line.transaction_type),
-                                                    )
-                                                >
+                                                // 交易类型：用共享 `Tag`（对应色的浅底 + 同色文字）。
+                                                // 原来这里是 `color` 与 `background` 都写成同一个语义色的手写 span，
+                                                // 结果**文字与底色完全同色**（实测 rgb(220,38,38) 叠 rgb(220,38,38)），
+                                                // 看上去就是个纯色块、读不出"支出/收入/转账"。
+                                                <Tag kind=TagKind::from_transaction_type(&line.transaction_type)>
                                                     {format::transaction_type_text(&line.transaction_type)}
-                                                </span>
+                                                </Tag>
                                             </td>
                                             <td class="is-center">
                                                 {if line.include_outlier { "是" } else { "否" }}
@@ -1170,7 +1090,7 @@ fn visible_type(label: &str, lines: &[ChartLine]) -> String {
         .unwrap_or_default()
 }
 
-/// 「添加曲线」弹窗（固定文案：标题「添加曲线」、ok「确定」、cancel「取消」、宽 500；
+/// 「添加曲线」弹窗（固定文案：标题「添加曲线」、ok「添加」、cancel「取消」、宽 500；
 /// 表单为 曲线名称 / 交易类型 / 分类 / 标签 / 标签匹配 / 描述包含 / 包含离群值）。
 #[allow(clippy::too_many_arguments)]
 fn add_line_modal(
@@ -1194,7 +1114,7 @@ fn add_line_modal(
             open=Signal::derive(move || open.get())
             title="添加曲线"
             width=500
-            ok_text="确定"
+            ok_text="添加"
             cancel_text="取消"
             ok_loading=Signal::derive(move || busy.get())
             on_close=move || open.set(false)
@@ -1202,7 +1122,7 @@ fn add_line_modal(
         >
             <div class="modal-form-item">
                 <p class="modal-form-label">"曲线名称"</p>
-                <Input value=label placeholder="请输入曲线名称" />
+                <Input value=label placeholder="曲线名称" />
             </div>
             <div class="modal-form-item">
                 <p class="modal-form-label">"交易类型"</p>
@@ -1212,7 +1132,7 @@ fn add_line_modal(
                         .iter()
                         .map(|(value, text)| SelectOption::new(*value, *text))
                         .collect()
-                    placeholder="请选择交易类型"
+                    placeholder="选择消费类型"
                     on_change=move |value: String| on_type_change.run(value)
                 />
             </div>
@@ -1221,7 +1141,7 @@ fn add_line_modal(
                 <Select
                     value=category
                     options=category_options.get()
-                    placeholder="请选择分类"
+                    placeholder="选择消费分类"
                     allow_clear=true
                     on_change=move |value: String| on_category_change.run(value)
                 />

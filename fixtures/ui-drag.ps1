@@ -158,8 +158,8 @@ function Read-Categories {
 
 # 把某个列表项拖到另一个列表项的位置（真实鼠标：按下 → 分段移动 → 抬起）
 #
-# 起手点用**行文字的中心**而不是行左边缘：左边缘 20px 处是 `.ct-drag-handle`，
-# 实测从那里起手偶尔不会进入拖拽（手柄上有 `touch-action: none`），从文字中心起手稳定。
+# 起手点用**行文字的中心**而不是行左边缘：左边缘那条 24px 的抓取带是 `.ui-drag-handle`，
+# 实测从那里起手偶尔不会进入拖拽（整行本来就可拖，把手只是视觉暗示），从文字中心起手稳定。
 # 移动分段要够密（20 段 × 60ms）：Chromium 需要看到 pointer 连续移动才启动 HTML5 拖拽。
 function Invoke-DragTo {
     param($Window, [string]$FromName, [string]$ToName)

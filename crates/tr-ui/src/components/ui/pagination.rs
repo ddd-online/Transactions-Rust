@@ -129,7 +129,7 @@ pub fn Pagination(
                     view! {
                         <select
                             class="tr-pagination__size"
-                            title="每页条数"
+                            aria-label="每页条数"
                             prop:value=move || page_size.get().to_string()
                             on:change=move |ev| {
                                 if let Ok(size) = event_target_value(&ev).parse::<i32>() {

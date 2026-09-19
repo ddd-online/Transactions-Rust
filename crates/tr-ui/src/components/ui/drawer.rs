@@ -5,6 +5,7 @@
 
 use leptos::prelude::*;
 
+use super::modal::is_mask_self_click;
 use crate::icons::{self, Icon};
 
 #[component]
@@ -21,7 +22,7 @@ pub fn Drawer(
     /// 是否显示底部按钮栏（默认隐藏）
     #[prop(optional)]
     footer: bool,
-    /// 确定按钮文案，默认「确定」
+    /// 确认按钮文案，默认「确认」
     #[prop(optional, into)]
     ok_text: Option<String>,
     /// 确定回调
@@ -32,14 +33,24 @@ pub fn Drawer(
     on_close: Option<UnsyncCallback<()>>,
     children: ChildrenFn,
 ) -> impl IntoView {
-    let ok_text = ok_text.unwrap_or_else(|| "确定".to_string());
+    let ok_text = ok_text.unwrap_or_else(|| "确认".to_string());
     let content_style = width
         .map(|width| format!("width: {width}px;"))
         .unwrap_or_default();
 
     view! {
         <Show when=move || open.get()>
-            <div class="ui-drawer__mask">
+            <div
+                class="ui-drawer__mask"
+                on:click=move |ev| {
+                    // 与「弹窗」同一套：点遮罩空白处关闭，点内容不关
+                    if is_mask_self_click(&ev) {
+                        if let Some(callback) = on_close {
+                            callback.run(());
+                        }
+                    }
+                }
+            >
                 <aside class="ui-drawer__content" style=content_style.clone()>
                     <div class="ui-drawer__header">
                         <h3 class="ui-drawer__title">{title.clone()}</h3>
@@ -61,7 +72,7 @@ pub fn Drawer(
                     <div class="ui-drawer__footer" class:is-hidden=move || !footer>
                         <button
                             type="button"
-                            class="ui-btn ui-btn--secondary ui-btn--sm"
+                            class="ui-btn ui-btn--secondary"
                             on:click=move |_| {
                                 if let Some(callback) = on_close {
                                     callback.run(());
@@ -72,7 +83,7 @@ pub fn Drawer(
                         </button>
                         <button
                             type="button"
-                            class="ui-btn ui-btn--primary ui-btn--sm"
+                            class="ui-btn ui-btn--primary"
                             on:click=move |_| {
                                 if let Some(callback) = on_ok {
                                     callback.run(());

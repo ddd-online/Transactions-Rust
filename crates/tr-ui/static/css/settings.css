@@ -19,14 +19,31 @@
   flex-shrink: 0;
 }
 
+/* 设置页的内容容器：**纵向不留内边距**（左右由统一规则给 16px）。
+ * 每行自带 12px 上下内边距，所以第一行的分隔线正好落在工具栏那条线上 ——
+ * 以前这里还有 16px 顶部内边距，工作空间那一行离工具栏的空档就显得很长。 */
 .st-panes {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  padding-top: var(--transactions-space-lg);
-  padding-bottom: var(--transactions-space-xl);
+  overflow-x: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* 页签面板容器（`TabPane` 渲染出的 `.ui-tab-pane`）：
+ *  1) **去掉它自带的 16px 上内边距** —— 实测这就是"工作空间上方空一截"的来源
+ *     （`.st-panes` 已经是 0，间隔全在它身上；去掉后首行紧贴工具栏那条线）；
+ *  2) **撑满分栏高度** —— 否则它是内容高度，"关于软件"这类需要垂直居中的面板
+ *     分不到多余空间，内容只能停在顶部（实测面板高 483 vs 分栏高 876）。 */
+.st-panes > .ui-tab-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: 0;
 }
 
 .st-pane {
@@ -36,13 +53,9 @@
   min-height: 0;
 }
 
-.st-pane-title {
-  margin: 0;
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-title-sm);
-  font-weight: var(--transactions-weight-semibold);
-  color: var(--transactions-color-text-major);
-}
+/* 说明：`.st-pane-title`（「消费模板」「日记配置」「股票交易」那三个分区标题）已删除 ——
+ * 页签本身已经说明当前在看哪一页，标题只是重复一遍。若将来某一页内容复杂到需要
+ * 二级分区，再按"分区标题 + 发丝线"的样式新加，不要恢复到"标题重复页签"的老样子。 */
 
 .st-toolbar {
   display: flex;
@@ -51,23 +64,44 @@
   gap: var(--transactions-space-md);
 }
 
+/* 只剩动作按钮的工具条：贴右（标题已经交给页签，不再重复） */
+.st-toolbar--actions {
+  justify-content: flex-end;
+}
+
 /* ---------------------------------------------------------------- 卡片列表 */
 
+/* 设置行 = **卡片里的行**，不是卡片里再套一张卡片：
+ * 页面内容区本身就是那张白卡片（`.page-body`），所以行只留一条通到卡片边缘的分隔线、
+ * 底色透明。以前每行自带边框 + 白底，在白卡片里就是"白套白"，层次全丢。 */
 .st-list {
   display: flex;
   flex-direction: column;
-  gap: var(--transactions-space-sm);
+}
+
+/* 第一行的上内边距收到 8px：让它紧贴工具栏那条底边线（原来是 16 + 12 = 28px 的空白），
+ * 但留一点呼吸，不让文字直接贴在线上。每个设置分栏的第一行都适用。 */
+.st-list > .st-card:first-child {
+  padding-top: var(--transactions-space-sm);
 }
 
 .st-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* 左右负外边距抵消页面内容容器的内边距，让分隔线通到卡片边缘 */
+  margin: 0 calc(-1 * var(--transactions-space-lg));
   padding: var(--transactions-space-md) var(--transactions-space-lg);
-  background-color: var(--transactions-color-major-background);
-  border: 1px solid var(--transactions-color-divider);
-  border-radius: var(--transactions-radius-md);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--transactions-color-divider);
+  border-radius: 0;
   transition: background-color var(--transactions-transition-fast);
+}
+
+/* 最后一行不再画线：下面就是卡片底边 */
+.st-list > .st-card:last-child {
+  border-bottom: none;
 }
 
 .st-card:hover {
@@ -133,12 +167,15 @@
 
 /* ---------------------------------------------------------------- 消费模板表格 */
 
+/* 模板表：**不再是卡片里的卡片**（原来自带描边 + 8px 圆角）。
+ * 表头用软灰底立起来（见下方 `.st-thead`），行之间用发丝线，整块通到卡片边缘。 */
 .st-table {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  border: 1px solid var(--transactions-color-divider);
-  border-radius: var(--transactions-radius-md);
+  border: none;
+  border-radius: 0;
+  margin: 0 calc(-1 * var(--transactions-space-lg));
 }
 
 .st-thead,
@@ -230,29 +267,17 @@
   justify-content: center;
 }
 
-.st-drag-handle {
-  display: inline-flex;
+/* 拖拽把手：统一用 `ui.css` 的 `.ui-drag-handle` + 图标集 `Icon::DragHandle`
+ * （以前这一页内联手画了一个 16 格 6 圆点 SVG，与分类标签页的 CSS 点阵还不一样）。 */
+.st-td--drag {
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+}
+
+/* ⚠ `:where()` 把权重降到 0：否则会压过 `.ui-drag-handle:hover`，把手悬停不变主色 */
+:where(.st-tr:hover) .ui-drag-handle {
   color: var(--transactions-color-text-secondary);
-  cursor: grab;
-  transition: color var(--transactions-transition-fast);
-  touch-action: none;
-}
-
-.st-drag-handle svg {
-  width: 16px;
-  height: 16px;
-}
-
-.st-drag-handle:hover {
-  color: var(--transactions-color-primary);
-}
-
-.st-tr:active .st-drag-handle {
-  cursor: grabbing;
 }
 
 .st-cell-ellipsis {
@@ -579,27 +604,41 @@
   cursor: help;
 }
 
-/* 费用说明是多行文案：`data-tooltip` 里带换行，按原样折行显示 */
+/* 费用说明是多行文案：`data-tooltip` 里带换行，按原样折行显示。
+ * 提示气泡**向左展开**（默认是居中展开）：这个图标在整行最右侧，
+ * 居中时气泡会越出面板右缘，既把 `.st-panes` 顶出横向滚动条，自己也容易被裁掉。 */
 .st-fee-tip::after {
+  left: auto;
+  right: 0;
+  transform: none;
   white-space: pre-line;
   max-width: 320px;
   line-height: var(--transactions-height-snug);
 }
 
+/* 费用表单：网格列必须**允许收缩**（`min-width: 0`）。
+ * 否则列内容（输入框 + "万分之/元/委托"后缀 + 提示图标）会撑到列宽之外，
+ * 把 `.st-pane` 顶出横向滚动条 —— 实测 `ui-form-item` 272 → scroll 279。 */
 .st-fee-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--transactions-space-md) var(--transactions-space-lg);
 }
 
+.st-fee-form > * {
+  min-width: 0;
+}
+
 .st-fee-field {
   display: flex;
   align-items: center;
   gap: var(--transactions-space-xs);
+  min-width: 0;
 }
 
 .st-fee-field .ui-input {
   flex: 1;
+  min-width: 0;
 }
 
 .st-fee-addon {
@@ -619,8 +658,13 @@
 
 /* ---------------------------------------------------------------- 关于软件 */
 
+/* 关于软件：内容在分栏里**水平垂直居中**。
+ * `flex: 1` 是必需的：`.st-pane` 默认是内容高度，没有多余空间可分配，
+ * `margin: auto`（`.st-about-main`）就起不到垂直居中的作用，内容会停在顶部。 */
 .st-about {
+  flex: 1;
   align-items: center;
+  justify-content: center;
   padding: var(--transactions-space-2xl) var(--transactions-space-lg);
 }
 
@@ -778,7 +822,7 @@
 @media (prefers-reduced-motion: reduce) {
   .st-card,
   .st-tr,
-  .st-drag-handle,
+  .ui-drag-handle,
   .st-tag-item-remove,
   .st-bar-fill {
     transition: none;

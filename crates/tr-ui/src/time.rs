@@ -11,6 +11,9 @@
 
 use wasm_bindgen::JsValue;
 
+/// 一天的秒数（时间范围翻页等纯整数计算用；不做时区换算）。
+pub const DAY_SECONDS: i64 = 86_400;
+
 /// 秒级时间戳 → 本地时间格式化字符串。
 ///
 /// ```ignore

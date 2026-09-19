@@ -16,9 +16,11 @@
 //!    （workspace_dir / close_behavior / appearance / config_path / is_dev），
 //!    其中 `config_path` 与 `is_dev` **不渲染**（本页没有对应 UI；
 //!    构建类型改用关于页的 `app_info("isDev")` 展示）。
-//! 4. **通用设置·外观/关闭行为/开发者工具**：持久化失败时提示并**回滚界面选中值**
-//!    （任务单要求），不静默吞掉；开发者工具以 `devtools_toggle`
-//!    的返回布尔为准。
+//! 4. **通用设置·外观/关闭行为**：持久化失败时提示并**回滚界面选中值**（任务单要求），
+//!    不静默吞掉。
+//!    **开发者工具不是开关而是按钮**：它的行为是"点击开一个新窗口"，没有可关闭的开关态
+//!    （要关就在 DevTools 自己的窗口上关），所以界面给「打开」按钮，只发 `devtools_toggle(true)`；
+//!    按钮带忙状态防止连点开出两个窗口。
 //! 5. **消费模板·新建模板是增补**：设置页此前**没有**新建入口（模板在「记一笔」弹窗里
 //!    「保存为模板」）。本实现按任务单增补「新建模板」弹窗，固定文案：
 //!    模板名称 / 请输入模板名称 / 保存模板失败 / 保存模板成功。
@@ -54,8 +56,8 @@ use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, Checkbox, CheckboxGroup, CheckboxOption, DragSortItem,
     DragSortState, Empty, Form, FormItem, FormLayout, Input, Modal, Popconfirm, Progress,
-    Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, Switch, TabItem, TabPane,
-    Tabs, Tag, TagKind, Tooltip,
+    Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, TabItem, TabPane, Tabs, Tag,
+    TagKind, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -73,8 +75,7 @@ const TAB_DIARY: &str = "diary";
 const TAB_STOCK: &str = "stock";
 const TAB_ABOUT: &str = "about";
 
-/// 交易费用说明（tooltip 固定文案，改动即影响界面；
-/// 换行用 `\n` + CSS `white-space: pre-line`）。
+/// 交易费用说明（「股票交易」分栏标题旁的说明浮层；与「股票交易」页的费用说明同口径）。
 const FEE_TOOLTIP: &str = "佣金：委托成交总额 × 费率，不足最低佣金时按最低佣金收取（买卖双向）\n一笔委托分多笔成交时，费用按委托成交总额计算一次，再按各笔成交金额比例分摊\n买入实际成本 = 成交金额 + 佣金 + 过户费";
 /// 印花税说明（固定文案）。
 const STAMP_TOOLTIP: &str = "卖出时按成交金额 × 费率收取";
@@ -88,6 +89,8 @@ const GITHUB_URL: &str = "https://github.com/ddd-online/Transactions-Rust";
 #[component]
 pub fn SettingsPage() -> impl IntoView {
     let active = RwSignal::new(TAB_GENERAL.to_string());
+    // 卡片底栏的「新建模板」→ 给「消费模板」分栏发一次请求脉冲（表单重置与弹窗开合都留在那一栏里）
+    let template_create = RwSignal::new(false);
     let items = vec![
         TabItem::new(TAB_GENERAL, "通用设置"),
         TabItem::new(TAB_TEMPLATE, "消费模板"),
@@ -101,19 +104,21 @@ pub fn SettingsPage() -> impl IntoView {
             <header class="page-header">
                 <div class="page-header-text">
                     <h1 class="page-title">{PAGE_TITLE}</h1>
-                    <p class="page-subtitle">"通用设置 · 消费模板 · 日记配置 · 股票交易 · 关于软件"</p>
                 </div>
                 <div class="app-top-bar-spacer"></div>
             </header>
 
             <div class="page-body">
-                <Tabs active=active items=items class="st-tabs" />
+                <div class="page-toolbar">
+                    <Tabs active=active items=items class="st-tabs" />
+                </div>
+
                 <div class="st-panes">
                     <TabPane active=active key=TAB_GENERAL>
                         <GeneralSetting />
                     </TabPane>
                     <TabPane active=active key=TAB_TEMPLATE>
-                        <TemplateSetting />
+                        <TemplateSetting create_request=template_create />
                     </TabPane>
                     <TabPane active=active key=TAB_DIARY>
                         <DiarySetting />
@@ -125,6 +130,19 @@ pub fn SettingsPage() -> impl IntoView {
                         <AboutSetting />
                     </TabPane>
                 </div>
+
+                // 卡片底栏：**只有「消费模板」这一栏有**（它的主动作是"新建"）。
+                // 放在 `.st-panes` 之外，所以它贴在卡片底边，滚动列表时不动。
+                <Show when=move || active.get() == TAB_TEMPLATE>
+                    <div class="page-footer-bar page-footer-bar--end">
+                        <Button
+                            variant=ButtonVariant::Primary
+                            on_click=move |_| template_create.set(true)
+                        >
+                            "新建模板"
+                        </Button>
+                    </div>
+                </Show>
             </div>
         </section>
     }
@@ -139,17 +157,12 @@ fn GeneralSetting() -> impl IntoView {
 
     let close_behavior = RwSignal::new(String::new());
     let appearance = RwSignal::new(stores.appearance.get_untracked());
-    let devtools = RwSignal::new(false);
+    // 开发者工具的按钮忙状态（防连点开出两个窗口）
+    let devtools_opening = RwSignal::new(false);
     let switching = RwSignal::new(false);
 
-    // DevTools 真实状态同步：开关始终跟随主进程，
-    // 避免"启动时自动打开 / 从 DevTools 自身按钮关闭"导致的状态脱节。
-    ipc::listen::<bool, _>(api::desktop::EVENT_DEVTOOLS_STATE_CHANGED, move |opened| {
-        devtools.set(opened)
-    });
-
     // 首屏：`config_get()` 一次拿全（workspace_dir / close_behavior / appearance /
-    // config_path / is_dev），再取 DevTools 初值。
+    // config_path / is_dev）。
     leptos::task::spawn_local(async move {
         match api::desktop::config_get().await {
             Ok(config) => {
@@ -165,11 +178,6 @@ fn GeneralSetting() -> impl IntoView {
                 stores.apply_appearance();
             }
             Err(error) => notify_error("读取配置", &error),
-        }
-
-        match api::desktop::devtools_get_state().await {
-            Ok(state) => devtools.set(state),
-            Err(error) => notify_error("读取开发者工具状态", &error),
         }
     });
 
@@ -236,23 +244,26 @@ fn GeneralSetting() -> impl IntoView {
         });
     };
 
-    // ---- 开发者工具：以后端返回的布尔为准 ----
-    let toggle_devtools = move |enabled: bool| {
+    // ---- 开发者工具：**一次性动作，不是开关** ----
+    // 点击就是"开一个新窗口"，没有"关"这一态（关它在它自己的窗口上）；所以界面给按钮而不是开关，
+    // 按钮只负责发 `true`。忙状态防连点开出两个窗口。
+    let open_devtools = move || {
+        if devtools_opening.get_untracked() {
+            return;
+        }
+        devtools_opening.set(true);
         leptos::task::spawn_local(async move {
-            match api::desktop::devtools_toggle(enabled).await {
-                Ok(state) => devtools.set(state),
-                Err(error) => {
-                    devtools.set(!enabled);
-                    notify_error("切换开发者工具", &error);
-                }
+            if let Err(error) = api::desktop::devtools_toggle(true).await {
+                notify_error("打开开发者工具", &error);
             }
+            devtools_opening.set(false);
         });
     };
 
     let workspace_text = move || {
         let directory = stores.workspace_dir.get();
         if directory.is_empty() {
-            "未设置工作空间".to_string()
+            "尚未选择工作空间".to_string()
         } else {
             directory
         }
@@ -284,7 +295,7 @@ fn GeneralSetting() -> impl IntoView {
             <div class="st-card">
                 <div class="st-card-info">
                     <span class="st-card-title">"外观"</span>
-                    <span class="st-card-desc">"界面颜色方案，可跟随系统"</span>
+                    <span class="st-card-desc">"界面配色，可跟随系统"</span>
                 </div>
                 <div class="st-card-action">
                     <Segmented
@@ -302,14 +313,14 @@ fn GeneralSetting() -> impl IntoView {
             <div class="st-card">
                 <div class="st-card-info">
                     <span class="st-card-title">"关闭行为"</span>
-                    <span class="st-card-desc">"点击关闭按钮时的操作"</span>
+                    <span class="st-card-desc">"点击右上角关闭按钮时的行为"</span>
                 </div>
                 <div class="st-card-action">
                     <Segmented
                         value=close_behavior
                         options=vec![
-                            SegmentedOption::new("quit", "直接关闭"),
-                            SegmentedOption::new("tray", "缩小到托盘"),
+                            SegmentedOption::new("quit", "直接退出"),
+                            SegmentedOption::new("tray", "最小化到托盘"),
                         ]
                         on_change=move |mode: String| change_close_behavior(mode)
                     />
@@ -319,13 +330,17 @@ fn GeneralSetting() -> impl IntoView {
             <div class="st-card">
                 <div class="st-card-info">
                     <span class="st-card-title">"开发者工具"</span>
-                    <span class="st-card-desc">"打开 Chromium DevTools，用于调试前端代码"</span>
+                    <span class="st-card-desc">"打开开发者工具，用于调试界面代码"</span>
                 </div>
                 <div class="st-card-action">
-                    <Switch
-                        checked=devtools
-                        on_change=move |enabled: bool| toggle_devtools(enabled)
-                    />
+                    // 行为是"开一个新窗口"，没有可关闭的开关态 → 用按钮（与「切换」同一套动作按钮样式）
+                    <Button
+                        variant=ButtonVariant::Secondary
+                        loading=devtools_opening
+                        on_click=move || open_devtools()
+                    >
+                        "打开"
+                    </Button>
                 </div>
             </div>
         </div>
@@ -335,8 +350,11 @@ fn GeneralSetting() -> impl IntoView {
 // ---------------------------------------------------------------- 消费模板
 
 /// 消费模板：列表 + 删除 + 拖拽排序 + （增补）新建。
+///
+/// `create_request` 是页面底栏「新建模板」发来的**一次请求脉冲**：
+/// 置 true 时本栏负责重置表单并打开弹窗（表单状态与弹窗都归本栏管），随即把它清回 false。
 #[component]
-fn TemplateSetting() -> impl IntoView {
+fn TemplateSetting(create_request: RwSignal<bool>) -> impl IntoView {
     let stores = AppStores::global();
 
     let templates = RwSignal::new(Vec::<TransactionTemplateDto>::new());
@@ -449,6 +467,16 @@ fn TemplateSetting() -> impl IntoView {
         create_open.set(true);
     };
 
+    // 底栏按「新建模板」→ 消费这次请求脉冲（重置表单 + 开弹窗都在这里，避免两处各写一遍）
+    Effect::new(move |_: Option<bool>| {
+        let requested = create_request.get();
+        if requested {
+            open_create();
+            create_request.set(false);
+        }
+        requested
+    });
+
     // 分类：随「弹窗打开 / 交易类型 / 账本」变化重新拉取
     Effect::new(move |_: Option<()>| {
         let open = create_open.get();
@@ -503,7 +531,7 @@ fn TemplateSetting() -> impl IntoView {
         }
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() {
-            Notifier::global().error("请先打开工作空间", None);
+            Notifier::global().error("请先选择工作空间", None);
             return;
         }
         // 前端先挡一道后端 `validate()` 的三条错误（文案与后端一致，中文）
@@ -552,13 +580,8 @@ fn TemplateSetting() -> impl IntoView {
 
     view! {
         <div class="st-pane">
-            <div class="st-toolbar">
-                <h2 class="st-pane-title">"消费模板"</h2>
-                <Button variant=ButtonVariant::Primary on_click=move || open_create()>
-                    "新建模板"
-                </Button>
-            </div>
-
+            // 分区标题与「新建模板」按钮都去掉了：标题由页签承担，
+            // 按钮移到底栏（`.page-footer-bar`，见 `SettingsPage`），表格因此从卡片顶部开始。
             <div class="st-table">
                 <div class="st-thead">
                     <div class="st-th st-th--drag"></div>
@@ -579,7 +602,7 @@ fn TemplateSetting() -> impl IntoView {
                                 view! {
                                     <div class="st-loading">
                                         <Spin spinning=true size=SpinSize::Small />
-                                        <span>"正在加载模板…"</span>
+                                        <span>"正在加载…"</span>
                                     </div>
                                 }
                                     .into_any()
@@ -635,7 +658,7 @@ fn TemplateSetting() -> impl IntoView {
                                 <Select
                                     value=form_category
                                     options=options
-                                    placeholder="请选择分类"
+                                    placeholder="选择消费分类"
                                     searchable=true
                                 />
                             }
@@ -694,7 +717,7 @@ fn template_row(
     } else {
         description_raw.clone()
     };
-    let delete_title = format!("删除模板「{}」？此操作不可恢复。", template.template_name);
+    let delete_title = format!("删除模板「{}」？", template.template_name);
     let id_for_delete = template_id.clone();
 
     let drop_handler = UnsyncCallback::new(move |(from, to): (usize, usize)| on_drop(from, to));
@@ -703,15 +726,8 @@ fn template_row(
     view! {
         <DragSortItem index=index state=drag on_drop=drop_handler class="st-tr">
             <div class="st-td st-td--drag">
-                <span class="st-drag-handle" title="拖动排序">
-                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                        <circle cx="5" cy="3" r="1.5"></circle>
-                        <circle cx="11" cy="3" r="1.5"></circle>
-                        <circle cx="5" cy="8" r="1.5"></circle>
-                        <circle cx="11" cy="8" r="1.5"></circle>
-                        <circle cx="5" cy="13" r="1.5"></circle>
-                        <circle cx="11" cy="13" r="1.5"></circle>
-                    </svg>
+                <span class="ui-drag-handle" title="拖动排序">
+                    {icons::icon(Icon::DragHandle)}
                 </span>
             </div>
 
@@ -915,13 +931,13 @@ fn DiarySetting() -> impl IntoView {
 
     let pick_import_directory = move || {
         leptos::task::spawn_local(async move {
-            match api::desktop::dialog_open("选择目录导入", "").await {
+            match api::desktop::dialog_open("选择导入目录", "").await {
                 Ok(response) => {
                     if let Some(directory) = response.first_path().map(str::to_string) {
                         run_import(directory);
                     }
                 }
-                Err(error) => notify_error("选择目录导入", &error),
+                Err(error) => notify_error("选择导入目录", &error),
             }
         });
     };
@@ -997,13 +1013,13 @@ fn DiarySetting() -> impl IntoView {
             return;
         }
         leptos::task::spawn_local(async move {
-            match api::desktop::dialog_open("选择目录导出", "").await {
+            match api::desktop::dialog_open("选择导出目录", "").await {
                 Ok(response) => {
                     if let Some(directory) = response.first_path().map(str::to_string) {
                         run_export(directory);
                     }
                 }
-                Err(error) => notify_error("选择目录导出", &error),
+                Err(error) => notify_error("选择导出目录", &error),
             }
         });
     };
@@ -1019,24 +1035,23 @@ fn DiarySetting() -> impl IntoView {
 
     view! {
         <div class="st-pane">
-            <h2 class="st-pane-title">"日记配置"</h2>
-
+            // 分区标题去掉：页签已经说明这是哪一页（见「消费模板」处的同一条说明）
             <div class="st-list">
                 <div class="st-card">
                     <div class="st-card-info">
                         <span class="st-card-title">"导入日记"</span>
                         <span class="st-card-desc">
-                            "从本地目录批量导入，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md 格式"
+                            "从本地目录批量导入，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md"
                         </span>
                     </div>
                     <div class="st-card-action">
-                        <Tooltip title="从本地目录批量导入，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md 格式">
+                        <Tooltip title="从本地目录批量导入，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md">
                             <Button
                                 variant=ButtonVariant::Secondary
                                 on_click=move || pick_import_directory()
                             >
                                 {icons::icon(Icon::Inbox)}
-                                "选择目录导入"
+                                "批量导入"
                             </Button>
                         </Tooltip>
                     </div>
@@ -1079,7 +1094,7 @@ fn DiarySetting() -> impl IntoView {
                                 on_click=move || pick_export_directory()
                             >
                                 {icons::icon(Icon::Read)}
-                                "选择目录导出"
+                                "批量导出"
                             </Button>
                         </Tooltip>
                     </div>
@@ -1286,7 +1301,7 @@ fn StockSetting() -> impl IntoView {
         }
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() {
-            Notifier::global().error("请先打开工作空间", None);
+            Notifier::global().error("请先选择工作空间", None);
             return;
         }
 
@@ -1379,7 +1394,7 @@ fn StockSetting() -> impl IntoView {
         }
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() {
-            Notifier::global().error("请先打开工作空间", None);
+            Notifier::global().error("请先选择工作空间", None);
             return;
         }
         tags_saving.set(true);
@@ -1405,7 +1420,7 @@ fn StockSetting() -> impl IntoView {
             return;
         }
         if stores.current_ledger_id.get_untracked().is_empty() {
-            Notifier::global().error("请先打开工作空间", None);
+            Notifier::global().error("请先选择工作空间", None);
             return;
         }
         let next = new_tag.get_untracked().trim().to_string();
@@ -1430,7 +1445,7 @@ fn StockSetting() -> impl IntoView {
             return;
         }
         if stores.current_ledger_id.get_untracked().is_empty() {
-            Notifier::global().error("请先打开工作空间", None);
+            Notifier::global().error("请先选择工作空间", None);
             return;
         }
         let next: Vec<String> = tags
@@ -1448,7 +1463,7 @@ fn StockSetting() -> impl IntoView {
         }
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() {
-            Notifier::global().error("重置股票交易数据失败", Some("请先打开工作空间".to_string()));
+            Notifier::global().error("重置股票交易数据失败", Some("请先选择工作空间".to_string()));
             return;
         }
         resetting.set(true);
@@ -1476,9 +1491,9 @@ fn StockSetting() -> impl IntoView {
 
     let tag_empty_text = move || {
         if tags_loading.get() {
-            "正在加载标签…".to_string()
+            "正在加载…".to_string()
         } else if stores.current_ledger_id.get().is_empty() {
-            "请先打开工作空间后配置交易标签".to_string()
+            "选择工作空间后即可配置交易标签".to_string()
         } else {
             "暂无标签".to_string()
         }
@@ -1486,8 +1501,7 @@ fn StockSetting() -> impl IntoView {
 
     view! {
         <div class="st-pane">
-            <h2 class="st-pane-title">"股票交易"</h2>
-
+            // 分区标题去掉：页签已经说明这是哪一页（见「消费模板」处的同一条说明）
             <div class="st-list">
                 // ---- 交易标签 ----
                 <div class="st-card st-card--block">
@@ -1495,7 +1509,7 @@ fn StockSetting() -> impl IntoView {
                         <div class="st-card-info">
                             <span class="st-card-title">"交易标签"</span>
                             <span class="st-card-desc">
-                                "清仓或交易历史中为每轮交易选择，可增删；「分析」默认不可删除。删除不影响历史记录，单个不超过 8 字，最多保存 20 个。"
+                                "每轮交易可选（最多 20 个、单个不超过 8 字）；删除不影响历史记录。"
                             </span>
                         </div>
                         <div class="st-tag-action">
@@ -1653,7 +1667,7 @@ fn StockSetting() -> impl IntoView {
                     </Form>
 
                     <Show when=move || no_ledger()>
-                        <p class="st-hint">"请先打开工作空间"</p>
+                        <p class="st-hint">"请先选择工作空间"</p>
                     </Show>
                 </div>
 
@@ -1725,6 +1739,17 @@ thread_local! {
     static UPDATE_STATE: RefCell<Option<UpdateState>> = const { RefCell::new(None) };
 }
 
+/// 在**应用根组件**（`shell::App`）里调用一次，把更新状态建在根 owner 下。
+///
+/// 必须早于任何组件挂载：`UpdateState` 里全是 `RwSignal`，信号的归属是**创建时所在的
+/// reactive owner**。若等 `AboutSetting` 首次渲染时才创建，它们就挂在那个页签组件上，
+/// 切走「关于软件」→ owner 销毁 → 信号变"已 dispose" → 再切回来渲染访问即 panic，
+/// 表现为**整个面板空白**（控制台：`you tried to access a reactive value … has already been disposed`）。
+/// 这与 `AppStores` 在根组件里 `new()` + `install()` 是同一条理由。
+pub fn init_update_state() {
+    let _ = UpdateState::global();
+}
+
 impl UpdateState {
     fn initial() -> Self {
         Self {
@@ -1743,6 +1768,12 @@ impl UpdateState {
     }
 
     /// 取全局状态；首次调用时创建并注册三个下载事件监听（只注册一次）。
+    ///
+    /// ⚠ **首次创建必须发生在应用根 owner 下**（见 [`init_update_state`]，由 `shell::App` 调用）：
+    /// 若等到 `AboutSetting` 第一次渲染时才落到这里，这些信号就挂在**那个组件**的 owner 上，
+    /// 切走「关于软件」时 owner 被销毁、信号变成"已 dispose"，
+    /// 再切回来渲染访问它们就 panic —— 现象是**整个面板空白**，控制台报
+    /// `you tried to access a reactive value ... but it has already been disposed`（实测踩过）。
     ///
     /// 注意 `RefCell` 的借用必须各自独立成句：`if let Some(x) = *slot.borrow()`
     /// 的临时借用会活到整个 `if let` 语句结束，紧接着再 `borrow_mut()` 会 panic。
@@ -1940,7 +1971,7 @@ fn AboutSetting() -> impl IntoView {
     let version_text = move || {
         let value = version.get();
         if value.is_empty() {
-            "版本 …".to_string()
+            "正在读取…".to_string()
         } else {
             format!("版本 {value}")
         }

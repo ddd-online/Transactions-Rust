@@ -31,8 +31,9 @@ use tr_domain::models::{KeyEvent, KeyEventImage};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, DatePicker, FileStatus, ImagePicker, Input, Modal,
-    Popconfirm, Textarea, UploadFileProgress, UploadProgress, UploadProgressBar, UploadStatus,
+    Button, ButtonSize, ButtonVariant, DatePicker, FileStatus, IconButton, IconButtonVariant,
+    ImagePicker, Input, Modal, Popconfirm, Textarea, UploadFileProgress, UploadProgress,
+    UploadProgressBar, UploadStatus,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -124,7 +125,7 @@ pub fn KeyEventPage() -> impl IntoView {
         asset_urls,
     };
 
-    // ---- 添加事件弹窗 ----
+    // ---- 新增事件弹窗 ----
     let add_open = RwSignal::new(false);
     let add_date = RwSignal::new(today_ymd());
     let add_title = RwSignal::new(String::new());
@@ -309,13 +310,13 @@ pub fn KeyEventPage() -> impl IntoView {
         });
     };
 
-    // ---- 添加事件 ----
+    // ---- 新增事件 ----
     let confirm_add = move || {
         let ledger_id = stores.current_ledger_id.get_untracked();
         let date = add_date.get_untracked();
         let title = add_title.get_untracked().trim().to_string();
         if ledger_id.is_empty() {
-            Notifier::global().warning("请先选择账本".to_string(), None);
+            Notifier::global().warning("尚未选择账本".to_string(), None);
             return;
         }
         if date.is_empty() {
@@ -373,31 +374,37 @@ pub fn KeyEventPage() -> impl IntoView {
     view! {
         <section class="page key-event-page">
             <header class="page-header">
-                <div class="key-event-yearbar">
-                    <button
-                        type="button"
-                        class="tr-time__nav"
-                        title="上一年"
-                        aria-label="上一年"
-                        on:click=move |_| year.update(|value| *value -= 1)
-                    >
-                        {icons::icon(Icon::Left)}
-                    </button>
-                    <span class="key-event-yearbar__value">{move || year.get().to_string()}</span>
-                    <button
-                        type="button"
-                        class="tr-time__nav"
-                        title="下一年"
-                        aria-label="下一年"
-                        on:click=move |_| year.update(|value| *value += 1)
-                    >
-                        {icons::icon(Icon::Right)}
-                    </button>
+                <div class="page-header-text">
+                    <h1 class="page-title">{PAGE_TITLE}</h1>
                 </div>
                 <div class="app-top-bar-spacer"></div>
             </header>
 
             <div class="page-body">
+                <div class="page-toolbar">
+                    <div class="key-event-yearbar">
+                        <button
+                            type="button"
+                            class="ui-icon-btn"
+                            title="上一年"
+                            aria-label="上一年"
+                            on:click=move |_| year.update(|value| *value -= 1)
+                        >
+                            {icons::icon(Icon::Left)}
+                        </button>
+                        <span class="key-event-yearbar__value">{move || year.get().to_string()}</span>
+                        <button
+                            type="button"
+                            class="ui-icon-btn"
+                            title="下一年"
+                            aria-label="下一年"
+                            on:click=move |_| year.update(|value| *value += 1)
+                        >
+                            {icons::icon(Icon::Right)}
+                        </button>
+                    </div>
+                </div>
+
                 <div class="key-event-body">
                     <div class="key-event-panel key-event-panel--left">
                         {event_list(
@@ -509,6 +516,7 @@ pub fn KeyEventPage() -> impl IntoView {
                                             fallback=move || {
                                                 view! {
                                                     <Button
+                                                        variant=ButtonVariant::Secondary
                                                         size=ButtonSize::Small
                                                         on_click=move |_| {
                                                             if let Some(event) = current_event
@@ -528,6 +536,7 @@ pub fn KeyEventPage() -> impl IntoView {
                                             }
                                         >
                                             <Button
+                                                variant=ButtonVariant::Secondary
                                                 size=ButtonSize::Small
                                                 disabled=Signal::derive(move || {
                                                     progress.get().status
@@ -915,7 +924,7 @@ fn drive_upload(controls: UploadControls) {
         set_percent(70);
 
         if ledger_id.is_empty() {
-            fail_upload(controls, index, "请先选择账本".to_string());
+            fail_upload(controls, index, "尚未选择账本".to_string());
             return;
         }
 
@@ -1015,7 +1024,7 @@ fn mark_file(controls: UploadControls, index: usize, mutate: impl FnOnce(&mut Up
 
 // ==================================================================== 子视图
 
-/// 左栏：事件卡片列表 + 底部「添加事件」。
+/// 左栏：事件卡片列表 + 底部「新增事件」。
 fn event_list(
     events: RwSignal<Vec<KeyEvent>>,
     loading: RwSignal<bool>,
@@ -1039,7 +1048,7 @@ fn event_list(
                         <div class="key-event-empty">
                             <span class="key-event-empty__text">
                                 {move || {
-                                    if loading.get() { "正在加载…" } else { "暂无事件记录" }
+                                    if loading.get() { "正在加载…" } else { "暂无事件" }
                                 }}
                             </span>
                         </div>
@@ -1073,6 +1082,11 @@ fn event_list(
                                 let click_date_for_key = date.clone();
                                 let delete_date = date.clone();
                                 let label_for_title = label.clone();
+                                // 回调先建好（`UnsyncCallback` 是 Copy）：`view!` 的 children
+                                // 可能多次求值，直接 move 捕获 `String` 会让闭包退化成 FnOnce。
+                                let delete_click = UnsyncCallback::new(move |()| {
+                                    on_delete.run(delete_date.clone())
+                                });
                                 view! {
                                     <div
                                         class="key-event-card"
@@ -1105,20 +1119,22 @@ fn event_list(
                                         </div>
                                         <Popconfirm
                                             title=format!(
-                                                "删除事件「{label_for_title}」？此操作不可恢复。",
+                                                "删除事件「{label_for_title}」？",
                                             )
                                             ok_text="删除"
                                             cancel_text="取消"
-                                            on_confirm=move || on_delete.run(delete_date.clone())
+                                            on_confirm=move || delete_click.run(())
                                         >
-                                            <button
-                                                type="button"
+                                            <IconButton
+                                                variant=IconButtonVariant::Danger
+                                                label="删除事件"
                                                 class="key-event-card__delete"
-                                                aria-label="删除事件"
-                                                on:click=move |event| event.stop_propagation()
+                                                // 不要 stop_propagation：外层 Popconfirm 的触发在捕获阶段，
+                                                // 这里再吞一次会把气泡的开关抵消（点删除什么都不弹）
+                                                on_click=delete_click
                                             >
                                                 {icons::icon(Icon::Close)}
-                                            </button>
+                                            </IconButton>
                                         </Popconfirm>
                                     </div>
                                 }
@@ -1130,7 +1146,7 @@ fn event_list(
 
             <div class="key-event-list__footer">
                 <Button variant=ButtonVariant::Primary block=true on_click=move || on_add.run(())>
-                    "添加事件"
+                    "新增事件"
                 </Button>
             </div>
         </div>
@@ -1385,15 +1401,14 @@ fn image_gallery(
                     loading="lazy"
                     on:click=move |_| preview_open.set(true)
                 />
-                <button
-                    type="button"
+                <IconButton
+                    variant=IconButtonVariant::OnMedia
+                    label="下载图片"
                     class="key-event-gallery__download"
-                    aria-label="下载图片"
-                    title="另存为"
-                    on:click=save_as
+                    on_click=move |_| save_as(())
                 >
                     {icons::icon(Icon::Download)}
-                </button>
+                </IconButton>
             </div>
 
             <div class="key-event-gallery__thumbs">
@@ -1416,17 +1431,16 @@ fn image_gallery(
                                         loading="lazy"
                                         on:click=move |_| selected_id.set(click_id.clone())
                                     />
-                                    <button
-                                        type="button"
+                                    <IconButton
+                                        variant=IconButtonVariant::Danger
+                                        compact=true
+                                        label="删除图片"
                                         class="key-event-thumb__delete"
-                                        aria-label="删除图片"
-                                        on:click=move |event| {
-                                            event.stop_propagation();
-                                            delete_image(delete_id.clone());
-                                        }
+                                        stop_propagation=true
+                                        on_click=move |_| delete_image(delete_id.clone())
                                     >
                                         {icons::icon(Icon::Close)}
-                                    </button>
+                                    </IconButton>
                                 </div>
                             }
                         })
@@ -1604,6 +1618,7 @@ fn linked_panel(
                                     let description = record.description.clone();
                                     let description_for_show = description.clone();
                                     let category = record.category.clone();
+                                    let delete_click = UnsyncCallback::new(move |()| on_delete.run(id.clone()));
                                     let amount = format::signed_amount(
                                         &record.transaction_type,
                                         record.price,
@@ -1643,19 +1658,20 @@ fn linked_panel(
                                                 </div>
                                             </div>
                                             <Popconfirm
-                                                title="删除这条关联交易？此操作不可恢复。"
+                                                title="删除这条关联交易？"
                                                 ok_text="删除"
                                                 cancel_text="取消"
-                                                on_confirm=move || on_delete.run(id.clone())
+                                                on_confirm=move || delete_click.run(())
                                             >
-                                                <button
-                                                    type="button"
+                                                <IconButton
+                                                    variant=IconButtonVariant::Danger
+                                                    label="删除交易"
                                                     class="key-event-linked__delete"
-                                                    aria-label="删除交易"
-                                                    on:click=move |event| event.stop_propagation()
+                                                    // 同上：气泡的开关在捕获阶段，这里不能吞掉
+                                                    on_click=delete_click
                                                 >
                                                     {icons::icon(Icon::Trash)}
-                                                </button>
+                                                </IconButton>
                                             </Popconfirm>
                                         </div>
                                     }
@@ -1670,7 +1686,7 @@ fn linked_panel(
     .into_any()
 }
 
-/// 「添加事件」弹窗（固定文案：标题「添加事件」、ok「确认」、cancel「取消」、宽 360）。
+/// 「新增事件」弹窗（固定文案：标题「新增事件」、ok「新增」、cancel「取消」、宽 360）。
 fn add_modal(
     open: RwSignal<bool>,
     date: RwSignal<String>,
@@ -1681,9 +1697,9 @@ fn add_modal(
     view! {
         <Modal
             open=Signal::derive(move || open.get())
-            title="添加事件"
+            title="新增事件"
             width=360
-            ok_text="确认"
+            ok_text="新增"
             cancel_text="取消"
             ok_loading=Signal::derive(move || loading.get())
             on_close=move || open.set(false)

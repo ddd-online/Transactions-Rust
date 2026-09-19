@@ -15,6 +15,8 @@ crate-type = ["cdylib"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tr-domain = { workspace = true }
 leptos = { version = "0.8", features = ["csr"] }
+# 折线图引擎：纯 Rust 出 SVG（默认特性为 0；raster/image-encoder 才会拉 image + resvg）
+charts-rs = { version = "1.0", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
@@ -25,8 +27,11 @@ console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = [
     "Blob",
     "CanvasRenderingContext2d",
+    "CssStyleDeclaration",
     "CustomEvent",
     "DataTransfer",
+    "DomRect",
+    "NodeList",
     "Document",
     "DragEvent",
     "Element",
@@ -36,11 +41,13 @@ web-sys = { version = "0.3", features = [
     "FileList",
     "FileReader",
     "HtmlCanvasElement",
+    "HtmlDivElement",
     "HtmlElement",
     "HtmlImageElement",
     "HtmlInputElement",
     "HtmlTextAreaElement",
     "ImageBitmap",
+    "MediaQueryList",
     "Node",
     "Url",
     "Window",

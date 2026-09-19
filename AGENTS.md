@@ -32,9 +32,29 @@ fixtures/            # schema 基线（fresh.sql）+ 种子与端到端脚本（
 cargo check -p tr-domain -p tr-store -p tr-service -p xtask --all-targets
 cargo test  -p tr-domain -p tr-store -p tr-service
 
+# ---------- 改界面的迭代循环（**不要**用 build/build-ui.ps1 + cargo build --release）----------
+# 那两步是**最终验收/发布**用的，实测约 4 分钟（其中 release 链接 2m40s）；
+# 迭代期一律走 dev 服务 + 热更新，一轮约 5~10 秒。
+#
+# 1) 起一次（之后一直开着）：
+#       pwsh -File fixtures/dev-hot.ps1 -Trunk -Launch -Workspace <ws> -ShotDir target\dev-shots
+#    做的事：拉起 trunk serve（:1520）+ dev 外壳（target\debug，走 devUrl）+ 盯 trunk 日志；
+#    改完 crates/tr-ui 下的 .rs / .css，trunk 重建完后**自动给窗口发 Ctrl+R**，窗口自己刷新；
+#    带 -ShotDir 时还会把刷新后的窗口存成 target\dev-shots\current.png（不用手动截图）。
+#    原理：trunk 的自动刷新信号浏览器吃、Tauri 的 WebView2 不吃，但 WebView2 吃键盘刷新（实测 0.8s）。
+# 2) 想单独看某一页/全部页面（**不重建、不重启**）：
+#       pwsh -File fixtures/dev-shot.ps1 -Page 股票交易
+#       pwsh -File fixtures/dev-shot.ps1 -AllPages
+#    它用真实鼠标点侧栏并**轮询确认页面真的切过去了**再截图（固定 sleep 会抓到上一页）。
+# 3) 只有需要"内嵌界面的 release 产物"（端到端护栏、发布）才做完整构建：
+#       powershell -File build/build-ui.ps1 && cargo build --release -p transactions --features tauri/custom-protocol
+#
+# 边界：改 src-tauri/（外壳）不适用热更新，要 cargo tauri dev 重启；
+#       -Launch / -Trunk 用独立配置目录（target\smoke\home-hot），不碰真实 ~/.transactions-dev.json。
+
 # 界面（WASM）：开发服务 / 发布构建（发布必须走脚本，见下方 wasm-opt 说明）
 trunk serve --config crates/tr-ui/Trunk.toml      # http://127.0.0.1:1520
-powershell -NoProfile -ExecutionPolicy Bypass -File build/build-ui.ps1   # 发布用界面
+powershell -NoProfile -ExecutionPolicy Bypass -File build/build-ui.ps1   # 发布用界面，迭代期别用
 
 # 桌面应用：开发 / 打包（会自动先跑 trunk）
 cargo tauri dev
@@ -221,6 +241,10 @@ cargo clippy --all-targets -- -D warnings
     应用窗口的**子窗口**，`ProcessId` 属于 `msedgewebview2.exe` → 在应用窗口 Descendants 里找；
   * **Tauri `dialog_open` 插件的选文件/选目录框**（见 `fixtures/ui-diary-io.ps1`）：
     **桌面顶层窗口**，`ProcessId` 就是应用自己 → 在 `RootElement` 的 Children 里按进程号找。
+  * **DevTools 窗口是第三种**（设置 → 通用 → 开发者工具 → 「打开」）：它是**桌面顶层窗口**，
+    但 `ProcessId` 属于 `msedgewebview2.exe`（`cls=Chrome_WidgetWin_1`、`name='DevTools - …'`）。
+    所以**按应用进程号枚举顶层窗口永远看不到它** —— 验证"按钮是否真的打开了 DevTools"时，
+    要扫全系统顶层窗口并按名字/类名筛，否则会误判成"没打开"。
   另外两类框的路径输入框 AutomationId 不同：**选文件 = 1148**（`文件名(N):` 组合框）、
   **选目录 = 1152**（`文件夹(F):` 编辑框）。**选目录时回车只是进入该目录，必须点「选择文件夹」按钮**
   （选文件时回车才等于「打开」）；选目录框还只接受**已存在**的目录，否则弹「…不存在」提示框。
@@ -269,6 +293,27 @@ cargo clippy --all-targets -- -D warnings
   跳过预发布、`v` 前缀、取**第一个** `.exe` 资产、body 缺失给空串、没有 `.exe` 仍算"有更新"）
   与 `digest_matches` / `normalize_digest`（`sha256:ABCD…` 大写去前缀后比较；缺失/空串则跳过校验）。
   界面上的「检查更新」另有实测：真实 GitHub API 返回「已是最新版本」（探针 `target/update-probe.ps1`）。
+- **不要在 `Effect` 体内创建信号**（同一个坑已经踩过两次，两次都表现为"界面空白 / 点了没反应"）：
+  `Effect` 每次重跑都会 **dispose 上一次创建的 reactive 值**，而界面那时往往还在读它们 ——
+  现象不是报错闪退，而是**整块视图不渲染**或**点击毫无反应**，只有控制台里有一句
+  `you tried to access a reactive value ... but it has already been disposed`。
+  * 第一次：`settings.rs` 的 `UpdateState`（「关于软件」）首次在组件里创建 → 切走再切回面板空白；
+    修法是把状态提前建到**根 owner**（`init_update_state()` 由 `shell::App` 调用）。
+  * 第二次：`transactions.rs` 排序弹窗在 `Effect` 里 `SortRow::new(...)` → **关掉再打开必 panic**；
+    修法改成"行信号池"：最多 4 行的信号在**页面 owner** 下一次建好，打开只回填值、
+    增删只改一个 `count`（见 `sort_modal` 注释）。
+  正确姿势：状态建在组件/根 owner 下，`Effect` 里只**读**、只做副作用。
+- **`scrollbar-width` 会让 `::-webkit-scrollbar` 整套失效**（真实缺陷，且它把设计"静默作废"了）：
+  CSS 规范里只要 `scrollbar-width` / `scrollbar-color` 被设成非 `auto`，`::-webkit-scrollbar-*`
+  伪元素就**整体不生效**。`base.css` 原来那个 `.u-custom-scrollbar` 两个都写，
+  于是那套"5px 圆角滑块 + 透明轨 + 悬浮加深"从未渲染过（而且它全仓**一个使用者都没有**）。
+  本机实测占用宽度（WebView2 / Chrome 153，DPI 1.5）：**原生 17px / `scrollbar-width:thin` 11px /
+  只写 webkit 6px**。现在滚动条是**全站默认**（`base.css` 第 1 节的「浏览器自带的表面」），
+  只用 `::-webkit-scrollbar`，**不要再加 `scrollbar-width`**。
+  另：`body { user-select: none }`（桌面窗口惯例）让全局 `::selection` 基本只在输入框里可见，
+  同节的 `caret-color` 与选区配色是配套的。
+  排查提示：`::-webkit-scrollbar` 的效果**从 `getComputedStyle` 读不到**，
+  要么查 CSSOM 规则、要么量 `offsetWidth - clientWidth`、要么看像素。
 - **`Input` 的 UIA 判据用 `ControlType.Edit`，别用 ClassName**（踩过）：本项目的输入框渲染成
   `class='ui-input__control'`，ClassName 并不是 `'Edit'`。用 `ClassName -eq 'Edit'` 过滤会
   **一个都找不到**（当时表现为"建仓弹窗里找不到股票代码输入框"，整轮全红）。

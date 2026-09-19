@@ -14,6 +14,11 @@
   gap: var(--transactions-space-md);
 }
 
+/* 年份切换是图标按钮，但在页头工具区里与 32px 的年份文字对齐 */
+.key-event-yearbar .ui-icon-btn {
+  --ui-icon-btn-size: 32px;
+}
+
 .key-event-yearbar__value {
   min-width: 80px;
   text-align: center;
@@ -24,6 +29,12 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 三栏 = 同一张纸上的三条轨道：卡片自己不填色，栏间用竖直发丝线分。
+ * 之前这里是"白底 + 描边 + 12px 圆角"，套在外层白卡里就是白卡套白卡；
+ * 左右两条侧轨保留软灰底（`minor-background`），因为它们是**导航性**的轨道
+ * （事件列表 / 关联交易），用底色而不是边框来定位，层次靠色不靠框。
+ * 内边距下放给各栏自己（`.key-event-body` 不再吃统一内边距），
+ * 左右轨的底色与竖线才能从卡片顶贯通到底。 */
 .key-event-body {
   flex: 1;
   display: grid;
@@ -31,9 +42,11 @@
   gap: 0;
   min-height: 0;
   overflow: hidden;
-  background-color: var(--transactions-color-major-background);
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-lg);
+}
+
+/* 中间详情栏：纸的底色，留出内容内边距 */
+.key-event-panel--center {
+  padding: var(--transactions-space-lg);
 }
 
 .key-event-panel {
@@ -42,6 +55,12 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* 左右两条侧轨之间、以及轨道与中间详情之间：一条贯通的竖线 */
+.key-event-panel--left,
+.key-event-panel--right {
+  min-width: 0;
 }
 
 .key-event-panel--left {
@@ -58,7 +77,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: var(--transactions-space-md);
+  padding: var(--transactions-space-lg);
   background-color: var(--transactions-color-minor-background);
   overflow: hidden;
 }
@@ -86,26 +105,33 @@
   color: var(--transactions-color-text-secondary);
 }
 
+/* 事件卡 = 侧轨里的**行**，不是白卡：默认透明（露出侧轨的软灰底），
+ * 悬停才浮起、选中用主色 tint。左侧那条 4px 色条承担"事件颜色"的表达，
+ * 所以这里不需要再画白底+描边（那就是卡片里的卡片）。 */
 .key-event-card {
   position: relative;
   display: flex;
   flex-direction: row;
   border-radius: var(--transactions-radius-md);
   cursor: pointer;
+  /* 卡片坐在**软灰轨道**上：用纸面白底 + 发丝描边立起来（与本页右侧关联交易卡同一手法）。
+   * 之前是透明卡面，靠悬停变白来表态 —— 卡片本身读不出"这是一张卡"。 */
   background-color: var(--transactions-color-major-background);
-  transition: background-color var(--transactions-transition-smooth),
-    box-shadow var(--transactions-transition-smooth),
-    transform var(--transactions-transition-smooth);
+  border: 1px solid var(--transactions-color-divider);
+  transition: box-shadow var(--transactions-transition-smooth),
+    border-color var(--transactions-transition-smooth),
+    background-color var(--transactions-transition-smooth);
 }
 
 .key-event-card:hover {
-  box-shadow: var(--transactions-shadow-sm);
-  transform: translateX(2px);
+  box-shadow: var(--transactions-shadow-md);
+  border-color: var(--transactions-color-window-border);
 }
 
 .key-event-card.is-active {
+  /* 选中：强调色底（与全站"选中"一致），名称再转强调色 */
   background-color: var(--transactions-color-active-bg);
-  box-shadow: var(--transactions-shadow-sm);
+  border-color: var(--transactions-color-primary);
 }
 
 .key-event-card:focus-visible {
@@ -158,21 +184,31 @@
   margin-top: var(--transactions-space-2xs);
 }
 
-.key-event-card__delete {
+/* Popconfirm 的包裹层自带 `position: relative`（气泡要相对触发器定位），它会把这个
+ * 绝对定位的删除按钮“吸”到自己身上 —— 按钮于是落在包裹层所在处（卡片右上、甚至卡片外），
+ * 而不是卡片的角上。把定位挪到包裹层（尺寸与按钮一致），按钮回归文档流；
+ * 气泡仍以包裹层为锚点，位置不变。 */
+.key-event-card .ui-popconfirm {
   position: absolute;
-  top: var(--transactions-space-xs);
+  bottom: var(--transactions-space-xs);
   right: var(--transactions-space-xs);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  background: var(--transactions-color-elevated);
-  color: var(--transactions-color-text-secondary);
-  cursor: pointer;
+}
+
+/* 定位挪到卡片下沿后，确认气泡若仍向下弹会被列表的滚动容器裁掉 —— 改为向上弹
+ * （气泡自身在可视区内即可；覆盖到上面的卡片是弹层的正常行为） */
+.key-event-card .ui-popconfirm__panel,
+.key-event-linked__card .ui-popconfirm__panel {
+  top: auto;
+  bottom: calc(100% + var(--transactions-space-xs));
+}
+
+/* 卡片右下角的删除：默认隐形，hover / 选中时出现；圆形浅底（本体见 .ui-icon-btn） */
+.key-event-card__delete {
+  position: static;
   border-radius: var(--transactions-radius-full);
-  font-size: var(--transactions-size-text-caption);
+  /* 卡片悬停时是白底，白圆底会消失 —— 同样改用软灰底 + 发丝描边 */
+  background: var(--transactions-color-minor-background);
+  border: 1px solid var(--transactions-color-divider);
   opacity: 0;
   transition: color var(--transactions-transition-fast),
     background-color var(--transactions-transition-fast),
@@ -184,15 +220,11 @@
   opacity: 1;
 }
 
-.key-event-card__delete:hover {
-  color: var(--transactions-color-expense);
-  background: var(--transactions-color-danger-hover-bg);
+.key-event-card__delete:hover:not(:disabled) {
   transform: scale(1.1);
 }
 
 .key-event-card__delete:focus-visible {
-  outline: 2px solid var(--transactions-color-primary);
-  outline-offset: 2px;
   opacity: 1;
 }
 
@@ -323,29 +355,16 @@
   object-fit: cover;
 }
 
+/* 叠在图片上的下载：本体是 .ui-icon-btn--on-media（毛玻璃底），这里只固定位置 */
 .key-event-gallery__download {
   position: absolute;
   bottom: 8px;
   right: 8px;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: none;
-  border-radius: var(--transactions-radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
   z-index: 1;
-  background: var(--transactions-color-elevated);
-  color: var(--transactions-color-text-secondary);
   box-shadow: var(--transactions-shadow-sm);
-  transition: color var(--transactions-transition-fast),
-    transform var(--transactions-transition-fast);
 }
 
-.key-event-gallery__download:hover {
-  color: var(--transactions-color-primary);
+.key-event-gallery__download:hover:not(:disabled) {
   transform: scale(1.1);
 }
 
@@ -389,33 +408,20 @@
   object-fit: cover;
 }
 
+/* 缩略图角标：本体是 .ui-icon-btn--compact（20px 圆形），这里只固定位置与显隐 */
 .key-event-thumb__delete {
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
   opacity: 0;
   z-index: 1;
   background: var(--transactions-color-elevated);
-  color: var(--transactions-color-text-secondary);
   box-shadow: var(--transactions-shadow-sm);
   transition: opacity var(--transactions-transition-fast);
 }
 
 .key-event-thumb:hover .key-event-thumb__delete {
   opacity: 1;
-}
-
-.key-event-thumb__delete:hover {
-  color: var(--transactions-color-expense);
 }
 
 /* 灯箱 */
@@ -529,7 +535,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: var(--transactions-space-md);
+  padding: var(--transactions-space-lg);
   background-color: var(--transactions-color-minor-background);
   overflow: hidden;
 }
@@ -540,22 +546,26 @@
   padding: var(--transactions-space-xs);
 }
 
+/* 关联交易卡：**白底 + 发丝描边**，坐在软灰侧轨上（一张纸上的卡片，不是"卡中卡"里的
+ * 卡片 —— 白底与侧轨的灰底相差一个层次，靠发丝线收边）。
+ * 悬停靠**阴影抬升**区分（底色已经是白的，不能再靠"透明→白"）。 */
 .key-event-linked__card {
   position: relative;
   display: flex;
   align-items: flex-start;
   padding: var(--transactions-space-sm);
   margin-bottom: var(--transactions-space-xs);
-  border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-md);
   background-color: var(--transactions-color-major-background);
-  box-shadow: var(--transactions-shadow-sm);
+  border: 1px solid var(--transactions-color-divider);
   min-height: 68px;
-  transition: box-shadow var(--transactions-transition-smooth);
+  transition: box-shadow var(--transactions-transition-smooth),
+    border-color var(--transactions-transition-smooth);
 }
 
 .key-event-linked__card:hover {
   box-shadow: var(--transactions-shadow-md);
+  border-color: var(--transactions-color-window-border);
 }
 
 .key-event-linked__body {
@@ -631,33 +641,26 @@
   min-width: 0;
 }
 
-.key-event-linked__delete {
+/* 同事件卡：Popconfirm 的包裹层是定位祖先，把定位交给它，按钮才真的落在卡片右下角 */
+.key-event-linked__card .ui-popconfirm {
   position: absolute;
   bottom: var(--transactions-space-xs);
   right: var(--transactions-space-xs);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  background: var(--transactions-color-elevated);
-  color: var(--transactions-color-text-secondary);
-  cursor: pointer;
+}
+
+/* 关联交易卡片右下角的删除：本体是 .ui-icon-btn--danger，这里只固定显隐 */
+.key-event-linked__delete {
+  position: static;
   border-radius: var(--transactions-radius-full);
-  font-size: var(--transactions-size-text-caption);
+  /* 白卡上白圆底看不见 —— 用软灰底 + 发丝描边把它从卡片上"抠"出来 */
+  background: var(--transactions-color-minor-background);
+  border: 1px solid var(--transactions-color-divider);
   opacity: 0;
-  transition: color var(--transactions-transition-fast),
-    background-color var(--transactions-transition-fast);
+  transition: opacity var(--transactions-transition-fast);
 }
 
 .key-event-linked__card:hover .key-event-linked__delete {
   opacity: 1;
-}
-
-.key-event-linked__delete:hover {
-  color: var(--transactions-color-expense);
-  background: var(--transactions-color-danger-hover-bg);
 }
 
 /* ---------------- 图片选择器 / 文本域（组件级） ---------------- */
@@ -1013,4 +1016,9 @@
   .key-event-thumb:hover {
     transform: none;
   }
+}
+
+/* 关键事件卡选中时名称转强调色（与持仓/已清仓卡一致） */
+.key-event-card.is-active .key-event-card__name {
+  color: var(--transactions-color-primary);
 }

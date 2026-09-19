@@ -31,7 +31,7 @@
 #     而且种子记录与我们的是同一秒 —— "我们的那笔"只能按"该类型里 created_at 最新"认（`Get-NewestTrade`）；
 #     另外**编辑会触发整个账本的派生资金记录重放**，
 #     所以资金记录也只能按"变动额"认，不能用"条数/相邻两条"这种全局判据；
-#   * 「建仓」按钮在**我的持仓**页签、费用设置在**我的账户**页签、重置在**设置页**——
+#   * 「建仓」按钮在**持仓**页签、费用设置在**账户**页签、重置在**设置页**——
 #     换页签后再下单，必须先切回去，否则会出现"设置存好了但下单弹窗压根没弹"的假象；
 #   * 设置页里「股票交易」这个名字**侧栏导航也有**，按名字取第一个会点到导航（跑错页）；
 #     只认 `ControlType == TabItem` 的那个。
@@ -245,6 +245,31 @@ function Find-UnnamedEditRight { param($Window)
     return ($band | Sort-Object { $_.Rect.X } | Select-Object -Last 1).Element
 }
 
+# 设置页费用表单里的 4 个输入框（佣金费率 / 最低佣金 / 印花税 / 过户费）。
+# 它们是同一行里的四列（标签在上、输入框在下），所以按"同一 Y 带 + 按 X 排序"取。
+function Get-FeeFormEdits { param($Window)
+    $edits = @()
+    foreach ($element in @(Get-Elements $Window)) {
+        $isEdit = ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
+            ($element.Current.ClassName -eq 'Edit')
+        if (-not $isEdit) { continue }
+        if ($element.Current.IsOffscreen) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if ($rect.Width -le 0 -or $rect.Height -le 0) { continue }
+        if ([double]::IsInfinity($rect.X) -or [double]::IsNaN($rect.X)) { continue }
+        $edits += [pscustomobject]@{ Element = $element; Rect = $rect }
+    }
+    if ($edits.Count -lt 4) { return @() }
+    # 取"同一水平带里元素最多"的那一带（>= 4 个），再按 X 从左到右
+    $best = @()
+    foreach ($candidate in $edits) {
+        $band = @($edits | Where-Object { [Math]::Abs($_.Rect.Y - $candidate.Rect.Y) -le 14 })
+        if ($band.Count -gt $best.Count) { $best = $band }
+    }
+    if ($best.Count -lt 4) { return @() }
+    return @($best | Sort-Object { $_.Rect.X } | Select-Object -First 4 | ForEach-Object { $_.Element })
+}
+
 # 弹窗/气泡里的按钮：与页面入口同名时取**最后一个**（浮层在 DOM 末尾）
 function Invoke-ModalButton { param($Window, [string]$Name)
     $all = Find-All $Window $Name
@@ -308,6 +333,26 @@ function Wait-VisibleButton { param($Window, [string]$Name, [int]$TimeoutSec = 2
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     do {
         $element = Find-VisibleButton -Window $Window -Name $Name -Last:$Last
+        if ($element) { return $element }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
+
+# 分栏是 TabItem，**不是** Button；而且页签名（账户/持仓/成交记录/交易统计）与页面里的
+# 文案（「总资产」「持仓市值」「成交记录」面板标题）可能同名，只按名字取第一个会点到页内元素。
+# 因此这里同时约束 ControlType = TabItem。
+function Find-Tab { param($Window, [string]$Name)
+    foreach ($element in @(Get-Elements $Window)) {
+        if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem) { continue }
+        if ($element.Current.Name -eq $Name) { return $element }
+    }
+    return $null
+}
+function Wait-Tab { param($Window, [string]$Name, [int]$TimeoutSec = 25)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $element = Find-Tab -Window $Window -Name $Name
         if ($element) { return $element }
         Start-Sleep -Milliseconds 400
     } while ((Get-Date) -lt $deadline)
@@ -389,7 +434,12 @@ function Add-Position {
     for ($attempt = 1; $attempt -le 3 -and -not $opened; $attempt++) {
         Invoke-Element (Wait-Element -Root $Window -Name '建仓') | Out-Null
         Start-Sleep -Seconds 1
-        $opened = [bool](Wait-Element -Root $Window -Name '记录建仓' -TimeoutSec 6)
+        # 判据用"弹窗里的输入框出现了"而不是标题文字：标题是 Text 元素，
+        # Chromium 的 UIA 树惰性构建时**可能滞后于弹窗本体** ——
+        # 实测出现过"标题 3 次都没查到，但弹窗已经能填、成交也落库了"的假红。
+        # 先看结果（输入框在不在），标题只作为兜底。
+        $opened = [bool](Find-UnnamedEditRight -Window $Window)
+        if (-not $opened) { $opened = [bool](Wait-Element -Root $Window -Name '委托建仓' -TimeoutSec 6) }
     }
     if (-not $opened) { return $false }
     $codeInput = Find-UnnamedEditRight -Window $Window
@@ -470,17 +520,21 @@ try {
     Write-Host "`n[stock] 1/7 建仓 $code × $buyLots 手 @ $buyPrice"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票交易')) '打开「股票交易」页'
     Start-Sleep -Seconds 3
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '我的持仓')) '切到「我的持仓」页签（建仓按钮在这里）'
+    Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '持仓')) '切到「持仓」页签（建仓按钮在这里）'
     Start-Sleep -Seconds 2
 
     $opened = $false
     for ($attempt = 1; $attempt -le 3 -and -not $opened; $attempt++) {
         Invoke-Element (Wait-Element -Root $window -Name '建仓') | Out-Null
         Start-Sleep -Seconds 1
-        $opened = [bool](Wait-Element -Root $window -Name '记录建仓' -TimeoutSec 6)
-        if (-not $opened) { Write-Host "  第 $attempt 次没弹出「记录建仓」，重试" -ForegroundColor DarkYellow }
+        # ⚠ 弹窗标题是**「委托建仓」**（应用里由 `format!("委托{类型}")` 生成）。
+        # 这里以前写的是旧标题「记录建仓」，改名后没同步 → 断言恒红（弹窗其实开着、后面全过）。
+        # 判据优先看结果：弹窗里的输入框在不在。
+        $opened = [bool](Find-UnnamedEditRight -Window $window)
+        if (-not $opened) { $opened = [bool](Wait-Element -Root $window -Name '委托建仓' -TimeoutSec 6) }
+        if (-not $opened) { Write-Host "  第 $attempt 次没弹出「委托建仓」，重试" -ForegroundColor DarkYellow }
     }
-    Assert-True $opened '弹窗「记录建仓」已打开'
+    Assert-True $opened '弹窗「委托建仓」已打开'
 
     $codeInput = Find-UnnamedEditRight -Window $window
     Assert-True ([bool]$codeInput) '找到弹窗里的「股票代码」输入框（按包围盒靠右那个）'
@@ -528,7 +582,7 @@ try {
     }
 
     # ================= 2/7 界面展示（建仓之后）=================
-    Write-Host "`n[stock] 2/7 界面展示：持仓卡片与交易历史"
+    Write-Host "`n[stock] 2/7 界面展示：持仓卡片与成交记录"
     $cardText = $null
     $deadline = (Get-Date).AddSeconds(20)
     do {
@@ -541,7 +595,7 @@ try {
         Assert-True ($cardText -match '持仓\s*3\s*手') "卡片上写着持仓 3 手（$cardText）"
     }
 
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '交易历史')) '切到「交易历史」页签'
+    Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '成交记录')) '切到「成交记录」页签'
     Start-Sleep -Seconds 3
     $seen = $false
     $deadline = (Get-Date).AddSeconds(15)
@@ -551,8 +605,8 @@ try {
             (@($texts | Where-Object { $_ -like "*$code*" }).Count -gt 0)
         if (-not $seen) { Start-Sleep -Milliseconds 500 }
     } while (-not $seen -and (Get-Date) -lt $deadline)
-    Assert-True $seen "交易历史里出现「$name / $code」"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '我的持仓')) '切回「我的持仓」（减仓/清仓按钮在详情区）'
+    Assert-True $seen "成交记录里出现「$name / $code」"
+    Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '持仓')) '切回「持仓」（减仓/清仓按钮在详情区）'
     Start-Sleep -Seconds 3
 
     # ================= 3/7 编辑成交（改成交价 → 费用/成本/资金链重算）=================
@@ -689,7 +743,7 @@ try {
 
     # ---- 减仓 1 手 ----
     $reduceLots = '1'
-    Assert-True (Submit-Trade -Window $window -OpenButton '减仓' -ModalTitle '记录减仓' -Price $reducePrice -Lots $reduceLots) `
+    Assert-True (Submit-Trade -Window $window -OpenButton '减仓' -ModalTitle '委托减仓' -Price $reducePrice -Lots $reduceLots) `
         '「减仓」弹窗走完（填价/手数 → 提交）'
     Start-Sleep -Seconds 2
 
@@ -730,8 +784,8 @@ try {
         Start-Sleep -Milliseconds 300
         [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
     }
-    $closeOpened = [bool](Wait-Element -Root $window -Name '记录清仓' -TimeoutSec 10)
-    Assert-True $closeOpened '弹窗「记录清仓」已打开'
+    $closeOpened = [bool](Wait-Element -Root $window -Name '委托清仓' -TimeoutSec 10)
+    Assert-True $closeOpened '弹窗「委托清仓」已打开'
     if ($closeOpened) {
         $lotsInput = Wait-EditLike -Root $window -Pattern '手数'
         $prefilled = ''
@@ -763,7 +817,7 @@ try {
     }
     Assert-FundChain -LedgerId $ledgerId -Stage '清仓后'
 
-    # ---- 清仓归档：建一个新轮次 + 把本轮三笔成交挂上去 + 指向该股票的交易历史 ----
+    # ---- 清仓归档：建一个新轮次 + 把本轮三笔成交挂上去 + 指向该股票的成交记录 ----
     $roundsAfter = @(Read-Table 'tbl_billadm_stock_trade_round' |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code })
     Assert-True ($roundsAfter.Count -eq ($roundsBefore.Count + 1)) `
@@ -791,23 +845,40 @@ try {
             }
             $historyRow = @(Read-Table 'tbl_billadm_stock_trade_history' |
                 Where-Object { $_.id -eq $newRound.history_id }) | Select-Object -First 1
-            Assert-True ([bool]$historyRow) '轮次的 history_id 指向该股票的交易历史行'
+            Assert-True ([bool]$historyRow) '轮次的 history_id 指向该股票的成交记录行'
             if ($historyRow) {
-                Assert-True ($historyRow.stock_code -eq $code) "交易历史行属于 $code"
+                Assert-True ($historyRow.stock_code -eq $code) "成交记录行属于 $code"
             }
         }
     }
     # ================= 6/7 交易费用设置：改完费率，**新委托立刻按新费率计费** =================
+    # ⚠ 费用设置的编辑入口**在「应用设置 → 股票交易」**（股票页只读取它来估费，不渲染表单）。
     # 费用设置的 UI 单位：佣金费率是**万分之**（÷10000 落库）、最低佣金是**元**（转分）、
     # 印花税/过户费是**百分比**（÷100）；公式见 `tr-domain/src/fee.rs`：
     #   佣金 = max(round(金额×费率), 最低佣金)；买入 = 佣金 + 过户费(沪市)；
     #   卖出 = 佣金 + 印花税 + 过户费(沪市)（印花税只卖出收）。
-    Write-Host "`n[stock] 6/7 费用设置：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '我的账户')) '切到「我的账户」（费用设置在右侧面板）'
-    Start-Sleep -Seconds 3
-    # 输入框预填后名字就是值，所以按 Y 序取面板里的 Edit（顺序：佣金费率/最低佣金/印花税/过户费）
-    $feeEdits = Get-ModalEdits -Window $window -ModalTitle '交易费用设置'
-    Assert-True ($feeEdits.Count -ge 4) "费用设置面板有 4 个输入框（实际 $($feeEdits.Count)）"
+    Write-Host "`n[stock] 6/7 费用设置（应用设置 → 股票交易）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置')) '打开「应用设置」'
+    Start-Sleep -Seconds 2
+    # ⚠ 侧栏也有个「股票交易」，按名字取第一个会点到导航！只认 ControlType 是 TabItem 的那个
+    $feeTab = $null
+    $feeTabDeadline = (Get-Date).AddSeconds(15)
+    do {
+        foreach ($element in @(Get-Elements $window)) {
+            if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem) { continue }
+            if ($element.Current.Name -ne '股票交易') { continue }
+            if ($element.Current.IsOffscreen) { continue }
+            $feeTab = $element
+            break
+        }
+        if (-not $feeTab) { Start-Sleep -Milliseconds 400 }
+    } while (-not $feeTab -and (Get-Date) -lt $feeTabDeadline)
+    Assert-True ([bool]$feeTab) '切到「股票交易」设置分栏'
+    if ($feeTab) { Invoke-Element $feeTab | Out-Null }
+    Start-Sleep -Seconds 2
+    Assert-True ([bool](Wait-Element -Root $window -Name '佣金费率' -TimeoutSec 15)) '设置页出现费用表单'
+    $feeEdits = @(Get-FeeFormEdits -Window $window)
+    Assert-True ($feeEdits.Count -ge 4) "费用表单有 4 个输入框（实际 $($feeEdits.Count)）"
     if ($feeEdits.Count -ge 4) {
         Assert-True (Set-Value $feeEdits[0] '1') '佣金费率填 1（万分之）'
         Assert-True (Set-Value $feeEdits[1] '0') '最低佣金填 0 元'
@@ -815,7 +886,7 @@ try {
         Assert-True (Set-Value $feeEdits[3] '0.002') '过户费填 0.002%'
         Start-Sleep -Milliseconds 500
         $saveFee = Wait-VisibleButton -Window $window -Name '保存' -TimeoutSec 10
-        Assert-True ([bool]$saveFee) '找到费用设置面板的「保存」'
+        Assert-True ([bool]$saveFee) '找到费用表单的「保存」'
         if ($saveFee) { Invoke-Element $saveFee | Out-Null }
         Start-Sleep -Seconds 3
     }
@@ -833,9 +904,24 @@ try {
     }
 
     # ---- 买入：3,000,000 分 → 佣金 300 + 过户费 60 = 360 分（印花税 0）----
-    # ⚠ 「建仓」按钮在**我的持仓**页签的左栏里，费用设置在「我的账户」——下单前要切回去，
-    # 否则会像刚才那样"设置存好了，但下单弹窗压根没弹"。
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '我的持仓')) '切回「我的持仓」再下单'
+    # ⚠ 费用设置改在「应用设置」里，下单要回「股票交易」页的**持仓**页签；
+    # 不回页面会导致"设置存好了，但下单弹窗压根没弹"。
+    # 侧栏的「股票交易」与设置页的页签同名，这里按**非 TabItem**筛出侧栏导航项。
+    $stockNav = $null
+    $navDeadline = (Get-Date).AddSeconds(15)
+    do {
+        foreach ($element in @(Find-All $window '股票交易')) {
+            if ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::TabItem) { continue }
+            if ($element.Current.IsOffscreen) { continue }
+            $stockNav = $element
+            break
+        }
+        if (-not $stockNav) { Start-Sleep -Milliseconds 400 }
+    } while (-not $stockNav -and (Get-Date) -lt $navDeadline)
+    Assert-True ([bool]$stockNav) '从设置页回到「股票交易」'
+    if ($stockNav) { Invoke-Element $stockNav | Out-Null }
+    Start-Sleep -Seconds 3
+    Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '持仓')) '切回「持仓」再下单'
     Start-Sleep -Seconds 3
     Assert-True (Add-Position -Window $window -Code $code -Name $name -Price $buyPrice -Lots $buyLots) `
         '按新费率建仓 3 手 @ 100'
@@ -852,7 +938,7 @@ try {
     }
 
     # ---- 卖出：1,200,000 分 → 佣金 120 + 印花税 1200 + 过户费 24 = 1344 分 ----
-    Assert-True (Submit-Trade -Window $window -OpenButton '减仓' -ModalTitle '记录减仓' -Price $reducePrice -Lots '1') `
+    Assert-True (Submit-Trade -Window $window -OpenButton '减仓' -ModalTitle '委托减仓' -Price $reducePrice -Lots '1') `
         '按新费率减仓 1 手 @ 120'
     Start-Sleep -Seconds 3
     $feeSellTrade = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'reduce'
