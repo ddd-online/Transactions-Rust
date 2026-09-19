@@ -134,6 +134,12 @@ pwsh -File fixtures/ui-transactions.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir 
 # 它同时是"详情区「减仓/清仓/加仓」点不动"这个真实缺陷的回归（见下方经验）。
 pwsh -File fixtures/ui-stock.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
+# 日记**编辑**链路端到端（与 ui-diary-io 互补：那条只覆盖导入/导出）：
+# 进日记页（首屏是**预览态**，要先点页脚的「编辑」）→ 写内容 → Ctrl+S（没有保存按钮，
+# 输入后 1500ms 防抖自动保存）→ 断言 正文/字数/心情落库 → 点心情「开心」→ 断言 mood=😊
+# 且 **id 不变**（同一天 upsert）→ 改写内容再断言 →「预览」里 Markdown 渲染出标题 → 删除。
+pwsh -File fixtures/ui-diary-edit.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
 # 关联/解除关键事件端到端（唯一自动化 DatePicker 的脚本）：记一笔 → 行内「关联到关键事件」→
 # 弹窗里用日期选择器选一个**不是今天**的日子（`link_date` 默认今天，选今天就等于没测选择器）
 # → 断言 触发器显示所选日期 + `key_event_date` 落库 + 该日期懒创建了一条空事件
@@ -253,6 +259,12 @@ cargo clippy --all-targets -- -D warnings
   （**与原 `CategoryColumn.vue` 逐字一致，是 parity 不是缺陷**）。`display: none` 的元素**不进 UIA 树**，
   所以"新建的那一行能删、别的行删不了"——因为新建的行是 active。做法：先用真实鼠标把指针移到行中心、
   等 ~0.5s，再按名字查按钮，并用"中心 Y 最近且在该行右侧"来区分同一列里的多个「删除」。
+- **往多行文本域写内容要"两条腿走路"**（写 `fixtures/ui-diary-edit.ps1` 时踩的）：
+  `ValuePattern.SetValue` 塞值不保证触发 DOM `input` 事件（而日记/记账这类页面的自动保存挂在 `input` 上），
+  纯靠剪贴板 `Ctrl+V` 又偶发失败——**窗口不是前台时 `AutomationElement.SetFocus()` 静默无效**，
+  于是 `Ctrl+A/Ctrl+V` 贴到别处，"内容没改、保存却成功了"，看着像偶发假绿/假红。
+  现在的做法：先 `SetForegroundWindow` → `SetFocus` → 校验 `FocusedElement` 是 Edit →
+  粘贴 → **用 ValuePattern 读回校验** → 断言失败就整段重试（最多 3 次）。
 - **别用 `| Select-Object -First N` 截断界面脚本的输出**：管道提前关闭会**终止上游脚本**，
   它的 `finally`（关掉测试实例）不执行，于是下一个脚本会因"本仓库已有实例在运行"而拒绝启动——
   我为此白查了一轮。要么 `-Last N`，要么 `*> 文件` 再读文件。
