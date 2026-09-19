@@ -1,0 +1,391 @@
+# ui-key-event.ps1 —— 关键事件页「新建事件」端到端：**任选日期** + **同一天 upsert（日期唯一）** + 删除。
+#
+# 为什么需要它：`fixtures/ui-crud.ps1` 里已经用「添加事件」建过事件，但它走的是**默认日期（今天）**，
+# 只验了"能建出来 + 改颜色/写 Markdown/删除"；`fixtures/ui-link-event.ps1` 验的是"记账记录关联到
+# 某天 → 该天懒创建空事件"。**从没验过**的两件事正好是这一页的数据语义核心：
+#   * 在「添加事件」弹窗里用 DatePicker **任选一个不是今天的日期** → 事件要落在**那一天**；
+#   * 同一天再建一次是 **upsert（覆盖）而不是新增**：`(ledger_id, date)` 唯一，**原 id 与 createdAt 保留**，
+#     只替换标题/正文/颜色（黄金对比 P1-4 覆盖落库，这里覆盖界面这条路径）。
+#
+# 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
+#   pwsh -File fixtures/ui-key-event.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
+param(
+    [string]$Exe,
+    [string]$SmokeHome,
+    [string]$Workspace,
+    [string]$OutDir
+)
+
+$ErrorActionPreference = 'Stop'
+
+$repo = Split-Path -Parent $PSScriptRoot
+$explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
+if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
+if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\ke-smoke\home' }
+if (-not $OutDir) { $OutDir = Join-Path $repo 'target\ke-smoke' }
+if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
+
+if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
+
+$smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
+$OutDir = [System.IO.Path]::GetFullPath($OutDir)
+if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
+    throw '拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置'
+}
+foreach ($dir in @($smokeHome, (Join-Path $smokeHome 'Desktop'), $OutDir)) {
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+}
+
+$repoPrefix = $repo.TrimEnd('\') + '\'
+$blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
+        $path = try { $_.Path } catch { $null }
+        $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+if ($blockers.Count -gt 0) {
+    throw "本仓库已有 Transactions 实例在运行（PID $($blockers.Id -join ', ')），单实例插件会顶掉本次启动。"
+}
+
+$ws = [System.IO.Path]::GetFullPath($Workspace)
+
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+$UIA = [System.Windows.Automation.AutomationElement]
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class TrKe {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  public static void Click(int x, int y) {
+    SetCursorPos(x, y);
+    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+  }
+}
+'@ -Language CSharp -ErrorAction SilentlyContinue
+
+$failures = New-Object System.Collections.Generic.List[string]
+function Assert-True {
+    param([bool]$Condition, [string]$Message)
+    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
+    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
+}
+function Get-Elements { param($Root)
+    return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+}
+function Find-First { param($Root, [string]$Name)
+    $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)))
+    if ($all.Count -eq 0) { return $null }
+    return $all[0]
+}
+function Find-All { param($Root, [string]$Name)
+    return @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name))))
+}
+function Find-Like { param($Root, [string]$Pattern)
+    foreach ($element in @(Get-Elements $Root)) {
+        $name = $element.Current.Name
+        if ($name -and $name.Contains($Pattern)) { return $element }
+    }
+    return $null
+}
+function Wait-Element { param($Root, [string]$Name, [int]$TimeoutSec = 20)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $element = Find-First $Root $Name
+        if ($element) { return $element }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
+function Wait-Like { param($Root, [string]$Pattern, [int]$TimeoutSec = 20)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $element = Find-Like -Root $Root -Pattern $Pattern
+        if ($element) { return $element }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
+function Invoke-Element { param($Element)
+    if (-not $Element) { return $false }
+    $pattern = $null
+    if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Invoke(); return $true
+    }
+    $rect = $Element.Current.BoundingRectangle
+    if ($rect.Width -gt 0) {
+        [TrKe]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        return $true
+    }
+    return $false
+}
+function Click-Element { param($Element)
+    if (-not $Element) { return $false }
+    $rect = $Element.Current.BoundingRectangle
+    if ($rect.Width -le 0) { return $false }
+    [TrKe]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    return $true
+}
+function Set-Value { param($Element, [string]$Value)
+    if (-not $Element) { return $false }
+    $pattern = $null
+    if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+        $pattern.SetValue($Value); return $true
+    }
+    $rect = $Element.Current.BoundingRectangle
+    if ($rect.Width -gt 0) {
+        [TrKe]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        Start-Sleep -Milliseconds 200
+        [System.Windows.Forms.SendKeys]::SendWait('^a')
+        [System.Windows.Forms.SendKeys]::SendWait($Value)
+        return $true
+    }
+    return $false
+}
+function Save-Screenshot { param([string]$Path)
+    try {
+        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bounds.Size)
+        $graphics.Dispose()
+        $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bitmap.Dispose()
+        Write-Host "  截图: $Path" -ForegroundColor DarkYellow
+    }
+    catch { Write-Host "  截图失败: $_" -ForegroundColor DarkYellow }
+}
+function Get-ReadyWindow { param([int]$ProcessId, [int]$TimeoutSec = 60)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $last = $null
+    while ((Get-Date) -lt $deadline) {
+        $candidate = $UIA::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
+            (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $ProcessId)))
+        if ($candidate) {
+            $last = $candidate
+            if (Find-First $candidate '消费记录') { return $candidate }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $last
+}
+function Read-Table { param([string]$Table)
+    $dump = Join-Path $OutDir "dump-$Table.json"
+    Push-Location $repo
+    & cargo -q xtask dump $ws --table $Table *> $dump
+    $exit = $LASTEXITCODE
+    Pop-Location
+    if ($exit -ne 0) { throw "导出 $Table 失败（exit=$exit）" }
+    return @((Get-Content $dump -Raw | ConvertFrom-Json).$Table)
+}
+# 行内按钮：先把指针移到该行中心（操作区只在 hover 时显示），再按名字 + 行中心 Y 就近取
+function Find-RowButton { param($Window, [string]$RowName, [string]$ButtonName)
+    $row = Wait-Like -Root $Window -Pattern $RowName -TimeoutSec 15
+    if (-not $row) { return $null }
+    $rowRect = $row.Current.BoundingRectangle
+    [TrKe]::Click([int]($rowRect.X + 10), [int]($rowRect.Y + $rowRect.Height / 2)) | Out-Null
+    Start-Sleep -Milliseconds 500
+    $rowCenter = $rowRect.Y + $rowRect.Height / 2
+    $best = $null; $bestDistance = [double]::MaxValue
+    foreach ($button in (Find-All $Window $ButtonName)) {
+        if ($button.Current.IsOffscreen) { continue }
+        $rect = $button.Current.BoundingRectangle
+        if ($rect.Width -le 0) { continue }
+        $distance = [Math]::Abs(($rect.Y + $rect.Height / 2) - $rowCenter)
+        if ($distance -lt $bestDistance) { $best = $button; $bestDistance = $distance }
+    }
+    if ($best -and $bestDistance -le 40) { return $best }
+    return $null
+}
+
+# ---- DatePicker：触发器不可按占位符找（有值时名字就是那个日期）；格子要**真正渲染出来**的 ----
+function Test-Rect { param($Rect)
+    foreach ($value in @($Rect.X, $Rect.Y, $Rect.Width, $Rect.Height)) {
+        if ([double]::IsNaN($value) -or [double]::IsInfinity($value)) { return $false }
+    }
+    return ($Rect.Width -gt 0 -and $Rect.Height -gt 0)
+}
+function Find-DateTrigger { param($Window)
+    foreach ($element in @(Get-Elements $Window)) {
+        if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+        if ($element.Current.IsOffscreen) { continue }
+        if ($element.Current.ClassName -notlike '*ui-date-picker__trigger*') { continue }
+        if (-not (Test-Rect $element.Current.BoundingRectangle)) { continue }
+        return $element
+    }
+    return $null
+}
+function Find-DateCell { param($Window, [int]$Day)
+    foreach ($element in @(Get-Elements $Window)) {
+        if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+        if ($element.Current.IsOffscreen) { continue }
+        if ($element.Current.Name -ne "$Day") { continue }
+        if ($element.Current.ClassName -notlike '*ui-date-picker__cell*') { continue }
+        if ($element.Current.ClassName -like '*is-outside*') { continue }
+        if (-not (Test-Rect $element.Current.BoundingRectangle)) { continue }
+        return $element
+    }
+    return $null
+}
+function Select-Date { param($Window, [int]$Day)
+    $trigger = Wait-Element -Root $Window -Name '选择日期' -TimeoutSec 3
+    if (-not $trigger) {
+        $deadline = (Get-Date).AddSeconds(10)
+        do {
+            $trigger = Find-DateTrigger -Window $Window
+            if (-not $trigger) { Start-Sleep -Milliseconds 400 }
+        } while (-not $trigger -and (Get-Date) -lt $deadline)
+    }
+    if (-not $trigger) { Write-Host '    找不到日期触发器（class=ui-date-picker__trigger）' -ForegroundColor DarkYellow; return '' }
+    $before = $trigger.Current.Name
+    Invoke-Element $trigger | Out-Null
+    $cell = $null
+    $deadline = (Get-Date).AddSeconds(8)
+    do {
+        $cell = Find-DateCell -Window $Window -Day $Day
+        if (-not $cell) { Start-Sleep -Milliseconds 300 }
+    } while (-not $cell -and (Get-Date) -lt $deadline)
+    if (-not $cell) { Write-Host "    没找到已渲染的第 $Day 天" -ForegroundColor DarkYellow; return '' }
+    Click-Element $cell | Out-Null
+    Start-Sleep -Milliseconds 800
+    $after = Find-DateTrigger -Window $Window
+    $value = if ($after) { $after.Current.Name } else { '' }
+    Write-Host "    日期选择器：'$before' → '$value'"
+    return $value
+}
+
+# ---- 播种 ----
+if (-not $explicitWorkspace) {
+    if (Test-Path $ws) { Remove-Item $ws -Recurse -Force }
+}
+if (-not (Test-Path (Join-Path $ws 'transactions.db'))) {
+    Push-Location $repo
+    & cargo -q xtask seed $ws *> (Join-Path $OutDir 'seed.log')
+    $seedExit = $LASTEXITCODE
+    Pop-Location
+    if ($seedExit -ne 0) { Get-Content (Join-Path $OutDir 'seed.log') -Tail 8; throw "播种失败（exit=$seedExit）" }
+    Write-Host "[ke] 播种工作空间: $ws" -ForegroundColor Cyan
+}
+
+@{ width = 1500; height = 950; workspaceDir = $ws; closeBehavior = 'quit'
+   appearance = 'light'; smokeTestMarker = 'ui-key-event.ps1' } |
+    ConvertTo-Json | Set-Content -Path (Join-Path $smokeHome '.transactions.json') -Encoding UTF8
+
+$stamp = Get-Date -Format 'HHmmss'
+$titleA = "UIA事件甲$stamp"
+$titleB = "UIA事件乙$stamp"
+# 选一个**不是今天**的日子（选今天就看不出 DatePicker 有没有生效 —— 弹窗默认就是今天）
+$today = Get-Date
+$day = if ($today.Day -eq 20) { 21 } else { 20 }
+$eventDate = $today.ToString('yyyy-MM-') + $day.ToString('00')
+
+$process = $null
+try {
+    $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME }
+    try {
+        $env:USERPROFILE = $smokeHome
+        $env:HOME = $smokeHome
+        $process = Start-Process -FilePath $Exe -PassThru
+    }
+    finally {
+        $env:USERPROFILE = $saved.USERPROFILE
+        $env:HOME = $saved.HOME
+    }
+
+    $window = Get-ReadyWindow -ProcessId $process.Id -TimeoutSec 60
+    if (-not $window) { throw '启动后 60 秒内没有拿到主窗口' }
+    $hwnd = [IntPtr]$window.Current.NativeWindowHandle
+    [TrKe]::ShowWindow($hwnd, 9) | Out-Null
+    [TrKe]::SetForegroundWindow($hwnd) | Out-Null
+    Start-Sleep -Seconds 1
+
+    Write-Host "`n[ke] 打开「关键事件」页（目标日期 $eventDate）"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '关键事件')) '打开「关键事件」页'
+    Start-Sleep -Seconds 3
+
+    # ================= 1/3 任选日期新建 =================
+    Write-Host "[ke] 1/3 用 DatePicker 选 $eventDate 并新建「$titleA」"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '添加事件' -TimeoutSec 15)) '点「添加事件」'
+    Start-Sleep -Seconds 2
+    Assert-True ([bool](Wait-Element -Root $window -Name '添加事件' -TimeoutSec 8)) '弹窗「添加事件」已打开'
+    $picked = Select-Date -Window $window -Day $day
+    Assert-True ($picked -eq $eventDate) "日期选择器选中 $eventDate（实际 '$picked'）"
+    Assert-True (Set-Value (Wait-Element -Root $window -Name '事件名称（可选）') $titleA) "填入事件名称「$titleA」"
+    Start-Sleep -Milliseconds 600
+    $confirmAdd = @(Find-All $window '确认' | Where-Object { -not $_.Current.IsOffscreen })
+    Assert-True ($confirmAdd.Count -gt 0) '找到弹窗「确认」'
+    if ($confirmAdd.Count -gt 0) { Invoke-Element $confirmAdd[$confirmAdd.Count - 1] | Out-Null }
+    Start-Sleep -Seconds 3
+
+    $created = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.date -eq $eventDate })
+    Assert-True ($created.Count -eq 1) "库里 $eventDate 恰好一条事件（实际 $($created.Count) 条）"
+    $eventId = if ($created.Count -ge 1) { $created[0].id } else { '' }
+    $ledgerId = if ($created.Count -ge 1) { $created[0].ledger_id } else { '' }
+    if ($created.Count -ge 1) {
+        Assert-True ($created[0].title -eq $titleA) "标题落库「$titleA」（实际 '$($created[0].title)'）"
+    }
+    $titleShown = Wait-Like -Root $window -Pattern $titleA -TimeoutSec 10
+    Assert-True ([bool]$titleShown) '左侧事件列表里出现该事件'
+
+    # ================= 2/3 同一天再建一次：upsert =================
+    Write-Host "[ke] 2/3 同一天（$eventDate）再建一次，标题换成「$titleB」"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '添加事件' -TimeoutSec 15)) '再次点「添加事件」'
+    Start-Sleep -Seconds 2
+    $pickedAgain = Select-Date -Window $window -Day $day
+    Assert-True ($pickedAgain -eq $eventDate) "再次选中同一天 $eventDate（实际 '$pickedAgain'）"
+    Assert-True (Set-Value (Wait-Element -Root $window -Name '事件名称（可选）') $titleB) "填入新标题「$titleB」"
+    Start-Sleep -Milliseconds 600
+    $confirmAgain = @(Find-All $window '确认' | Where-Object { -not $_.Current.IsOffscreen })
+    if ($confirmAgain.Count -gt 0) { Invoke-Element $confirmAgain[$confirmAgain.Count - 1] | Out-Null }
+    Start-Sleep -Seconds 3
+
+    $upserted = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.date -eq $eventDate })
+    Assert-True ($upserted.Count -eq 1) "同一天仍是**一条**（upsert 而不是新增，实际 $($upserted.Count) 条）"
+    if ($upserted.Count -eq 1) {
+        Assert-True ($upserted[0].title -eq $titleB) "标题被覆盖为「$titleB」（实际 '$($upserted[0].title)'）"
+        Assert-True ($upserted[0].id -eq $eventId) 'id 保留（覆盖写不是删了重建）'
+        Assert-True ($upserted[0].ledger_id -eq $ledgerId) '账本没变'
+    }
+    $newShown = Wait-Like -Root $window -Pattern $titleB -TimeoutSec 10
+    Assert-True ([bool]$newShown) '列表里显示新标题'
+    $oldShown = @(Get-Elements $window | ForEach-Object { $_.Current.Name } |
+        Where-Object { $_ -and $_.Contains($titleA) })
+    Assert-True ($oldShown.Count -eq 0) '列表里不再显示旧标题'
+
+    # ================= 3/3 删除 =================
+    Write-Host "[ke] 3/3 删除事件「$titleB」"
+    $deleteButton = Find-RowButton -Window $window -RowName $titleB -ButtonName '删除事件'
+    Assert-True ([bool]$deleteButton) '找到该事件的「删除事件」按钮'
+    if ($deleteButton) {
+        Click-Element $deleteButton | Out-Null
+        Start-Sleep -Milliseconds 1200
+        $confirmDelete = Find-All $window '删除'
+        if ($confirmDelete.Count -gt 0) { Invoke-Element $confirmDelete[$confirmDelete.Count - 1] | Out-Null }
+        Start-Sleep -Seconds 3
+    }
+    $gone = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.date -eq $eventDate })
+    Assert-True ($gone.Count -eq 0) "删除后 $eventDate 在库里没有事件了（实际 $($gone.Count) 条）"
+}
+finally {
+    if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
+    if ($process -and -not $process.HasExited) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        $process.WaitForExit(5000) | Out-Null
+    }
+}
+
+Write-Host ''
+if ($failures.Count -gt 0) {
+    Write-Host "[ke] 失败 $($failures.Count) 项：" -ForegroundColor Red
+    $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
+    exit 1
+}
+Write-Host '[ke] 全部通过：任选日期新建 → 同一天 upsert（id 保留）→ 删除' -ForegroundColor Green

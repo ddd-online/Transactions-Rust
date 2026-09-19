@@ -140,6 +140,11 @@ pwsh -File fixtures/ui-stock.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 # 且 **id 不变**（同一天 upsert）→ 改写内容再断言 →「预览」里 Markdown 渲染出标题 → 删除。
 pwsh -File fixtures/ui-diary-edit.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
+# 关键事件「新建」端到端：DatePicker **任选一个不是今天的日期** → 断言事件落在那一天 →
+# 同一天再建一次 → 断言 **upsert（一条、id 保留、标题被覆盖）** → 行内「删除事件」→ 库里清空。
+# （ui-crud 只验了用**默认日期（今天）**建事件 + 改颜色/写描述/删除；日期唯一性这条在这里锁。）
+pwsh -File fixtures/ui-key-event.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
 # 关联/解除关键事件端到端（唯一自动化 DatePicker 的脚本）：记一笔 → 行内「关联到关键事件」→
 # 弹窗里用日期选择器选一个**不是今天**的日子（`link_date` 默认今天，选今天就等于没测选择器）
 # → 断言 触发器显示所选日期 + `key_event_date` 落库 + 该日期懒创建了一条空事件

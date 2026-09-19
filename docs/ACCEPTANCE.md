@@ -160,7 +160,12 @@ build\target\transactions.exe               # 便携版（13.3 MB，双击即用
 `KeyEventImageGallery`、`KeyEventLinkedTr`、`UploadProgressBar`、`MarkdownViewer`。
 
 - [ ] 年视图列表：按年拉到事件，日期上有事件的标记；切换年份
-- [ ] 新建/编辑事件：日期（唯一）、标题、颜色（含 outlier）、Markdown 内容
+- [x] 新建/编辑事件：日期（唯一）、标题、颜色（含 outlier）、Markdown 内容
+      —— **新建与"日期唯一"已自动化**（`fixtures/ui-key-event.ps1`）：在「添加事件」弹窗里用
+      DatePicker **选一个不是今天的日期**（弹窗默认就是今天，选今天就等于没测选择器）→ 断言
+      事件落在那一天、左侧列表出现；同一天再建一次 → 断言 **仍是一条、`id` 保留、标题被覆盖**
+      （upsert 而非新增）→ 行内「删除事件」→ 该日期在库里清空。
+      颜色（含 outlier）与 Markdown 内容由 `fixtures/ui-crud.ps1` 覆盖（点色板写库、写 Markdown 后渲染）
       —— **新建事件已实测**（`添加事件 → 输入名称 → 确认`：左侧列表立即出现该事件，库里 `key_event` 增加一行
       `date=2026-09-19 title='UIA 冒烟事件 …'`，日期默认当天）；
       颜色选择、Markdown 内容编辑（`编辑描述`）、删除事件仍建议人工点一次
