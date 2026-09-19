@@ -125,7 +125,7 @@ pwsh -File fixtures/ui-sync-ledger.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <
 # → **排序**（重置 → 加「金额 降序」→ 应用 → 断言表格区金额序列非递增、最大值排第一）。
 pwsh -File fixtures/ui-transactions.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
-# 股票全生命周期端到端：建仓（真实行情查名）→ **减仓** → **清仓** → 界面展示。
+# 股票全生命周期端到端：建仓（真实行情查名）→ **编辑成交** → **删除委托** → **减仓** → **清仓** → 界面展示。
 # 断言 成交（价按分/手数/股数/成交额/手续费）→ 持仓（数量、成本=成交额+手续费，减仓按比例结转
 # `cost_basis = round(total_cost × 本次股数 / 持仓股数)`、`realized_pnl = amount - fee - cost_basis`）
 # → 资金记录（余额链、买入 -(成交额+手续费)、卖出 +(成交额-手续费)）→ 清仓归档（新轮次 + 回填三笔
@@ -289,7 +289,7 @@ cargo clippy --all-targets -- -D warnings
   才锁定"信号写对了，是 Modal 没挂载"。**教训：先分清"没点到"和"点了没反应"**，
   别用"这按钮自动化不了"给产品的 bug 打掩护。
   修法：三处去掉冗余的 `selected_code.set`（`src/pages/stock.rs` 有注释）；
-  回归：`fixtures/ui-stock.ps1`（67 项断言，建仓 → 减仓 → 清仓全链路）。
+  回归：`fixtures/ui-stock.ps1`（91 项断言：建仓 → 编辑成交 → 删除委托 → 减仓 → 清仓 + 清仓归档）。
 - **"复用工作空间"的判断要在默认值赋值之前取**（踩过）：脚本常写成
   `if (-not $Workspace) { $Workspace = <默认路径> }` 之后再 `if (-not $Workspace -or ...) { 重新播种 }`，
   但那时 `$Workspace` 已经非空，条件恒为 false → 永远不重新播种。

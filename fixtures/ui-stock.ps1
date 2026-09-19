@@ -4,6 +4,9 @@
 # 而界面上"点减仓/清仓 → 填成交价 → 提交"这条路一直只有「建仓」被手工验过。
 # 这里把整条生命周期走完，并按服务层的口径把关键金额算清楚：
 #   * 建仓：持仓数量 += 股数，`total_cost += amount + fee`（**成本含手续费**）
+#   * 编辑成交：改价后成交额/持仓成本按新价重算（手续费字段自洽；100→101 时佣金都低于最低 5 元，
+#     所以金额变了费用不变 —— 这本身是个有意义的断言，见脚本注释）
+#   * 删除整笔委托：回放掉这笔委托的全部成交与派生资金记录，持仓归零
 #   * 减仓/清仓：`cost_basis = round(total_cost × 本次股数 / 持仓股数)`，
 #     `realized_pnl = amount - fee - cost_basis`，数量与成本按比例结转；清空时成本归零并归档本轮
 #   * 资金记录：`cash_balance` 恒等于 `principal + Σ amount_change`（不变量，逐步校验）
@@ -15,6 +18,15 @@
 #   重渲染，交易弹窗**永远弹不出来**——现象极像"按钮点不动"（真实鼠标 / 键盘回车 / InvokePattern
 #   三种激活方式都无效，而表头那个不写 selected_code 的「建仓」按钮一直正常）。
 #   修法：那三处去掉冗余的 `selected_code.set`（见 `src/pages/stock.rs` 的注释）。
+#
+# 写这个脚本踩到的三个坑（都留在注释里）：
+#   * 成交记录表的行内「编辑/删除」在**持仓详情区**，所以要有持仓才看得到；清仓后它们就不在了；
+#   * 「编辑成交」弹窗的输入框**预填之后可访问名就是那个值**（不是占位符），按名字找会命中旁边的
+#     标签 <p>，必须按 Y 序取弹窗里的 Edit（`Get-ModalEdits`）；
+#   * 这个工作空间里**同代码的种子成交也在同一个账本**（界面只显示当前轮次那笔，DB 查询会一起捞），
+#     而且种子记录与我们的是同一秒 —— "我们的那笔"只能按"该类型里 created_at 最新"认（`Get-NewestTrade`）；
+#     另外**编辑会触发整个账本的派生资金记录重放**（与 parity 阶段 3 的行为一致），
+#     所以资金记录也只能按"变动额"认，不能用"条数/相邻两条"这种全局判据。
 #
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/ui-stock.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
@@ -336,6 +348,58 @@ function Submit-Trade {
     return -not [bool](Find-First $Window $ModalTitle)
 }
 
+# 建仓（无断言版）：供"删除委托后重建现场"复用。
+# 认"我们的那笔成交"：这个账本里还有**种子数据**的同代码成交（界面只显示当前轮次那笔，
+# 数据库查询会把它们一起捞出来；而且种子的记录与我们的是同一秒，按 created_at 过滤并不可靠），
+# 所以用与 1/5 相同的口径：同类型（open/reduce/close）里 created_at 最新的那一笔。
+function Get-NewestTrade { param([string]$LedgerId, [string]$Code, [string]$TradeType)
+    $rows = @(Read-Table 'tbl_billadm_stock_trade' | Where-Object {
+            $_.ledger_id -eq $LedgerId -and $_.stock_code -eq $Code -and $_.trade_type -eq $TradeType
+        } | Sort-Object created_at)
+    if ($rows.Count -eq 0) { return $null }
+    return $rows[$rows.Count - 1]
+}
+# 弹窗里的输入框：预填之后可访问名就是**值**（不是占位符），按 Y 序取才稳。
+function Get-ModalEdits { param($Window, [string]$ModalTitle)
+    $title = Find-First $Window $ModalTitle
+    if (-not $title) { return @() }
+    $titleY = $title.Current.BoundingRectangle.Y
+    $edits = @()
+    foreach ($element in @(Get-Elements $Window)) {
+        $isEdit = ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
+            ($element.Current.ClassName -eq 'Edit')
+        if (-not $isEdit -or $element.Current.IsOffscreen) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if ($rect.Width -le 0 -or $rect.Y -lt $titleY) { continue }
+        $edits += [pscustomobject]@{ Element = $element; Y = $rect.Y }
+    }
+    return @($edits | Sort-Object Y | ForEach-Object { $_.Element })
+}
+function Add-Position {
+    param($Window, [string]$Code, [string]$Name, [string]$Price, [string]$Lots)
+    $opened = $false
+    for ($attempt = 1; $attempt -le 3 -and -not $opened; $attempt++) {
+        Invoke-Element (Wait-Element -Root $Window -Name '建仓') | Out-Null
+        Start-Sleep -Seconds 1
+        $opened = [bool](Wait-Element -Root $Window -Name '记录建仓' -TimeoutSec 6)
+    }
+    if (-not $opened) { return $false }
+    $codeInput = Find-UnnamedEditRight -Window $Window
+    if (-not $codeInput) { return $false }
+    Set-Value $codeInput $Code | Out-Null
+    Start-Sleep -Milliseconds 600
+    Invoke-Element (Wait-Element -Root $Window -Name '查询股票名称') | Out-Null
+    Start-Sleep -Seconds 3
+    Set-Value (Wait-Element -Root $Window -Name '成交价（元/股）') $Price | Out-Null
+    $lotsInput = Wait-EditLike -Root $Window -Pattern '手数'
+    if ($lotsInput) { Set-Value $lotsInput $Lots | Out-Null }
+    Start-Sleep -Milliseconds 800
+    $buttons = Find-All $Window '建仓'
+    if ($buttons.Count -gt 0) { Invoke-Element $buttons[$buttons.Count - 1] | Out-Null }
+    Start-Sleep -Seconds 5
+    return $true
+}
+
 # ---- 播种 ----
 # **默认每次重新播种**：本脚本断言的是"持仓数量/成本"这种**绝对状态**，复用旧工作空间必然失真
 # （实测踩过：上一轮留下的 300 股让这一轮变成 600 股，后面全崩）。
@@ -394,8 +458,8 @@ try {
     $ledgerId = ''
     $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 5
 
-    # ================= 1/3 建仓 =================
-    Write-Host "`n[stock] 1/3 建仓 $code × $buyLots 手 @ $buyPrice"
+    # ================= 1/5 建仓 =================
+    Write-Host "`n[stock] 1/5 建仓 $code × $buyLots 手 @ $buyPrice"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票交易')) '打开「股票交易」页'
     Start-Sleep -Seconds 3
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '我的持仓')) '切到「我的持仓」页签（建仓按钮在这里）'
@@ -455,8 +519,8 @@ try {
             "买入资金变动 = -(成交额 + 手续费)（$($buyRecord.amount_change)）"
     }
 
-    # ================= 2/3 界面展示（建仓之后）=================
-    Write-Host "`n[stock] 2/3 界面展示：持仓卡片与交易历史"
+    # ================= 2/5 界面展示（建仓之后）=================
+    Write-Host "`n[stock] 2/5 界面展示：持仓卡片与交易历史"
     $cardText = $null
     $deadline = (Get-Date).AddSeconds(20)
     do {
@@ -483,7 +547,124 @@ try {
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '我的持仓')) '切回「我的持仓」（减仓/清仓按钮在详情区）'
     Start-Sleep -Seconds 3
 
-    # ================= 3/3 减仓 → 清仓 =================
+    # ================= 3/5 编辑成交（改成交价 → 费用/成本/资金链重算）=================
+    # 成交记录表每行的「编辑」按钮（在持仓详情区，所以这时必须还有持仓）。
+    # ⚠ 两个坑：① 这个账本里**还有种子数据**的同代码成交（界面只显示当前轮次那笔，数据库查询会一起捞出来），
+    # 所以"我们的成交"用与 1/5 相同的口径认：同类型里 created_at 最新的那一笔；
+    # ② 编辑弹窗的输入框**预填后名字就是值**（不是占位符），必须按 Y 序取 Edit，不能按名字找。
+    Write-Host "`n[stock] 3/5 编辑成交：把建仓价从 $buyPrice 改成 101"
+    $orderTrade = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
+    Assert-True ([bool]$orderTrade) '编辑前能认到我们的建仓成交（该类型最新一笔）'
+    if ($orderTrade) {
+        Assert-True (([int64]$orderTrade.price) -eq 10000) "编辑前成交价 100.00 元（$($orderTrade.price) 分）"
+        Assert-True ($orderTrade.lots -eq 3) "编辑前手数 3（$($orderTrade.lots)）"
+    }
+
+    $editButton = Wait-VisibleButton -Window $window -Name '编辑' -TimeoutSec 15
+    Assert-True ([bool]$editButton) '找到成交行「编辑」按钮'
+    if ($editButton) {
+        $rect = $editButton.Current.BoundingRectangle
+        [TrStock]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 300
+        [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    }
+    $editOpened = [bool](Wait-Element -Root $window -Name '编辑成交' -TimeoutSec 10)
+    Assert-True $editOpened '弹窗「编辑成交」已打开'
+    if ($editOpened) {
+        $modalEdits = Get-ModalEdits -Window $window -ModalTitle '编辑成交'
+        Assert-True ($modalEdits.Count -ge 2) "弹窗里有两个输入框（成交价/手数，实际 $($modalEdits.Count) 个）"
+        if ($modalEdits.Count -ge 2) {
+            Assert-True (Set-Value $modalEdits[0] '101') '把成交价改成 101'
+        }
+        Start-Sleep -Milliseconds 600
+        $saveButton = Wait-VisibleButton -Window $window -Name '保存' -TimeoutSec 10
+        Assert-True ([bool]$saveButton) '找到「保存」'
+        if ($saveButton) { Invoke-Element $saveButton | Out-Null }
+        Start-Sleep -Seconds 4
+        # 若弹出「影响预演」确认框（本轮无已归档轮次时通常直接写库），一并确认
+        $impactOk = Wait-VisibleButton -Window $window -Name '确认' -TimeoutSec 4
+        if ($impactOk) {
+            Write-Host '  出现影响预演确认框，点「确认」'
+            Invoke-Element $impactOk | Out-Null
+            Start-Sleep -Seconds 4
+        }
+    }
+
+    $editedTrade = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
+    Assert-True ([bool]$editedTrade) '编辑后仍能认到那笔建仓成交'
+    if ($editedTrade) {
+        Assert-True (([int64]$editedTrade.price) -eq 10100) "成交价改成 101.00 元（实际 $($editedTrade.price) 分）"
+        Assert-True (([int64]$editedTrade.amount) -eq 3030000) "成交额按新价重算 = 101×300 股 = 3,030,000 分（实际 $($editedTrade.amount)）"
+        # 手续费：**不能断言"一定变了"** —— 100 → 101 时两笔成交额都落在佣金最低 5 元以下
+        # （实测 3,000,000 与 3,030,000 分都是 530 分），这里断言的是字段自洽性。
+        Assert-True (([int64]$editedTrade.commission + [int64]$editedTrade.stamp_duty + [int64]$editedTrade.transfer_fee) `
+            -eq ([int64]$editedTrade.fee)) `
+            "手续费自洽（佣金 $($editedTrade.commission) + 印花税 $($editedTrade.stamp_duty) + 过户费 $($editedTrade.transfer_fee) = $($editedTrade.fee)）"
+    }
+    $posAfterEdit = @(Read-Table 'tbl_billadm_stock_position' |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
+    if ($editedTrade -and $posAfterEdit) {
+        Assert-True ($posAfterEdit.quantity -eq 300) "编辑不改数量（$($posAfterEdit.quantity) 股）"
+        Assert-True (([int64]$posAfterEdit.total_cost) -eq (([int64]$editedTrade.amount) + ([int64]$editedTrade.fee))) `
+            "持仓成本按新价重算 = 成交额 + 手续费（$($posAfterEdit.total_cost)）"
+    }
+    # 资金记录：**按"变动额"认我们这条**。编辑会触发整个账本的派生资金记录重放
+    # （这与 parity 阶段 3 的行为一致），种子记录的 created_at 会被重写，所以"条数/相邻两条"都不可靠。
+    if ($editedTrade) {
+        $expectedChange = -(([int64]$editedTrade.amount) + ([int64]$editedTrade.fee))
+        $ourFundsAfterEdit = @(Get-FundRecords -LedgerId $ledgerId | Where-Object { ([int64]$_.amount_change) -eq $expectedChange })
+        Assert-True ($ourFundsAfterEdit.Count -ge 1) `
+            "编辑后资金记录按新价重放（存在变动 = $expectedChange 的记录，实际 $($ourFundsAfterEdit.Count) 条）"
+    }
+
+    # ================= 4/5 删除委托（整笔回放）→ 重新建仓 =================
+    Write-Host "`n[stock] 4/5 删除整笔委托 → 再建仓（好继续验减仓/清仓）"
+    $ourBuyFundIds = @(if ($editedTrade) {
+            $expected = -(([int64]$editedTrade.amount) + ([int64]$editedTrade.fee))
+            Get-FundRecords -LedgerId $ledgerId | Where-Object { ([int64]$_.amount_change) -eq $expected } |
+                ForEach-Object { $_.id }
+        })
+    $deleteButton = Wait-VisibleButton -Window $window -Name '删除' -TimeoutSec 15
+    Assert-True ([bool]$deleteButton) '找到成交行「删除」按钮'
+    if ($deleteButton) {
+        $rect = $deleteButton.Current.BoundingRectangle
+        [TrStock]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 300
+        [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    }
+    $deleteOpened = [bool](Wait-Element -Root $window -Name '删除整笔委托？' -TimeoutSec 10)
+    Assert-True $deleteOpened '弹窗「删除整笔委托？」已打开'
+    if ($deleteOpened) {
+        $deleteSummary = Get-Elements $window | ForEach-Object { $_.Current.Name } |
+            Where-Object { $_ -and $_ -like '*共 1 笔成交*' } | Select-Object -First 1
+        Assert-True ([bool]$deleteSummary) "确认框里带委托摘要（$deleteSummary）"
+        $confirm = Wait-VisibleButton -Window $window -Name '确认' -TimeoutSec 10
+        Assert-True ([bool]$confirm) '找到「确认」'
+        if ($confirm) { Invoke-Element $confirm | Out-Null }
+        Start-Sleep -Seconds 4
+    }
+
+    $tradeAfterDelete = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
+    Assert-True (-not $tradeAfterDelete -or ([int64]$tradeAfterDelete.price -ne 10100)) `
+        "删除后那笔 101.00 元的建仓成交没了（最新一笔：$(if ($tradeAfterDelete) { "$($tradeAfterDelete.price) 分" } else { '无' })）"
+    $posAfterDelete = @(Read-Table 'tbl_billadm_stock_position' |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
+    if ($posAfterDelete) {
+        Assert-True ($posAfterDelete.quantity -eq 0) "删除后持仓数量归零（实际 $($posAfterDelete.quantity)）"
+        Assert-True (([int64]$posAfterDelete.total_cost) -eq 0) "删除后持仓成本归零（实际 $($posAfterDelete.total_cost)）"
+    }
+    $fundIdsAfterDelete = @(Get-FundRecords -LedgerId $ledgerId | ForEach-Object { $_.id })
+    $survivors = @($ourBuyFundIds | Where-Object { $fundIdsAfterDelete -contains $_ })
+    Assert-True ($survivors.Count -eq 0) "删除委托后我们那条资金记录也被回放掉了（残留 $($survivors.Count) 条）"
+
+    # 重新建仓，供 5/5 的减仓/清仓使用
+    Assert-True (Add-Position -Window $window -Code $code -Name $name -Price $buyPrice -Lots $buyLots) '重新建仓 3 手 @ 100'
+    Start-Sleep -Seconds 2
+    $posRebuilt = @(Read-Table 'tbl_billadm_stock_position' |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
+    Assert-True ([bool]$posRebuilt -and $posRebuilt.quantity -eq 300) "重建仓后持仓回到 300 股（实际 $(if ($posRebuilt) { $posRebuilt.quantity } else { 'n/a' })）"
+
+    # ================= 5/5 减仓 → 清仓 =================
     # 详情区的「减仓/清仓」现在真的能点开了（见文件顶部那条缺陷说明）。
     Write-Host "`n[stock] 3/3 减仓 1 手 @ $reducePrice → 清仓 2 手 @ $closePrice"
 
@@ -623,4 +804,4 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
     exit 1
 }
-Write-Host '[stock] 全部通过：建仓 → 减仓 → 清仓落库（成本结转/已实现盈亏/资金链）+ 清仓归档 + 界面展示' -ForegroundColor Green
+Write-Host '[stock] 全部通过：建仓 → 编辑成交 → 删除委托 → 减仓 → 清仓（成本结转/已实现盈亏/资金链/清仓归档）+ 界面展示' -ForegroundColor Green
