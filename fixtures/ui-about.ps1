@@ -56,6 +56,16 @@ $blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Whe
 if ($blockers.Count -gt 0) {
     throw "本仓库已有 Transactions 实例在运行（PID $($blockers.Id -join ', ')），单实例插件会顶掉本次启动。"
 }
+# 别的目录下装着的同一款应用也算数：单实例插件认的是应用标识、不是 exe 路径，
+# 所以用户自己那份（例如 D:\software\Transactions\）开着时，本次启动会被顶掉、
+# 表现为"启动后 60 秒内没有拿到主窗口"（排查过一轮才发现是这个原因）。
+$foreign = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
+        $path = try { $_.Path } catch { $null }
+        $path -and -not $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+if ($foreign.Count -gt 0) {
+    throw "本机另有 Transactions 实例在运行（PID $($foreign.Id -join ', ')：$($foreign.Path -join '; ')）—— 单实例插件会顶掉本次启动，请先退出它。"
+}
 
 $ws = [System.IO.Path]::GetFullPath($Workspace)
 
