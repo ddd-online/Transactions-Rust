@@ -482,3 +482,14 @@ Select-String -Path src-tauri\src\updater.rs,crates\tr-ui\src\pages\settings.rs,
 版本号唯一来源是 `src-tauri/tauri.conf.json`（`Cargo.toml` 的 workspace/`src-tauri` 两处也要同步）；
 应用内更新读 release 的 `tag_name` 与首个 `.exe` 资产的 `digest`。
 许可证以仓库根 `LICENSE` 为准（Apache-2.0）。
+
+**踩过的坑：发布资产可能是上一版的安装包**（真实事故：0.2.0 的 release 资产其实是 0.1.0 的安装包，
+两个 release 的资产字节数与 `sha256` 完全相同，用户装完看到的还是 0.1.0 的界面）。
+根因是 `cargo tauri build` **不清** `target\release\bundle\nsis\`，上一版遗留的
+`Transactions_0.1.0_x64-setup.exe` 与新的 `Transactions_0.2.0_x64-setup.exe` 并排存在，
+而旧脚本用 `Get-ChildItem *-setup.exe | Select-Object -First 1` 取**字典序第一个**（0.1.0 在前）。
+现在 `build.ps1` 会在构建前删掉陈旧安装包、只认 `Transactions_{版本}_x64-setup.exe`、
+并断言它的 `LastWriteTime` 晚于本轮构建开始时刻；安装包与便携版都必须落盘成功，否则非零退出。
+根子上还是那条老教训：**别只信退出码，也别按"第一个匹配"取产物**——发布前用
+`fixtures/ui-about.ps1` 对着产物核一次自报版本号，发布后再 `gh release view <tag> --json assets`
+核对 `digest` 与本地 `Get-FileHash` 一致（同一个 digest 出现在两个 tag 下就是发错了）。

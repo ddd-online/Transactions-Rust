@@ -3,12 +3,12 @@
 桌面端个人记账应用：**Tauri 2 外壳 + Leptos(WASM) 界面 + rusqlite 内核**，全部由 Rust 实现。
 所有记账数据保存在你自己选择的本地工作空间（一个 SQLite 数据库）里，无云端账户、无后台服务、无 Node 依赖。
 
-本文档描述 **0.1.0**。
+本文档描述 **0.2.0**。
 
 ## 功能
 
 - **消费记录**：记一笔（模板一键填充）、编辑、删除、复制同步到其他账本、筛选（关键词/类型/分类/标签/离群/时间范围）、排序、分页、统计条。
-- **数据分析**：分类占比、时间趋势、标签云、离群消费等图表（界面层自绘 SVG，不引入图表 JS 库）。
+- **数据分析**：分类占比、时间趋势、标签云、离群消费等图表（引擎为 `charts-rs`，界面层直出 SVG，不引入图表 JS 库）。
 - **股票交易**：账户与持仓、建仓/加仓/减仓/清仓（真实行情查名与现价）、成交记录与编辑、交易历史归档为轮次、费用设置（佣金/最低佣金/印花税/过户费）、盈亏统计、重置股票数据。
 - **关键事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、图片附件（含 HEIC 在界面层转码后上传）。
 - **日记**：按日期一篇，Markdown 预览/编辑，导入/导出目录，心情标记，字数统计。
@@ -50,7 +50,7 @@ fixtures/            # schema 基线、端到端脚本（**不含任何真实个
 ## 下载安装
 
 到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载
-`Transactions-x64-v0.1.0.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
+`Transactions-x64-v0.2.0.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
 
 首次启动会让你选择一个工作空间目录：空目录会按当前 schema 建库，已经是当前格式的目录会直接打开。
 应用内「设置 → 关于软件」会检查本仓库的 Release，发现新版本可下载并校验 `sha256` 后安装。
@@ -72,7 +72,7 @@ cargo tauri dev
 pwsh -File build/build.ps1
 ```
 
-产物：`build\target\Transactions-x64-v0.1.0.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
+产物：`build\target\Transactions-x64-v0.2.0.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
 发布流程：`build/clean.ps1` → `build/build.ps1` → `build/release.ps1`（`gh release create` + 上传安装包）。
 版本号唯一来源是 `src-tauri/tauri.conf.json`。
 
@@ -99,6 +99,7 @@ cargo xtask dump <workspace-dir>            # 只读导出业务表为规范化 
 
 # 端到端：真机启动应用，用 UI Automation 驱动窗口
 pwsh -File fixtures/smoke.ps1               # 首次启动/已配置 两种启动形态
+pwsh -File fixtures/ui-about.ps1            # 打包产物自报版本 == tauri.conf.json 的版本
 pwsh -File fixtures/ui-smoke.ps1 -WriteFlow # 7 个页面渲染 + 界面写入闭环
 pwsh -File fixtures/ui-stock.ps1            # 股票全生命周期（138 项断言）
 pwsh -File fixtures/ui-transactions.ps1     # 消费记录：编辑/模板/排序/筛选

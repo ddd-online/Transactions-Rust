@@ -2,6 +2,39 @@
 
 本文件记录本仓库的版本变更。版本号以 `src-tauri/tauri.conf.json` 为唯一来源。
 
+## [0.2.0] - 2026-09-20
+
+图表引擎换代 + 界面布局与组件全面细化。**数据格式与配置键名均无变化**，
+既有的 0.1.0 工作空间可直接打开（schema 未动）。
+
+### 变更
+
+- **图表**：折线图引擎由 `plotters` 换成 `charts-rs`（`default-features = false`，直出 SVG，
+  `THEME_LIGHT` / `THEME_DARK` 跟随主题）；折线改直线段、数据点实心、图例与 Y 轴刻度列对齐、
+  单序列面积填充；画布尺寸随容器自适应；游标 / tooltip / 参考线改由 DOM 覆盖层绘制。
+- **股票**：修通四个分栏的高度链，「资金变化记录」分页行贴到卡片底部；持仓页左栏通栏、
+  「建仓」贴底，卡片三态（软灰卡面 / 纸面悬停 / 强调色选中）；成交记录页详情改纸面卡、
+  轮次详情标题独占一行；间距收敛为「区域 24 / 卡内 16 / 内容 12」三级节奏。
+- **日记**：移除 Markdown 与预览、去掉底栏，工具栏承载保存状态与删除，编辑框上下留白一致。
+- **关键事件**：卡片与关联交易卡改纸面 + 发丝描边，选中用强调色底。
+- **消费记录 / 设置 / 分类标签 / 数据分析**：分页、抽屉、日期选择器、空态等细节统一；
+  新增 `time_range_picker` 组件，移除未使用的 `float_button`。
+
+### 修复
+
+- **发布：0.2.0 的安装包资产曾经是 0.1.0 的安装包**（用户下载安装后仍是 0.1.0 的界面，
+  两个 release 的资产字节数与 `sha256` 完全相同）。原因：`cargo tauri build` 不清 NSIS 产物目录，
+  `build/build.ps1` 用 `Get-ChildItem *-setup.exe | Select-Object -First 1` 取**字典序第一个**，
+  于是上一版遗留的 `Transactions_0.1.0_x64-setup.exe` 被改名成 `Transactions-x64-v0.2.0.exe` 上传。
+  现在构建前先清掉陈旧安装包，只认 `Transactions_{版本}_x64-setup.exe`，
+  并断言它是**本轮构建**产出的文件，安装包与便携版都要落盘成功，否则直接失败退出。
+
+### 验证
+
+- 新增 `fixtures/ui-about.ps1`：断言打包产物自报的版本号（「设置 → 关于软件」）与
+  `tauri.conf.json` 一致，并覆盖关于页其余固定内容与更新检查终态。
+- 新增 `fixtures/dev-hot.ps1`（trunk 与外壳的热更新桥）与 `fixtures/dev-shot.ps1`（按页截图）。
+
 ## [0.1.0] - 2026-09-19
 
 首个版本：**Tauri 2 外壳 + Leptos(WASM) 界面 + rusqlite 内核**的纯 Rust 桌面记账应用。
@@ -34,4 +67,5 @@
 - 已知偏差与取舍（行情与更新检查的 HTTP 客户端不读系统代理、资金记录 `created_at` 的严格递增规则等）
   记在 `AGENTS.md`。
 
+[0.2.0]: https://github.com/ddd-online/Transactions-Rust/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ddd-online/Transactions-Rust/releases/tag/v0.1.0
