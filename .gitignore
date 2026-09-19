@@ -28,3 +28,8 @@ transactions.log
 .idea/
 *.swp
 Thumbs.db
+
+# 本机安装的 AI 编码工具 skill（`npx impeccable install` 等）；
+# 含 vendored JS/数据（约 2 MB），与「界面无 Node、不 vendor JS 库」的约定不符，故不入库。
+/.dsh/
+/.agents/
