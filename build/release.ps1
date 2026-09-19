@@ -48,4 +48,4 @@ if ($LASTEXITCODE -eq 0) {
 if ($LASTEXITCODE -ne 0) { Fail "gh 发布失败，退出码: $LASTEXITCODE" }
 
 Write-Success "已发布 $tag（资产 $($assets.Count) 个）"
-Write-Host "提示：应用内更新会读取该 release 的 `tag_name` 与首个 .exe 资产的 `digest`（sha256）。" -ForegroundColor DarkGray
+Write-Host "提示：应用内更新会读取该 release 的 tag_name 与首个 .exe 资产的 digest（sha256）。" -ForegroundColor DarkGray
