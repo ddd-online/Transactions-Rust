@@ -2,7 +2,11 @@
 
 本文件记录本仓库的版本变更。版本号以 `src-tauri/tauri.conf.json` 为唯一来源。
 
-## [未发布]
+## [0.3.0] - 2026-09-21
+
+本次发布的重点是**数据可见范围与升级路径**（日记按账本隔离、既有工作空间首次打开时自动升级并备份），
+外加**代理配置**（HTTP 代理 + 自动探测系统代理）与一轮**信息架构 / 命名调整**、
+若干界面修复与测试脚本加固。
 
 **日记按账本隔离 + 工作空间自动迁移**（数据可见范围与升级路径都变了，属**可见行为变更**；
 既有工作空间在首次打开时会**自动升级**，升级前自动备份）。
@@ -262,6 +266,7 @@
 - 已知偏差与取舍（行情与更新检查的 HTTP 客户端不读系统代理、资金记录 `created_at` 的严格递增规则等）
   记在 `AGENTS.md`。
 
+[0.3.0]: https://github.com/ddd-online/Transactions-Rust/releases/tag/v0.3.0
 [0.2.1]: https://github.com/ddd-online/Transactions-Rust/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ddd-online/Transactions-Rust/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ddd-online/Transactions-Rust/releases/tag/v0.1.0
