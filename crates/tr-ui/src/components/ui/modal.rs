@@ -14,8 +14,33 @@
 //! ```
 
 use leptos::prelude::*;
+use leptos::tachys::view::any_view::{AnyView, IntoAny};
 
 use crate::icons::{self, Icon};
+
+/// 「关闭」按钮（弹窗 / 抽屉 / 通知右上角的 ×）。
+///
+/// 4 处曾经逐行相同，只有 class 不同：弹窗与抽屉是 `ui-modal__close`、
+/// 通知是 `notice__close`。`on_close` 为 `None` 时按钮**照样渲染**、点了什么都不做
+/// （与旧的内联写法逐字一致）。
+pub(crate) fn close_button(class: &'static str, on_close: Option<UnsyncCallback<()>>) -> AnyView {
+    view! {
+        <button
+            type="button"
+            class=class
+            title="关闭"
+            aria-label="关闭"
+            on:click=move |_| {
+                if let Some(callback) = on_close {
+                    callback.run(());
+                }
+            }
+        >
+            {icons::icon(Icon::Close)}
+        </button>
+    }
+    .into_any()
+}
 
 /// 模态框。
 #[component]
@@ -78,19 +103,7 @@ pub fn Modal(
                 <div class="ui-modal__content" style=content_style.clone()>
                     <div class="ui-modal__header">
                         <h3 class="ui-modal__title">{move || title.get()}</h3>
-                        <button
-                            type="button"
-                            class="ui-modal__close"
-                            title="关闭"
-                            aria-label="关闭"
-                            on:click=move |_| {
-                                if let Some(callback) = on_close {
-                                    callback.run(());
-                                }
-                            }
-                        >
-                            {icons::icon(Icon::Close)}
-                        </button>
+                        {close_button("ui-modal__close", on_close)}
                     </div>
                     <div class="ui-modal__body">{children()}</div>
                     // 底栏用 class 切换而不是内层 `Show`：内层 `Show` 的 children 是 `Fn`，

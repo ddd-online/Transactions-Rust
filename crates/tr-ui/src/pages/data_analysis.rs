@@ -23,6 +23,7 @@ use std::collections::BTreeMap;
 
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
+use tr_domain::consts::{TAG_POLICY_ALL, TAG_POLICY_ANY};
 use tr_domain::dto::{
     ChartDto, ChartLineCondition, ChartLineData, ChartQueryRequest, ChartQueryResponse,
     CreateChartRequest, UpdateChartRequest,
@@ -33,14 +34,14 @@ use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, CheckboxGroup,
     CheckboxOption, Divider, Empty, IconButton, IconButtonVariant, Input, LineChart, Modal,
-    Popconfirm, Select, SelectOption, Spin, Tag, TagKind, TimeRangePicker,
+    PageHeader, Popconfirm, Select, SelectOption, Spin, Tag, TagKind, TimeRangePicker,
 };
 use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::store::AppStores;
-use crate::time::today_ymd;
+use crate::time::{range_to_seconds, today_ymd};
 
 /// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "数据分析";
@@ -55,8 +56,8 @@ const TRANSACTION_TYPES: [(&str, &str); 3] = [
 /// 时间粒度选项。
 const GRANULARITIES: [(&str, &str); 2] = [("year", "年"), ("month", "月")];
 
-/// 标签匹配策略。
-const TAG_POLICIES: [(&str, &str); 2] = [("any", "任意"), ("all", "全部")];
+/// 标签匹配策略（取值复用领域层常量，避免同一组字面量在多处各写一份）。
+const TAG_POLICIES: [(&str, &str); 2] = [(TAG_POLICY_ANY, "任意"), (TAG_POLICY_ALL, "全部")];
 
 /// 曲线配色（按交易类型语义色；同类型多条时用调色板兜底）。
 fn series_color(transaction_type: &str, index: usize) -> String {
@@ -147,7 +148,9 @@ pub fn DataAnalysisPage() -> impl IntoView {
         }
         let request = ChartQueryRequest {
             ledger_id: chart.ledger_id.clone(),
-            ts_range: time_range_seconds(&range_start.get_untracked(), &range_end.get_untracked()),
+            ts_range: range_to_seconds(&range_start.get_untracked(), &range_end.get_untracked())
+                .map(|(from, to)| vec![from, to])
+                .unwrap_or_default(),
             granularity: chart.granularity.clone(),
             lines: chart
                 .lines
@@ -252,7 +255,6 @@ pub fn DataAnalysisPage() -> impl IntoView {
     let delete_chart = move |chart: ChartDto| {
         let ledger_id = stores.current_ledger_id.get_untracked();
         let chart_id = chart.chart_id.clone();
-        let title = chart.title.clone();
         leptos::task::spawn_local(async move {
             match api::chart::delete(&chart_id).await {
                 Ok(()) => {
@@ -273,7 +275,6 @@ pub fn DataAnalysisPage() -> impl IntoView {
                             selected.set(next);
                         }
                     }
-                    let _ = title;
                 }
                 Err(_) => Notifier::global().error("删除图表失败".to_string(), None),
             }
@@ -368,12 +369,7 @@ pub fn DataAnalysisPage() -> impl IntoView {
 
     view! {
         <section class="page da-page">
-            <header class="page-header">
-                <div class="page-header-text">
-                    <h1 class="page-title">{PAGE_TITLE}</h1>
-                </div>
-                <div class="app-top-bar-spacer"></div>
-            </header>
+            <PageHeader title=PAGE_TITLE />
 
             <div class="page-body">
                 <div class="page-toolbar">
@@ -570,18 +566,6 @@ pub fn DataAnalysisPage() -> impl IntoView {
     }
 }
 
-/// 时间粒度切换（日 / 月 / 年）。
-/// 「YYYY-MM-DD」区间 → 闭区间 Unix 秒（起点 00:00:00、终点 23:59:59）。
-fn time_range_seconds(start: &str, end: &str) -> Vec<i64> {
-    let Some(from) = crate::time::ymd_to_seconds(start) else {
-        return Vec::new();
-    };
-    let Some(to) = crate::time::ymd_to_seconds(end) else {
-        return Vec::new();
-    };
-    vec![from, to + 86_399]
-}
-
 /// 交易类型 → CSS 颜色变量（列表上的小圆点）。
 fn transaction_type_color(transaction_type: &str) -> String {
     match transaction_type {
@@ -633,7 +617,7 @@ fn chart_panel(
     let new_type = RwSignal::new("income".to_string());
     let new_category = RwSignal::new(String::new());
     let new_tags = RwSignal::new(Vec::<String>::new());
-    let new_policy = RwSignal::new("any".to_string());
+    let new_policy = RwSignal::new(TAG_POLICY_ANY.to_string());
     let new_description = RwSignal::new(String::new());
     let new_include_outlier = RwSignal::new(true);
     let category_options = RwSignal::new(Vec::<SelectOption>::new());
@@ -872,7 +856,7 @@ fn chart_panel(
                                     new_type.set("income".to_string());
                                     new_category.set(String::new());
                                     new_tags.set(Vec::new());
-                                    new_policy.set("any".to_string());
+                                    new_policy.set(TAG_POLICY_ANY.to_string());
                                     new_description.set(String::new());
                                     new_include_outlier.set(true);
                                     category_options.set(Vec::new());

@@ -14,6 +14,8 @@ use tr_domain::dto::{
 
 use crate::ipc::{self, IpcError};
 
+use super::LedgerIdRequest;
+
 /// `"all"`（与 `type`/`transactionType` 的不过滤语义一致）。
 pub const ALL: &str = "all";
 
@@ -30,12 +32,6 @@ struct DeleteRequest {
     name: String,
     #[serde(rename = "type")]
     transaction_type: String,
-    #[serde(rename = "ledgerId")]
-    ledger_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct InitializeRequest {
     #[serde(rename = "ledgerId")]
     ledger_id: String,
 }
@@ -102,7 +98,7 @@ pub async fn update_sort(
 pub async fn initialize(ledger_id: &str) -> Result<InitializeCategoriesResponse, IpcError> {
     ipc::call(
         "category_initialize",
-        InitializeRequest {
+        LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
     )

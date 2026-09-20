@@ -3,6 +3,8 @@
 //! 与 [`crate::components::ui::Popconfirm`] 的区别：这里的内容完全由调用方决定
 //! （例如筛选条件的小结、图表曲线的图例说明），没有固定的确认/取消按钮。
 
+use super::backdrop;
+use super::with_class;
 use leptos::prelude::*;
 
 #[component]
@@ -27,10 +29,7 @@ pub fn Popover(
     if align_end {
         classes.push_str(" ui-popover--end");
     }
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class(&classes, class.as_deref());
 
     view! {
         <div class=classes class:is-open=move || open.get()>
@@ -39,7 +38,7 @@ pub fn Popover(
             </span>
 
             <Show when=move || open.get()>
-                <div class="ui-select__backdrop" on:click=move |_| open.set(false)></div>
+                {backdrop(UnsyncCallback::new(move |()| open.set(false)))}
             </Show>
             // 面板常驻 DOM，用 `is-hidden` 控制显隐：`Show` 的 children 必须是 `Fn`，
             // 而 `content`（`ViewFn`）一旦被闭包 move 进去就退化成 `FnOnce`。

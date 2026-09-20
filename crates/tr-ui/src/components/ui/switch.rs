@@ -4,6 +4,7 @@
 //! 与组件套件其余部分的"按钮 + `data-*` 状态"风格一致，也免去 `:checked` 选择器的
 //! 浏览器差异（Windows WebView2 的默认勾选框外观无法完全覆盖）。
 
+use super::with_class;
 use leptos::prelude::*;
 
 #[component]
@@ -25,11 +26,7 @@ pub fn Switch(
 ) -> impl IntoView {
     let disabled = disabled.unwrap_or_else(|| Signal::derive(|| false));
 
-    let mut classes = String::from("ui-switch-field");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-switch-field", class.as_deref());
 
     let toggle = move |_| {
         if disabled.get_untracked() {

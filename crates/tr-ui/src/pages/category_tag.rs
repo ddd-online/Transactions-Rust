@@ -27,7 +27,7 @@ use tr_domain::dto::{CategoryDto, TagDto};
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, DragSortItem, DragSortState, IconButton, IconButtonVariant,
-    Input, Modal,
+    Input, Modal, PageHeader,
 };
 use crate::error_handler::{get_error_message, notify_error};
 use crate::format;
@@ -757,12 +757,7 @@ pub fn CategoryTagPage() -> impl IntoView {
 
     view! {
         <section class="page">
-            <header class="page-header">
-                <div class="page-header-text">
-                    <h1 class="page-title">{PAGE_TITLE}</h1>
-                </div>
-                <div class="app-top-bar-spacer"></div>
-            </header>
+            <PageHeader title=PAGE_TITLE />
 
             <div class="page-body">
                 <div class="page-toolbar">

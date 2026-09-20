@@ -32,8 +32,8 @@ use tr_domain::models::{KeyEvent, KeyEventImage};
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, DatePicker, FileStatus, IconButton, IconButtonVariant,
-    ImagePicker, Input, Modal, Popconfirm, Textarea, UploadFileProgress, UploadProgress,
-    UploadProgressBar, UploadStatus,
+    ImagePicker, Input, Modal, PageHeader, Popconfirm, Textarea, UploadFileProgress,
+    UploadProgress, UploadProgressBar, UploadStatus,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -373,12 +373,7 @@ pub fn KeyEventPage() -> impl IntoView {
 
     view! {
         <section class="page key-event-page">
-            <header class="page-header">
-                <div class="page-header-text">
-                    <h1 class="page-title">{PAGE_TITLE}</h1>
-                </div>
-                <div class="app-top-bar-spacer"></div>
-            </header>
+            <PageHeader title=PAGE_TITLE />
 
             <div class="page-body">
                 <div class="page-toolbar">

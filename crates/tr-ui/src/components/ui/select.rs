@@ -8,6 +8,8 @@
 //! 面板是真下拉（绝对定位 + 阴影），带一层透明遮罩负责"点击别处关闭"。
 //! 选项用 `map + collect_view` 渲染：选项量级是"账本/分类/标签"，几十条，无需 keyed diff。
 
+use super::backdrop;
+use super::with_class;
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
 
@@ -100,11 +102,7 @@ pub fn Select(
 
     let placeholder = placeholder.unwrap_or_else(|| "请选择".to_string());
 
-    let mut classes = String::from("ui-select");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-select", class.as_deref());
 
     view! {
         <div class=classes class:is-open=move || open.get()>
@@ -146,13 +144,10 @@ pub fn Select(
             </button>
 
             <Show when=move || open.get()>
-                <div
-                    class="ui-select__backdrop"
-                    on:click=move |_| {
-                        open.set(false);
-                        query.set(String::new());
-                    }
-                ></div>
+                {backdrop(UnsyncCallback::new(move |()| {
+                    open.set(false);
+                    query.set(String::new());
+                }))}
                 <div class="ui-select__panel">
                     <Show when=move || searchable>
                         <div class="ui-select__search">

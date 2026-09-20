@@ -15,6 +15,7 @@
 //!
 //! 样式在 `static/css/ui.css` 的 `.ui-table*`；`.table-wrapper` 复用 `app.css` 里的滚动容器。
 
+use super::with_class;
 use leptos::prelude::*;
 
 /// 单元格水平对齐。
@@ -93,11 +94,7 @@ pub fn Table(
     /// 表体行
     children: ChildrenFn,
 ) -> impl IntoView {
-    let mut classes = String::from("ui-table");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-table", class.as_deref());
 
     let header = columns
         .iter()

@@ -114,12 +114,6 @@ impl AppStores {
         self.current_ledger_id.set(id);
     }
 
-    /// 统计值（分）；缺失的键按 0 处理。
-    pub fn statistic(&self, key: &str) -> i64 {
-        self.statistics
-            .with(|map| map.get(key).copied().unwrap_or(0))
-    }
-
     /// 把外观写入 `<html data-theme>`：
     /// * `light` / `dark` → 显式设置 `data-theme`
     /// * `system` → **移除**属性，交回 `tokens.css` 的 `prefers-color-scheme` 兜底

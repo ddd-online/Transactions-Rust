@@ -14,6 +14,9 @@
 //!   悬浮预览范围也没做——本项目只有"筛选时间范围"一处用区间，两次点击已经够直观。
 //! * 邻月的日期正常渲染但标成 `is-outside`，点击会**选中并跳月**（刻意如此：少一次点击）。
 
+use super::backdrop;
+use super::nav_button;
+use super::with_class;
 use leptos::prelude::*;
 
 use crate::icons::{self, Icon};
@@ -67,7 +70,7 @@ pub fn add_months(year: i32, month: u32, delta: i32) -> (i32, u32) {
 }
 
 /// 某年某月的天数（用 JS 的"下月第 0 天"技巧，自动处理闰年）。
-fn days_in_month(year: i32, month: u32) -> u32 {
+pub(super) fn days_in_month(year: i32, month: u32) -> u32 {
     let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32, 0);
     date.get_date()
 }
@@ -167,15 +170,7 @@ fn CalendarPanel(
     view! {
         <div class="ui-date-picker__panel">
             <div class="ui-date-picker__header">
-                <button
-                    type="button"
-                    class="ui-date-picker__nav"
-                    title="上一月"
-                    aria-label="上一月"
-                    on:click=move |_| shift(-1)
-                >
-                    {icons::icon(Icon::Left)}
-                </button>
+                {nav_button("ui-date-picker__nav", "上一月", Icon::Left, UnsyncCallback::new(move |()| shift(-1)))}
                 <button
                     type="button"
                     class="ui-date-picker__title"
@@ -187,15 +182,7 @@ fn CalendarPanel(
                 >
                     {title}
                 </button>
-                <button
-                    type="button"
-                    class="ui-date-picker__nav"
-                    title="下一月"
-                    aria-label="下一月"
-                    on:click=move |_| shift(1)
-                >
-                    {icons::icon(Icon::Right)}
-                </button>
+                {nav_button("ui-date-picker__nav", "下一月", Icon::Right, UnsyncCallback::new(move |()| shift(1)))}
             </div>
 
             <div class="ui-date-picker__weekdays">
@@ -288,11 +275,7 @@ pub fn DatePicker(
         }
     };
 
-    let mut classes = String::from("ui-date-picker");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-date-picker", class.as_deref());
 
     view! {
         <div class=classes class:is-open=move || open.get()>
@@ -333,7 +316,7 @@ pub fn DatePicker(
             </button>
 
             <Show when=move || open.get()>
-                <div class="ui-select__backdrop" on:click=move |_| open.set(false)></div>
+                {backdrop(UnsyncCallback::new(move |()| open.set(false)))}
                 <div class="ui-date-picker__dropdown">
                     <CalendarPanel
                         visible=visible
@@ -417,11 +400,7 @@ pub fn DateRangePicker(
         }
     });
 
-    let mut classes = String::from("ui-date-picker ui-date-range-picker");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-date-picker ui-date-range-picker", class.as_deref());
 
     view! {
         <div class=classes class:is-open=move || open.get() class:is-inline=inline>
@@ -469,7 +448,7 @@ pub fn DateRangePicker(
 
             <Show when=move || inline || open.get()>
                 <Show when=move || !inline>
-                    <div class="ui-select__backdrop" on:click=move |_| open.set(false)></div>
+                    {backdrop(UnsyncCallback::new(move |()| open.set(false)))}
                 </Show>
                 <div class="ui-date-picker__dropdown">
                     <CalendarPanel

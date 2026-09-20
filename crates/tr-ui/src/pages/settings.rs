@@ -55,9 +55,9 @@ use tr_domain::money::{cents_to_yuan, yuan_to_cents};
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, Checkbox, CheckboxGroup, CheckboxOption, DragSortItem,
-    DragSortState, Empty, Form, FormItem, FormLayout, Input, Modal, Popconfirm, Progress,
-    Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, TabItem, TabPane, Tabs, Tag,
-    TagKind, Tooltip,
+    DragSortState, Empty, Form, FormItem, FormLayout, Input, Modal, PageHeader, Popconfirm,
+    Progress, Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, TabItem, TabPane,
+    Tabs, Tag, TagKind, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -101,12 +101,7 @@ pub fn SettingsPage() -> impl IntoView {
 
     view! {
         <section class="page">
-            <header class="page-header">
-                <div class="page-header-text">
-                    <h1 class="page-title">{PAGE_TITLE}</h1>
-                </div>
-                <div class="app-top-bar-spacer"></div>
-            </header>
+            <PageHeader title=PAGE_TITLE />
 
             <div class="page-body">
                 <div class="page-toolbar">

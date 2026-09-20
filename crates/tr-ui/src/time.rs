@@ -99,17 +99,15 @@ pub fn ymd_to_seconds(input: &str) -> Option<i64> {
     Some((date.get_time() / 1000.0) as i64)
 }
 
-/// `YYYY-MM` 串 → 该月 1 日 00:00:00（本地时区）的 Unix 秒。
-pub fn ym_to_seconds(input: &str) -> Option<i64> {
-    let trimmed = input.trim();
-    let (year, month) = trimmed.split_once('-')?;
-    let year: u32 = year.parse().ok()?;
-    let month: u32 = month.parse().ok()?;
-    if !(1..=12).contains(&month) {
-        return None;
-    }
-    let date = js_sys::Date::new_with_year_month_day(year, month as i32 - 1, 1);
-    Some((date.get_time() / 1000.0) as i64)
+/// `YYYY-MM-DD` 区间 → **闭区间** Unix 秒 `(起点, 终点)`：
+/// 起点取当天 00:00:00、终点取当天 23:59:59（本地时区）。
+///
+/// 查询区间只有这一份实现（消费记录页的 `tr_query` 与数据分析页的图表查询共用），
+/// 任一端解析失败返回 `None`——调用方各自决定是"不发查询"还是"发空区间"。
+pub fn range_to_seconds(from: &str, to: &str) -> Option<(i64, i64)> {
+    let start = ymd_to_seconds(from)?;
+    let end = ymd_to_seconds(to)?;
+    Some((start, end + DAY_SECONDS - 1))
 }
 
 /// 星期中文名（`js_sys::Date::get_day()` 的 0 = 周日）。

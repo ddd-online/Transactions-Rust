@@ -16,6 +16,7 @@
 //! 原生 `draggable` 已经给出 dragstart / dragover / drop / dragend 四个钩子，
 //! 自绘反而要接管滚动、命中测试与指针捕获，收益不成比例。
 
+use super::with_class;
 use leptos::prelude::*;
 
 /// 一次拖拽排序的共享状态（列表容器建一份，所有子项共用）。
@@ -73,11 +74,7 @@ pub fn DragSortItem(
     class: Option<String>,
     children: Children,
 ) -> impl IntoView {
-    let mut classes = String::from("ui-drag-item");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-drag-item", class.as_deref());
 
     view! {
         <div

@@ -409,7 +409,10 @@
   width: 100%;
 }
 
-.ui-select__trigger {
+/* `.ui-select__trigger` 与 `.ui-date-picker__trigger` 的基础外观逐字相同，
+ * 合并成一条规则；两者各自的 :hover / :focus-visible / .is-open 仍分开写。 */
+.ui-select__trigger,
+.ui-date-picker__trigger {
   display: flex;
   align-items: center;
   gap: var(--transactions-space-sm);
@@ -1539,25 +1542,7 @@
   width: 100%;
 }
 
-.ui-date-picker__trigger {
-  display: flex;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-  width: 100%;
-  height: var(--transactions-btn-height-md);
-  padding: 0 var(--transactions-space-md);
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-md);
-  background-color: var(--transactions-color-major-background);
-  color: var(--transactions-color-text-major);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body);
-  cursor: pointer;
-  text-align: left;
-  transition: border-color var(--transactions-transition-fast),
-    box-shadow var(--transactions-transition-fast);
-}
-
+/* `.ui-date-picker__trigger` 的基础外观与 `.ui-select__trigger` 共用（见「Select」一节的合并规则） */
 .ui-date-picker__trigger:hover {
   border-color: var(--transactions-color-border-l2);
 }

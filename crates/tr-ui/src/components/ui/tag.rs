@@ -3,6 +3,7 @@
 //! 用于交易类型（收入/支出/转账）、离群值标记，以及中性/主色标签。
 //! 样式：`--transactions-color-<kind>` + `--transactions-color-<kind>-tint`。
 
+use super::with_class;
 use leptos::prelude::*;
 
 /// 标签语义。
@@ -62,10 +63,7 @@ pub fn Tag(
         classes.push(' ');
         classes.push_str(kind_class);
     }
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class(&classes, class.as_deref());
 
     view! {
         <span class=classes title=title>

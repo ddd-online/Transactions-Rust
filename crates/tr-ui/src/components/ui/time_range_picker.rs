@@ -17,6 +17,9 @@
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
 
+use super::backdrop;
+use super::date_picker::{add_months, days_in_month};
+use super::nav_button;
 use super::{DateRangePicker, Segmented, SegmentedOption};
 use crate::icons::{self, Icon};
 use crate::time::{format_timestamp, today_ymd, ymd_to_seconds, DAY_SECONDS};
@@ -27,6 +30,10 @@ const TIME_RANGE_MODES: [(&str, &str); 3] = [("date", "日"), ("month", "月"), 
 // ==================================================================== 日期算术（纯整数，无新依赖）
 
 /// 拆分 `YYYY-MM-DD` → `(年, 月)`。
+///
+/// 注意：这里**故意**不复用 [`crate::time::split_ymd`]——那个是"三段都必须是数字"的
+/// 完整 `(年, 月, 日)` 解析（`2026-01-xx` → `None`），而本文件的调用点只需要年月，
+/// 允许日缺失/非法（`2026-01-xx` → `Some((2026, 1))`）。
 pub(crate) fn split_ymd(input: &str) -> Option<(i32, u32)> {
     let trimmed = input.trim();
     let (year, rest) = trimmed.split_once('-')?;
@@ -34,36 +41,11 @@ pub(crate) fn split_ymd(input: &str) -> Option<(i32, u32)> {
     Some((year.parse().ok()?, month.parse().ok()?))
 }
 
-/// 拆分 `YYYY-MM-DD` → `(年, 月, 日)`。
-fn split_ymd_full(input: &str) -> Option<(i32, u32, u32)> {
-    let trimmed = input.trim();
-    let mut parts = trimmed.split('-');
-    let year = parts.next()?.parse().ok()?;
-    let month = parts.next()?.parse().ok()?;
-    let day = parts.next()?.parse().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((year, month, day))
-}
-
-/// 月加减（`delta` 可负），返回 `(年, 月)`。
-fn add_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
-    let total = year * 12 + (month as i32 - 1) + delta;
-    (total.div_euclid(12), total.rem_euclid(12) as u32 + 1)
-}
-
-/// 某年某月的天数（用 JS「下月第 0 天」技巧，自动处理闰年）。
-fn days_in_month(year: i32, month: u32) -> u32 {
-    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32, 0);
-    date.get_date()
-}
-
 /// 某天所在周的周一。
 ///
 /// 一周从周一算起：`get_day()` 的 0 是周日，用 `(day + 6) % 7` 折算成距周一的偏移；
 fn week_monday(ymd: &str) -> Option<String> {
-    let (year, month, day) = split_ymd_full(ymd)?;
+    let (year, month, day) = crate::time::split_ymd(ymd)?;
     let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32);
     let offset = ((date.get_day() + 6) % 7) as i32; // 0 = 周一
     if offset == 0 {
@@ -81,7 +63,7 @@ fn week_monday(ymd: &str) -> Option<String> {
 
 /// 某天所在周的周日。
 fn week_sunday(ymd: &str) -> Option<String> {
-    let (year, month, day) = split_ymd_full(ymd)?;
+    let (year, month, day) = crate::time::split_ymd(ymd)?;
     let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32 + 6);
     Some(format!(
         "{:04}-{:02}-{:02}",
@@ -116,7 +98,7 @@ fn year_bounds(ymd: &str) -> Option<(String, String)> {
 }
 
 /// `normalizeTimeRange`：按粒度对齐后，起点取当天 00:00、终点取当天 23:59:59
-/// （这里只需处理日期部分，秒数在 [`range_to_seconds`] 里补齐）。
+/// （这里只需处理日期部分，秒数在 [`crate::time::range_to_seconds`] 里补齐）。
 pub(crate) fn normalize_range(start: &str, end: &str, mode: &str) -> (String, String) {
     let (from, to) = match mode {
         "month" => {
@@ -156,8 +138,9 @@ pub(crate) fn shift_period(start: &str, end: &str, mode: &str, direction: i32) -
             let Some((end_year, end_month)) = split_ymd(end) else {
                 return (start.to_string(), end.to_string());
             };
-            let (next_start_year, next_start_month) = add_month(start_year, start_month, direction);
-            let (next_end_year, next_end_month) = add_month(end_year, end_month, direction);
+            let (next_start_year, next_start_month) =
+                add_months(start_year, start_month, direction);
+            let (next_end_year, next_end_month) = add_months(end_year, end_month, direction);
             let last = days_in_month(next_end_year, next_end_month);
             (
                 format!("{next_start_year:04}-{next_start_month:02}-01"),
@@ -268,7 +251,7 @@ fn preset_ranges(mode: &str) -> Vec<(&'static str, String, String)> {
     };
     // 近 N 个月（含本月）的区间
     let months_ago = |back: i32| -> (String, String) {
-        let (start_year, start_month) = add_month(year, month, -back);
+        let (start_year, start_month) = add_months(year, month, -back);
         let (_, end) = month_span(year, month);
         (format!("{start_year:04}-{start_month:02}-01"), end)
     };
@@ -278,7 +261,7 @@ fn preset_ranges(mode: &str) -> Vec<(&'static str, String, String)> {
             let mut presets: Vec<(&'static str, String, String)> = Vec::new();
             let (from, to) = month_span(year, month);
             presets.push(("本月", from, to));
-            let (last_year, last_month) = add_month(year, month, -1);
+            let (last_year, last_month) = add_months(year, month, -1);
             let (from, to) = month_span(last_year, last_month);
             presets.push(("上月", from, to));
             let (from, to) = months_ago(5);
@@ -310,7 +293,7 @@ fn preset_ranges(mode: &str) -> Vec<(&'static str, String, String)> {
             }
             let (from, to) = month_span(year, month);
             presets.push(("本月", from, to));
-            let (last_year, last_month) = add_month(year, month, -1);
+            let (last_year, last_month) = add_months(year, month, -1);
             let (from, to) = month_span(last_year, last_month);
             presets.push(("上月", from, to));
             presets
@@ -383,15 +366,7 @@ pub fn TimeRangePicker(
                 options=mode_options
                 on_change=move |next: String| change_mode(next)
             />
-            <button
-                type="button"
-                class="ui-icon-btn ui-icon-btn--bordered ui-time__nav"
-                title="上一周期"
-                aria-label="上一周期"
-                on:click=move |_| shift(-1)
-            >
-                {icons::icon(Icon::Left)}
-            </button>
+            {nav_button("ui-icon-btn ui-icon-btn--bordered ui-time__nav", "上一周期", Icon::Left, UnsyncCallback::new(move |()| shift(-1)))}
 
             <div class="ui-time__field" class:is-open=move || picker_open.get()>
                 <button
@@ -406,7 +381,7 @@ pub fn TimeRangePicker(
                 </button>
 
                 <Show when=move || picker_open.get()>
-                    <div class="ui-select__backdrop" on:click=move |_| picker_open.set(false)></div>
+                    {backdrop(UnsyncCallback::new(move |()| picker_open.set(false)))}
                     <div class="ui-time__panel">
                         {move || {
                             let current_mode = mode.get();
@@ -478,15 +453,7 @@ pub fn TimeRangePicker(
                 </Show>
             </div>
 
-            <button
-                type="button"
-                class="ui-icon-btn ui-icon-btn--bordered ui-time__nav"
-                title="下一周期"
-                aria-label="下一周期"
-                on:click=move |_| shift(1)
-            >
-                {icons::icon(Icon::Right)}
-            </button>
+            {nav_button("ui-icon-btn ui-icon-btn--bordered ui-time__nav", "下一周期", Icon::Right, UnsyncCallback::new(move |()| shift(1)))}
         </div>
     }
 }
@@ -500,7 +467,7 @@ fn month_panel(
 ) -> AnyView {
     let shift_year = move |delta: i32| {
         visible.update(|(year, month)| {
-            let (next_year, next_month) = add_month(*year, *month, delta * 12);
+            let (next_year, next_month) = add_months(*year, *month, delta * 12);
             *year = next_year;
             *month = next_month;
         });
@@ -508,27 +475,11 @@ fn month_panel(
 
     view! {
         <div class="ui-time__panel-head">
-            <button
-                type="button"
-                class="ui-icon-btn ui-icon-btn--bordered ui-time__nav"
-                title="上一年"
-                aria-label="上一年"
-                on:click=move |_| shift_year(-1)
-            >
-                {icons::icon(Icon::Left)}
-            </button>
+            {nav_button("ui-icon-btn ui-icon-btn--bordered ui-time__nav", "上一年", Icon::Left, UnsyncCallback::new(move |()| shift_year(-1)))}
             <span class="ui-time__panel-title">
                 {move || format!("{} 年", visible.get().0)}
             </span>
-            <button
-                type="button"
-                class="ui-icon-btn ui-icon-btn--bordered ui-time__nav"
-                title="下一年"
-                aria-label="下一年"
-                on:click=move |_| shift_year(1)
-            >
-                {icons::icon(Icon::Right)}
-            </button>
+            {nav_button("ui-icon-btn ui-icon-btn--bordered ui-time__nav", "下一年", Icon::Right, UnsyncCallback::new(move |()| shift_year(1)))}
         </div>
         <div class="ui-time__grid ui-time__grid--month">
             {move || {
@@ -581,30 +532,14 @@ fn year_panel(
 
     view! {
         <div class="ui-time__panel-head">
-            <button
-                type="button"
-                class="ui-icon-btn ui-icon-btn--bordered ui-time__nav"
-                title="上一个十年"
-                aria-label="上一个十年"
-                on:click=move |_| shift_decade(-1)
-            >
-                {icons::icon(Icon::Left)}
-            </button>
+            {nav_button("ui-icon-btn ui-icon-btn--bordered ui-time__nav", "上一个十年", Icon::Left, UnsyncCallback::new(move |()| shift_decade(-1)))}
             <span class="ui-time__panel-title">
                 {move || {
                     let decade = visible.get().0.div_euclid(10) * 10;
                     format!("{decade} – {}", decade + 9)
                 }}
             </span>
-            <button
-                type="button"
-                class="ui-icon-btn ui-icon-btn--bordered ui-time__nav"
-                title="下一个十年"
-                aria-label="下一个十年"
-                on:click=move |_| shift_decade(1)
-            >
-                {icons::icon(Icon::Right)}
-            </button>
+            {nav_button("ui-icon-btn ui-icon-btn--bordered ui-time__nav", "下一个十年", Icon::Right, UnsyncCallback::new(move |()| shift_decade(1)))}
         </div>
         <div class="ui-time__grid ui-time__grid--year">
             {move || {

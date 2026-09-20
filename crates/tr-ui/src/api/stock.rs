@@ -259,23 +259,6 @@ pub async fn overview(ledger_id: &str) -> Result<StockOverviewDto, IpcError> {
     .await
 }
 
-/// 设置初始本金（**分**）。已有资金记录时后端返回 409。
-pub async fn principal_set(ledger_id: &str, amount: i64) -> Result<StockOverviewDto, IpcError> {
-    #[derive(Debug, Serialize)]
-    struct Request {
-        ledger_id: String,
-        amount: i64,
-    }
-    ipc::call(
-        "stock_principal_set",
-        Request {
-            ledger_id: ledger_id.to_string(),
-            amount,
-        },
-    )
-    .await
-}
-
 /// 追加本金（**分**，可指定发生日期）。
 pub async fn principal_add(
     ledger_id: &str,

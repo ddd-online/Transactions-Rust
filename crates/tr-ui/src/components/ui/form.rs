@@ -6,6 +6,7 @@
 //! * `required` 在标签前加红色 `*`
 //! * `error` 非空时在控件下方显示红色校验文案，并把控件边框染红
 
+use super::with_class;
 use leptos::prelude::*;
 
 /// 表单布局。
@@ -40,10 +41,7 @@ pub fn Form(
 ) -> impl IntoView {
     let mut classes = String::from("ui-form ");
     classes.push_str(layout.class());
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class(&classes, class.as_deref());
 
     view! { <div class=classes>{children()}</div> }
 }
@@ -71,11 +69,7 @@ pub fn FormItem(
     let error = error.unwrap_or_else(|| Signal::derive(String::new));
     let has_error = move || !error.get().is_empty();
 
-    let mut classes = String::from("ui-form-item");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-form-item", class.as_deref());
 
     view! {
         <div class=classes class:is-error=has_error class:is-required=required>

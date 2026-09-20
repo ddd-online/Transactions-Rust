@@ -6,6 +6,7 @@
 //! 勾选框用 `<button role="checkbox">` + 内联 SVG 勾号，避免原生 `<input type="checkbox">`
 //! 在 WebView2 上与设计令牌不一致的默认外观。
 
+use super::with_class;
 use leptos::prelude::*;
 
 use crate::icons::{self, Icon};
@@ -61,11 +62,7 @@ pub fn Checkbox(
 ) -> impl IntoView {
     let disabled = disabled.unwrap_or_else(|| Signal::derive(|| false));
 
-    let mut classes = String::from("ui-checkbox");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-checkbox", class.as_deref());
 
     view! {
         <div class=classes>
@@ -134,11 +131,7 @@ pub fn CheckboxGroup(
 ) -> impl IntoView {
     let disabled = disabled.unwrap_or_else(|| Signal::derive(|| false));
 
-    let mut classes = String::from("ui-checkbox-group");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-checkbox-group", class.as_deref());
 
     view! {
         <div class=classes>

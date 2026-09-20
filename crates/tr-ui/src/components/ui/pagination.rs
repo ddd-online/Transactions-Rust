@@ -8,6 +8,7 @@
 //! 页码收敛规则：首页、末页、当前页 ±1 必显，其余折叠为 `…`；
 //! 靠近两端时多显示几个，避免出现 `1 … 2` 这类空洞。
 
+use super::with_class;
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
 
@@ -59,11 +60,7 @@ pub fn Pagination(
 ) -> impl IntoView {
     let disabled = disabled.unwrap_or_else(|| Signal::derive(|| false));
 
-    let mut classes = String::from("tr-footer-controls");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("tr-footer-controls", class.as_deref());
 
     let size_options = page_size_options.unwrap_or_else(|| PAGE_SIZE_OPTIONS.to_vec());
 

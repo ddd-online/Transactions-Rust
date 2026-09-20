@@ -9,16 +9,7 @@ use tr_domain::dto::TransactionTemplateDto;
 
 use crate::ipc::{self, IpcError};
 
-#[derive(Debug, Serialize)]
-struct ListRequest {
-    #[serde(rename = "ledgerId")]
-    ledger_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct IdRequest {
-    id: String,
-}
+use super::{IdRequest, LedgerIdRequest};
 
 #[derive(Debug, Serialize)]
 struct SortRequest {
@@ -38,7 +29,7 @@ pub async fn create(template: TransactionTemplateDto) -> Result<String, IpcError
 pub async fn list(ledger_id: &str) -> Result<Vec<TransactionTemplateDto>, IpcError> {
     ipc::call(
         "template_list",
-        ListRequest {
+        LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
     )

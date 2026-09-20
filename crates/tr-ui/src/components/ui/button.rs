@@ -27,6 +27,7 @@
 //!
 //! `icon_only` 让按钮退化为正方形图标按钮（`min-width: auto` + 与高度等宽）。
 
+use super::with_class;
 use leptos::prelude::*;
 
 use crate::icons::{self, Icon};
@@ -132,10 +133,7 @@ pub fn Button(
     if block {
         classes.push_str(" ui-btn--block");
     }
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class(&classes, class.as_deref());
 
     view! {
         <button
@@ -219,10 +217,7 @@ pub fn IconButton(
     if compact {
         classes.push_str(" ui-icon-btn--compact");
     }
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class(&classes, class.as_deref());
 
     view! {
         <button

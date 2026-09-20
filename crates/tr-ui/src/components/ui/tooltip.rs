@@ -3,6 +3,7 @@
 //! 只做"仅文字提示"（表格行内按钮、面板标题问号等）。
 //! 复杂内容（带标题/富文本的 popover）本阶段不做，留给后续阶段的 `Popover` 组件。
 
+use super::with_class;
 use leptos::prelude::*;
 
 #[component]
@@ -15,11 +16,7 @@ pub fn Tooltip(
     class: Option<String>,
     children: Children,
 ) -> impl IntoView {
-    let mut classes = String::from("ui-tooltip");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-tooltip", class.as_deref());
 
     view! {
         <span class=classes data-tooltip=title>

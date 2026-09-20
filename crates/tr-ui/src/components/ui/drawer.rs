@@ -5,8 +5,8 @@
 
 use leptos::prelude::*;
 
+use super::close_button;
 use super::modal::is_mask_self_click;
-use crate::icons::{self, Icon};
 
 #[component]
 pub fn Drawer(
@@ -54,19 +54,7 @@ pub fn Drawer(
                 <aside class="ui-drawer__content" style=content_style.clone()>
                     <div class="ui-drawer__header">
                         <h3 class="ui-drawer__title">{title.clone()}</h3>
-                        <button
-                            type="button"
-                            class="ui-modal__close"
-                            title="关闭"
-                            aria-label="关闭"
-                            on:click=move |_| {
-                                if let Some(callback) = on_close {
-                                    callback.run(());
-                                }
-                            }
-                        >
-                            {icons::icon(Icon::Close)}
-                        </button>
+                        {close_button("ui-modal__close", on_close)}
                     </div>
                     <div class="ui-drawer__body">{children()}</div>
                     <div class="ui-drawer__footer" class:is-hidden=move || !footer>

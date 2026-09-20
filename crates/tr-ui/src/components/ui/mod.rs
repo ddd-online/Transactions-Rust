@@ -36,6 +36,7 @@ mod image_picker;
 mod input;
 mod markdown;
 mod modal;
+mod page_header;
 mod pagination;
 mod popconfirm;
 mod popover;
@@ -50,6 +51,57 @@ mod tag;
 mod textarea;
 pub(crate) mod time_range_picker;
 mod tooltip;
+
+// ---------------------------------------------------------------- 内部小工具
+
+use leptos::prelude::*;
+use leptos::tachys::view::any_view::{AnyView, IntoAny};
+
+/// 拼接组件类名：`base` + 可选的附加类名。
+///
+/// 与各组件里原来手写的那 4 行逐字等价（包括边界）：`None` → 原样返回 `base`；
+/// `Some("")` → **留下一个尾随空格**（旧写法 `push(' ')` 之后 `push_str("")` 就是这个结果）。
+pub(super) fn with_class(base: &str, extra: Option<&str>) -> String {
+    match extra {
+        Some(extra) => format!("{base} {extra}"),
+        None => base.to_string(),
+    }
+}
+
+/// 浮层背景遮罩：`<div class="ui-select__backdrop" on:click=关闭></div>`。
+///
+/// 8 处（下拉 / 日期 / 日期区间 / 气泡 / 二次确认 / 时间范围 / 账本菜单）原来各自抄了一遍，
+/// 只有"点一下要做什么"不同，所以这里只收一个回调；class 与 DOM 逐字不变。
+pub(crate) fn backdrop(close: UnsyncCallback<()>) -> AnyView {
+    view! {
+        <div class="ui-select__backdrop" on:click=move |_| close.run(())></div>
+    }
+    .into_any()
+}
+
+/// 日历 / 周期翻页按钮（只有图标，`title` 与 `aria-label` 取同一个 `label`）。
+///
+/// 8 处逐字相同：日历用 `ui-date-picker__nav`、周期用
+/// `ui-icon-btn ui-icon-btn--bordered ui-time__nav`，所以 class 由调用方给。
+pub(super) fn nav_button(
+    class: &'static str,
+    label: &'static str,
+    dir: crate::icons::Icon,
+    on_click: UnsyncCallback<()>,
+) -> AnyView {
+    view! {
+        <button
+            type="button"
+            class=class
+            title=label
+            aria-label=label
+            on:click=move |_| on_click.run(())
+        >
+            {crate::icons::icon(dir)}
+        </button>
+    }
+    .into_any()
+}
 
 pub use button::{Button, ButtonSize, ButtonVariant, IconButton, IconButtonVariant};
 pub use chart::{ChartConfig, ChartPoint, ChartSeries, ChartValueKind, LineChart};
@@ -68,6 +120,9 @@ pub use image_picker::{
 pub use input::Input;
 pub use markdown::{render_markdown, Markdown};
 pub use modal::Modal;
+// 关闭按钮（×）：弹窗 / 抽屉 / 通知共用，见 `modal::close_button`
+pub(crate) use modal::close_button;
+pub use page_header::PageHeader;
 pub use pagination::{page_slots, Pagination, PAGE_SIZE_OPTIONS};
 pub use popconfirm::Popconfirm;
 pub use popover::Popover;

@@ -9,6 +9,8 @@
 //! </Dropdown>
 //! ```
 
+use super::backdrop;
+use super::with_class;
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
 
@@ -75,10 +77,7 @@ pub fn Dropdown(
     if align_end {
         classes.push_str(" ui-dropdown--end");
     }
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class(&classes, class.as_deref());
 
     view! {
         <div class=classes class:is-open=move || open.get()>
@@ -87,7 +86,7 @@ pub fn Dropdown(
             </span>
 
             <Show when=move || open.get()>
-                <div class="ui-select__backdrop" on:click=move |_| open.set(false)></div>
+                {backdrop(UnsyncCallback::new(move |()| open.set(false)))}
                 <div class="ui-dropdown__panel" role="menu">
                     {move || {
                         items

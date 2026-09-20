@@ -5,6 +5,7 @@
 //!
 //! 附加能力：`placeholder`、`maxlength`、`allow_clear`（右侧清空按钮）、`on_enter`。
 
+use super::with_class;
 use leptos::prelude::*;
 
 use crate::icons::{self, Icon};
@@ -34,11 +35,7 @@ pub fn Input(
 ) -> impl IntoView {
     let disabled = disabled.unwrap_or_else(|| Signal::derive(|| false));
 
-    let mut classes = String::from("ui-input");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-input", class.as_deref());
 
     view! {
         <div class=classes class:ui-input--disabled=move || disabled.get()>

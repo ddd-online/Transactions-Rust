@@ -7,6 +7,7 @@
 //! （通用/模板/日记/股票/关于），显式列出 `items` 再按 `active` 分支渲染更直观，
 //! 也避免为了一处用法引入一层 context。
 
+use super::with_class;
 use leptos::prelude::*;
 
 /// 一个标签项。
@@ -42,11 +43,7 @@ pub fn Tabs(
     #[prop(optional, into)]
     class: Option<String>,
 ) -> impl IntoView {
-    let mut classes = String::from("ui-tabs");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-tabs", class.as_deref());
 
     view! {
         <div class=classes role="tablist">

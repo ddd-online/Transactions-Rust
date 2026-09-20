@@ -3,6 +3,7 @@
 //! 用于「关于软件」的下载进度。百分比由外部传入（`update:download-progress` 事件的
 //! `percent` 已经是 0..=100 的整数，直接 `as f64` 即可，不要再乘除）。
 
+use super::with_class;
 use leptos::prelude::*;
 
 #[component]
@@ -19,11 +20,7 @@ pub fn Progress(
 ) -> impl IntoView {
     let clamped = move || percent.get().clamp(0.0, 100.0);
 
-    let mut classes = String::from("ui-progress");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-progress", class.as_deref());
 
     view! {
         <div class=classes>

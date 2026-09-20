@@ -8,11 +8,7 @@ use tr_domain::dto::{ChartDto, CreateChartRequest, UpdateChartRequest};
 
 use crate::ipc::{self, IpcError};
 
-#[derive(Debug, Serialize)]
-struct ListRequest {
-    #[serde(rename = "ledgerId")]
-    ledger_id: String,
-}
+use super::LedgerIdRequest;
 
 #[derive(Debug, Serialize)]
 struct IdRequest {
@@ -24,7 +20,7 @@ struct IdRequest {
 pub async fn list(ledger_id: &str) -> Result<Vec<ChartDto>, IpcError> {
     ipc::call(
         "chart_list",
-        ListRequest {
+        LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
     )

@@ -2,6 +2,7 @@
 //!
 //! 取值全部来自 `--transactions-color-divider`；带文字时文字为次要色小字。
 
+use super::with_class;
 use leptos::prelude::*;
 
 #[component]
@@ -26,10 +27,7 @@ pub fn Divider(
     if has_text {
         classes.push_str(" ui-divider--with-text");
     }
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class(&classes, class.as_deref());
 
     view! {
         <div class=classes role="separator">

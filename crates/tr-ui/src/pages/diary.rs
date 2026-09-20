@@ -30,7 +30,7 @@ use leptos::prelude::*;
 use tr_domain::models::{DiaryDateItem, DiaryEntry};
 
 use crate::api;
-use crate::components::ui::{Button, ButtonVariant, DatePicker, Modal, Textarea};
+use crate::components::ui::{Button, ButtonVariant, DatePicker, Modal, PageHeader, Textarea};
 use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
@@ -248,12 +248,7 @@ pub fn DiaryPage() -> impl IntoView {
 
     view! {
         <section class="page diary-page">
-            <header class="page-header">
-                <div class="page-header-text">
-                    <h1 class="page-title">{PAGE_TITLE}</h1>
-                </div>
-                <div class="app-top-bar-spacer"></div>
-            </header>
+            <PageHeader title=PAGE_TITLE />
 
             <div class="page-body">
                 <div class="page-toolbar">
@@ -696,10 +691,4 @@ fn DiaryEditor(
             </div>
         </Show>
     }
-}
-
-/// 让 `ButtonVariant` 的引用不被裁剪（本页按钮统一走 [`Button`]）。
-#[allow(dead_code)]
-fn primary_variant() -> ButtonVariant {
-    ButtonVariant::Primary
 }

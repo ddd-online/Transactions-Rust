@@ -209,20 +209,6 @@ pub fn result_class(pnl: i64) -> &'static str {
     }
 }
 
-/// Y 轴金额刻度（统计曲线用）：`¥1.2万` / `¥-1.2万` / `¥120`。
-pub fn money_axis_text(cents: i64) -> String {
-    let yuan = cents as f64 / 100.0;
-    let sign = if yuan < 0.0 { "-" } else { "" };
-    let magnitude = yuan.abs();
-    if magnitude >= 1e8 {
-        format!("{sign}¥{:.1}亿", magnitude / 1e8)
-    } else if magnitude >= 1e4 {
-        format!("{sign}¥{:.1}万", magnitude / 1e4)
-    } else {
-        format!("{sign}¥{magnitude:.0}")
-    }
-}
-
 /// `YYYY-MM-DD` → `M-D`（关键事件列表的短日期；解析失败原样返回）。
 pub fn short_date(date: &str) -> String {
     let parts: Vec<&str> = date.split('-').collect();

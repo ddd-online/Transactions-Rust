@@ -17,7 +17,7 @@ use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
 
 use crate::api;
-use crate::components::ui::{IconButton, IconButtonVariant, Input, Modal};
+use crate::components::ui::{backdrop, close_button, IconButton, IconButtonVariant, Input, Modal};
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
 use crate::notify::{Notice, NoticeKind, Notifier};
@@ -327,7 +327,7 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
     };
 
     let confirm_delete = move || {
-        let Some((id, name)) = delete_target.get_untracked() else {
+        let Some((id, _name)) = delete_target.get_untracked() else {
             return;
         };
         deleting.set(true);
@@ -336,7 +336,6 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
                 Ok(()) => {
                     delete_target.set(None);
                     refresh_ledgers().await;
-                    let _ = name;
                 }
                 Err(error) => notify_error("删除账本", &error),
             }
@@ -376,10 +375,7 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
 
                     <Show when=move || menu_open.get()>
                         <div class="ledger-menu-layer">
-                            <div
-                                class="ui-select__backdrop"
-                                on:click=move |_| menu_open.set(false)
-                            ></div>
+                            {backdrop(UnsyncCallback::new(move |()| menu_open.set(false)))}
                             <div class="ledger-menu" role="menu">
                                 {move || {
                                     let ledgers = stores.ledgers.get();
@@ -668,15 +664,10 @@ fn NoticeOverlay() -> impl IntoView {
                                     {icons::icon(notice_kind_icon(notice.kind))}
                                 </span>
                                 <span>{notice.title}</span>
-                                <button
-                                    type="button"
-                                    class="notice__close"
-                                    title="关闭"
-                                    aria-label="关闭"
-                                    on:click=move |_| notifier.dismiss(id)
-                                >
-                                    {icons::icon(Icon::Close)}
-                                </button>
+                                {close_button(
+                                    "notice__close",
+                                    Some(UnsyncCallback::new(move |()| notifier.dismiss(id))),
+                                )}
                             </div>
                         }
                     })
@@ -702,15 +693,10 @@ fn NoticeOverlay() -> impl IntoView {
                                         {notice.description}
                                     </p>
                                 </div>
-                                <button
-                                    type="button"
-                                    class="notice__close"
-                                    title="关闭"
-                                    aria-label="关闭"
-                                    on:click=move |_| notifier.dismiss(id)
-                                >
-                                    {icons::icon(Icon::Close)}
-                                </button>
+                                {close_button(
+                                    "notice__close",
+                                    Some(UnsyncCallback::new(move |()| notifier.dismiss(id))),
+                                )}
                             </div>
                         }
                     })

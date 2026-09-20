@@ -11,6 +11,8 @@ use tr_domain::models::{KeyEvent, KeyEventImage};
 
 use crate::ipc::{self, IpcError};
 
+use super::IdRequest;
+
 #[derive(Debug, Serialize)]
 struct YearRequest {
     year: String,
@@ -37,11 +39,6 @@ struct ImageAddRequest {
     date: String,
     ledger_id: String,
     data: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ImageIdRequest {
-    id: String,
 }
 
 /// 某年的全部关键事件。
@@ -140,9 +137,5 @@ pub async fn image_add(date: &str, ledger_id: &str, data: &str) -> Result<KeyEve
 
 /// 删除一张图片。
 pub async fn image_delete(id: &str) -> Result<(), IpcError> {
-    ipc::call_void(
-        "key_event_image_delete",
-        ImageIdRequest { id: id.to_string() },
-    )
-    .await
+    ipc::call_void("key_event_image_delete", IdRequest { id: id.to_string() }).await
 }

@@ -6,6 +6,7 @@
 //! 使用场合：关键事件正文、本轮复盘、日记正文
 //! （日记那里还要更细的等宽字体与撑满高度，用 `class` 覆盖）。
 
+use super::with_class;
 use leptos::prelude::*;
 
 /// 多行文本域。
@@ -44,10 +45,7 @@ pub fn Textarea(
     if !resizable {
         classes.push_str(" ui-textarea--fixed");
     }
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class(&classes, class.as_deref());
 
     view! {
         <div class=classes class:ui-textarea--disabled=move || disabled.get()>

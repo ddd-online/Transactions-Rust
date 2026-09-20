@@ -910,11 +910,9 @@
   gap: var(--transactions-space-xs);
 }
 
-.tr-pagination__item {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 32px;
+/* 页码按钮与「每页条数」下拉共用同一套外观（原来两份逐字重复的声明） */
+.tr-pagination__item,
+.tr-pagination__size {
   height: 32px;
   padding: 0 var(--transactions-space-sm);
   border: 1px solid var(--transactions-color-window-border);
@@ -924,6 +922,14 @@
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body-sm);
   cursor: pointer;
+}
+
+/* 页码按钮自己的部分：居中 + 最小宽度 + 过渡（`__size` 是原生 select，不需要这些） */
+.tr-pagination__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
   transition: all var(--transactions-transition-fast);
 }
 
@@ -955,18 +961,7 @@
   font-size: var(--transactions-size-text-body-sm);
 }
 
-.tr-pagination__size {
-  height: 32px;
-  padding: 0 var(--transactions-space-sm);
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-sm);
-  background-color: var(--transactions-color-major-background);
-  color: var(--transactions-color-text-major);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body-sm);
-  cursor: pointer;
-}
-
+/* `.tr-pagination__size` 的外观与 `.tr-pagination__item` 共用（见上方合并规则） */
 .tr-pagination__size:focus-visible {
   outline: 2px solid var(--transactions-color-primary);
   outline-offset: 2px;

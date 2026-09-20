@@ -45,9 +45,9 @@ use std::collections::BTreeMap;
 
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
+use tr_domain::consts::TAG_POLICY_ANY;
 use tr_domain::dto::{
-    CategoryDto, QueryConditionSortField, TagDto, TrQueryResult, TransactionRecordDto,
-    TransactionTemplateDto,
+    CategoryDto, QueryConditionSortField, TagDto, TransactionRecordDto, TransactionTemplateDto,
 };
 use tr_domain::models::QueryConditionItem;
 use tr_domain::money::yuan_to_cents;
@@ -57,15 +57,15 @@ use crate::api;
 use crate::components::ui::time_range_picker::{normalize_range, shift_period, split_ymd};
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, CheckboxGroup, DatePicker, Empty, Form, FormItem,
-    FormLayout, Input, Modal, Pagination, Segmented, SegmentedOption, Select, SelectOption, Spin,
-    Tag, TagKind, TimeRangePicker,
+    FormLayout, Input, Modal, PageHeader, Pagination, Segmented, SegmentedOption, Select,
+    SelectOption, Spin, Tag, TagKind, TimeRangePicker,
 };
 use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::store::AppStores;
-use crate::time::{format_timestamp, today_ymd, ymd_to_seconds, DAY_SECONDS};
+use crate::time::{format_timestamp, range_to_seconds, today_ymd, ymd_to_seconds};
 
 /// 页面标题（固定文案，改动即影响界面）
 pub const PAGE_TITLE: &str = "消费记录";
@@ -91,9 +91,6 @@ const SORT_FIELDS: [(&str, &str); 4] = [
     ("category", "分类"),
     ("transactionType", "类型"),
 ];
-
-/// 标签匹配策略常量（`any` / `all`）。
-const TAG_POLICY_ANY: &str = "any";
 
 /// 行内操作：编辑 / 关联 / 同步到其他账本 / 删除。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -444,12 +441,7 @@ pub fn TransactionsPage() -> impl IntoView {
 
     view! {
         <section class="page">
-            <header class="page-header">
-                <div class="page-header-text">
-                    <h1 class="page-title">{PAGE_TITLE}</h1>
-                </div>
-                <div class="app-top-bar-spacer"></div>
-            </header>
+            <PageHeader title=PAGE_TITLE />
 
             <div class="page-body">
                 <div class="page-toolbar">
@@ -641,8 +633,8 @@ fn fetch_page(
     loading.set(true);
     leptos::task::spawn_local(async move {
         let mut condition = api::tr::default_condition(&input.ledger_id, input.page, input.size);
-        if let Some(range) = range_to_seconds(&input.start, &input.end) {
-            condition.ts_range = range;
+        if let Some((from, to)) = range_to_seconds(&input.start, &input.end) {
+            condition.ts_range = vec![from, to];
         }
         condition.items = input.filters;
         condition.sort_fields = sort_fields(&input.sorts);
@@ -683,19 +675,6 @@ fn transaction_type_segments() -> Vec<SegmentedOption> {
         .iter()
         .map(|(value, label)| SegmentedOption::new(*value, *label))
         .collect()
-}
-
-/// 把时间范围（`YYYY-MM-DD`）转成**闭区间** Unix 秒
-/// （`convertToUnixTimeRange`：起点当天 00:00:00、终点当天 23:59:59）。
-fn range_to_seconds(start: &str, end: &str) -> Option<Vec<i64>> {
-    let start_seconds = ymd_to_seconds(start)?;
-    let end_seconds = end_of_day_seconds(end)?;
-    Some(vec![start_seconds, end_seconds])
-}
-
-/// 某天 23:59:59（本地）的 Unix 秒。
-fn end_of_day_seconds(ymd: &str) -> Option<i64> {
-    Some(ymd_to_seconds(ymd)? + DAY_SECONDS - 1)
 }
 
 /// 排序项 → 查询 DTO 字段。
@@ -743,21 +722,6 @@ fn load_ledger_meta(
         has_any_records.set(record_total.map(|total| total > 0));
         has_any_categories.set(categories.map(|list| !list.is_empty()));
     });
-}
-
-/// 把查询结果写进信号（供 `fetch` 之外的重用）。
-#[allow(dead_code)]
-fn apply_result(
-    items: RwSignal<Vec<TransactionRecordDto>>,
-    total: RwSignal<i64>,
-    total_pages: RwSignal<i32>,
-    stores: AppStores,
-    result: TrQueryResult,
-) {
-    items.set(result.items);
-    total.set(result.total);
-    total_pages.set(result.total_pages);
-    stores.statistics.set(result.tr_statistics);
 }
 
 /// 区间是否落在同一天。

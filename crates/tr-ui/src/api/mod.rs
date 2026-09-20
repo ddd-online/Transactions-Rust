@@ -32,6 +32,8 @@
 //! 是否提示、提示什么前缀，交给调用方用 [`crate::error_handler`] 决定
 //! （命令封装与错误提示解耦：是否提示、用什么前缀由调用方决定）。
 
+use serde::Serialize;
+
 pub mod category;
 pub mod chart;
 pub mod desktop;
@@ -43,5 +45,26 @@ pub mod tag;
 pub mod template;
 pub mod tr;
 pub mod update;
+
+// ---------------------------------------------------------------- 同形请求体（本层共享）
+//
+// 这几个形状在多个域里逐字重复（`{ id }` 5 份、`{ ledgerId }` 3 份），
+// 合到本模块各留一份。**字段名与 serde 重命名逐字不变**——它们是与 `tr-ipc` 的硬契约。
+// 只在 tr-ui 内部共享：界面侧的请求结构体仍然是"手抄 tr-ipc"的副本，不能跨 crate 共用。
+
+/// 只带一个 `id` 字段的请求（`ledger_list` / `ledger_get` / `ledger_delete` /
+/// `tr_delete` / `template_delete` / `key_event_image_delete`）。
+#[derive(Debug, Serialize)]
+pub(super) struct IdRequest {
+    id: String,
+}
+
+/// 只带一个 `ledgerId`（camelCase）字段的请求
+/// （`chart_list` / `category_initialize` / `template_list`）。
+#[derive(Debug, Serialize)]
+pub(super) struct LedgerIdRequest {
+    #[serde(rename = "ledgerId")]
+    ledger_id: String,
+}
 
 pub use crate::ipc::IpcError;

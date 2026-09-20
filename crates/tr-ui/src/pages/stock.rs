@@ -38,12 +38,13 @@ use tr_domain::dto::{
     StockStatisticsDto, StockStatisticsPointDto, StockTradeDto, StockTradeHistoryDetailDto,
     StockTradeHistoryDto, StockTradeHistorySummaryDto, StockTradeImpactDto, StockTradeRoundDto,
 };
+use tr_domain::fee::{compute_order_fee, is_shanghai_code, is_valid_stock_code};
 use tr_domain::models::StockFeeSetting;
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, ChartConfig, ChartPoint, ChartSeries, ChartValueKind,
-    DatePicker, Empty, Input, LineChart, Modal, Pagination, Segmented, SegmentedOption, Select,
+    Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, DatePicker, Empty,
+    Input, LineChart, Modal, PageHeader, Pagination, Segmented, SegmentedOption, Select,
     SelectOption, TabItem, TabPane, Tabs, Textarea,
 };
 use crate::error_handler::notify_error;
@@ -72,20 +73,6 @@ const ROUND_REVIEW_TEMPLATE: &str = "判断层\n\n买入理由：\n卖出理由�
 
 /// 复盘占位文案（固定文案，改动即影响界面）。
 const REVIEW_PLACEHOLDER: &str = "写下本轮的操作依据、得失与可改进之处（500 字以内）";
-
-/// 沪深股票代码校验（沪 60/68、深 00/30 开头）。
-fn is_valid_stock_code(code: &str) -> bool {
-    let bytes = code.as_bytes();
-    if bytes.len() != 6 || !bytes.iter().all(|byte| byte.is_ascii_digit()) {
-        return false;
-    }
-    matches!(&code[..2], "60" | "68" | "00" | "30")
-}
-
-/// 是否沪市（60 / 68 开头）—— 过户费只对沪市收取。
-fn is_shanghai_code(code: &str) -> bool {
-    code.starts_with("60") || code.starts_with("68")
-}
 
 /// 委托内一笔成交的输入行（元 / 手）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -117,27 +104,19 @@ impl FeeEstimate {
     }
 }
 
-/// 预估本次委托的费用（整笔委托一次计收）。
+/// 预估本次委托的费用（整笔委托一次计收，与后端 `tr_domain::fee` 同一份算法）。
+///
+/// 保留 `amount_cents <= 0` 的守卫：域函数在金额为 0 时会取最低佣金，
+/// 而"还没填价格/手数"时预估应当是 0。
 fn estimate_fee(amount_cents: i64, is_buy: bool, code: &str, fee: &StockFeeSetting) -> FeeEstimate {
     if amount_cents <= 0 {
         return FeeEstimate::default();
     }
-    let amount = amount_cents as f64;
-    let commission = ((amount * fee.commission_rate).round() as i64).max(fee.min_commission);
-    let stamp_duty = if is_buy {
-        0
-    } else {
-        (amount * fee.stamp_duty_rate).round() as i64
-    };
-    let transfer_fee = if is_shanghai_code(code) {
-        (amount * fee.transfer_fee_rate).round() as i64
-    } else {
-        0
-    };
+    let breakdown = compute_order_fee(amount_cents, is_shanghai_code(code), fee, is_buy);
     FeeEstimate {
-        commission,
-        stamp_duty,
-        transfer_fee,
+        commission: breakdown.commission,
+        stamp_duty: breakdown.stamp_duty,
+        transfer_fee: breakdown.transfer_fee,
     }
 }
 
@@ -167,12 +146,7 @@ pub fn StockPage() -> impl IntoView {
 
     view! {
         <section class="page stock-page">
-            <header class="page-header">
-                <div class="page-header-text">
-                    <h1 class="page-title">{PAGE_TITLE}</h1>
-                </div>
-                <div class="app-top-bar-spacer"></div>
-            </header>
+            <PageHeader title=PAGE_TITLE />
 
             <div class="page-body">
                 <div class="page-toolbar">
@@ -341,8 +315,6 @@ fn account_view(active: RwSignal<String>) -> AnyView {
                     principal_open.set(false);
                     withdraw_open.set(false);
                     amount_text.set(String::new());
-                    let page = fund_page.get_untracked().page.max(1) as i64;
-                    let _ = page;
                     fund_page.update(|page| page.page = 1);
                     load_fund_records(1, FUND_PAGE_SIZE);
                 }
@@ -1201,10 +1173,6 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                             (Some(latest), Some(prev)) if prev > 0 => Some(latest - prev),
                                             _ => None,
                                         };
-                                        let market_value = match position.latest_price {
-                                            Some(latest) if latest > 0 => latest.saturating_mul(position.quantity),
-                                            _ => position.total_cost,
-                                        };
                                         let float_pnl = match position.latest_price {
                                             Some(latest) if latest > 0 => {
                                                 Some(latest.saturating_mul(position.quantity).saturating_sub(position.total_cost))
@@ -1229,7 +1197,6 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                         });
                                         let class = format::pnl_class(day_change.unwrap_or(0));
                                         let float_class = format::pnl_class(float_pnl.unwrap_or(0));
-                                        let _ = market_value;
                                         let code_for_click = code.clone();
                                         view! {
                                             <button
@@ -1499,34 +1466,15 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                             }
                                         }
                                     >
-                                        <Textarea
-                                            value=review_draft
-                                            rows=3
-                                            maxlength=500
-                                            placeholder=REVIEW_PLACEHOLDER
-                                            class="stock-review__textarea"
-                                        />
-                                        <div class="stock-review__actions">
-                                            <Button
-                                                variant=ButtonVariant::Secondary
-                                                size=ButtonSize::Small
-                                                disabled=Signal::derive(move || review_saving.get())
-                                                on_click=move |_| {
-                                                    review_editing.set(false);
-                                                    review_draft.set(String::new());
-                                                }
-                                            >
-                                                "取消"
-                                            </Button>
-                                            <Button
-                                                variant=ButtonVariant::Primary
-                                                size=ButtonSize::Small
-                                                loading=Signal::derive(move || review_saving.get())
-                                                on_click=move |_| save_review()
-                                            >
-                                                "保存"
-                                            </Button>
-                                        </div>
+                                        {review_editor(
+                                            review_draft,
+                                            review_saving,
+                                            UnsyncCallback::new(move |()| {
+                                                review_editing.set(false);
+                                                review_draft.set(String::new());
+                                            }),
+                                            UnsyncCallback::new(move |()| save_review()),
+                                        )}
                                     </Show>
                                 </Show>
                             </div>
@@ -1562,13 +1510,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                                         Vec<StockTradeDto>,
                                                     )| open_edit((trade, siblings))),
                                                     UnsyncCallback::new(move |trades: Vec<StockTradeDto>| {
-                                                        start_delete_order(
-                                                            &stores,
-                                                            trades,
-                                                            impact,
-                                                            positions,
-                                                            selected_code,
-                                                        );
+                                                        start_delete_order(&stores, trades, impact);
                                                     }),
                                                 )
                                             }}
@@ -1629,15 +1571,52 @@ fn position_view(active: RwSignal<String>) -> AnyView {
     .into_any()
 }
 
+/// 本轮复盘编辑块：持仓区与历史轮次区各一处，结构逐行相同，只有「取消 / 保存」不同。
+///
+/// 刻意**不**统一两处的「取消」写法：持仓区是 `review_editing.set(false)`（`RwSignal<bool>`），
+/// 轮次区是 `review_editing.set(String::new())`（`RwSignal<String>` 存的是轮次 id），语义不同。
+fn review_editor(
+    draft: RwSignal<String>,
+    saving: RwSignal<bool>,
+    on_cancel: UnsyncCallback<()>,
+    on_save: UnsyncCallback<()>,
+) -> AnyView {
+    view! {
+        <Textarea
+            value=draft
+            rows=3
+            maxlength=500
+            placeholder=REVIEW_PLACEHOLDER
+            class="stock-review__textarea"
+        />
+        <div class="stock-review__actions">
+            <Button
+                variant=ButtonVariant::Secondary
+                size=ButtonSize::Small
+                disabled=Signal::derive(move || saving.get())
+                on_click=move |_| on_cancel.run(())
+            >
+                "取消"
+            </Button>
+            <Button
+                variant=ButtonVariant::Primary
+                size=ButtonSize::Small
+                loading=Signal::derive(move || saving.get())
+                on_click=move |_| on_save.run(())
+            >
+                "保存"
+            </Button>
+        </div>
+    }
+    .into_any()
+}
+
 /// 发起「删除整笔委托」的影响预演。
 fn start_delete_order(
     stores: &AppStores,
     order_trades: Vec<StockTradeDto>,
     impact: RwSignal<Option<ImpactPrompt>>,
-    positions: RwSignal<Vec<StockPositionDto>>,
-    selected_code: RwSignal<String>,
 ) {
-    let _ = positions;
     let ledger_id = stores.current_ledger_id.get_untracked();
     if ledger_id.is_empty() || order_trades.is_empty() {
         return;
@@ -1682,7 +1661,6 @@ fn start_delete_order(
             Err(error) => notify_error("预演交易影响失败", &error),
         }
     });
-    let _ = selected_code;
 }
 
 /// 影响预演里的「失效轮次」段落固定文案（改动即影响界面）。
@@ -3095,34 +3073,15 @@ fn round_card(
                                 }
                             }
                         >
-                            <Textarea
-                                value=review_draft
-                                rows=3
-                                maxlength=500
-                                placeholder=REVIEW_PLACEHOLDER
-                                class="stock-review__textarea"
-                            />
-                            <div class="stock-review__actions">
-                                <Button
-                                    variant=ButtonVariant::Secondary
-                                    size=ButtonSize::Small
-                                    disabled=Signal::derive(move || review_saving.get())
-                                    on_click=move |_| {
-                                        review_editing.set(String::new());
-                                        review_draft.set(String::new());
-                                    }
-                                >
-                                    "取消"
-                                </Button>
-                                <Button
-                                    variant=ButtonVariant::Primary
-                                    size=ButtonSize::Small
-                                    loading=Signal::derive(move || review_saving.get())
-                                    on_click=move |_| on_save_review.run(id.get_value())
-                                >
-                                    "保存"
-                                </Button>
-                            </div>
+                            {review_editor(
+                                review_draft,
+                                review_saving,
+                                UnsyncCallback::new(move |()| {
+                                    review_editing.set(String::new());
+                                    review_draft.set(String::new());
+                                }),
+                                UnsyncCallback::new(move |()| on_save_review.run(id.get_value())),
+                            )}
                         </Show>
                     </Show>
                 </div>
@@ -3155,19 +3114,6 @@ impl Metric {
         Metric::Expectancy,
         Metric::MaxDrawdown,
     ];
-
-    #[allow(dead_code)]
-    fn key(self) -> &'static str {
-        match self {
-            Metric::TotalPnl => "totalPnl",
-            Metric::WinRate => "winRate",
-            Metric::AvgWin => "avgWin",
-            Metric::AvgLoss => "avgLoss",
-            Metric::PnlRatio => "pnlRatio",
-            Metric::Expectancy => "expectancy",
-            Metric::MaxDrawdown => "maxDrawdown",
-        }
-    }
 
     fn label(self) -> &'static str {
         match self {
@@ -3755,12 +3701,4 @@ fn StatKpi(
             <span class="stock-kpi__sub">{move || sub.get()}</span>
         </div>
     }
-}
-
-/// 让 `Empty` / `Textarea` / `ChartPoint` 等导入不被裁剪（本页按需使用）。
-#[allow(dead_code)]
-fn keep_imports() {
-    let _ = Empty;
-    let _ = std::mem::size_of::<ChartPoint>();
-    let _: Option<ButtonVariant> = None;
 }

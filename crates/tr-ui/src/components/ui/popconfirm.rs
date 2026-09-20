@@ -9,6 +9,8 @@
 //! </Popconfirm>
 //! ```
 
+use super::backdrop;
+use super::with_class;
 use leptos::prelude::*;
 
 use crate::icons::{self, Icon};
@@ -42,11 +44,7 @@ pub fn Popconfirm(
     let ok_text = ok_text.unwrap_or_else(|| "确认".to_string());
     let cancel_text = cancel_text.unwrap_or_else(|| "取消".to_string());
 
-    let mut classes = String::from("ui-popconfirm");
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class("ui-popconfirm", class.as_deref());
 
     view! {
         <div class=classes class:is-open=move || open.get()>
@@ -58,7 +56,7 @@ pub fn Popconfirm(
             </span>
 
             <Show when=move || open.get()>
-                <div class="ui-select__backdrop" on:click=move |_| open.set(false)></div>
+                {backdrop(UnsyncCallback::new(move |()| open.set(false)))}
                 <div class="ui-popconfirm__panel" role="dialog">
                     <div class="ui-popconfirm__header">
                         {icons::icon(Icon::WarningCircle)}

@@ -14,20 +14,12 @@ use tr_domain::dto::LedgerDto;
 use crate::ipc::{self, IpcError};
 use crate::store::ALL;
 
-#[derive(Debug, Serialize)]
-struct ListRequest {
-    id: String,
-}
+use super::IdRequest;
 
 #[derive(Debug, Serialize)]
 struct CreateRequest {
     name: String,
     description: String,
-}
-
-#[derive(Debug, Serialize)]
-struct IdRequest {
-    id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,7 +36,7 @@ pub async fn list_all() -> Result<Vec<LedgerDto>, IpcError> {
 
 /// 按 `id` 查询（`"all"` 或逗号分隔的 id 列表）。
 pub async fn list(id: &str) -> Result<Vec<LedgerDto>, IpcError> {
-    ipc::call("ledger_list", ListRequest { id: id.to_string() }).await
+    ipc::call("ledger_list", IdRequest { id: id.to_string() }).await
 }
 
 /// 新建账本，返回新账本 id。

@@ -20,10 +20,7 @@ use tr_domain::dto::{
 
 use crate::ipc::{self, IpcError};
 
-#[derive(Debug, Serialize)]
-struct IdRequest {
-    id: String,
-}
+use super::IdRequest;
 
 #[derive(Debug, Serialize)]
 struct LinkRequest {
@@ -72,11 +69,6 @@ pub async fn chart_data(request: ChartQueryRequest) -> Result<ChartQueryResponse
 /// 新建一条记录，返回记录 id。
 pub async fn create(record: TransactionRecordDto) -> Result<String, IpcError> {
     ipc::call("tr_create", record).await
-}
-
-/// 批量新建，返回成功条数（错误文案形如 `record 1: ...`）。
-pub async fn batch_create(records: Vec<TransactionRecordDto>) -> Result<i32, IpcError> {
-    ipc::call("tr_batch_create", records).await
 }
 
 /// 删除记录及其标签关联。

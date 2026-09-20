@@ -3,6 +3,7 @@
 //! 等宽分段 + 滑块式激活底色。
 //! 用于「记一笔」弹窗的交易类型（支出/收入/转账）与外观设置（浅色/深色/跟随系统）。
 
+use super::with_class;
 use leptos::prelude::*;
 
 /// 一个分段选项。
@@ -61,10 +62,7 @@ pub fn Segmented(
     if block {
         classes.push_str(" ui-segmented--block");
     }
-    if let Some(extra) = class.as_deref() {
-        classes.push(' ');
-        classes.push_str(extra);
-    }
+    let classes = with_class(&classes, class.as_deref());
 
     view! {
         <div class=classes class:is-disabled=move || disabled.get()>

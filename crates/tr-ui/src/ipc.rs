@@ -156,24 +156,6 @@ pub async fn call_void_no_args(command: &str) -> Result<(), IpcError> {
     }
 }
 
-/// 批量调用：按给定顺序**串行**发出同构调用，返回值顺序与入参一致。
-///
-/// 用途：页面首屏的一次性取数（例如同时取账本 + 分类 + 标签）。
-/// 之所以不做并发：wasm 单线程下并发只省往返排队，却需要跨任务回传结果（自建 oneshot
-/// 或 `Promise.all` 的 JS 胶水），复杂度与收益不成比例；串行版本语义更简单，
-/// 且错误逐条可见（不会像 `Promise.all` 一样丢掉已完成项的结果）。
-pub async fn call_batch<Req, Res>(calls: Vec<(&str, Req)>) -> Vec<Result<Res, IpcError>>
-where
-    Req: Serialize,
-    Res: DeserializeOwned,
-{
-    let mut results = Vec::with_capacity(calls.len());
-    for (command, req) in calls {
-        results.push(call::<_, Res>(command, req).await);
-    }
-    results
-}
-
 /// 序列化/反序列化失败：属于本地桥接错误，与内核无关。
 fn json_error(error: serde_wasm_bindgen::Error) -> IpcError {
     IpcError::new(format!("IPC 数据编码失败: {error}"), 500)
