@@ -136,7 +136,7 @@ pub use switch::Switch;
 pub use table::{Table, TableAlign, TableColumn};
 pub use tabs::{TabItem, TabPane, Tabs};
 pub use tag::{Tag, TagKind};
-// 时间范围选择器：消费记录页与数据分析页共用
+// 时间范围选择器：消费记录页与分析子功能共用
 pub use textarea::Textarea;
 pub use time_range_picker::TimeRangePicker;
 pub use tooltip::Tooltip;

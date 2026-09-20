@@ -2,7 +2,7 @@
 #
 # 覆盖快速验收里原先靠人工的第 6、8 项（以及第 7 项的删除半边）：
 #   * 分类标签页：新增分类 → 库里多一行 → 删除 → 库里少一行；标签同理
-#   * 数据分析页：新增图表 → 库里多一行 → 删除（气泡确认）→ 库里少一行
+#   * 记账 · 分析子功能（原顶级页「数据分析」）：新增图表 → 库里多一行 → 删除（气泡确认）→ 库里少一行
 #   * 关键事件页：点色板改颜色 → 库里 color 变；编辑描述写 Markdown → 保存 → 库里 content 变；
 #                 删除事件（气泡确认）→ 库里少一行
 # 断言全部落在**数据库**上（不看提示文案），所以和实现的措辞解耦。
@@ -318,8 +318,9 @@ try {
     Assert-True ($tagGone.Count -eq 0) "删除后库里不再有该标签（$tagName）"
 
     # ================= 3/4 图表：新增 → 删除（气泡确认）=================
-    Write-Host "`n[crud] 3/4 数据分析：新增图表 → 删除"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '数据分析')) '打开「数据分析」页'
+    Write-Host "`n[crud] 3/4 记账 · 分析子功能：新增图表 → 删除"
+    # 图表原来在顶级页「数据分析」里，现已并入记账页、更名「分析」：走左侧图标条切换
+    Assert-True (Invoke-SubFunction -Window $window -Name '分析') '切到记账页的「分析」子功能'
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增图表')) '点「新增图表」'
     Start-Sleep -Milliseconds 800

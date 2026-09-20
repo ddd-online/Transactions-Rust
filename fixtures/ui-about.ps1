@@ -5,7 +5,7 @@
 # 两侧一旦漂移（改了 tauri.conf.json 却没重新构建，或反过来只改了 Cargo.toml），
 # 界面会照常显示、更新检查却会一直给出错误结论 —— 这类"看不见的错"没有别的护栏能挡住：
 #   * `cargo test` 只测纯函数，读不到 exe 里的版本资源；
-#   * `fixtures/smoke.ps1` / `ui-smoke.ps1` 只断言"界面起来了、7 页渲染了"。
+#   * `fixtures/smoke.ps1` / `ui-smoke.ps1` 只断言"界面起来了、各页渲染了"。
 # 所以这里做两件事：
 #   1. 从 `src-tauri/tauri.conf.json` 读**期望版本**，断言关于页显示「版本 X.Y.Z」与之一致；
 #   2. 断言关于页其余固定内容（应用名 / GitHub 链接 / 版权行）确实渲染，

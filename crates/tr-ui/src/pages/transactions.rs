@@ -56,7 +56,7 @@ use tr_domain::models::QueryConditionItem;
 use tr_domain::money::yuan_to_cents;
 
 use crate::api;
-// 时间范围选择器是共享组件（与数据分析页共用）；其中三个日期算术 helper 本页也要用
+// 时间范围选择器是共享组件（与分析子功能共用）；其中三个日期算术 helper 本页也要用
 use crate::components::ui::time_range_picker::{normalize_range, shift_period, split_ymd};
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, CheckboxGroup, DatePicker, Empty, FeaturePage, Form,
@@ -1025,8 +1025,8 @@ fn sync_ledger_options() -> Vec<(String, String)> {
 /// 这里只给"里面的东西"；结果条数「共 N 条」在分页行里，见 [`record_footer_row`]）。
 ///
 /// 这一页**有**底栏而其它子功能没有，判断依据是"这个功能用不用得上"：
-/// 收支合计是列表页的产物，其余功能（标签、模板、数据分析、股票、关键事件、日记、设置）
-/// 不需要，于是它们的版心直接触达窗口底边。
+/// 收支合计是列表页的产物，其余子功能（分析 / 标签 / 模板）与其它顶级功能
+/// （股票、关键事件、日记、设置）不需要，于是它们的版心直接触达窗口底边。
 fn statistics_bar() -> AnyView {
     let stores = AppStores::global();
     let value = move |key: &'static str| {
@@ -1120,7 +1120,7 @@ fn empty_state_view(
                 <span class="empty-guide-icon">{icons::icon(Icon::Transaction)}</span>
                 <p class="empty-guide-title">"从第一笔开始"</p>
                 <p class="empty-guide-text">
-                    "收入与支出会自动按月汇总，可在「数据分析」查看趋势。"
+                    "收入与支出会自动按月汇总，可在「分析」查看趋势。"
                 </p>
                 <div class="empty-guide-actions">
                     <Show when=move || has_any_categories.get() == Some(false)>

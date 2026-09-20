@@ -102,7 +102,7 @@ pub fn ymd_to_seconds(input: &str) -> Option<i64> {
 /// `YYYY-MM-DD` 区间 → **闭区间** Unix 秒 `(起点, 终点)`：
 /// 起点取当天 00:00:00、终点取当天 23:59:59（本地时区）。
 ///
-/// 查询区间只有这一份实现（消费记录页的 `tr_query` 与数据分析页的图表查询共用），
+/// 查询区间只有这一份实现（消费记录页的 `tr_query` 与分析子功能的图表查询共用），
 /// 任一端解析失败返回 `None`——调用方各自决定是"不发查询"还是"发空区间"。
 pub fn range_to_seconds(from: &str, to: &str) -> Option<(i64, i64)> {
     let start = ymd_to_seconds(from)?;

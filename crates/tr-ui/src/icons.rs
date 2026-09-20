@@ -21,7 +21,7 @@ pub enum Icon {
     Tag,
     /// 消费记录
     Transaction,
-    /// 数据分析
+    /// 分析
     LineChart,
     /// 股票
     Stock,
@@ -69,7 +69,7 @@ pub enum Icon {
     ClockCircle,
     /// 勾选 —— 复选框 / 单选列表
     Check,
-    // ---- P6-b：关键事件 / 日记 / 股票 / 数据分析 用到的图标 ----
+    // ---- P6-b：关键事件 / 日记 / 股票 / 分析 用到的图标 ----
     /// 编辑
     Edit,
     /// 下载 / 另存

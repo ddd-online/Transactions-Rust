@@ -1,8 +1,12 @@
-//! 数据分析页（`/da_view`）—— P6-b 完整实现。
+//! 记账 · **分析**子功能（图表列表 + 曲线条件 + 自绘 SVG 折线图）。
+//!
+//! 它原来是**顶级功能「数据分析」**（侧栏独立一项，路由 `/da_view`），现已迁入记账页、
+//! 作为**第 2 个子功能**并更名「分析」：版心、标题栏与左侧子功能图标条由
+//! [`crate::pages::accounting`] 统一渲染，本模块只提供版心里的「工具栏 + 内容区」。
 //!
 //! ## 组成
 //!
-//! * [`DataAnalysisPage`]：左侧 220px 图表列表 + 右侧图表视图编排
+//! * [`AnalysisSub`]：左侧 220px 图表列表 + 右侧图表视图编排
 //! * [`chart_list_panel`]：列表项（颜色点组 / 删除气泡 / 新增按钮）
 //! * [`chart_panel`]：标题 + 粒度 + 曲线表 + 保存 + 图表 + 右侧求和面板
 //! * [`crate::components::ui::LineChart`]：自绘 SVG 折线图
@@ -43,9 +47,6 @@ use crate::notify::Notifier;
 use crate::store::AppStores;
 use crate::time::{range_to_seconds, today_ymd};
 
-/// 页面标题（固定文案，改动即影响界面）。
-pub const PAGE_TITLE: &str = "数据分析";
-
 /// 交易类型选项（曲线条件用）。
 const TRANSACTION_TYPES: [(&str, &str); 3] = [
     ("income", "收入"),
@@ -80,11 +81,14 @@ fn series_color(transaction_type: &str, index: usize) -> String {
     }
 }
 
-// ==================================================================== 页面
+// ==================================================================== 分析子功能
 
-/// 页面根组件。
+/// 记账页的「分析」子功能：图表列表 + 图表面板。
+///
+/// 只负责工具栏 + 内容区，版心与左侧子功能图标条由 `FeaturePage` 提供
+/// （与「记录 / 标签 / 模板」同一套骨架）。
 #[component]
-pub fn DataAnalysisPage() -> impl IntoView {
+pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
     let stores = AppStores::global();
     let charts = RwSignal::new(Vec::<ChartDto>::new());
     let selected = RwSignal::new(String::new());
@@ -514,7 +518,12 @@ pub fn DataAnalysisPage() -> impl IntoView {
     }.into_any();
 
     view! {
-        <FeaturePage title=PAGE_TITLE toolbar=toolbar content=content />
+        <FeaturePage
+            title=super::accounting::PAGE_TITLE
+            rail=view! { <super::accounting::SubFunctionRail sub=sub /> }.into_any()
+            toolbar=toolbar
+            content=content
+        />
 
         <Modal
             open=Signal::derive(move || create_open.get())

@@ -7,8 +7,7 @@
 
 ## 功能
 
-- **记账**（含 记录 / 标签 / 模板 三个子功能）：记一笔（模板一键填充）、编辑、删除、复制同步到其他账本、筛选（关键词/类型/分类/标签/离群/时间范围）、排序、分页、统计条。
-- **数据分析**：分类占比、时间趋势、标签云、离群消费等图表（引擎为 `charts-rs`，界面层直出 SVG，不引入图表 JS 库）。
+- **记账**（含 记录 / 分析 / 标签 / 模板 四个子功能，走左侧图标条切换）：记一笔（模板一键填充）、编辑、删除、复制同步到其他账本、筛选（关键词/类型/分类/标签/离群/时间范围）、排序、分页、统计条；**分析**提供分类占比、时间趋势、标签云、离群消费等图表（引擎为 `charts-rs`，界面层直出 SVG，不引入图表 JS 库）。
 - **股票**：账户与持仓、建仓/加仓/减仓/清仓（真实行情查名与现价）、成交记录与编辑、交易历史归档为轮次、费用设置（佣金/最低佣金/印花税/过户费）、盈亏统计、重置股票数据。
 - **关键事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、图片附件（含 HEIC 在界面层转码后上传）。
 - **日记**：按日期一篇，**按账本隔离**（切账本即切日记，同一天在不同账本各存一篇），Markdown 预览/编辑，导入/导出目录（作用于当前账本），心情标记，字数统计。
@@ -40,10 +39,11 @@ fixtures/            # schema 基线、端到端脚本（**不含任何真实个
 
 ## 数据
 
-- 工作空间结构以 `fixtures/schema/fresh.sql` 为基线：`transactions.db` 不存在时按基线建库，
-  已存在时**只做只读校验，绝不执行任何 DDL/DML 去改结构**（`cargo xtask validate <dir>`）。
-- **本仓库没有、也不会有数据迁移代码**：更早格式的工作空间会被明确拒绝
-  （提示改用其他工作目录，或用支持该格式的旧版本升级）。
+- 工作空间结构以 `fixtures/schema/fresh.sql` 为基线：`transactions.db` 不存在时按基线建库；
+  已存在时先由**迁移引擎**（`crates/tr-store/src/migrations.rs`）按登记表升级到当前格式，
+  **升级前自动备份**为 `transactions.db.pre-migration-<时间戳>.bak`（同一工作空间只保留最近一份），
+  再按当前格式做只读校验（`cargo xtask validate <dir>` / `cargo xtask migrate <dir>`）。
+  比已知格式更早、且没有对应迁移路径时明确拒绝并提示。
 - 金额恒为整数分（`i64`），只有展示层做分/元换算。
 - 用户配置文件位置与键名稳定（`~/.transactions.json`，开发构建 `~/.transactions-dev.json`），读写时保留未知键。
 
@@ -100,7 +100,7 @@ cargo xtask dump <workspace-dir>            # 只读导出业务表为规范化 
 # 端到端：真机启动应用，用 UI Automation 驱动窗口
 pwsh -File fixtures/smoke.ps1               # 首次启动/已配置 两种启动形态
 pwsh -File fixtures/ui-about.ps1            # 打包产物自报版本 == tauri.conf.json 的版本
-pwsh -File fixtures/ui-smoke.ps1 -WriteFlow # 6 个顶级功能 + 记账 3 个子功能渲染 + 界面写入闭环
+pwsh -File fixtures/ui-smoke.ps1 -WriteFlow # 5 个顶级功能 + 记账 4 个子功能渲染 + 界面写入闭环
 pwsh -File fixtures/ui-stock.ps1            # 股票全生命周期（138 项断言）
 pwsh -File fixtures/ui-transactions.ps1     # 记账·记录：编辑/模板/排序/筛选
 pwsh -File fixtures/ui-diary-edit.ps1       # 日记编辑链路

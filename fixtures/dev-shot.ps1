@@ -9,7 +9,7 @@
 # 用法（pwsh 7）：
 #   pwsh -File fixtures\dev-shot.ps1                       # 抓当前页面 → target\dev-shots\current.png
 #   pwsh -File fixtures\dev-shot.ps1 -Page 分类标签         # 先切页再抓 → target\dev-shots\分类标签.png
-#   pwsh -File fixtures\dev-shot.ps1 -AllPages             # 7 个页面各抓一张
+#   pwsh -File fixtures\dev-shot.ps1 -AllPages             # 5 个顶级功能 + 4 个子功能各抓一张
 #   pwsh -File fixtures\dev-shot.ps1 -OutDir target\look    # 换输出目录
 #
 # 需要 dev 外壳正在运行：
@@ -53,13 +53,15 @@ public class TrDevShot {
 }
 '@ -Language CSharp
 
-# 侧栏的 6 个顶级功能 + 记账页的 3 个子功能（子功能走左侧图标条，不进侧栏）
-$ALL_PAGES = @('记账', '记录', '标签', '模板', '数据分析', '股票', '关键事件', '日记', '应用设置')
+# 侧栏的 5 个顶级功能 + 记账页的 4 个子功能（子功能走左侧图标条，不进侧栏）
+# （原「数据分析」顶级页已并入记账、更名「分析」，所以顶级功能由 6 个减为 5 个）
+$ALL_PAGES = @('记账', '记录', '分析', '标签', '模板', '股票', '关键事件', '日记', '应用设置')
 
 # 子功能 → 该子功能自己的一个标志性控件（判断"真的切过去了"用它，比找同名标题可靠：
-# 三个子功能共用标题栏「记账」，而「标签」这类名字在内容里也有同名文字）
+# 四个子功能共用标题栏「记账」，而「标签」这类名字在内容里也有同名文字）
 $SUB_FUNCTIONS = [ordered]@{
     '记录' = '记一笔'
+    '分析' = '新增图表'
     '标签' = '新增分类'
     '模板' = '新建模板'
 }

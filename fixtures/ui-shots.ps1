@@ -57,9 +57,10 @@ public class TrShot {
 }
 '@ -Language CSharp
 
-$pages = @('记账', '数据分析', '股票', '关键事件', '日记', '应用设置')
-# 记账页的三个子功能（左侧图标条切换）：每个也各抓一张，界面上它们是三块不同的内容
-$subPages = @('记录', '标签', '模板')
+$pages = @('记账', '股票', '关键事件', '日记', '应用设置')
+# 记账页的四个子功能（左侧图标条切换）：每个也各抓一张，界面上它们是四块不同的内容
+# （「分析」原为顶级页「数据分析」，已并入记账并更名）
+$subPages = @('记录', '分析', '标签', '模板')
 $failures = New-Object System.Collections.Generic.List[string]
 $rows = New-Object System.Collections.Generic.List[object]
 
@@ -173,7 +174,7 @@ try {
             })
     }
 
-    # 记账页的三个子功能：走左侧图标条（不是侧栏）
+    # 记账页的四个子功能：走左侧图标条（不是侧栏）
     foreach ($page in $subPages) {
         Invoke-ByName -Window $window -Name '记账' | Out-Null
         Start-Sleep -Milliseconds 800
@@ -232,5 +233,5 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { "  - $_" }
     exit 1
 }
-Write-Host "[ui-shots] ✅ 7 个页面都有真实像素内容，主题切换生效" -ForegroundColor Green
+Write-Host "[ui-shots] ✅ 5 个顶级功能 + 4 个子功能都有真实像素内容，主题切换生效" -ForegroundColor Green
 exit 0
