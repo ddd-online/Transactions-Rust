@@ -52,8 +52,29 @@ pub const EVENT_WORKSPACE_CHANGED: &str = "workspace-changed";
 /// 事件名：DevTools 开合状态变化。
 pub const EVENT_DEVTOOLS_STATE_CHANGED: &str = "devtools:state-changed";
 
-fn internal(error: impl std::fmt::Display) -> ApiError {
+/// 把底层错误收敛为 500 信封（命令面与更新器共用同一套转换）。
+pub(crate) fn internal(error: impl std::fmt::Display) -> ApiError {
     ApiError::from(AppError::internal(error.to_string()))
+}
+
+/// 注册一次文件 / 目录选择回调，并在异步运行时的工作线程上等待结果。
+///
+/// 用回调 + 阻塞等待而不是对话框插件的阻塞 API：阻塞 API 在主线程会死锁。
+async fn pick_path<F>(register: F) -> ApiResult<Option<PathBuf>>
+where
+    F: FnOnce(Box<dyn FnOnce(Option<tauri_plugin_dialog::FilePath>) + Send>),
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    register(Box::new(move |picked| {
+        let _ = tx.send(picked);
+    }));
+
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
+            .await
+            .map_err(internal)?
+            .and_then(|file_path| file_path.into_path().ok()),
+    )
 }
 
 // ---------------------------------------------------------------- 窗口控制
@@ -206,9 +227,7 @@ pub fn config_set_appearance(
     req: SetAppearanceRequest,
 ) -> ApiResult<()> {
     let theme = match req.appearance.as_str() {
-        "light" => Some(tauri::Theme::Light),
-        "dark" => Some(tauri::Theme::Dark),
-        "system" => None,
+        "light" | "dark" | "system" => shell::theme_of(&req.appearance),
         _ => return Err(ApiError::from(AppError::bad_request("无效的外观设置"))),
     };
 
@@ -360,7 +379,6 @@ pub struct DialogOpenResponse {
 /// 这里把等待放到异步运行时的工作线程上。
 #[tauri::command]
 pub async fn dialog_open(app: AppHandle, req: DialogOpenRequest) -> ApiResult<DialogOpenResponse> {
-    let (tx, rx) = std::sync::mpsc::channel();
     let mut builder = app.dialog().file();
     if let Some(title) = req.title.as_deref() {
         builder = builder.set_title(title);
@@ -368,14 +386,10 @@ pub async fn dialog_open(app: AppHandle, req: DialogOpenRequest) -> ApiResult<Di
     if let Some(path) = req.default_path.as_deref() {
         builder = builder.set_directory(path);
     }
-    builder.pick_folder(move |folder| {
-        let _ = tx.send(folder);
-    });
-
-    let picked = tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
-        .await
-        .map_err(internal)?
-        .and_then(|file_path| file_path.into_path().ok());
+    let picked = pick_path(move |callback| {
+        builder.pick_folder(callback);
+    })
+    .await?;
 
     Ok(match picked {
         Some(path) => DialogOpenResponse {
@@ -406,6 +420,17 @@ pub struct FileSaveResponse {
     pub error: Option<String>,
 }
 
+impl FileSaveResponse {
+    /// 失败信封（`canceled` 缺省，序列化时不出现在 JSON 里）。
+    fn failed(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            canceled: None,
+            error: Some(message.into()),
+        }
+    }
+}
+
 /// 把工作空间资产里的图片另存到用户选择的位置。
 #[tauri::command]
 pub async fn file_save_image(
@@ -414,35 +439,19 @@ pub async fn file_save_image(
     req: FileSaveRequest,
 ) -> ApiResult<FileSaveResponse> {
     let Ok(workspace) = ipc_state.workspace() else {
-        return Ok(FileSaveResponse {
-            success: false,
-            canceled: None,
-            error: Some("未打开工作空间".to_string()),
-        });
+        return Ok(FileSaveResponse::failed("未打开工作空间"));
     };
 
     let assets_root = workspace.assets_directory();
     let Ok(root) = assets_root.canonicalize() else {
-        return Ok(FileSaveResponse {
-            success: false,
-            canceled: None,
-            error: Some("源文件不存在".to_string()),
-        });
+        return Ok(FileSaveResponse::failed("源文件不存在"));
     };
     // 防路径遍历：解析后必须仍位于 assets 目录内
     let Ok(source) = assets_root.join(&req.relative_path).canonicalize() else {
-        return Ok(FileSaveResponse {
-            success: false,
-            canceled: None,
-            error: Some("源文件不存在".to_string()),
-        });
+        return Ok(FileSaveResponse::failed("源文件不存在"));
     };
     if !source.starts_with(&root) {
-        return Ok(FileSaveResponse {
-            success: false,
-            canceled: None,
-            error: Some("非法文件路径".to_string()),
-        });
+        return Ok(FileSaveResponse::failed("非法文件路径"));
     }
 
     let default_name = source
@@ -451,22 +460,17 @@ pub async fn file_save_image(
         .unwrap_or("image")
         .to_string();
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog()
-        .file()
-        .set_file_name(default_name)
-        .add_filter(
-            "图片文件",
-            &["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic"],
-        )
-        .save_file(move |target| {
-            let _ = tx.send(target);
-        });
-
-    let picked = tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
-        .await
-        .map_err(internal)?
-        .and_then(|file_path| file_path.into_path().ok());
+    let picked = pick_path(move |callback| {
+        app.dialog()
+            .file()
+            .set_file_name(default_name)
+            .add_filter(
+                "图片文件",
+                &["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic"],
+            )
+            .save_file(callback);
+    })
+    .await?;
 
     let Some(target) = picked else {
         return Ok(FileSaveResponse {

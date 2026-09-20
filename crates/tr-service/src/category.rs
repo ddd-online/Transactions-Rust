@@ -264,18 +264,7 @@ pub fn initialize_categories(workspace: &Workspace, ledger_id: &str) -> ServiceR
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-category-service-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
+    use crate::test_support::workspace;
 
     #[test]
     fn default_data_has_expected_shape() {

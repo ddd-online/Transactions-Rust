@@ -82,19 +82,8 @@ fn validate(dto: &TransactionTemplateDto) -> ServiceResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::workspace;
     use tr_store::dao::transaction_template::TransactionTemplateDao as Dao;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-template-service-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn dto(name: &str) -> TransactionTemplateDto {
         TransactionTemplateDto {

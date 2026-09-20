@@ -54,21 +54,6 @@ pub fn create_tag(
     })
 }
 
-/// 删除某分类（`分类名:交易类型`）下的全部标签
-/// （分类服务删除分类时一并调用）。
-pub fn delete_tags_by_category(
-    workspace: &Workspace,
-    ledger_id: &str,
-    category_transaction_type: &str,
-) -> ServiceResult<()> {
-    TagDao::delete_by_category(
-        &workspace.connection(),
-        ledger_id,
-        category_transaction_type,
-    )
-    .map_err(ServiceError::from)
-}
-
 /// 删除标签：先删交易记录上的该标签关联，再删标签本身（单事务）。
 pub fn delete_tag(
     workspace: &Workspace,
@@ -109,15 +94,6 @@ pub fn update_tag_sort(
     })
 }
 
-/// 单个标签名下的关联交易数。
-pub fn count_records_by_tag(
-    workspace: &Workspace,
-    ledger_id: &str,
-    tag: &str,
-) -> ServiceResult<i64> {
-    TagDao::count_by_tag(&workspace.connection(), ledger_id, tag).map_err(ServiceError::from)
-}
-
 /// 批量统计每个标签名下的关联交易数（空名单直接返回空 map）。
 pub fn count_records_by_tags(
     workspace: &Workspace,
@@ -131,19 +107,8 @@ pub fn count_records_by_tags(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::workspace;
     use tr_domain::models::TrTag;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-tag-service-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn tr_tag(ledger_id: &str, transaction_id: &str, tag: &str) -> TrTag {
         TrTag {
@@ -212,6 +177,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 分类服务删除分类时走的就是这个 DAO 入口（见 `category::delete_category` 的同一事务）；
+    /// 原先是服务层 `delete_tags_by_category` 的包装测试，包装删掉后直接测活路径。
     #[test]
     fn delete_tags_by_category_only_touches_that_category() {
         let (workspace, dir) = workspace("delete-category");
@@ -220,9 +187,9 @@ mod tests {
         create_tag(&workspace, "l1", "工资", "工资奖金:income").unwrap();
         create_tag(&workspace, "l2", "三餐", "餐饮美食:expense").unwrap();
 
-        delete_tags_by_category(&workspace, "l1", "餐饮美食:expense").unwrap();
-
         let conn = workspace.connection();
+        TagDao::delete_by_category(&conn, "l1", "餐饮美食:expense").unwrap();
+
         assert!(TagDao::query_by_ledger(&conn, "l1", "餐饮美食:expense")
             .unwrap()
             .is_empty());
@@ -271,8 +238,6 @@ mod tests {
             )
             .unwrap();
         }
-
-        assert_eq!(count_records_by_tag(&workspace, "l1", "三餐").unwrap(), 2);
 
         let names = vec!["三餐".to_string(), "外卖".to_string(), "不存在".to_string()];
         let counts = count_records_by_tags(&workspace, "l1", &names).unwrap();

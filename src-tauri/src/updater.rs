@@ -24,8 +24,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
 
-use tr_domain::error::AppError;
-use tr_ipc::{ApiError, ApiResult};
+use tr_ipc::ApiResult;
+
+use crate::commands::internal;
 
 /// GitHub 最新 release 接口。
 ///
@@ -110,7 +111,7 @@ pub async fn update_check(app: AppHandle) -> ApiResult<UpdateCheckResponse> {
     let current_version = app.package_info().version.to_string();
     tauri::async_runtime::spawn_blocking(move || check_update(&current_version))
         .await
-        .map_err(|error| ApiError::from(AppError::internal(error.to_string())))
+        .map_err(internal)
 }
 
 fn check_update(current_version: &str) -> UpdateCheckResponse {
@@ -259,7 +260,7 @@ pub async fn update_download(
         download_and_verify(&app_handle, &url, digest.as_deref(), &cancel)
     })
     .await
-    .map_err(|error| ApiError::from(AppError::internal(error.to_string())))?;
+    .map_err(internal)?;
 
     match result {
         Ok(path) => {

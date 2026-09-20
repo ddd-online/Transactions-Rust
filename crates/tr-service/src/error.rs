@@ -66,6 +66,11 @@ impl std::fmt::Display for ServiceError {
 
 impl std::error::Error for ServiceError {}
 
+/// 跨表通用的 rusqlite 错误映射（与 `ServiceError::from(rusqlite::Error)` 等价）。
+pub(crate) fn db<T>(result: rusqlite::Result<T>) -> ServiceResult<T> {
+    result.map_err(ServiceError::Database)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

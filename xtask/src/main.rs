@@ -12,7 +12,7 @@
 //! cargo xtask dump <workspace-dir> [--table <name>]
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rusqlite::Connection;
@@ -106,6 +106,18 @@ fn seed_workspace(args: &[String]) -> ExitCode {
     }
 }
 
+/// 以只读方式打开数据库（不建库、不执行 DDL/DML）；
+/// 失败时打印统一文案并返回 `None`，调用方直接 `ExitCode::FAILURE`。
+fn open_readonly(path: &Path) -> Option<Connection> {
+    match Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(conn) => Some(conn),
+        Err(error) => {
+            eprintln!("打开数据库失败: {error}");
+            None
+        }
+    }
+}
+
 /// 只读导出业务表为规范化 JSON。
 ///
 /// 「规范化」的含义：按 `rowid` 升序、列名升序输出为对象数组，
@@ -149,14 +161,9 @@ fn dump_workspace(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let conn =
-        match Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
-            Ok(conn) => conn,
-            Err(error) => {
-                eprintln!("打开数据库失败: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let Some(conn) = open_readonly(&db_path) else {
+        return ExitCode::FAILURE;
+    };
 
     let tables: Vec<&str> = match only_table.as_deref() {
         Some(table) => vec![table],
@@ -270,14 +277,9 @@ fn validate_workspace(args: &[String]) -> ExitCode {
     }
 
     // 直接以只读方式打开并跑校验：不经过 Workspace::open，确保零副作用
-    let conn =
-        match Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
-            Ok(conn) => conn,
-            Err(error) => {
-                eprintln!("打开数据库失败: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let Some(conn) = open_readonly(&db_path) else {
+        return ExitCode::FAILURE;
+    };
 
     match schema::validate_current(&conn) {
         Ok(()) => {

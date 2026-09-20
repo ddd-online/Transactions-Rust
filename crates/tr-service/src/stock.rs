@@ -34,6 +34,7 @@ use tr_store::dao::is_not_found;
 use tr_store::dao::stock::StockDao;
 use tr_store::Workspace;
 
+use crate::error::db;
 use crate::quote::{StockQuoteFetcher, TencentStockQuoteFetcher};
 use crate::{ServiceError, ServiceResult};
 
@@ -72,9 +73,23 @@ fn round_meta_key(stock_code: &str, round_no: i64) -> String {
     format!("{stock_code}#{round_no}")
 }
 
-/// 跨表通用的 rusqlite 错误映射（与 `ServiceError::from(rusqlite::Error)` 等价）。
-fn db<T>(result: rusqlite::Result<T>) -> ServiceResult<T> {
-    result.map_err(ServiceError::Database)
+// ---------- 数值工具 ----------
+
+/// 占比百分比：`round(part / whole * 10000) / 100`（保留两位小数）。
+///
+/// `whole <= 0` 时返回 `0.0`（防除零）；调用点仍各自保留原有的 `if whole > 0` 守卫，
+/// 因此这里的兜底分支不会被走到，只是让这个纯函数的定义域完整。
+pub(crate) fn percent_of(part: i64, whole: i64) -> f64 {
+    if whole > 0 {
+        ((part as f64 / whole as f64) * 10_000.0).round() / 100.0
+    } else {
+        0.0
+    }
+}
+
+/// 减仓按剩余总成本的比例结转成本（四舍五入到分），避免整除截断造成已实现盈亏偏差。
+fn cost_basis_of(total_cost: i64, shares: i64, quantity: i64) -> i64 {
+    (total_cost as f64 * shares as f64 / quantity as f64).round() as i64
 }
 
 // ---------- 日期工具 ----------
@@ -110,7 +125,9 @@ pub fn normalize_stock_record_date(date: &str) -> ServiceResult<String> {
 }
 
 /// 严格解析 `YYYY-MM-DD`，返回 (年, 月, 日)；格式或取值非法时返回 `None`。
-fn parse_strict_date(date: &str) -> Option<(i32, u32, u32)> {
+///
+/// 日记服务的日期校验（`diary::is_valid_date`）也复用这里，两条链路口径一致。
+pub(crate) fn parse_strict_date(date: &str) -> Option<(i32, u32, u32)> {
     let bytes = date.as_bytes();
     if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
         return None;
@@ -128,13 +145,6 @@ fn parse_strict_date(date: &str) -> Option<(i32, u32, u32)> {
     Some((date.year(), date.month(), date.day()))
 }
 
-/// 分 → 保留两位小数的元字符串，用于资金记录备注。
-///
-/// 用整数运算实现，避免浮点误差。
-fn cents_to_yuan_str(cents: i64) -> String {
-    tr_domain::money::cents_to_yuan(cents)
-}
-
 // ---------- 账户 / 费用设置 / 标签设置 ----------
 
 /// 获取账户，不存在则创建（本金为 0）。
@@ -142,20 +152,7 @@ pub fn get_or_create_account(
     workspace: &Workspace,
     ledger_id: &str,
 ) -> ServiceResult<StockAccount> {
-    let conn = workspace.connection();
-    match StockDao::get_account(&conn, ledger_id) {
-        Ok(account) => Ok(account),
-        Err(error) if is_not_found(&error) => {
-            let account = StockAccount {
-                id: tr_store::util::new_uuid(),
-                ledger_id: ledger_id.to_string(),
-                ..StockAccount::default()
-            };
-            db(StockDao::create_account(&conn, &account))?;
-            Ok(account)
-        }
-        Err(error) => Err(ServiceError::Database(error)),
-    }
+    get_or_create_account_in(&workspace.connection(), ledger_id)
 }
 
 /// 获取费用设置，不存在则按默认值创建（万2.354 / 5元 / 0.05% / 0.001%）。
@@ -163,42 +160,7 @@ pub fn get_or_create_fee_setting(
     workspace: &Workspace,
     ledger_id: &str,
 ) -> ServiceResult<StockFeeSetting> {
-    let conn = workspace.connection();
-    match StockDao::get_fee_setting(&conn, ledger_id) {
-        Ok(setting) => Ok(setting),
-        Err(error) if is_not_found(&error) => {
-            let setting = StockFeeSetting {
-                id: tr_store::util::new_uuid(),
-                ledger_id: ledger_id.to_string(),
-                ..StockFeeSetting::default()
-            };
-            db(StockDao::create_fee_setting(&conn, &setting))?;
-            Ok(setting)
-        }
-        Err(error) => Err(ServiceError::Database(error)),
-    }
-}
-
-/// 获取标签设置行，不存在时按默认标签列表创建（分析/打板/尾盘/追涨/蓄力）。
-fn get_trade_tag_setting(
-    workspace: &Workspace,
-    ledger_id: &str,
-) -> ServiceResult<StockTradeTagSetting> {
-    let conn = workspace.connection();
-    match StockDao::get_trade_tag_setting(&conn, ledger_id) {
-        Ok(setting) => Ok(setting),
-        Err(error) if is_not_found(&error) => {
-            let setting = StockTradeTagSetting {
-                id: tr_store::util::new_uuid(),
-                ledger_id: ledger_id.to_string(),
-                tags: tags_to_json(&consts::default_stock_trade_tags()),
-                ..StockTradeTagSetting::default()
-            };
-            db(StockDao::create_trade_tag_setting(&conn, &setting))?;
-            Ok(setting)
-        }
-        Err(error) => Err(ServiceError::Database(error)),
-    }
+    get_or_create_fee_setting_in(&workspace.connection(), ledger_id)
 }
 
 /// 可用标签的有序 JSON 数组序列化。
@@ -208,23 +170,11 @@ fn tags_to_json(tags: &[String]) -> String {
 
 /// 返回某账本当前可用的交易标签（有序）；解析异常或空列表时回退默认列表**并修复存储**。
 pub fn get_trade_tags(workspace: &Workspace, ledger_id: &str) -> ServiceResult<Vec<String>> {
-    let setting = get_trade_tag_setting(workspace, ledger_id)?;
-    match serde_json::from_str::<Vec<String>>(&setting.tags) {
-        Ok(tags) if !tags.is_empty() => Ok(tags),
-        _ => {
-            let defaults = consts::default_stock_trade_tags();
-            let conn = workspace.connection();
-            db(StockDao::update_trade_tag_setting_tags(
-                &conn,
-                ledger_id,
-                &tags_to_json(&defaults),
-            ))?;
-            Ok(defaults)
-        }
-    }
+    get_trade_tags_in(&workspace.connection(), ledger_id)
 }
 
-fn contains_tag(tags: &[String], tag: &str) -> bool {
+/// 交易标签是否在可用列表里。
+pub(crate) fn contains_tag(tags: &[String], tag: &str) -> bool {
     tags.iter().any(|item| item == tag)
 }
 
@@ -261,7 +211,7 @@ pub fn get_overview_with(
 
     // 总盈亏占本金百分比，本金为 0 时按 0 处理（防除零）
     let total_pnl_percent = if account.principal > 0 {
-        ((realized_pnl as f64 / account.principal as f64) * 10_000.0).round() / 100.0
+        percent_of(realized_pnl, account.principal)
     } else {
         0.0
     };
@@ -363,8 +313,8 @@ pub fn add_principal_at_date(
             net_pnl: None,
             remark: format!(
                 "本金 {} → {}",
-                cents_to_yuan_str(account.principal),
-                cents_to_yuan_str(new_principal)
+                tr_domain::money::cents_to_yuan(account.principal),
+                tr_domain::money::cents_to_yuan(new_principal)
             ),
             created_at: 0,
         };
@@ -422,7 +372,7 @@ pub fn add_withdraw_at_date(
         if amount > prev_cash {
             return Err(AppError::bad_request(format!(
                 "支取金额不能超过可用现金（{} 元）",
-                cents_to_yuan_str(prev_cash)
+                tr_domain::money::cents_to_yuan(prev_cash)
             ))
             .into());
         }
@@ -439,8 +389,8 @@ pub fn add_withdraw_at_date(
             net_pnl: None,
             remark: format!(
                 "现金 {} → {}",
-                cents_to_yuan_str(prev_cash),
-                cents_to_yuan_str(after_cash)
+                tr_domain::money::cents_to_yuan(prev_cash),
+                tr_domain::money::cents_to_yuan(after_cash)
             ),
             created_at: 0,
         };
@@ -499,10 +449,13 @@ fn get_or_create_fee_setting_in(
     }
 }
 
-/// 事务内等价 `get_trade_tags`。
-fn get_trade_tags_in(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult<Vec<String>> {
-    let setting = match StockDao::get_trade_tag_setting(conn, ledger_id) {
-        Ok(setting) => setting,
+/// 事务内取得标签设置行，不存在时按默认标签列表创建（分析/打板/尾盘/追涨/蓄力）。
+fn get_or_create_trade_tag_setting_in(
+    conn: &rusqlite::Connection,
+    ledger_id: &str,
+) -> ServiceResult<StockTradeTagSetting> {
+    match StockDao::get_trade_tag_setting(conn, ledger_id) {
+        Ok(setting) => Ok(setting),
         Err(error) if is_not_found(&error) => {
             let setting = StockTradeTagSetting {
                 id: tr_store::util::new_uuid(),
@@ -511,10 +464,15 @@ fn get_trade_tags_in(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceRes
                 ..StockTradeTagSetting::default()
             };
             db(StockDao::create_trade_tag_setting(conn, &setting))?;
-            setting
+            Ok(setting)
         }
-        Err(error) => return Err(ServiceError::Database(error)),
-    };
+        Err(error) => Err(ServiceError::Database(error)),
+    }
+}
+
+/// 事务内等价 `get_trade_tags`。
+fn get_trade_tags_in(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult<Vec<String>> {
+    let setting = get_or_create_trade_tag_setting_in(conn, ledger_id)?;
     match serde_json::from_str::<Vec<String>>(&setting.tags) {
         Ok(tags) if !tags.is_empty() => Ok(tags),
         _ => {
@@ -527,11 +485,6 @@ fn get_trade_tags_in(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceRes
             Ok(defaults)
         }
     }
-}
-
-/// 读取费用设置（不存在则创建默认值）。
-pub fn get_fee_settings(workspace: &Workspace, ledger_id: &str) -> ServiceResult<StockFeeSetting> {
-    get_or_create_fee_setting(workspace, ledger_id)
 }
 
 /// 保存费用设置。
@@ -620,8 +573,8 @@ pub fn save_trade_tags(
     }
 
     // 确保设置行存在（不存在时按默认值创建）
-    get_trade_tag_setting(workspace, ledger_id)?;
     let conn = workspace.connection();
+    get_or_create_trade_tag_setting_in(&conn, ledger_id)?;
     if let Err(error) =
         StockDao::update_trade_tag_setting_tags(&conn, ledger_id, &tags_to_json(&normalized))
     {
@@ -906,12 +859,12 @@ fn trade_order_remark(
     if count <= 1 {
         format!(
             "{stock_name} {total_lots}手 @ {}",
-            cents_to_yuan_str(avg_price)
+            tr_domain::money::cents_to_yuan(avg_price)
         )
     } else {
         format!(
             "{stock_name} {total_lots}手 @ {}（{count}笔成交）",
-            cents_to_yuan_str(avg_price)
+            tr_domain::money::cents_to_yuan(avg_price)
         )
     }
 }
@@ -1055,9 +1008,7 @@ pub fn create_trade_order(
             }
 
             // 按剩余总成本的比例结转（四舍五入到分），避免整除截断造成已实现盈亏偏差
-            let cost_basis = (position.total_cost as f64 * trade.shares as f64
-                / position.quantity as f64)
-                .round() as i64;
+            let cost_basis = cost_basis_of(position.total_cost, trade.shares, position.quantity);
             let realized = trade.amount - trade.fee - cost_basis;
             trade.realized_pnl = Some(realized);
             realized_total += realized;
@@ -1225,7 +1176,7 @@ fn close_round(
         id: tr_store::util::new_uuid(),
         ledger_id: ledger_id.to_string(),
         stock_code: stock_code.to_string(),
-        history_id: history.id.clone(),
+        history_id: history.id,
         round_no: count + 1,
         opened_at,
         closed_at,
@@ -1441,8 +1392,7 @@ fn build_history_dto(
     }
     item.total_pnl = total_pnl;
     if total_buy_cost > 0 {
-        item.total_pnl_rate =
-            ((total_pnl as f64 / total_buy_cost as f64) * 10_000.0).round() / 100.0;
+        item.total_pnl_rate = percent_of(total_pnl, total_buy_cost);
     }
     Ok(item)
 }
@@ -1469,7 +1419,7 @@ pub fn get_trade_history_detail(
         id: history.id.clone(),
         ledger_id: history.ledger_id.clone(),
         stock_code: history.stock_code.clone(),
-        stock_name: history.stock_name.clone(),
+        stock_name: history.stock_name,
         ..StockTradeHistoryDetailDto::default()
     };
     let mut total_pnl = 0_i64;
@@ -1505,8 +1455,7 @@ pub fn get_trade_history_detail(
     detail.round_count = rounds.len() as i64;
     detail.total_pnl = total_pnl;
     if total_buy_cost > 0 {
-        detail.total_pnl_rate =
-            ((total_pnl as f64 / total_buy_cost as f64) * 10_000.0).round() / 100.0;
+        detail.total_pnl_rate = percent_of(total_pnl, total_buy_cost);
     }
     Ok(detail)
 }
@@ -1638,8 +1587,7 @@ pub fn get_trade_history_summary(
         }
     }
     if total_buy_cost > 0 {
-        summary.total_pnl_rate =
-            ((summary.total_pnl as f64 / total_buy_cost as f64) * 10_000.0).round() / 100.0;
+        summary.total_pnl_rate = percent_of(summary.total_pnl, total_buy_cost);
     }
     Ok(summary)
 }
@@ -1902,7 +1850,7 @@ fn update_trade_fill_tx(
     if order_trades.is_empty() {
         // 兼容未回填委托的历史数据：该成交本身就是一笔独立委托
         let mut single = trade.clone();
-        single.order_id = order_id.clone();
+        single.order_id = order_id;
         single.order_seq = 1;
         order_trades = vec![single];
     }
@@ -2151,8 +2099,7 @@ pub fn rebuild_trades(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceRe
             ))
             .into());
         }
-        let cost_basis =
-            (position.total_cost as f64 * shares as f64 / position.quantity as f64).round() as i64;
+        let cost_basis = cost_basis_of(position.total_cost, shares, position.quantity);
         let realized = amount - fee - cost_basis;
         trades[index].realized_pnl = Some(realized);
         if let Some(order) = current.as_mut() {
@@ -2312,7 +2259,7 @@ fn flush_replay_order(
                     id: tr_store::util::new_uuid(),
                     ledger_id: ledger_id.to_string(),
                     stock_code: order.stock_code.clone(),
-                    history_id: history.id.clone(),
+                    history_id: history.id,
                     round_no,
                     opened_at,
                     closed_at: order.last_time,
@@ -2410,6 +2357,7 @@ fn fund_record_after(a: &StockFundRecord, b: &StockFundRecord) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::workspace;
     use tr_domain::dto::StockQuoteDto;
 
     /// 测试用的账本 / 股票常量。
@@ -2467,19 +2415,6 @@ mod tests {
             prev_close,
             quote_time,
         }
-    }
-
-    /// 临时工作空间（与 `transaction_record.rs` 的测试辅助同形）。
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-svc-stock-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
     }
 
     /// 设置本金。
@@ -2546,40 +2481,6 @@ mod tests {
                 close_at - if close_at > 60 { 60 } else { 0 },
             ),
             (consts::STOCK_TRADE_CLOSE, close_price, close_at),
-        ] {
-            let trade = StockTrade {
-                id: tr_store::util::new_uuid(),
-                ledger_id: TEST_LEDGER_ID.to_string(),
-                stock_code: code.to_string(),
-                stock_name: name.to_string(),
-                trade_type: trade_type.to_string(),
-                price,
-                lots,
-                shares: lots * 100,
-                amount: price * lots * 100,
-                trade_time: at,
-                ..StockTrade::default()
-            };
-            StockDao::create_trade(&conn, &trade).unwrap();
-        }
-    }
-
-    /// 直接用时间戳造一轮干净结算。
-    /// `created_at` 是秒级、次序由主键兜底，因此显式错开一分钟，
-    /// 才能让"按成交时间升序重放"的次序确定。
-    fn seed_clean_round_at_ts(
-        workspace: &Workspace,
-        code: &str,
-        name: &str,
-        open_price: i64,
-        close_price: i64,
-        lots: i64,
-        trade_time: i64,
-    ) {
-        let conn = workspace.connection();
-        for (trade_type, price, at) in [
-            (consts::STOCK_TRADE_OPEN, open_price, trade_time - 60),
-            (consts::STOCK_TRADE_CLOSE, close_price, trade_time),
         ] {
             let trade = StockTrade {
                 id: tr_store::util::new_uuid(),
@@ -3797,7 +3698,7 @@ mod tests {
         let (workspace, dir) = workspace("tags-custom");
 
         seed_principal(&workspace, 10_000_000);
-        seed_clean_round_at_ts(
+        seed_clean_round_from(
             &workspace,
             TEST_CODE,
             TEST_NAME,
@@ -3806,7 +3707,7 @@ mod tests {
             10,
             1_700_000_000,
         );
-        seed_clean_round_at_ts(
+        seed_clean_round_from(
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
@@ -5073,7 +4974,7 @@ mod tests {
 
         seed_principal(&workspace, 10_000_000);
         // 第 1 笔（A 盈利 +100000）→ 第 2 笔（B 盈利 +50000）→ 第 3 笔（A 亏损 -80000）
-        seed_clean_round_at_ts(
+        seed_clean_round_from(
             &workspace,
             TEST_CODE,
             TEST_NAME,
@@ -5082,7 +4983,7 @@ mod tests {
             10,
             1_690_000_000,
         );
-        seed_clean_round_at_ts(
+        seed_clean_round_from(
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
@@ -5091,7 +4992,7 @@ mod tests {
             10,
             1_690_001_000,
         );
-        seed_clean_round_at_ts(
+        seed_clean_round_from(
             &workspace,
             TEST_CODE,
             TEST_NAME,
@@ -5149,7 +5050,7 @@ mod tests {
 
         seed_principal(&workspace, 10_000_000);
         // 盈利 +100000 → 平局 0（计入总笔数） → 亏损 -60000
-        seed_clean_round_at_ts(
+        seed_clean_round_from(
             &workspace,
             TEST_CODE,
             TEST_NAME,
@@ -5158,7 +5059,7 @@ mod tests {
             10,
             1_690_000_000,
         );
-        seed_clean_round_at_ts(
+        seed_clean_round_from(
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
@@ -5167,7 +5068,7 @@ mod tests {
             10,
             1_690_001_000,
         );
-        seed_clean_round_at_ts(
+        seed_clean_round_from(
             &workspace,
             TEST_CODE,
             TEST_NAME,
@@ -5209,7 +5110,7 @@ mod tests {
         assert_eq!((empty.round_count, empty.points.len()), (0, 0));
 
         seed_principal(&workspace, 10_000_000);
-        seed_clean_round_at_ts(
+        seed_clean_round_from(
             &workspace,
             TEST_CODE,
             TEST_NAME,
@@ -5909,7 +5810,7 @@ mod tests {
     fn fee_settings_roundtrip_and_validation() {
         let (workspace, dir) = workspace("fee-settings");
 
-        let defaults = get_fee_settings(&workspace, TEST_LEDGER_ID).unwrap();
+        let defaults = get_or_create_fee_setting(&workspace, TEST_LEDGER_ID).unwrap();
         assert_eq!(defaults.commission_rate, 0.0002354);
         assert_eq!(defaults.min_commission, 500);
         assert_eq!(defaults.stamp_duty_rate, 0.0005);
@@ -5924,7 +5825,7 @@ mod tests {
             save_fee_settings(&workspace, TEST_LEDGER_ID, 0.0003, 1000, 0.001, 0.00002).unwrap();
         assert_eq!(saved.commission_rate, 0.0003);
         assert_eq!(saved.min_commission, 1000);
-        let reloaded = get_fee_settings(&workspace, TEST_LEDGER_ID).unwrap();
+        let reloaded = get_or_create_fee_setting(&workspace, TEST_LEDGER_ID).unwrap();
         assert_eq!(reloaded.commission_rate, 0.0003);
         assert_eq!(reloaded.min_commission, 1000);
 

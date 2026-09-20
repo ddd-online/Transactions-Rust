@@ -130,28 +130,11 @@ fn decode_gbk(payload: &[u8]) -> String {
     decoded.into_owned()
 }
 
-/// 从响应文本里取出第一段 `v_xxx="..."` 的引号内容并按 `~` 切分字段。
+/// 遍历响应里全部 `v_xxx="..."` 段落（批量请求会返回多行）。
 ///
 /// 这里手工扫描 `v_xxx="..."` 而不是用正则：
 /// 对合法响应两者结果相同，而手工扫描不会把"正则回溯"这类行为差异带进来。
-fn first_quote_fields(payload: &str) -> Option<Vec<&str>> {
-    let mut rest = payload;
-    while let Some(start) = rest.find("v_") {
-        let candidate = &rest[start + 2..];
-        if let Some(quote_start) = candidate.find('=') {
-            let after_eq = &candidate[quote_start + 1..];
-            if let Some(stripped) = after_eq.strip_prefix('"') {
-                if let Some(end) = stripped.find('"') {
-                    return Some(stripped[..end].split(FIELD_SEPARATOR).collect());
-                }
-            }
-        }
-        rest = &rest[start + 2..];
-    }
-    None
-}
-
-/// 遍历响应里全部 `v_xxx="..."` 段落（批量请求会返回多行）。
+/// `parse_tencent_name` 只取其中的第一段（`.first()`），扫描顺序与原先的单段版一致。
 fn all_quote_fields(payload: &str) -> Vec<Vec<&str>> {
     let mut result = Vec::new();
     let mut rest = payload;
@@ -221,9 +204,9 @@ pub fn parse_tencent_quote_payload(payload: &str) -> HashMap<String, StockQuoteD
     result
 }
 
-/// 解析单只股票名称：取第一个 `v_xxx="..."` 的第 [1] 段并去空白。
+/// 解析单只股票名称：取第一段 `v_xxx="..."` 的第 [1] 段并去空白。
 pub fn parse_tencent_name(payload: &str) -> String {
-    match first_quote_fields(payload) {
+    match all_quote_fields(payload).first() {
         Some(parts) if parts.len() >= 2 => parts[1].trim().to_string(),
         _ => String::new(),
     }

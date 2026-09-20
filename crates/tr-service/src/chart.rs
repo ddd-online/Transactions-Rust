@@ -57,21 +57,13 @@ fn condition(
     }
 }
 
-/// 月度图表的默认曲线（不含离群点）。
-fn default_chart_lines() -> Vec<ChartLine> {
+/// 预设的支出 / 收入 / 转账三条曲线；`include_outlier` 决定是否把离群点计入
+/// （月度预设为 false，年度预设为 true）。
+fn chart_lines(include_outlier: bool) -> Vec<ChartLine> {
     vec![
-        line("支出", "expense", false),
-        line("收入", "income", false),
-        line("转账", "transfer", false),
-    ]
-}
-
-/// 预设的年度曲线（含离群点）。
-fn yearly_chart_lines() -> Vec<ChartLine> {
-    vec![
-        line("支出", "expense", true),
-        line("收入", "income", true),
-        line("转账", "transfer", true),
+        line("支出", "expense", include_outlier),
+        line("收入", "income", include_outlier),
+        line("转账", "transfer", include_outlier),
     ]
 }
 
@@ -117,8 +109,8 @@ fn seed_default_charts(workspace: &Workspace, ledger_id: &str) -> ServiceResult<
     tracing::info!("账本 {} 无图表，创建预设图表", ledger_id);
 
     let presets: [(&str, &str, Vec<ChartLine>, i32); 3] = [
-        ("月度消费趋势", "month", default_chart_lines(), 0),
-        ("年度消费趋势", "year", yearly_chart_lines(), 1),
+        ("月度消费趋势", "month", chart_lines(false), 0),
+        ("年度消费趋势", "year", chart_lines(true), 1),
         ("年度收入趋势", "year", income_chart_lines(), 2),
     ];
 
@@ -241,6 +233,7 @@ fn to_dto(chart: &Chart) -> ServiceResult<ChartDto> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::workspace;
 
     /// 以下期望值来自一次真实运行，作为回归基线，不要手改：
     /// 月度图表的默认曲线（`includeOutlier:false`、空的 conditions）。
@@ -269,18 +262,6 @@ mod tests {
         r#"{"label":"年度分红收入","transactionType":"income","includeOutlier":true,"conditions":["#,
         r#"{"transactionType":"income","category":"投资理财","tags":[],"tagPolicy":"all","tagNot":false,"description":"年分红"}]}]"#
     );
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-chart-service-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn line_of(label: &str, transaction_type: &str) -> ChartLine {
         line(label, transaction_type, false)
@@ -325,8 +306,8 @@ mod tests {
         );
 
         // 解析往返：DTO 的 lines 与逐字 JSON 一一对应；再编码回去完全相同
-        assert_eq!(charts[0].lines, default_chart_lines());
-        assert_eq!(charts[1].lines, yearly_chart_lines());
+        assert_eq!(charts[0].lines, chart_lines(false));
+        assert_eq!(charts[1].lines, chart_lines(true));
         assert_eq!(charts[2].lines, income_chart_lines());
         for chart in &charts {
             let reencoded = encode_chart_lines(&chart.lines).unwrap();
@@ -436,7 +417,7 @@ mod tests {
         let updated = update(
             &workspace,
             &UpdateChartRequest {
-                chart_id: preset_id.clone(),
+                chart_id: preset_id,
                 title: "改名后的月度".to_string(),
                 granularity: "year".to_string(),
                 lines: vec![line_of("支出", "expense")],

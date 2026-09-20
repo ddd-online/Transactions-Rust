@@ -152,40 +152,11 @@ fn parse_diary_file_name(name: &str) -> Option<&str> {
 }
 
 /// `YYYY-MM-DD` 严格校验（含闰年）：格式不合法或日期不存在都算非法。
+///
+/// 复用股票服务里同一口径的严格解析（chrono 的公历规则），
+/// 不再自己手写 `days_in_month` / `is_leap_year`。
 fn is_valid_date(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
-        return false;
-    }
-    for (index, byte) in bytes.iter().enumerate() {
-        if index == 4 || index == 7 {
-            continue;
-        }
-        if !byte.is_ascii_digit() {
-            return false;
-        }
-    }
-    let year: i32 = value[0..4].parse().unwrap_or(0);
-    let month: u32 = value[5..7].parse().unwrap_or(0);
-    let day: u32 = value[8..10].parse().unwrap_or(0);
-    if !(1..=12).contains(&month) || day < 1 {
-        return false;
-    }
-    day <= days_in_month(year, month)
-}
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
-    }
-}
-
-fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    crate::stock::parse_strict_date(value).is_some()
 }
 
 /// `YYYY-MM-DD` → (年, 月)。
@@ -258,18 +229,7 @@ fn replace_invalid_utf8(raw: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-service-diary-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
+    use crate::test_support::workspace;
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(

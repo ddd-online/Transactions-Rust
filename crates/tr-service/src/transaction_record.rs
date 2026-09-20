@@ -7,7 +7,7 @@
 //! * **关联关键事件**：目标日期没有关键事件时自动创建一条空事件，并写一条 info 日志
 //! * **新建记录不写 `key_event_date`**（关联只能走 link 命令）
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use tr_domain::consts;
 use tr_domain::dto::{
@@ -118,16 +118,7 @@ pub fn query_trs_on_condition(
         .collect();
     let tag_map = TrTagDao::query_by_tr_ids(&workspace.connection(), &transaction_ids)?;
 
-    let mut items = Vec::with_capacity(result.items.len());
-    for record in &result.items {
-        let mut dto = TransactionRecordDto::from_record(record);
-        if let Some(tags) = tag_map.get(&record.transaction_id) {
-            for tag in tags {
-                dto.tags.push(tag.tag.clone());
-            }
-        }
-        items.push(dto);
-    }
+    let items = attach_tags(&result.items, &tag_map);
 
     // 分页推导
     let page_size = if condition.limit <= 0 {
@@ -414,36 +405,33 @@ pub fn query_linked_by_date(
     let tag_map = TrTagDao::query_by_tr_ids(&conn, &transaction_ids)
         .map_err(|error| ServiceError::Internal(format!("query tr tags: {error}")))?;
 
-    let mut dtos = Vec::with_capacity(records.len());
-    for record in &records {
+    Ok(attach_tags(&records, &tag_map))
+}
+
+/// 记录模型 → DTO，并把 `tag_map`（`transaction_id` → 标签列表）里的标签补进去。
+fn attach_tags(
+    records: &[tr_domain::models::TransactionRecord],
+    tag_map: &HashMap<String, Vec<TrTag>>,
+) -> Vec<TransactionRecordDto> {
+    let mut items = Vec::with_capacity(records.len());
+    for record in records {
         let mut dto = TransactionRecordDto::from_record(record);
         if let Some(tags) = tag_map.get(&record.transaction_id) {
             for tag in tags {
                 dto.tags.push(tag.tag.clone());
             }
         }
-        dtos.push(dto);
+        items.push(dto);
     }
-    Ok(dtos)
+    items
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::workspace;
     use tr_domain::dto::QueryConditionItem;
     use tr_store::util::new_uuid;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-service-tr-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn dto(
         price: i64,

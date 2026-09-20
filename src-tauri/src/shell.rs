@@ -108,14 +108,18 @@ pub fn create_init_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     Ok(window)
 }
 
-/// 按外观设置应用窗口主题（`system` 表示跟随系统）。
-fn apply_appearance(window: &WebviewWindow, appearance: &str) {
-    let theme = match appearance {
+/// 外观字符串 → 窗口主题；`light` / `dark` 之外的取值（含 `system`）都表示"跟随系统"。
+pub(crate) fn theme_of(appearance: &str) -> Option<tauri::Theme> {
+    match appearance {
         "light" => Some(tauri::Theme::Light),
         "dark" => Some(tauri::Theme::Dark),
         _ => None,
-    };
-    let _ = window.set_theme(theme);
+    }
+}
+
+/// 按外观设置应用窗口主题（`system` 表示跟随系统）。
+fn apply_appearance(window: &WebviewWindow, appearance: &str) {
+    let _ = window.set_theme(theme_of(appearance));
 }
 
 /// 托盘：显示主窗口 / 关闭程序；左键单击显示主窗口。

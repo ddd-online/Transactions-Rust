@@ -81,16 +81,13 @@ pub fn delete_by_date(workspace: &Workspace, ledger_id: &str, date: &str) -> Ser
     let images = KeyEventImageDao::query_by_event_date(&workspace.connection(), ledger_id, date)
         .map_err(|error| ServiceError::Internal(format!("query images: {error}")))?;
 
-    workspace
-        .transaction(|conn| {
-            KeyEventImageDao::delete_by_event_date(conn, ledger_id, date).map_err(|error| {
-                ServiceError::Internal(format!("delete image records: {error}"))
-            })?;
-            KeyEventDao::delete_by_date(conn, ledger_id, date)
-                .map_err(|error| ServiceError::Internal(format!("delete key event: {error}")))?;
-            Ok(())
-        })
-        .map_err(|error: ServiceError| error)?;
+    workspace.transaction(|conn| -> ServiceResult<()> {
+        KeyEventImageDao::delete_by_event_date(conn, ledger_id, date)
+            .map_err(|error| ServiceError::Internal(format!("delete image records: {error}")))?;
+        KeyEventDao::delete_by_date(conn, ledger_id, date)
+            .map_err(|error| ServiceError::Internal(format!("delete key event: {error}")))?;
+        Ok(())
+    })?;
 
     // 事务提交成功后再删文件（避免"记录已删但文件删除失败"造成状态不可恢复）
     for image in images {
@@ -172,19 +169,8 @@ pub fn delete_image(workspace: &Workspace, image_id: &str) -> ServiceResult<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::workspace;
     use base64::Engine;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-service-keyevent-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     /// 生成一个最小的合法 PNG（1×1）data URI。
     fn tiny_png_data_uri() -> String {

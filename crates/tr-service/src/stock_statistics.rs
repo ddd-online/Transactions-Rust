@@ -19,7 +19,8 @@ use tr_domain::models::{StockFundRecord, StockTradeRound};
 use tr_store::dao::stock::StockDao;
 use tr_store::Workspace;
 
-use crate::stock::{get_or_create_account, get_trade_tags, unix_to_date};
+use crate::error::db;
+use crate::stock::{contains_tag, get_or_create_account, get_trade_tags, percent_of, unix_to_date};
 use crate::{ServiceError, ServiceResult};
 
 /// 一条已归档的完整结算（一次「建仓 → 清仓」轮次）及其盈亏。
@@ -71,7 +72,7 @@ pub fn get_statistics_range(
     }
     if !tag.is_empty() {
         let available_tags = get_trade_tags(workspace, ledger_id)?;
-        if !available_tags.iter().any(|item| item == tag) {
+        if !contains_tag(&available_tags, tag) {
             return Err(AppError::bad_request("无效的交易标签").into());
         }
     }
@@ -302,7 +303,7 @@ fn statistics(
             ..StockStatisticsPointDto::default()
         };
         if stat_count > 0 {
-            point.win_rate = ((wins as f64 / stat_count as f64) * 10_000.0).round() / 100.0;
+            point.win_rate = percent_of(wins, stat_count);
         }
         if wins > 0 {
             point.avg_win = (win_amount_sum as f64 / wins as f64).round() as i64;
@@ -321,8 +322,7 @@ fn statistics(
             point.expectancy = (total as f64 / stat_count as f64).round() as i64;
         }
         if principal_at > 0 {
-            point.max_drawdown_pct =
-                ((drawdown as f64 / principal_at as f64) * 10_000.0).round() / 100.0;
+            point.max_drawdown_pct = percent_of(drawdown, principal_at);
         }
         result.points.push(point);
     }
@@ -455,10 +455,6 @@ fn push_capital_flow(flows: &mut Vec<CapitalFlow>, record: &StockFundRecord) {
         }),
         _ => {}
     }
-}
-
-fn db<T>(result: rusqlite::Result<T>) -> ServiceResult<T> {
-    result.map_err(ServiceError::Database)
 }
 
 #[cfg(test)]

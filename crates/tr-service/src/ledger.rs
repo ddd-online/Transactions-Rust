@@ -95,14 +95,6 @@ pub fn query_ledger_by_id(workspace: &Workspace, ledger_id: &str) -> ServiceResu
     })
 }
 
-/// 按名称查询账本。
-pub fn query_ledger_by_name(workspace: &Workspace, ledger_name: &str) -> ServiceResult<Ledger> {
-    LedgerDao::query_by_name(&workspace.connection(), ledger_name).map_err(|error| {
-        tracing::error!("按名称查询账本失败, name: {}, err: {}", ledger_name, error);
-        ServiceError::from(error)
-    })
-}
-
 /// 删除账本及其全部业务数据（单事务级联），提交后再清理磁盘上的图片文件。
 pub fn delete_ledger_by_id(workspace: &Workspace, ledger_id: &str) -> ServiceResult<()> {
     // 事务前收集该账本的图片路径：删库成功后无法再查到它们
@@ -135,19 +127,8 @@ pub fn delete_ledger_by_id(workspace: &Workspace, ledger_id: &str) -> ServiceRes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::workspace;
     use tr_store::dao::is_not_found;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-ledger-service-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     #[test]
     fn create_then_query_roundtrip() {
@@ -165,7 +146,6 @@ mod tests {
         assert_eq!(updated.description, "新说明");
 
         assert_eq!(list_all_ledger(&workspace).unwrap().len(), 1);
-        assert_eq!(query_ledger_by_name(&workspace, "改名").unwrap().id, id);
 
         std::fs::remove_dir_all(&dir).ok();
     }

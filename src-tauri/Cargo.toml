@@ -12,12 +12,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tr-domain = { workspace = true }
 tr-store = { workspace = true }
-tr-service = { workspace = true }
 tr-ipc = { workspace = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2"
 
 # devtools：生产构建同样允许开关 DevTools（对应「设置 → 通用 → 开发者工具」）。
 # tray-icon：系统托盘。image-png/image-ico：图标解码。

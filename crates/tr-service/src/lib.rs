@@ -23,3 +23,24 @@ pub mod transaction_record;
 pub mod transaction_template;
 
 pub use error::{ServiceError, ServiceResult};
+
+/// 各模块测试共用的夹具（只在测试编译时存在）。
+#[cfg(test)]
+pub(crate) mod test_support {
+    use tr_store::Workspace;
+
+    /// 开一个全新的临时工作空间，返回 `(workspace, 目录)`；
+    /// 目录名带模块名、进程号与纳秒时间戳，并发跑的测试互不干扰。
+    /// 调用方测试结束时自行 `std::fs::remove_dir_all(&dir)`。
+    pub fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "tr-service-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        (Workspace::open(&dir).unwrap(), dir)
+    }
+}
