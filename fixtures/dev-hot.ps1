@@ -107,9 +107,10 @@ function Get-RepoAppWindow {
     foreach ($proc in $procs) {
         $cond = New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $proc.Id)
         foreach ($candidate in @($UIA::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $cond))) {
+            # 侧栏条目「记账」出现 = 这是主窗口（而不是 600×560 的初始化窗口）
             $names = @($candidate.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-                    (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, '消费记录'))))
-            if ($names.Count -gt 0) { return $candidate }   # 有侧栏 = 主窗口（不是初始化窗口）
+                    (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, '记账'))))
+            if ($names.Count -gt 0) { return $candidate }
         }
     }
     return $null
@@ -143,6 +144,12 @@ function Start-TrunkServe {
 function Start-DevShell {
     if (-not (Test-Path $Exe)) { throw "找不到 dev 外壳: $Exe（先跑 cargo build -p transactions）" }
     New-Item -ItemType Directory -Force -Path $SmokeHome | Out-Null
+    # 一次性 HOME 里必须先有 `Desktop`：`USERPROFILE` 指向这里以后，Windows 的
+    # 文件夹/文件对话框（选工作空间、日记导入导出、上传图片）默认落在 `%USERPROFILE%\Desktop`，
+    # 那个目录不存在时会先弹一个「位置不可用」的模态框挡住流程（实测踩过）。
+    foreach ($sub in @('Desktop', 'AppData')) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $SmokeHome $sub) | Out-Null
+    }
     $wsAbs = if ($Workspace) { [System.IO.Path]::GetFullPath($Workspace) } else { '' }
     @{ width = 1500; height = 1000; workspaceDir = $wsAbs; closeBehavior = 'quit'; appearance = 'light' } |
         ConvertTo-Json | Set-Content -Path (Join-Path $SmokeHome '.transactions-dev.json') -Encoding UTF8

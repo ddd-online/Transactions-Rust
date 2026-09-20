@@ -57,7 +57,9 @@ public class TrShot {
 }
 '@ -Language CSharp
 
-$pages = @('消费记录', '数据分析', '股票交易', '关键事件', '日记', '分类标签', '应用设置')
+$pages = @('记账', '数据分析', '股票交易', '关键事件', '日记', '应用设置')
+# 记账页的三个子功能（左侧图标条切换）：每个也各抓一张，界面上它们是三块不同的内容
+$subPages = @('记录', '标签', '模板')
 $failures = New-Object System.Collections.Generic.List[string]
 $rows = New-Object System.Collections.Generic.List[object]
 
@@ -167,6 +169,25 @@ try {
         if ($blank) { $failures.Add("$page 疑似空白：标准差 $($stat.StdDev)、颜色数 $($stat.Colors)") }
         $rows.Add([pscustomobject]@{
                 Page = $page; StdDev = $stat.StdDev; Colors = $stat.Colors
+                Mean = $stat.Mean; PngKB = [math]::Round($stat.Bytes / 1KB, 1); Blank = $blank
+            })
+    }
+
+    # 记账页的三个子功能：走左侧图标条（不是侧栏）
+    foreach ($page in $subPages) {
+        Invoke-ByName -Window $window -Name '记账' | Out-Null
+        Start-Sleep -Milliseconds 800
+        if (-not (Invoke-SubFunction -Window $window -Name $page)) {
+            $failures.Add("找不到记账子功能入口: $page")
+            continue
+        }
+        Start-Sleep -Milliseconds 1500
+        $file = Join-Path $OutDir "记账-$page.png"
+        $stat = Save-WindowShot -Handle $handle -Path $file
+        $blank = ($stat.StdDev -lt 8) -or ($stat.Colors -lt 20)
+        if ($blank) { $failures.Add("记账·$page 疑似空白：标准差 $($stat.StdDev)、颜色数 $($stat.Colors)") }
+        $rows.Add([pscustomobject]@{
+                Page = "记账·$page"; StdDev = $stat.StdDev; Colors = $stat.Colors
                 Mean = $stat.Mean; PngKB = [math]::Round($stat.Bytes / 1KB, 1); Blank = $blank
             })
     }

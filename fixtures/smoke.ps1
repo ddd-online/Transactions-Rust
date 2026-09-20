@@ -3,7 +3,8 @@
 # 覆盖两件事（都是自动护栏覆盖不到的部分）：
 #   1. **已配置工作空间**启动：只出现主窗口（标题 `Transactions`），并且真的打开了工作空间；
 #   2. **首次启动**（`workspaceDir` 为空）：只出现初始化窗口（标题 `欢迎使用 Transactions`），
-#      **不会**提前创建主窗口。这一条对应曾经的真实缺陷：`workspace_init` 全仓无调用点，
+#      **不会**提前创建主窗口；而且这个窗口**关不掉**（发 WM_CLOSE 后窗口与进程都还在，
+#      用户必须先选定工作空间）。这一条对应曾经的真实缺陷：`workspace_init` 全仓无调用点，
 #      导致选完目录后主窗口永远不出现（详见 AGENTS.md 的踩坑清单）。
 #
 # 为什么默认用 debug 构建的 exe：`is_dev = cfg!(debug_assertions)`，
@@ -97,6 +98,24 @@ public class TrSmokeWindows {
       return true;
     }, IntPtr.Zero);
     return found;
+  }
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+  /// 按 PID + 标题找一个可见顶层窗口的句柄（没找到返回 IntPtr.Zero）。
+  public static IntPtr HandleForPidTitle(uint target, string title) {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows((h, l) => {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (pid == target && IsWindowVisible(h)) {
+        var sb = new StringBuilder(512); GetWindowText(h, sb, sb.Capacity);
+        if (sb.ToString() == title) { found = h; return false; }
+      }
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+  /// 发一个 WM_CLOSE（等价于 Alt+F4 / 点标题栏关闭）。
+  public static void PostClose(IntPtr hWnd) {
+    PostMessage(hWnd, 0x0010, IntPtr.Zero, IntPtr.Zero);
   }
 }
 '@ -Language CSharp
@@ -213,6 +232,18 @@ if ($Case -in @('all', 'first-run')) {
         Assert-True ($titles -contains '欢迎使用 Transactions') "出现初始化窗口（标题 欢迎使用 Transactions）"
         Assert-True (-not ($titles -contains 'Transactions')) "没有提前创建主窗口"
         Assert-True ($titles.Count -eq 1) "只有 1 个界面窗口（实际: $($titles.Count) → $($titles -join ' | ')）"
+
+        # 这个窗口是**强制**的工作空间选择屏：给它发 WM_CLOSE（= Alt+F4 / 点关闭），
+        # 窗口和进程都必须还在（用户必须先选定工作空间；逃生门是托盘菜单的「关闭程序」）。
+        $initHandle = [TrSmokeWindows]::HandleForPidTitle([uint32]$process.Id, '欢迎使用 Transactions')
+        Assert-True ($initHandle -ne [IntPtr]::Zero) '拿到初始化窗口的句柄（才能发关闭请求）'
+        if ($initHandle -ne [IntPtr]::Zero) {
+            [TrSmokeWindows]::PostClose($initHandle)
+            Start-Sleep -Seconds 2
+            $afterClose = Get-AppWindowTitles $process
+            Assert-True ($afterClose -contains '欢迎使用 Transactions') '收到关闭请求后初始化窗口仍在（未选定工作空间时关不掉）'
+            Assert-True (-not $process.HasExited) '收到关闭请求后进程仍存活'
+        }
 
         $log = if (Test-Path $appLog) { Get-Content $appLog -Raw } else { '' }
         Assert-True ($log -match '启动 Transactions') "应用日志记录了启动"

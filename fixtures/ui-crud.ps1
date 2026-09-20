@@ -258,8 +258,8 @@ try {
     Start-Sleep -Milliseconds 500
 
     # ================= 1/4 分类与标签：新增 → 删除 =================
-    Write-Host "`n[crud] 1/4 分类标签页：新增分类 → 删除"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '分类标签')) '打开「分类标签」页'
+    Write-Host "`n[crud] 1/4 记账 · 标签子功能：新增分类 → 删除"
+    Assert-True (Invoke-SubFunction -Window $window -Name '标签') '切到记账页的「标签」子功能'
     Start-Sleep -Seconds 2
 
     $before = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_category' -OutDir $OutDir | Where-Object { $_.name -eq $categoryName })
@@ -428,12 +428,10 @@ try {
     }
     $eventGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir | Where-Object { $_.date -eq $eventDate })
     Assert-True ($eventGone.Count -eq 0) "删除后库里不再有该事件（$eventDate）"
-    # ================= 5/5 消费模板：新建 → 删除（设置页）=================
-    Write-Host "`n[crud] 5/5 消费模板：新建 → 删除"
+    # ================= 5/5 记账 · 模板子功能：新建 → 删除 =================
+    Write-Host "`n[crud] 5/5 记账 · 模板子功能：新建 → 删除"
     $templateName = "UIA模板$stamp"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置')) '打开「应用设置」'
-    Start-Sleep -Seconds 2
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '消费模板')) '切到「消费模板」页签'
+    Assert-True (Invoke-SubFunction -Window $window -Name '模板') '切到记账页的「模板」子功能'
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新建模板')) '点「新建模板」'
     Start-Sleep -Milliseconds 1000

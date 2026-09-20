@@ -22,7 +22,8 @@
                       + P6-b 的 textarea/markdown/chart/image-picker/upload-progress）
         app.css    —— 外壳骨架（侧边栏 / 顶部窗口控制 / 底部状态栏）与页面通用骨架
         页面级样式 —— transactions.css / category_tag.css / settings.css
-                      / key_event.css / diary.css / stock.css / data_analysis.css（一页一文件）
+                      / key_event.css / diary.css / stock.css / data_analysis.css
+                      / templates.css（记账·模板子功能；一页一文件）
     -->
     <link data-trunk rel="rust" />
     <link data-trunk rel="css" href="static/css/tokens.css" />
@@ -37,6 +38,7 @@
     <link data-trunk rel="css" href="static/css/diary.css" />
     <link data-trunk rel="css" href="static/css/stock.css" />
     <link data-trunk rel="css" href="static/css/data_analysis.css" />
+    <link data-trunk rel="css" href="static/css/templates.css" />
     <!--
       字体与图标按原样拷进 dist（不参与 hash 重命名）：
       样式表被 trunk 放在 dist 根目录，因此 fonts.css / app.css 里的相对路径写作 ./fonts/...

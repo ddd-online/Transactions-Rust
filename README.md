@@ -7,7 +7,7 @@
 
 ## 功能
 
-- **消费记录**：记一笔（模板一键填充）、编辑、删除、复制同步到其他账本、筛选（关键词/类型/分类/标签/离群/时间范围）、排序、分页、统计条。
+- **记账**（含 记录 / 标签 / 模板 三个子功能）：记一笔（模板一键填充）、编辑、删除、复制同步到其他账本、筛选（关键词/类型/分类/标签/离群/时间范围）、排序、分页、统计条。
 - **数据分析**：分类占比、时间趋势、标签云、离群消费等图表（引擎为 `charts-rs`，界面层直出 SVG，不引入图表 JS 库）。
 - **股票交易**：账户与持仓、建仓/加仓/减仓/清仓（真实行情查名与现价）、成交记录与编辑、交易历史归档为轮次、费用设置（佣金/最低佣金/印花税/过户费）、盈亏统计、重置股票数据。
 - **关键事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、图片附件（含 HEIC 在界面层转码后上传）。
@@ -100,9 +100,9 @@ cargo xtask dump <workspace-dir>            # 只读导出业务表为规范化 
 # 端到端：真机启动应用，用 UI Automation 驱动窗口
 pwsh -File fixtures/smoke.ps1               # 首次启动/已配置 两种启动形态
 pwsh -File fixtures/ui-about.ps1            # 打包产物自报版本 == tauri.conf.json 的版本
-pwsh -File fixtures/ui-smoke.ps1 -WriteFlow # 7 个页面渲染 + 界面写入闭环
+pwsh -File fixtures/ui-smoke.ps1 -WriteFlow # 6 个顶级功能 + 记账 3 个子功能渲染 + 界面写入闭环
 pwsh -File fixtures/ui-stock.ps1            # 股票全生命周期（138 项断言）
-pwsh -File fixtures/ui-transactions.ps1     # 消费记录：编辑/模板/排序/筛选
+pwsh -File fixtures/ui-transactions.ps1     # 记账·记录：编辑/模板/排序/筛选
 pwsh -File fixtures/ui-diary-edit.ps1       # 日记编辑链路
 pwsh -File fixtures/ui-key-event.ps1        # 关键事件：任选日期新建 + 同日 upsert
 # 其余脚本见 AGENTS.md 的「常用命令」

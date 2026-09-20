@@ -3,13 +3,14 @@
  * 布局：工具栏 + 两栏（260px 日期树 / 自适应编辑器）。
  * ============================================ */
 
-/* 日记工具栏（今天 / 全部收起 / 跳转日期）：外边距由 `.page-toolbar` 统一给 */
+/* 日记工具栏（今天 / 全部收起 / 日期选择器）：外边距由 `.page-toolbar` 统一给 */
 .diary-tools {
   display: flex;
   align-items: center;
   gap: var(--transactions-space-md);
 }
 
+/* 日期选择器宽度（选到某天即跳转，旁边不再有「跳转日期」按钮） */
 .diary-jump {
   width: 160px;
 }
@@ -325,6 +326,11 @@
 /* 已保存状态 + 删除按钮现在跟在**页面工具栏**右侧（编辑器底部那条栏已删除） */
 .diary-save-status {
   font-size: var(--transactions-size-text-caption);
+}
+
+/* 编辑中：改动进了草稿、还没落库（防抖窗口内） */
+.diary-save-status.is-editing {
+  color: var(--transactions-color-text-secondary);
 }
 
 .diary-save-status.is-saving {

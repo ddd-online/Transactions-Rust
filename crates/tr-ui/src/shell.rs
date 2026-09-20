@@ -6,8 +6,10 @@
 //!   支持新建账本与删除确认
 //! * 底部状态栏：左侧工作空间/账本状态，右侧在「消费记录」页显示 `trStatistics` 统计
 //!   （仅「消费记录」页渲染底部统计）
-//! * `workspace-required` 事件（由 [`crate::ipc`] 在识别到"未打开工作空间"时派发）
-//!   与"尚未配置工作空间"都会打开「选择工作空间」流程：`dialog_open` → `workspace_open`
+//! * **工作空间强制选择**：读到配置之前不渲染页面；没有工作空间（从未配置过、或
+//!   配置里的目录打不开、或收到 `workspace-required` 事件）时，只渲染
+//!   [`WorkspaceRequired`]——一个**不可关闭**的选择屏（`dialog_open` → `workspace_open`）。
+//!   选择成功后才挂载整个界面，避免首屏命令撞上"后端还没打开工作空间"。
 //!
 //! 本实现的设计取舍：
 //! * 没有"内核状态指示灯"：Rust 版没有子进程内核，进程即应用，该指示灯无对应语义
@@ -22,16 +24,18 @@ use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
 use crate::notify::{Notice, NoticeKind, Notifier};
 use crate::pages::{
-    CategoryTagPage, DataAnalysisPage, DiaryPage, KeyEventPage, SettingsPage, StockPage,
-    TransactionsPage,
+    AccountingPage, DataAnalysisPage, DiaryPage, KeyEventPage, SettingsPage, StockPage,
 };
 use crate::store::{AppStores, APPEARANCE_SYSTEM};
 
-/// 页面（共 7 个）。
+/// 页面（共 6 个顶级功能）。
+///
+/// 「记账」是其中唯一带**子功能**的功能（记录 / 标签 / 模板，见
+/// [`crate::pages::accounting`]）：侧栏只列顶级功能，子功能由版心左侧的图标条切换。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
-    /// 消费记录
-    Transactions,
+    /// 记账（记录 / 标签 / 模板）
+    Accounting,
     /// 数据分析
     DataAnalysis,
     /// 股票交易
@@ -40,28 +44,24 @@ pub enum Page {
     KeyEvent,
     /// 日记管理
     Diary,
-    /// 分类标签
-    CategoryTag,
     /// 应用设置
     Settings,
 }
 
 impl Page {
     /// 侧边栏顺序（顺序即渲染顺序）。
-    pub const ALL: [Page; 7] = [
-        Page::Transactions,
+    pub const ALL: [Page; 6] = [
+        Page::Accounting,
         Page::DataAnalysis,
         Page::Stock,
         Page::KeyEvent,
         Page::Diary,
-        Page::CategoryTag,
         Page::Settings,
     ];
 
-    /// 侧边栏中除「设置」之外的 6 项（「设置」固定在最底部）。
-    pub const NAV_ITEMS: [Page; 6] = [
-        Page::CategoryTag,
-        Page::Transactions,
+    /// 侧边栏中除「设置」之外的 5 项（「设置」固定在最底部）。
+    pub const NAV_ITEMS: [Page; 5] = [
+        Page::Accounting,
         Page::DataAnalysis,
         Page::Stock,
         Page::KeyEvent,
@@ -70,12 +70,12 @@ impl Page {
 
     pub fn label(self) -> &'static str {
         match self {
-            Page::Transactions => "消费记录",
+            // 顶级功能名与页面标题共用一个来源（见 accounting::PAGE_TITLE）
+            Page::Accounting => crate::pages::accounting::PAGE_TITLE,
             Page::DataAnalysis => "数据分析",
             Page::Stock => "股票交易",
             Page::KeyEvent => "关键事件",
             Page::Diary => "日记",
-            Page::CategoryTag => "分类标签",
             Page::Settings => "应用设置",
         }
     }
@@ -83,12 +83,11 @@ impl Page {
     /// 页面的稳定标识（仅用于调试与占位页展示，不随界面改动）。
     pub fn route(self) -> &'static str {
         match self {
-            Page::Transactions => "/tr_view",
+            Page::Accounting => "/accounting_view",
             Page::DataAnalysis => "/da_view",
             Page::Stock => "/stock_view",
             Page::KeyEvent => "/key_event_view",
             Page::Diary => "/diary_view",
-            Page::CategoryTag => "/category_tag_view",
             Page::Settings => "/settings_view",
         }
     }
@@ -96,35 +95,14 @@ impl Page {
     /// 侧边栏图标（与文案一一对应）。
     pub fn icon(self) -> Icon {
         match self {
-            // 导航图标的排列：分类标签 / 消费记录 / 数据分析 / 股票交易 /
-            // 关键事件 / 日记管理，底部是应用设置
-            Page::CategoryTag => Icon::Tag,
-            Page::Transactions => Icon::Transaction,
+            // 导航图标的排列：记账 / 数据分析 / 股票交易 / 关键事件 / 日记管理，
+            // 底部是应用设置
+            Page::Accounting => Icon::Transaction,
             Page::DataAnalysis => Icon::LineChart,
             Page::Stock => Icon::Stock,
             Page::KeyEvent => Icon::Star,
             Page::Diary => Icon::Read,
             Page::Settings => Icon::Setting,
-        }
-    }
-
-    /// 页面主要依赖的命令（用于文档与排查；P6-b 之后**全部页面均已实现**）。
-    pub fn planned_commands(self) -> &'static str {
-        match self {
-            Page::Transactions => "tr_query / tr_create / tr_delete / tr_link",
-            Page::DataAnalysis => {
-                "chart_list / chart_create / chart_update / chart_delete / tr_chart_data"
-            }
-            Page::Stock => {
-                "stock_overview / stock_positions / stock_trades / stock_trade_create / \
-                 stock_statistics / stock_history"
-            }
-            Page::KeyEvent => "key_event_list_by_year / key_event_upsert / key_event_image_add",
-            Page::Diary => "diary_list_dates / diary_get / diary_upsert / diary_delete",
-            Page::CategoryTag => {
-                "category_list / category_create / tag_list / tag_create / template_list"
-            }
-            Page::Settings => "config_get / config_set_appearance / app_info / update_check",
         }
     }
 }
@@ -141,20 +119,32 @@ pub fn App() -> impl IntoView {
     // 切走再切回时已 dispose → 该面板整块空白（见 `init_update_state` 的注释）。
     crate::pages::settings::init_update_state();
 
-    let current_page = RwSignal::new(Page::Transactions);
-    let workspace_modal_open = RwSignal::new(false);
+    let current_page = RwSignal::new(Page::Accounting);
+    // 工作空间流程的两个开关：
+    // * `config_loaded`：读到配置之前**不渲染任何页面**。否则页面一挂载就发业务命令，
+    //   而后端此刻还没打开工作空间（`workspace_open` 由界面在读到配置后才发），
+    //   命令会以「未打开工作空间」失败并派发 `workspace-required` ——
+    //   在**已配置工作空间**的正常启动里弹出选择框。
+    // * `workspace_required`：还没选定工作空间 → 只显示**不可关闭**的强制选择屏。
+    let config_loaded = RwSignal::new(false);
+    let workspace_required = RwSignal::new(false);
     let workspace_picking = RwSignal::new(false);
 
-    // 监听 `workspace-required`：由 ipc 层在"未打开工作空间"时派发
-    let workspace_required = window_event_listener_untyped("workspace-required", move |_| {
-        workspace_modal_open.set(true);
-    });
-    on_cleanup(move || workspace_required.remove());
+    // 监听 `workspace-required`：由 ipc 层在"未打开工作空间"时派发。
+    // 只有**确实还没有工作空间**时才进入强制选择：一个晚到的命令失败不该把
+    // 已经打开工作空间的会话锁死。
+    let workspace_required_listener =
+        window_event_listener_untyped("workspace-required", move |_| {
+            if AppStores::global().workspace_dir.get_untracked().is_empty() {
+                workspace_required.set(true);
+            }
+        });
+    on_cleanup(move || workspace_required_listener.remove());
 
-    // 首屏初始化：读配置（外观 + 工作空间）→ 有工作空间则打开并拉账本，否则弹选择框。
+    // 首屏初始化：读配置（外观 + 工作空间）→ 打开工作空间，否则进入强制选择屏。
     // 组件体只执行一次，因此直接 spawn 即可（不需要 Effect 去重）。
     leptos::task::spawn_local(async move {
-        match api::desktop::config_get().await {
+        let opened = match api::desktop::config_get().await {
             Ok(config) => {
                 let appearance = if config.appearance.is_empty() {
                     APPEARANCE_SYSTEM.to_string()
@@ -166,52 +156,77 @@ pub fn App() -> impl IntoView {
                 stores.workspace_dir.set(config.workspace_dir.clone());
 
                 if config.workspace_dir.is_empty() {
-                    workspace_modal_open.set(true);
+                    // 从未配置过：直接进强制选择屏（不再先渲染界面再弹窗）
+                    false
                 } else {
-                    open_workspace(config.workspace_dir).await;
+                    open_workspace(config.workspace_dir).await
                 }
             }
             Err(error) => {
                 notify_error("读取配置", &error);
-                workspace_modal_open.set(true);
+                false
             }
-        }
+        };
+        workspace_required.set(!opened);
+        config_loaded.set(true);
     });
 
     view! {
-        <div class="app-shell">
-            <div class="app-shell-body">
-                <aside class="app-sidebar">
-                    <AppLeftBar current_page=current_page />
-                </aside>
+        // 尚未选定工作空间 → **只有**这个不可关闭的选择屏：用户必须先选目录。
+        // 它有别于普通弹窗：没有 ×、没有「取消」、点遮罩不关，外壳（窗口控制按钮）
+        // 也不渲染，所以关不掉；外壳侧同时拒绝关闭请求（见 `src-tauri/src/shell.rs`）。
+        <Show when=move || config_loaded.get() && workspace_required.get()>
+            <WorkspaceRequired
+                picking=workspace_picking
+                on_pick=UnsyncCallback::new(move |()| {
+                    pick_workspace(workspace_picking, move || workspace_required.set(false))
+                })
+            />
+        </Show>
 
-                <main class="app-content">
-                    <TopBar />
-                    <NoticeOverlay />
-                    <div class="app-router-view">
-                        {move || match current_page.get() {
-                            Page::Transactions => view! { <TransactionsPage /> }.into_any(),
-                            Page::DataAnalysis => view! { <DataAnalysisPage /> }.into_any(),
-                            Page::Stock => view! { <StockPage /> }.into_any(),
-                            Page::KeyEvent => view! { <KeyEventPage /> }.into_any(),
-                            Page::Diary => view! { <DiaryPage /> }.into_any(),
-                            Page::CategoryTag => view! { <CategoryTagPage /> }.into_any(),
-                            Page::Settings => view! { <SettingsPage /> }.into_any(),
-                        }}
-                    </div>
-                    // 外壳**没有**全局底部栏：底部的收支统计只属于消费记录页，
-                    // 由该页把它渲染在功能卡片内部（这样卡片能一直触达窗口底边）。
-                    // 工作空间与账本名也不再占用底栏 —— 账本在侧栏顶部、工作空间在设置页。
-                </main>
+        <Show when=move || config_loaded.get() && !workspace_required.get()>
+            <div class="app-shell">
+                <div class="app-shell-body">
+                    <aside class="app-sidebar">
+                        <AppLeftBar current_page=current_page />
+                    </aside>
+
+                    <main class="app-content">
+                        <TopBar />
+                        <NoticeOverlay />
+                        <div class="app-router-view">
+                            {move || match current_page.get() {
+                                Page::Accounting => view! { <AccountingPage /> }.into_any(),
+                                Page::DataAnalysis => view! { <DataAnalysisPage /> }.into_any(),
+                                Page::Stock => view! { <StockPage /> }.into_any(),
+                                Page::KeyEvent => view! { <KeyEventPage /> }.into_any(),
+                                Page::Diary => view! { <DiaryPage /> }.into_any(),
+                                Page::Settings => view! { <SettingsPage /> }.into_any(),
+                            }}
+                        </div>
+                        // 外壳**没有**全局底部栏：底部的收支统计只属于消费记录页，
+                        // 由该页把它渲染在功能卡片内部（这样卡片能一直触达窗口底边）。
+                        // 工作空间与账本名也不再占用底栏 —— 账本在侧栏顶部、工作空间在设置页。
+                    </main>
+                </div>
             </div>
+        </Show>
+    }
+}
 
+/// 工作空间未指定时的**强制选择屏**：铺满窗口、不可关闭，是此时唯一的界面。
+#[component]
+fn WorkspaceRequired(picking: RwSignal<bool>, on_pick: UnsyncCallback<()>) -> impl IntoView {
+    let stores = AppStores::global();
+    view! {
+        <div class="workspace-required">
             <Modal
-                open=workspace_modal_open
+                open=true
                 title="新建或打开工作空间"
                 ok_text="选择目录…"
-                ok_loading=workspace_picking
-                on_close=move || workspace_modal_open.set(false)
-                on_ok=move || pick_workspace(workspace_modal_open, workspace_picking)
+                ok_loading=picking
+                locked=true
+                on_ok=move || on_pick.run(())
             >
                 <p class="workspace-picker-text">
                     "选择一个目录作为工作空间，应用会在其中创建 transactions.db 数据库与 data/assets 资产目录。"
@@ -231,23 +246,26 @@ pub fn App() -> impl IntoView {
 }
 
 /// 打开（或切换）工作空间：打开数据库 → 记住目录 → 刷新账本列表。
-async fn open_workspace(directory: String) {
+/// 返回是否成功（失败时界面据此进入**强制选择屏**，用户必须换一个能打开的目录）。
+async fn open_workspace(directory: String) -> bool {
     let stores = AppStores::global();
     match api::desktop::workspace_open(&directory).await {
         Ok(()) => {
             stores.workspace_dir.set(directory);
             refresh_ledgers().await;
+            true
         }
         Err(error) => {
             notify_error("打开工作空间", &error);
             // 失败时把目录清掉，避免状态栏显示一个并未打开的工作空间
             stores.workspace_dir.set(String::new());
+            false
         }
     }
 }
 
-/// 弹出目录选择对话框并打开所选目录。
-fn pick_workspace(modal_open: RwSignal<bool>, picking: RwSignal<bool>) {
+/// 弹出目录选择对话框并打开所选目录；**成功打开后**才调用 `on_opened`。
+fn pick_workspace(picking: RwSignal<bool>, on_opened: impl Fn() + 'static) {
     let stores = AppStores::global();
     if picking.get_untracked() {
         return;
@@ -258,8 +276,9 @@ fn pick_workspace(modal_open: RwSignal<bool>, picking: RwSignal<bool>) {
         match api::desktop::dialog_open("新建或打开工作空间", &default_path).await {
             Ok(response) => {
                 if let Some(path) = response.first_path() {
-                    open_workspace(path.to_string()).await;
-                    modal_open.set(false);
+                    if open_workspace(path.to_string()).await {
+                        on_opened();
+                    }
                 }
             }
             Err(error) => notify_error("选择工作空间", &error),

@@ -6,6 +6,9 @@
 //! `children` 用 [`ChildrenFn`]（可重复调用的 children）：模态内容包在 `Show` 里，
 //! 开关时会重建视图树，因此 children 必须能多次求值。
 //!
+//! `locked = true` 时不可关闭：没有右上角 ×、没有「取消」、点遮罩也不关
+//! （用于"必须先完成这一步"的强制流程，见 `shell.rs` 的工作空间选择屏）。
+//!
 //! 用法：
 //! ```ignore
 //! <Modal open=show title="创建账本" on_ok=move || { /* ... */ }>
@@ -69,6 +72,10 @@ pub fn Modal(
     /// 确认按钮用危险样式（删除类确认框）
     #[prop(optional)]
     ok_danger: bool,
+    /// 锁定：**不可关闭** —— 不渲染右上角 ×、不渲染「取消」，点遮罩也不关。
+    /// 用于"必须先完成这一步"的强制流程（如尚未选定工作空间）。
+    #[prop(optional)]
+    locked: bool,
     /// 关闭回调（遮罩、关闭按钮、取消按钮共用）
     #[prop(optional, into)]
     on_close: Option<UnsyncCallback<()>>,
@@ -92,7 +99,11 @@ pub fn Modal(
                 class="ui-modal__mask"
                 on:click=move |ev| {
                     // 点遮罩空白处关闭；内容区的点击会冒泡到这里，但那时 `target`
-                    // 是内容里的元素，所以不会误关（见 [`is_mask_self_click`]）
+                    // 是内容里的元素，所以不会误关（见 [`is_mask_self_click`]）。
+                    // `locked` 的弹窗**连遮罩都不响应**（否则强制流程会被一点就绕过去）。
+                    if locked {
+                        return;
+                    }
                     if is_mask_self_click(&ev) {
                         if let Some(callback) = on_close {
                             callback.run(());
@@ -103,7 +114,9 @@ pub fn Modal(
                 <div class="ui-modal__content" style=content_style.clone()>
                     <div class="ui-modal__header">
                         <h3 class="ui-modal__title">{move || title.get()}</h3>
-                        {close_button("ui-modal__close", on_close)}
+                        <Show when=move || !locked>
+                            {close_button("ui-modal__close", on_close)}
+                        </Show>
                     </div>
                     <div class="ui-modal__body">{children()}</div>
                     // 底栏用 class 切换而不是内层 `Show`：内层 `Show` 的 children 是 `Fn`，
@@ -112,17 +125,19 @@ pub fn Modal(
                         class="ui-modal__footer"
                         class:is-hidden=move || !show_footer
                     >
-                        <button
-                            type="button"
-                            class="ui-btn ui-btn--secondary"
-                            on:click=move |_| {
-                                if let Some(callback) = on_close {
-                                    callback.run(());
+                        <Show when=move || !locked>
+                            <button
+                                type="button"
+                                class="ui-btn ui-btn--secondary"
+                                on:click=move |_| {
+                                    if let Some(callback) = on_close {
+                                        callback.run(());
+                                    }
                                 }
-                            }
-                        >
-                            {move || cancel_text.get()}
-                        </button>
+                            >
+                                {move || cancel_text.get()}
+                            </button>
+                        </Show>
                         <button
                             type="button"
                             class="ui-btn ui-btn--primary"

@@ -58,13 +58,19 @@ if ($sameExe) { throw "同一个可执行文件已有实例在运行（PID $($sa
 # 用 `-Discover` 生成的清单来维护这张表（发现缺失标记时先跑 Discover 看真实文案）。
 # 标记刻意选"页面结构/常驻控件"而不是随数据变化的文案，换工作空间也能过。
 $markers = [ordered]@{
-    '消费记录' = @('记一笔', '排序', '筛选', '每页条数')
     '数据分析' = @('新增图表', '曲线合计', '月度消费趋势')
     '股票交易' = @('账户', '持仓', '成交记录', '交易统计', '追加本金')
     '关键事件' = @('新增事件', '上一年', '下一年')
-    '日记' = @('今天', '全部收起', '跳转日期', '心情')
-    '分类标签' = @('新增分类', '新增标签', '分类', '标签')
+    '日记' = @('今天', '全部收起', '心情')
     '应用设置' = @('工作空间', '外观', '关闭行为', '开发者工具')
+}
+
+# 记账页的三个**子功能**（左侧图标条切换，不是侧栏条目）：子功能名 → 标记。
+# 「记账」这一项看的是默认子功能「记录」。
+$subMarkers = [ordered]@{
+    '记录' = @('记一笔', '排序', '筛选', '每页条数')
+    '标签' = @('新增分类', '新增标签', '分类', '标签')
+    '模板' = @('新建模板', '模板名称', '交易类型')
 }
 
 function Get-AppWindow {
@@ -169,12 +175,32 @@ function Stop-AppSession {
 function Invoke-NavigationChecks {
     param($Session)
     $window = $Session.Window
-    foreach ($page in $markers.Keys) {
+
+    # 待检查的页面清单：先记账页（默认子功能「记录」），再它的三个子功能（走左侧图标条），
+    # 最后其余顶级功能（走侧栏）。
+    $checks = @([pscustomobject]@{ Name = '记账'; Markers = $subMarkers['记录']; Sub = $false })
+    foreach ($key in $subMarkers.Keys) {
+        if ($key -eq '记录') { continue }   # 已经由「记账」这一条覆盖（默认子功能就是它）
+        $checks += [pscustomobject]@{ Name = $key; Markers = $subMarkers[$key]; Sub = $true }
+    }
+    foreach ($key in $markers.Keys) {
+        $checks += [pscustomobject]@{ Name = $key; Markers = $markers[$key]; Sub = $false }
+    }
+
+    foreach ($check in $checks) {
+        $page = $check.Name
         Write-Host "`n[ui-smoke] 打开页面：$page" -ForegroundColor Cyan
-        $clicked = Invoke-ByName -Window $window -Name $page
+        if ($check.Sub) {
+            # 子功能：先回记账页，再点左侧图标条上的那一项
+            Invoke-ByName -Window $window -Name '记账' -TimeoutSec 10 | Out-Null
+            Start-Sleep -Milliseconds 600
+            $clicked = Invoke-SubFunction -Window $window -Name $page
+        } else {
+            $clicked = Invoke-ByName -Window $window -Name $page
+        }
         if (-not $clicked) {
-            $failures.Add("找不到侧栏入口: $page")
-            Write-Host "  ✗ 找不到侧栏入口" -ForegroundColor Red
+            $failures.Add("找不到入口: $page")
+            Write-Host "  ✗ 找不到入口" -ForegroundColor Red
             continue
         }
         Start-Sleep -Milliseconds 1200
@@ -196,7 +222,7 @@ function Invoke-NavigationChecks {
             Write-Host "  ✓ 页面渲染（$($pageNames.Count) 个元素）" -ForegroundColor Green
         }
 
-        foreach ($marker in $markers[$page]) {
+        foreach ($marker in $check.Markers) {
             if ($pageNames -contains $marker) { Write-Host "  ✓ 标记 '$marker'" -ForegroundColor Green }
             else { $failures.Add("$page 缺少标记 '$marker'"); Write-Host "  ✗ 缺少标记 '$marker'" -ForegroundColor Red }
         }

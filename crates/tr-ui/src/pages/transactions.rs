@@ -1,10 +1,13 @@
-//! 消费记录页（P6-a 完整版：只读列表 + 全部写操作）。
+//! 记账 · **记录**子功能（P6-a 完整版：只读列表 + 全部写操作）。
+//!
+//! 它是记账页（[`crate::pages::accounting`]）三个子功能之一，只提供版心里的
+//! 「工具栏 + 内容区 + 底栏」，标题栏与左侧子功能图标条由 `FeaturePage` 统一渲染。
 //!
 //! ## 文件结构
 //!
 //! | 组成部分 | 说明 |
 //! |---|---|
-//! | [`TransactionsPage`] | 页面编排：工具栏 / 时间范围 / 分页 / 空态三态 / 三个悬浮按钮 / 关联弹窗 |
+//! | [`RecordSub`] | 子功能编排：工具栏 / 时间范围 / 分页 / 空态三态 / 三个悬浮按钮 / 关联弹窗 |
 //! | [`table_view`] / [`row_view`] | 表格：8 列（日期/类型/分类/标签/描述/金额/标记/操作）、列宽、行底色、行内「编辑 / 关联 / 同步 / 删除」 |
 //! | [`record_modal`] | 记一笔 / 编辑（模板套用、类型→分类→标签联动、离群值） |
 //! | [`sort_modal`] / [`sort_row_view`] | 排序弹窗及其每一行 |
@@ -56,8 +59,8 @@ use crate::api;
 // 时间范围选择器是共享组件（与数据分析页共用）；其中三个日期算术 helper 本页也要用
 use crate::components::ui::time_range_picker::{normalize_range, shift_period, split_ymd};
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, CheckboxGroup, DatePicker, Empty, Form, FormItem,
-    FormLayout, Input, Modal, PageHeader, Pagination, Segmented, SegmentedOption, Select,
+    Button, ButtonSize, ButtonVariant, CheckboxGroup, DatePicker, Empty, FeaturePage, Form,
+    FormItem, FormLayout, Input, Modal, Pagination, Segmented, SegmentedOption, Select,
     SelectOption, Spin, Tag, TagKind, TimeRangePicker,
 };
 use crate::error_handler::notify_error;
@@ -67,8 +70,6 @@ use crate::notify::Notifier;
 use crate::store::AppStores;
 use crate::time::{format_timestamp, range_to_seconds, today_ymd, ymd_to_seconds};
 
-/// 页面标题（固定文案，改动即影响界面）
-pub const PAGE_TITLE: &str = "消费记录";
 /// 查询错误前缀（此常量由 P5 定稿并被别处引用，故保留）
 pub const QUERY_ERROR_PREFIX: &str = "查询失败";
 
@@ -114,8 +115,11 @@ type RowEvent = (RowAction, TransactionRecordDto);
 
 // ==================================================================== 页面
 
+/// 记账页的「记录」子功能：消费记录列表。
+///
+/// 只负责工具栏 + 内容区（+ 底栏），版心与左侧子功能图标条由 `FeaturePage` 提供。
 #[component]
-pub fn TransactionsPage() -> impl IntoView {
+pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
     let stores = AppStores::global();
 
     // ---- 列表数据 ----
@@ -439,149 +443,151 @@ pub fn TransactionsPage() -> impl IntoView {
         .into_any()
     };
 
-    view! {
-        <section class="page">
-            <PageHeader title=PAGE_TITLE />
+    // 版心三块：工具栏 / 内容区各自建好视图再交给 `FeaturePage`（骨架见 components/ui/feature_page.rs）
+    let toolbar = view! {
+        <div class="tr-toolbar">
+            <div class="tr-toolbar-left">
+                <TimeRangePicker
+                    mode=range_mode
+                    start=range_start
+                    end=range_end
+                />
+            </div>
+        <div class="tr-toolbar-right">
+            <Button
+                variant=ButtonVariant::Secondary
+                class="tr-tool-btn"
+                aria_label="排序"
+                title=Signal::derive(move || {
+                    let fields = sort_items.get();
+                    let first = fields
+                        .first()
+                        .map(|item| {
+                            SORT_FIELDS
+                                .iter()
+                                .find(|(key, _)| *key == item.field)
+                                .map(|(_, label)| *label)
+                                .unwrap_or(item.field.as_str())
+                        })
+                        .unwrap_or("日期");
+                    let direction = if fields.first().map(|item| item.order == "asc").unwrap_or(false) {
+                        "升序"
+                    } else {
+                        "降序"
+                    };
+                    format!("排序：{first} {direction}")
+                })
+                on_click=move || sort_open.set(true)
+            >
+                <span class="tr-btn-icon">
+                    {move || {
+                        let ascending = sort_items
+                            .get()
+                            .first()
+                            .map(|item| item.order == "asc")
+                            .unwrap_or(false);
+                        if ascending {
+                            icons::icon(Icon::SortAsc)
+                        } else {
+                            icons::icon(Icon::SortDesc)
+                        }
+                    }}
+                </span>
+                "排序"
+            </Button>
+            <Button
+                variant=ButtonVariant::Secondary
+                class="tr-tool-btn"
+                aria_label="筛选"
+                title="筛选条件"
+                on_click=move || filter_open.set(true)
+            >
+                <span class="tr-btn-icon">{icons::icon(Icon::Search)}</span>
+                "筛选"
+                <Show when=move || !condition_items.get().is_empty()>
+                    <span class="tr-btn-badge">
+                        {move || condition_items.get().len()}
+                    </span>
+                </Show>
+            </Button>
+            <Button
+                variant=ButtonVariant::Primary
+                disabled=Signal::derive(move || {
+                    stores.current_ledger_id.get().is_empty()
+                })
+                on_click=move || request_create()
+            >
+                "记一笔"
+            </Button>
+            </div>
+        </div>
+    }.into_any();
 
-            <div class="page-body">
-                <div class="page-toolbar">
-                    <div class="tr-toolbar">
-                        <div class="tr-toolbar-left">
-                        <TimeRangePicker
-                            mode=range_mode
-                            start=range_start
-                            end=range_end
-                        />
-                    </div>
-                    <div class="tr-toolbar-right">
-                        <Button
-                            variant=ButtonVariant::Secondary
-                            class="tr-tool-btn"
-                            aria_label="排序"
-                            title=Signal::derive(move || {
-                                let fields = sort_items.get();
-                                let first = fields
-                                    .first()
-                                    .map(|item| {
-                                        SORT_FIELDS
-                                            .iter()
-                                            .find(|(key, _)| *key == item.field)
-                                            .map(|(_, label)| *label)
-                                            .unwrap_or(item.field.as_str())
-                                    })
-                                    .unwrap_or("日期");
-                                let direction = if fields.first().map(|item| item.order == "asc").unwrap_or(false) {
-                                    "升序"
-                                } else {
-                                    "降序"
-                                };
-                                format!("排序：{first} {direction}")
-                            })
-                            on_click=move || sort_open.set(true)
-                        >
-                            <span class="tr-btn-icon">
-                                {move || {
-                                    let ascending = sort_items
-                                        .get()
-                                        .first()
-                                        .map(|item| item.order == "asc")
-                                        .unwrap_or(false);
-                                    if ascending {
-                                        icons::icon(Icon::SortAsc)
-                                    } else {
-                                        icons::icon(Icon::SortDesc)
-                                    }
-                                }}
-                            </span>
-                            "排序"
-                        </Button>
-                        <Button
-                            variant=ButtonVariant::Secondary
-                            class="tr-tool-btn"
-                            aria_label="筛选"
-                            title="筛选条件"
-                            on_click=move || filter_open.set(true)
-                        >
-                            <span class="tr-btn-icon">{icons::icon(Icon::Search)}</span>
-                            "筛选"
-                            <Show when=move || !condition_items.get().is_empty()>
-                                <span class="tr-btn-badge">
-                                    {move || condition_items.get().len()}
-                                </span>
-                            </Show>
-                        </Button>
-                        <Button
-                            variant=ButtonVariant::Primary
-                            disabled=Signal::derive(move || {
-                                stores.current_ledger_id.get().is_empty()
-                            })
-                            on_click=move || request_create()
-                        >
-                            "记一笔"
-                        </Button>
-                    </div>
-                    </div>
-                </div>
-
-                <div class="tr-body">
-                    <div class="tr-content">
-                        <Show when=move || !items.get().is_empty() fallback=empty_state>
-                            {table_view}
-                        </Show>
-                    </div>
-
-                    <div class="tr-footer">
-                        <Pagination
-                            page=page
-                            total_pages=Signal::derive(move || total_pages.get())
-                            page_size=page_size
-                            page_size_options=PAGE_SIZE_OPTIONS.to_vec()
-                            disabled=Signal::derive(move || loading.get())
-                        />
-                    </div>
-                </div>
-
-                // 卡片自己的底栏：左侧结果条数 + 分页，右侧收支合计。
-                // 只在这一页存在 —— 其它功能的卡片直接触达窗口底边。
-                {statistics_footer(total)}
+    let content = view! {
+        <div class="tr-body">
+            <div class="tr-content">
+                <Show when=move || !items.get().is_empty() fallback=empty_state>
+                    {table_view}
+                </Show>
             </div>
 
-            // ---- 排序弹窗 ----
-            {sort_modal(sort_open, sort_items, Callback::new(apply_sort))}
+            <div class="tr-footer">
+                <Pagination
+                    page=page
+                    total_pages=Signal::derive(move || total_pages.get())
+                    page_size=page_size
+                    page_size_options=PAGE_SIZE_OPTIONS.to_vec()
+                    disabled=Signal::derive(move || loading.get())
+                />
+            </div>
+        </div>
+    }
+    .into_any();
 
-            // ---- 筛选弹窗 ----
-            {filter_modal(filter_open, condition_items, Callback::new(move |next| {
-                condition_items.set(next)
-            }))}
+    view! {
+        <FeaturePage
+            title=super::accounting::PAGE_TITLE
+            rail=view! { <super::accounting::SubFunctionRail sub=sub /> }.into_any()
+            toolbar=toolbar
+            content=content
+            footer=statistics_footer(total)
+        />
 
-            // ---- 关联关键事件弹窗 ----
-            {link_modal(
-                link_open,
-                link_target,
-                link_date,
-                Callback::new(move |_| confirm_link()),
-                Callback::new(move |_| unlink()),
-            )}
+        // ---- 排序弹窗 ----
+        {sort_modal(sort_open, sort_items, Callback::new(apply_sort))}
 
-            // ---- 记一笔 / 编辑弹窗 ----
-            {record_modal(record_open, editing, Callback::new(move |_| do_refresh()))}
+        // ---- 筛选弹窗 ----
+        {filter_modal(filter_open, condition_items, Callback::new(move |next| {
+            condition_items.set(next)
+        }))}
 
-            // ---- 分类缺失确认框 ----
-            <Modal
-                open=Signal::derive(move || init_confirm_open.get())
-                title="暂无分类"
-                width=420
-                ok_text="初始化分类"
-                cancel_text="暂不记录"
-                ok_loading=Signal::derive(move || init_loading.get())
-                on_close=move || init_confirm_open.set(false)
-                on_ok=move || do_init_categories()
-            >
-                <p class="workspace-picker-text">
-                    "先创建默认分类与标签，记下的每一笔才能归档和复盘。"
-                </p>
-            </Modal>
-        </section>
+        // ---- 关联关键事件弹窗 ----
+        {link_modal(
+            link_open,
+            link_target,
+            link_date,
+            Callback::new(move |_| confirm_link()),
+            Callback::new(move |_| unlink()),
+        )}
+
+        // ---- 记一笔 / 编辑弹窗 ----
+        {record_modal(record_open, editing, Callback::new(move |_| do_refresh()))}
+
+        // ---- 分类缺失确认框 ----
+        <Modal
+            open=Signal::derive(move || init_confirm_open.get())
+            title="暂无分类"
+            width=420
+            ok_text="初始化分类"
+            cancel_text="暂不记录"
+            ok_loading=Signal::derive(move || init_loading.get())
+            on_close=move || init_confirm_open.set(false)
+            on_ok=move || do_init_categories()
+        >
+            <p class="workspace-picker-text">
+                "先创建默认分类与标签，记下的每一笔才能归档和复盘。"
+            </p>
+        </Modal>
     }
 }
 
@@ -1011,11 +1017,11 @@ fn sync_ledger_options() -> Vec<(String, String)> {
 
 // ==================================================================== 空态
 
-/// 卡片底栏：左侧结果条数，右侧收支合计。
+/// 版心底栏：左侧结果条数，右侧收支合计。
 ///
 /// 这一页**有**底栏而其它页没有，判断依据是"这个功能用不用得上"：
 /// 结果条数与收支合计是列表页的产物，其余功能（分类标签、数据分析、股票、关键事件、日记、设置）
-/// 不需要，于是它们的卡片直接触达窗口底边。
+/// 不需要，于是它们的版心直接触达窗口底边。
 fn statistics_footer(total: RwSignal<i64>) -> AnyView {
     let stores = AppStores::global();
     let value = move |key: &'static str| {

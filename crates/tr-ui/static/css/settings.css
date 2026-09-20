@@ -46,13 +46,6 @@
   padding-top: 0;
 }
 
-.st-pane {
-  display: flex;
-  flex-direction: column;
-  gap: var(--transactions-space-md);
-  min-height: 0;
-}
-
 /* 说明：`.st-pane-title`（「消费模板」「日记配置」「股票交易」那三个分区标题）已删除 ——
  * 页签本身已经说明当前在看哪一页，标题只是重复一遍。若将来某一页内容复杂到需要
  * 二级分区，再按"分区标题 + 发丝线"的样式新加，不要恢复到"标题重复页签"的老样子。 */
@@ -158,149 +151,6 @@
   gap: var(--transactions-space-sm);
 }
 
-.st-hint {
-  margin: 0;
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-tertiary);
-}
-
-/* ---------------------------------------------------------------- 消费模板表格 */
-
-/* 模板表：**不再是卡片里的卡片**（原来自带描边 + 8px 圆角）。
- * 表头用软灰底立起来（见下方 `.st-thead`），行之间用发丝线，整块通到卡片边缘。 */
-.st-table {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  border: none;
-  border-radius: 0;
-  margin: 0 calc(-1 * var(--transactions-space-lg));
-}
-
-.st-thead,
-.st-tr {
-  display: grid;
-  grid-template-columns:
-    36px
-    minmax(120px, 1.4fr)
-    100px
-    minmax(90px, 1fr)
-    minmax(110px, 1.2fr)
-    minmax(70px, 0.8fr)
-    minmax(140px, 1.6fr)
-    60px;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-}
-
-.st-thead {
-  padding: var(--transactions-space-sm) var(--transactions-space-md);
-  background-color: var(--transactions-color-minor-background);
-  border-bottom: 1px solid var(--transactions-color-divider);
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
-.st-th {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  font-weight: var(--transactions-weight-medium);
-  color: var(--transactions-color-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.st-th--center {
-  text-align: center;
-}
-
-/* 拖拽列（列宽由表头网格决定，这里只做居中） */
-.st-th--drag {
-  text-align: center;
-}
-
-.st-tbody {
-  display: flex;
-  flex-direction: column;
-}
-
-.st-tr {
-  padding: var(--transactions-space-sm) var(--transactions-space-md);
-  border-bottom: 1px solid var(--transactions-color-divider);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-major);
-  transition: background-color var(--transactions-transition-fast);
-}
-
-.st-tr:last-child {
-  border-bottom: none;
-}
-
-.st-tr:hover {
-  background-color: var(--transactions-color-hover-bg);
-}
-
-.st-td {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.st-td--center {
-  display: flex;
-  justify-content: center;
-}
-
-.st-td--tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--transactions-space-2xs);
-}
-
-.st-td--drag {
-  display: flex;
-  justify-content: center;
-}
-
-/* 拖拽把手：统一用 `ui.css` 的 `.ui-drag-handle` + 图标集 `Icon::DragHandle`
- * （以前这一页内联手画了一个 16 格 6 圆点 SVG，与分类标签页的 CSS 点阵还不一样）。 */
-.st-td--drag {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* ⚠ `:where()` 把权重降到 0：否则会压过 `.ui-drag-handle:hover`，把手悬停不变主色 */
-:where(.st-tr:hover) .ui-drag-handle {
-  color: var(--transactions-color-text-secondary);
-}
-
-.st-cell-ellipsis {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.st-dash {
-  color: var(--transactions-color-text-disabled);
-}
-
-.st-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--transactions-space-sm);
-  padding: var(--transactions-space-2xl);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-secondary);
-}
 
 /* ---------------------------------------------------------------- 日记配置 */
 
@@ -618,7 +468,7 @@
 
 /* 费用表单：网格列必须**允许收缩**（`min-width: 0`）。
  * 否则列内容（输入框 + "万分之/元/委托"后缀 + 提示图标）会撑到列宽之外，
- * 把 `.st-pane` 顶出横向滚动条 —— 实测 `ui-form-item` 272 → scroll 279。 */
+ * 把 `.page-pane` 顶出横向滚动条 —— 实测 `ui-form-item` 272 → scroll 279。 */
 .st-fee-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -659,7 +509,7 @@
 /* ---------------------------------------------------------------- 关于软件 */
 
 /* 关于软件：内容在分栏里**水平垂直居中**。
- * `flex: 1` 是必需的：`.st-pane` 默认是内容高度，没有多余空间可分配，
+ * `flex: 1` 是必需的：`.page-pane` 默认是内容高度，没有多余空间可分配，
  * `margin: auto`（`.st-about-main`）就起不到垂直居中的作用，内容会停在顶部。 */
 .st-about {
   flex: 1;
@@ -821,7 +671,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .st-card,
-  .st-tr,
   .ui-drag-handle,
   .st-tag-item-remove,
   .st-bar-fill {

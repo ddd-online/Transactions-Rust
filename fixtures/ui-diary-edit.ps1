@@ -173,13 +173,13 @@ try {
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '日记')) '打开「日记」'
     Start-Sleep -Seconds 3
     # 页脚的编辑/预览切换：预览态时按钮文案是「编辑」
-    # 新行为：没有「编辑/预览」切换按钮，页面本身就是编辑态
-$toggle = $true
-    Assert-True ([bool]$toggle) '日记页直接就是编辑态（无预览切换）'
-    if ($toggle) { Invoke-Element $toggle | Out-Null }
+    # 新行为：没有「编辑/预览」切换按钮（也没有可点的 toggle），页面本身就是编辑态。
+    # 原来是 `$toggle = $true` 再 `Invoke-Element $toggle` —— 那是一段残留死代码，
+    # 真跑起来会在 Invoke-Element 里炸（`[bool]` 没有 TryGetCurrentPattern），
+    # 于是本脚本**从来跑不到后面任何断言**。这里直接按"已经是编辑态"往下走。
     Start-Sleep -Seconds 1
     $textarea = Get-DiaryTextarea -Window $window
-    Assert-True ([bool]$textarea) '编辑态下找到日记文本域'
+    Assert-True ([bool]$textarea) '日记页直接就是编辑态：找到日记文本域'
     if (-not $textarea) { throw '找不到日记文本域，后续无法继续' }
 
     # ================= 2/4 写内容 → Ctrl+S → 落库 =================
@@ -204,17 +204,23 @@ $toggle = $true
     $wordLabel = Get-Elements $window | ForEach-Object { $_.Current.Name } |
         Where-Object { $_ -eq "$($contentA.Length)字" } | Select-Object -First 1
     Assert-True ([bool]$wordLabel) "编辑器右上角显示「$($contentA.Length)字」"
-    # 保存状态标签：「已保存」会一直显示——这是"自动保存真的跑了"的界面证据
-    $savedLabel = Get-Elements $window | ForEach-Object { $_.Current.Name } |
-        Where-Object { $_ -eq '已保存' } | Select-Object -First 1
-    Assert-True ([bool]$savedLabel) '页脚保存状态显示「已保存」'
+    # 保存状态标签：三种状态如实反映——「编辑中」（改动进草稿、防抖窗口内）→
+    # 「保存中…」→「已保存」。Ctrl+S 后必须是「已保存」。
+    # 注意：Wait-Like 是**字面子串**匹配（`$name.Contains($Pattern)`），不是正则，别写 '^已保存$'。
+    $savedLabel = Wait-Element -Root $window -Name '已保存' -TimeoutSec 8
+    Assert-True ([bool]$savedLabel) '保存完成后状态标签显示「已保存」'
 
     # ================= 3/4 选心情 + 改内容：同一天 upsert（id 不变）=================
     Write-Host "`n[diary] 3/4 选心情「开心」并改写内容 → 同一天 upsert"
     $moodButton = Wait-Element -Root $window -Name '开心' -TimeoutSec 10
     Assert-True ([bool]$moodButton) '找到心情按钮「开心」'
     if ($moodButton) { Invoke-Element $moodButton | Out-Null }
+    # 切心情也走同一条自动保存链路：点完在防抖窗口内必须是「编辑中」
+    $editingLabel = Wait-Element -Root $window -Name '编辑中' -TimeoutSec 2
+    Assert-True ([bool]$editingLabel) '改动未落库时状态标签是「编辑中」'
     Start-Sleep -Seconds 3   # 切心情走 1500ms 防抖保存
+    $savedAgain = Wait-Element -Root $window -Name '已保存' -TimeoutSec 8
+    Assert-True ([bool]$savedAgain) '防抖保存完成后状态标签回到「已保存」'
     $afterMood = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_diary_entry' -OutDir $OutDir | Where-Object { $_.date -eq $today }) | Select-Object -First 1
     Assert-True ([bool]$afterMood) '选心情后条目仍在'
     if ($afterMood) {

@@ -133,7 +133,7 @@ function Wait-Like { param($Root, [string]$Pattern, [int]$TimeoutSec = 25)
     return $null
 }
 
-# 启动时要抓**主窗口**（含侧栏「消费记录」），不是"该进程的第一个窗口"：
+# 启动时要抓**主窗口**（含侧栏），不是"该进程的第一个窗口"：
 # 启动期会先出现 600×560 的初始化窗口，抓到它后面所有按名字的查找都会落空。
 # 注意与 `Get-AppWindow`（第一个顶层窗口）是**两个不同的判据**，不要互相替换。
 function Get-ReadyWindow { param([int]$ProcessId, [int]$TimeoutSec = 60)
@@ -144,8 +144,8 @@ function Get-ReadyWindow { param([int]$ProcessId, [int]$TimeoutSec = 60)
             (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $ProcessId)))
         if ($candidate) {
             $last = $candidate
-            # 侧栏条目出现即说明是主窗口且界面已挂载（'消费记录' 是默认页）
-            if (Find-First $candidate '消费记录') { return $candidate }
+            # 侧栏条目出现即说明是主窗口且界面已挂载（'记账' 是默认页）
+            if (Find-First $candidate '记账') { return $candidate }
         }
         Start-Sleep -Milliseconds 500
     }
@@ -185,6 +185,36 @@ function Click-Element { param($Element)
     if ($rect.Width -le 0) { return $false }
     [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
     return $true
+}
+
+# 记账页左侧的**子功能图标条**：点一个子功能（记录 / 标签 / 模板）。
+#
+# 为什么不能直接用 `Find-First`/`Invoke-Element` 按名字取第一个同名元素：
+# 子功能名（尤其「标签」）和页面内容里的文字会重名（标签栏的标题也叫「标签」），
+# 而 UIA 的查询是**取第一个匹配**，撞上文字元素（没有 Invoke 模式）就会卡住不动。
+# 这里改成"按名字找 Button、取**最靠左**的那个" —— 图标条在版心的最左边，位置本身即判据。
+function Invoke-SubFunction { param($Window, [string]$Name, [int]$TimeoutSec = 15)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $cond = New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)
+        $candidates = @($Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) |
+            Where-Object {
+                $_.Current.ControlType.ProgrammaticName -eq 'ControlType.Button' -and
+                (Test-Rect $_.Current.BoundingRectangle)
+            }
+        $button = $candidates | Sort-Object { $_.Current.BoundingRectangle.X } | Select-Object -First 1
+        if ($button) {
+            $pattern = $null
+            if ($button.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+                $pattern.Invoke()
+            } else {
+                Click-Element $button | Out-Null
+            }
+            return $true
+        }
+        Start-Sleep -Milliseconds 400
+    }
+    return $false
 }
 
 # 行内操作按钮：先把指针移到行上（操作区只在 :hover 时 display:flex，不进 UIA 树），

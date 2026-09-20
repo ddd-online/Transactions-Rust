@@ -648,11 +648,148 @@
  * 页面通用（pages/）
  * ============================================ */
 
+/* ============================================
+ * 功能页版心（`.page-region`，组件见 components/ui/feature_page.rs）
+ *
+ * 标题栏（`.page-header`）之下的**整个区域**都属于功能页：没有外边距、没有边框、
+ * 没有圆角 —— 它不是"卡片"，而是这一屏的版心；横向一切为二：
+ *
+ *   .page
+ *     ├─ .page-header          标题栏（48px，右上角给窗口三键留位，拖动区）
+ *     └─ .page-region
+ *          ├─ .page-rail       可选：子功能图标条（同一顶级功能下的子功能切换）
+ *          └─ .page-main
+ *               ├─ .page-toolbar    本页操作（底边发丝线；页签下划线压在这条线上）
+ *               ├─ .page-content    内容区（吃掉剩余高度）
+ *               └─ .page-footer-bar 可选底栏（只在主列里，图标条在它左边通到底）
+ *
+ * **底色沿用画布（不填色）**：层次一律交给工具栏/图标条的发丝线与各页自己的白面；
+ * 在这里加背景色就等于把"没有卡片"又变回一张卡片。
+ * ============================================ */
+.page-region {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* 子功能图标条：**同一顶级功能下的子功能切换**（不是内容里的栏目）。
+ * 用与外壳侧栏相同的色调 + 一条右发丝线，读起来就是"又一层导航"。
+ *
+ * 它从标题栏下面开始（标题栏横跨整宽，见 `.page-region`），上下内边距与工具栏同档。 */
+.page-rail {
+  flex-shrink: 0;
+  width: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--transactions-space-2xs);
+  padding: var(--transactions-space-sm) 0;
+  background-color: var(--transactions-color-sidebar-fill);
+  border-right: 1px solid var(--transactions-color-border-l1);
+}
+
+/* 图标条里的按钮：40×40 方形、图标居中；激活态用主动作色 + 浅底（与侧栏 `.nav-btn.active` 同一套语言）。
+ * 悬停提示/可访问名就是子功能名（记录 / 标签 / 模板）。 */
+.page-rail-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--transactions-space-2xs);
+  width: 100%;
+}
+
+.page-rail-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: var(--transactions-radius-md);
+  cursor: pointer;
+  color: var(--transactions-color-icon);
+  transition: background-color var(--transactions-transition-fast),
+    color var(--transactions-transition-fast);
+}
+
+.page-rail-btn:hover {
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-text-major);
+}
+
+.page-rail-btn.is-active {
+  background-color: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
+}
+
+.page-rail-btn:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.page-rail-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.page-rail-btn-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+/* 工具栏里只有一个主动作时把它推到右侧（记账 · 模板子功能在用） */
+.toolbar-end {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* 版心内的面板：一列纵向排布（设置页每个页签、记账·模板子功能都在用）。
+ * 它只负责"列 + 间距 + 不撑破高度"，内边距与滚动由各页自己给。 */
+.page-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-md);
+  min-height: 0;
+}
+
+/* 表单下面的一行小字提示（设置页 / 记账·模板共用） */
+.page-hint {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.page-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 内容区：吃掉工具栏/底栏之外的全部高度。
+ * 页面自己的容器（`.tr-body` / `.st-panes` / `.diary-body` …）在这些高度里排布，
+ * 谁需要滚动由谁自己声明 —— 这里给一层兜底滚动，避免内容比区域高时被直接裁掉。 */
+.page-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
 /* 页面容器。**顶部不留内边距**：页头（顶部容器）必须从窗口顶端开始，
  * 才能与侧栏的账本容器**同一起点、同一高度**（两者高度用同一个令牌），
- * 于是两侧下方的「功能卡片 / 导航组」落在同一条水平线上 —— 这是左右顶对齐的关键一环。
- * 页面自己**不再给左右内边距**：卡片的左右间隔由 `.page-body` 的 margin 给，
- * 这样"卡片四周间隔"只有一个来源，不会出现页面内边距 + 卡片 margin 叠加。 */
+ * 于是两侧下方的「版心 / 导航组」落在同一条水平线上 —— 这是左右顶对齐的关键一环。
+ * 页面自己**不给左右内边距**：新版心（`.page-region` / `.page-main`）铺满整宽、旧卡片（`.page-body`）
+ * 的左右间隔由它自己的 margin 给，两边都只有一个来源，不会出现"页面内边距 + 卡片 margin"叠加。 */
 .page {
   display: flex;
   flex-direction: column;
@@ -749,6 +886,9 @@
  * 工具栏与各页内容容器，整行的东西（表头、设置行）才能通到卡片边缘。 */
 /* 功能卡片 = 工具栏 + 内容 (+ 可选底栏)，一起装在这一张"纸"里：
  *
+ * ⚠ **这是正在退役的旧骨架**：新版是上面的 `.page-region`（铺满、无卡片），
+ * 逐页迁移中（已完成：记账的 3 个子功能）。等其余 5 页迁完，下面这段连同 `.page-body` 一起删除。
+ *
  *   .page
  *     ├─ .page-header   功能标题（左上角）+ 窗口三按钮（右上角）  ← 顶部容器
  *     └─ .page-body     功能卡片（容器，不是"卡片"）
@@ -770,16 +910,22 @@
   overflow: hidden;
 }
 
-/* 卡片自己的底栏（只有消费记录页有）：左侧结果条数、右侧收支合计。
- * 它是卡片内的最后一行，底边与卡片底边重合 —— 卡片因此能一直触达窗口底边。
- * 顶边一条发丝线把它与列表分开；左右内边距与工具栏/内容一致。 */
+/* 底栏（可选）：消费记录页放「共 N 条 + 收支合计」，模板子功能把主动作放在工具栏（不用底栏）。
+ * 它是**主列的最后一行**：有子功能图标条时，图标条在它左边一路通到底（底栏不铺到图标条下面）。
+ *
+ * 两条硬约定：
+ *   1. **高度与侧栏底部「应用设置」那条带同一个令牌**（`size-footer-height` = 44px）——
+ *      两栏的底边因此齐平，底部不会出现两条高度不同的横带；
+ *   2. **顶边保留一条发丝线**：它是内容区与底栏之间的分隔（与工具栏的底边线同一档，
+ *      都用 `divider` 而不是更重的 `window-border`）。 */
 .page-footer-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--transactions-space-md);
   flex-shrink: 0;
-  padding: var(--transactions-space-sm) var(--transactions-space-lg);
+  height: var(--transactions-size-footer-height);
+  padding: 0 var(--transactions-space-lg);
   border-top: 1px solid var(--transactions-color-divider);
 }
 
@@ -816,39 +962,8 @@
   padding: 0;
 }
 
-/* 占位页（P6 阶段逐页替换） */
-.page-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--transactions-space-md);
-  padding: var(--transactions-space-3xl);
-  text-align: center;
-}
-
-.page-placeholder-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: var(--transactions-radius-sm);
-  background-color: var(--transactions-color-primary-tint);
-  color: var(--transactions-color-primary);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  font-weight: 500;
-}
-
-.page-hint {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body);
-  color: var(--transactions-color-text-secondary);
-  margin: 0;
-  max-width: 560px;
-}
-
 /* ============================================
- * 消费记录页
+ * 记账 · 记录子功能
  * ============================================ */
 
 /* 消费记录页工具栏：底边线与外边距由 `.page-toolbar` 统一给，这里只管左右两簇的排布 */
@@ -881,8 +996,7 @@
   overflow: auto;
 }
 
-/* 分页行：贴卡片右侧（条数与收支合计已经移到卡片底栏，这里只剩翻页控件）。
- * 表格现在通到卡片边缘，所以这一行（以及它的左右下内边距）自己带着。 */
+/* 分页行（版心的最后一行，底栏之上）：只有翻页控件，条数与收支合计在底栏。 */
 .tr-footer {
   display: flex;
   align-items: center;
@@ -1142,4 +1256,23 @@
   padding: var(--transactions-space-sm) var(--transactions-space-md);
   margin-bottom: var(--transactions-space-lg);
   word-break: break-all;
+}
+
+/* 工作空间未指定时的**强制选择屏**：铺满窗口，且是此时唯一的界面（选择屏自己
+ * 不可关闭，外壳的窗口控制按钮也不渲染）。背景与 --transactions-color-major-background
+ * 一致，弹窗卡片仍靠边框 + 阴影与它区分（与其它弹窗同一套观感）。 */
+.workspace-required {
+  position: fixed;
+  inset: 0;
+  background-color: var(--transactions-color-major-background);
+}
+
+/* 这个屏里没有自绘标题栏（`.app-top-bar` / `.page-header` —— 它们平时负责拖动窗口），
+ * 于是把遮罩本身当作拖动区：卡片以外的空白处可以拖窗口，卡片上不行（按钮要能点）。 */
+.workspace-required .ui-modal__mask {
+  -webkit-app-region: drag;
+}
+
+.workspace-required .ui-modal__content {
+  -webkit-app-region: no-drag;
 }

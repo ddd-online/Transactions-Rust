@@ -1,7 +1,9 @@
 //! 窗口与系统托盘：无边框主窗口、初始化窗口、托盘菜单、关闭行为。
 //!
 //! * 主窗口 1400×1000（默认），无边框，尺寸/位置写回 `~/.transactions.json`
-//! * 首次启动（配置里没有工作空间目录）先显示初始化窗口（600×560，不可缩放，无边框）
+//! * 首次启动（配置里没有工作空间目录）先显示初始化窗口（600×560，不可缩放，无边框）：
+//!   界面在这个窗口里只渲染**不可关闭**的工作空间选择屏，外壳同时拒绝关闭请求，
+//!   用户必须先选定工作空间（逃生门：托盘菜单「关闭程序」）
 //! * 系统托盘：显示主窗口 / 关闭程序；最小化到托盘后任务栏不保留图标
 //! * 关闭行为：`quit` 直接退出、`tray` 隐藏到托盘、未设置时每次询问
 //!   （Tauri 的消息框没有「下次不再提醒」勾选框，因此这里固定为"每次询问"，
@@ -15,6 +17,7 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tr_ipc::AppState;
 
 use crate::commands::DesktopState;
 use crate::config::{CLOSE_BEHAVIOR_QUIT, CLOSE_BEHAVIOR_TRAY};
@@ -105,6 +108,7 @@ pub fn create_init_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 
     let appearance = app.state::<DesktopState>().config.snapshot().appearance;
     apply_appearance(&window, &appearance);
+    attach_init_window_events(app, &window);
     Ok(window)
 }
 
@@ -157,8 +161,38 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// 工作空间是否已经成功打开（进程内单例，由 `workspace_open` 设置）。
+fn workspace_is_open(app: &AppHandle) -> bool {
+    app.state::<AppState>().ws.opened_workspace().is_some()
+}
+
+/// 关闭请求是否可以放行。
+///
+/// 工作空间还没打开时**一律拒绝关闭**：此刻界面上只有那个不可关闭的选择屏，
+/// 用户必须先选定工作空间（逃生门是托盘菜单的「关闭程序」，那走 `app.exit`，
+/// 不经过窗口关闭请求）。
+fn close_allowed(app: &AppHandle) -> bool {
+    if workspace_is_open(app) {
+        return true;
+    }
+    tracing::info!("工作空间尚未打开，忽略关闭请求（必须先选定工作空间）");
+    false
+}
+
 /// 显示并聚焦主窗口（必要时创建）。
+///
+/// **工作空间还没打开时不创建主窗口**：那一刻唯一该存在的窗口是初始化窗口
+/// （工作空间选择屏）。否则"再点一次应用图标"会在单实例回调里凭空造出一个
+/// 1500×1000 的主窗口，看起来就像又开了一个软件实例。
 pub fn show_main_window(app: &AppHandle) {
+    if !workspace_is_open(app) {
+        if let Some(init) = app.get_webview_window(INIT_WINDOW) {
+            let _ = init.show();
+            let _ = init.unminimize();
+            let _ = init.set_focus();
+            return;
+        }
+    }
     match app.get_webview_window(MAIN_WINDOW) {
         Some(window) => {
             let _ = window.show();
@@ -166,7 +200,9 @@ pub fn show_main_window(app: &AppHandle) {
             let _ = window.set_focus();
         }
         None => {
-            let _ = create_main_window(app);
+            if let Err(error) = create_main_window(app) {
+                tracing::error!("创建主窗口失败: {error}");
+            }
         }
     }
 }
@@ -294,6 +330,9 @@ pub fn attach_main_window_events(app: &AppHandle, window: &WebviewWindow) {
         tauri::WindowEvent::CloseRequested { api, .. } => {
             // 关闭按钮不直接销毁窗口，先走关闭行为
             api.prevent_close();
+            if !close_allowed(&app_handle) {
+                return;
+            }
             let state = app_handle.state::<DesktopState>();
             request_close(&app_handle, &main_window, &state);
         }
@@ -302,6 +341,22 @@ pub fn attach_main_window_events(app: &AppHandle, window: &WebviewWindow) {
             let _ = main_window.emit("window-state-changed", maximized);
         }
         _ => {}
+    });
+}
+
+/// 初始化窗口的事件：工作空间选定之前**关不掉**。
+///
+/// 这个窗口就是那个不可关闭的选择屏（界面侧同样没有 × / 「取消」，点遮罩也不关），
+/// 于是 Alt+F4 是唯一的绕过路径 —— 这里把它也拦掉。
+/// 正常路径不受影响：选定工作空间后外壳用的是 `destroy()`（不触发 `CloseRequested`）。
+pub fn attach_init_window_events(app: &AppHandle, window: &WebviewWindow) {
+    let app_handle = app.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if !close_allowed(&app_handle) {
+                api.prevent_close();
+            }
+        }
     });
 }
 

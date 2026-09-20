@@ -130,7 +130,7 @@ impl ConfigStore {
 }
 
 /// 用户主目录。Windows 用 `USERPROFILE`，其它平台用 `HOME`。
-fn home_dir() -> PathBuf {
+pub(crate) fn home_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)

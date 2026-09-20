@@ -53,7 +53,16 @@ public class TrDevShot {
 }
 '@ -Language CSharp
 
-$ALL_PAGES = @('消费记录', '数据分析', '股票交易', '关键事件', '日记', '分类标签', '应用设置')
+# 侧栏的 6 个顶级功能 + 记账页的 3 个子功能（子功能走左侧图标条，不进侧栏）
+$ALL_PAGES = @('记账', '记录', '标签', '模板', '数据分析', '股票交易', '关键事件', '日记', '应用设置')
+
+# 子功能 → 该子功能自己的一个标志性控件（判断"真的切过去了"用它，比找同名标题可靠：
+# 三个子功能共用标题栏「记账」，而「标签」这类名字在内容里也有同名文字）
+$SUB_FUNCTIONS = [ordered]@{
+    '记录' = '记一笔'
+    '标签' = '新增分类'
+    '模板' = '新建模板'
+}
 
 function Get-RepoAppWindow {
     # ⚠ 要**轮询**：窗口刚起来时 UIA 树是惰性构建的（首查常只返回二十来个元素、连侧栏都没有），
@@ -68,9 +77,9 @@ function Get-RepoAppWindow {
         foreach ($proc in $procs) {
             $cond = New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $proc.Id)
             foreach ($candidate in @($UIA::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $cond))) {
-                # 有侧栏「消费记录」才是主窗口（不是 600×560 的初始化窗口）
+                # 有侧栏「记账」才是主窗口（不是 600×560 的初始化窗口）
                 $ok = @($candidate.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-                        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, '消费记录'))))
+                        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, '记账'))))
                 if ($ok.Count -gt 0) { return $candidate }
             }
         }
@@ -151,18 +160,35 @@ function Test-PageLoaded {
 
 foreach ($name in $targets) {
     $done = $false
+    $subMarker = if ($SUB_FUNCTIONS.Contains($name)) { $SUB_FUNCTIONS[$name] } else { $null }
     for ($attempt = 1; $attempt -le 3 -and -not $done; $attempt++) {
-        $nav = Find-NamedElement -Window $window -Name $name
-        if (-not $nav) { Write-Host "[dev-shot] ✗ 侧栏里找不到「$name」" -ForegroundColor Yellow; break }
-        $r = $nav.Current.BoundingRectangle
         [void][TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle)
         Start-Sleep -Milliseconds 150
-        [TrDevShot]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
-        # 轮询等页面真的切过去（固定 sleep 会抓到上一页：实测「数据分析」抓成了「分类标签」）
-        $deadline = (Get-Date).AddSeconds(4)
-        while ((Get-Date) -lt $deadline) {
-            Start-Sleep -Milliseconds 250
-            if (Test-PageLoaded -Window $window -PageName $name) { $done = $true; break }
+        if ($subMarker) {
+            # 子功能：先回到「记账」页，再点左侧图标条上的那一项
+            $nav = Find-NamedElement -Window $window -Name '记账'
+            if ($nav) {
+                $r = $nav.Current.BoundingRectangle
+                [TrDevShot]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+                Start-Sleep -Milliseconds 500
+            }
+            Invoke-SubFunction -Window $window -Name $name | Out-Null
+            $deadline = (Get-Date).AddSeconds(8)
+            while ((Get-Date) -lt $deadline -and -not $done) {
+                Start-Sleep -Milliseconds 250
+                if (Find-First $window $subMarker) { $done = $true }
+            }
+        } else {
+            $nav = Find-NamedElement -Window $window -Name $name
+            if (-not $nav) { Write-Host "[dev-shot] ✗ 侧栏里找不到「$name」" -ForegroundColor Yellow; break }
+            $r = $nav.Current.BoundingRectangle
+            [TrDevShot]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+            # 轮询等页面真的切过去（固定 sleep 会抓到上一页：实测「数据分析」抓成了「分类标签」）
+            $deadline = (Get-Date).AddSeconds(4)
+            while ((Get-Date) -lt $deadline) {
+                Start-Sleep -Milliseconds 250
+                if (Test-PageLoaded -Window $window -PageName $name) { $done = $true; break }
+            }
         }
         if (-not $done) { Write-Host "[dev-shot]   第 $attempt 次点击后页面没切过去，重试" -ForegroundColor DarkYellow }
     }

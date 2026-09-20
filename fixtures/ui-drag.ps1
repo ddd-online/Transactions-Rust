@@ -183,8 +183,8 @@ try {
     [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 500
 
-    Write-Host "`n[ui-drag] 1/2 打开「分类标签」并读取初始顺序"
-    Assert-True (Invoke-Element (Find-First $window '分类标签')) '打开「分类标签」页'
+    Write-Host "`n[ui-drag] 1/2 打开「记账 → 标签」并读取初始顺序"
+    Assert-True (Invoke-SubFunction -Window $window -Name '标签') '切到记账页的「标签」子功能'
     Start-Sleep -Seconds 3
 
     $before = Read-Categories
@@ -233,9 +233,10 @@ try {
 
     # 切走再回来：界面顺序必须仍然等于库里的顺序（这条能抓住"列表没按 sort_order 排"、
     # 或者"只在本地改了没落库"这类问题——用户看到的就是"拖了没用/一刷新就弹回去"）。
-    Invoke-Element (Find-First $window '消费记录') | Out-Null
+    # 切走 = 换到「记录」子功能；切回 = 再点图标条的「标签」。
+    Assert-True (Invoke-SubFunction -Window $window -Name '记录') '切到「记录」子功能（离开标签页）'
     Start-Sleep -Seconds 2
-    Invoke-Element (Find-First $window '分类标签') | Out-Null
+    Assert-True (Invoke-SubFunction -Window $window -Name '标签') '切回「标签」子功能'
     Start-Sleep -Seconds 3
     $namesReopened = @(Get-Elements $window | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
     $reopenedIndexes = @($after | ForEach-Object {

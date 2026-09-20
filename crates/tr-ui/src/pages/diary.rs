@@ -2,7 +2,7 @@
 //!
 //! ## 组成
 //!
-//! * [`DiaryPage`]：工具栏（今天 / 收起全部 / 跳转日期）+ 两栏编排
+//! * [`DiaryPage`]：工具栏（今天 / 收起全部 / 日期选择器）+ 两栏编排
 //! * [`DiaryTree`]：年 → 月 → 日三级折叠树（年/月降序、日降序）
 //! * [`DiaryEditor`]：心情 + 字数 + **始终可编辑**（无预览/Markdown 渲染）+ 1500ms 防抖自动保存 + 删除
 //! * 状态直接由本文件持有信号（与其余页面一致）
@@ -13,7 +13,10 @@
 //! * **日记不存在也能写**：`diary_get` 对不存在的日期会报错，因此读取失败时按
 //!   "空条目"兜底，否则新日期永远打不开编辑器。
 //! * **自动保存、无保存按钮**：输入或切心情后 1500ms 防抖保存；`Ctrl+S`/`Cmd+S` 立即保存。
-//! * **保存状态不回落 idle**：「已保存」会一直显示，不自动回落到 idle。
+//! * **保存状态如实反映**：输入/切心情先把状态置为 `Editing`（「编辑中」），
+//!   防抖到点保存时短暂 `Saving`（「保存中…」），成功后 `Saved`（「已保存」）；
+//!   失败为「保存失败」。换日期时状态回到 `Idle`（不把上一条的状态带过来）。
+//!   保存期间又发生改动时，完成回调会再排一次防抖保存，因此「编辑中」一定会收敛到「已保存」。
 //! * **左右两处字数口径不同**：编辑器按本地草稿的码点数实时算，左树用服务端的 `wordCount`。
 //! * **折叠状态**：首次拿到非空数据时全部年份收起；月份默认全收起；「收起全部」把所有年份收起。
 //!
@@ -53,10 +56,13 @@ const MOODS: [(&str, &str); 6] = [
     ("😰", "焦虑"),
 ];
 
-/// 保存状态（驱动「保存中… / 已保存 / 保存失败」）。
+/// 保存状态（驱动「编辑中 / 保存中… / 已保存 / 保存失败」）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SaveStatus {
+    /// 已落库（或刚载入，尚无改动）
     Idle,
+    /// **有未落库的改动**：输入/切心情后、防抖窗口内（这就是「编辑中」）
+    Editing,
     Saving,
     Saved,
     Error,
@@ -66,6 +72,7 @@ impl SaveStatus {
     fn label(self) -> &'static str {
         match self {
             SaveStatus::Idle | SaveStatus::Saved => "已保存",
+            SaveStatus::Editing => "编辑中",
             SaveStatus::Saving => "保存中…",
             SaveStatus::Error => "保存失败",
         }
@@ -73,6 +80,7 @@ impl SaveStatus {
 
     fn class(self) -> &'static str {
         match self {
+            SaveStatus::Editing => "is-editing",
             SaveStatus::Saving => "is-saving",
             SaveStatus::Saved => "is-saved",
             SaveStatus::Error => "is-error",
@@ -93,6 +101,8 @@ pub fn DiaryPage() -> impl IntoView {
     let draft = RwSignal::new(String::new());
     let mood = RwSignal::new(String::new());
     let save_status = RwSignal::new(SaveStatus::Idle);
+    // 补存闸门：保存完成时若草稿又变了就 +1，交给下面的 Effect 再排一次保存
+    let save_retry = RwSignal::new(0u64);
     let saving = RwSignal::new(false);
     let delete_open = RwSignal::new(false);
     let deleting = RwSignal::new(false);
@@ -108,6 +118,8 @@ pub fn DiaryPage() -> impl IntoView {
 
     let load_entry = move |date: String| {
         selected_date.set(date.clone());
+        // 换日期后状态从零起算：否则上一条的「编辑中 / 保存中… / 保存失败」会被带过来
+        save_status.set(SaveStatus::Idle);
         leptos::task::spawn_local(async move {
             match api::diary::get(&date).await {
                 Ok(item) => {
@@ -141,6 +153,8 @@ pub fn DiaryPage() -> impl IntoView {
             return;
         };
         if saving.get_untracked() {
+            // 上一次保存还在飞：不并发写（避免旧内容后落库）。
+            // 这次调用不会被丢掉——下面的完成回调会发现草稿已经变了，再排一次防抖保存。
             return;
         }
         saving.set(true);
@@ -148,6 +162,9 @@ pub fn DiaryPage() -> impl IntoView {
         let date = current.date.clone();
         let content = draft.get_untracked();
         let mood_value = mood.get_untracked();
+        // 快照：用来判断"保存期间草稿又变了没有"
+        let content_at_start = content.clone();
+        let mood_at_start = mood_value.clone();
         leptos::task::spawn_local(async move {
             match api::diary::upsert(&date, &content, &mood_value).await {
                 Ok(saved) => {
@@ -173,10 +190,21 @@ pub fn DiaryPage() -> impl IntoView {
                 }
             }
             saving.set(false);
+            // 保存期间草稿又变了（在飞的请求撞上了一波输入）→ 补排一次防抖保存。
+            // 没有这一步的话「编辑中」会一直挂着，最新内容也永远不会落库。
+            let same_entry = entry.get_untracked().is_some_and(|item| item.date == date);
+            if same_entry
+                && (draft.get_untracked() != content_at_start
+                    || mood.get_untracked() != mood_at_start)
+            {
+                save_retry.update(|tick| *tick += 1);
+            }
         });
     };
 
     let schedule_save = move || {
+        // 「编辑中」：改动已进草稿、还没落库（防抖窗口内就显示这个）
+        save_status.set(SaveStatus::Editing);
         // 先清掉上一次的待触发任务
         timer.update_value(|slot| {
             if let Some(handle) = slot.take() {
@@ -192,6 +220,15 @@ pub fn DiaryPage() -> impl IntoView {
         }
     };
 
+    // 补存闸门：保存完成时若发现草稿又变了，就再走一次（带防抖的）保存，
+    // 保证「编辑中」最终一定收敛到「已保存」。
+    Effect::new(move |_| {
+        if save_retry.get() == 0 {
+            return;
+        }
+        schedule_save();
+    });
+
     let go_to_date = move |date: String| {
         if date.is_empty() {
             return;
@@ -203,6 +240,18 @@ pub fn DiaryPage() -> impl IntoView {
         });
         load_entry(date);
     };
+
+    // 日期选择器**选到某天就直接跳过去**（不再需要「跳转日期」按钮）。
+    // `DatePicker` 只在"选中某天 / 清空"时写 `jump_date`，因此这个 Effect 不会在挂载时误触发；
+    // 点「今天」会把 `jump_date` 清空 → 空串在这里直接返回，不会被带着重复跳一次。
+    // （Effect 体内只读信号、只做副作用；不在这里创建任何响应式值 —— 那会被随后的重跑 dispose。）
+    Effect::new(move |_| {
+        let date = jump_date.get();
+        if date.is_empty() {
+            return;
+        }
+        go_to_date(date);
+    });
 
     let go_to_today = move || {
         jump_date.set(String::new());
@@ -278,15 +327,6 @@ pub fn DiaryPage() -> impl IntoView {
                         <div class="diary-jump">
                             <DatePicker value=jump_date placeholder="选择日期" />
                         </div>
-                        <Button
-                            variant=ButtonVariant::Secondary
-                            on_click=move |_| {
-                                let date = jump_date.get_untracked();
-                                go_to_date(date);
-                            }
-                        >
-                            "跳转日期"
-                        </Button>
                     </div>
 
                     // 已保存状态与「删除」跟着工具栏走（原来在编辑器底部的那条栏里）

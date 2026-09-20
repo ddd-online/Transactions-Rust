@@ -67,6 +67,9 @@ cargo tauri build                                 # 产出 NSIS 安装包
 # 单个脚本里若仍留着同名函数，那是因为它的默认超时/守卫/文案与共享版不同（刻意保留的变体）。
 # 共享版 Assert-True 找不到调用方的 `$failures` 时会直接抛错（防"断言静默不计数"的假绿）；
 # Read-Table / Start-App 需要显式传 -Repo/-Workspace/-OutDir/-SmokeHome/-Exe，别依赖隐式作用域。
+# 记账页的三个子功能（记录 / 标签 / 模板）走左侧图标条，**用 Invoke-SubFunction -Name <子功能名> 点它**：
+# 子功能名与页面里的文字会重名（标签栏标题也叫「标签」），按名字取第一个匹配会撞上文字元素而卡住；
+# 该函数按"同名 Button 里最靠左的那个"定位（图标条在版心最左边）。
 
 # 验证护栏
 cargo xtask schema-diff                           # Rust 建库结构与 fixtures/schema/fresh.sql 逐条一致
@@ -83,7 +86,8 @@ pwsh -File fixtures/design-audit.ps1
 # 用临时 USERPROFILE 启动，碰不到你真实的 ~/.transactions.json。
 pwsh -File fixtures/smoke.ps1 [-Workspace <既有工作空间>] [-Exe <exe>]
 
-# 逐页界面冒烟：用 UI Automation 驱动真实窗口，挨个点开 7 个页面并断言内容渲染；
+# 逐页界面冒烟：用 UI Automation 驱动真实窗口，挨个点开 6 个顶级功能 +
+# 记账页的 3 个子功能（记录 / 标签 / 模板，走左侧图标条）并断言内容渲染；
 # `-WriteFlow` 还会在**工作空间副本**里通过界面记一笔，验证"弹窗→填表→保存→列表出现"闭环；
 # `-Discover` 导出每页元素清单，用来维护脚本顶部的页面标记表。
 pwsh -File fixtures/ui-smoke.ps1 [-Workspace <ws>] [-WriteFlow] [-Discover]
@@ -93,7 +97,7 @@ pwsh -File fixtures/ui-smoke.ps1 [-Workspace <ws>] [-WriteFlow] [-Discover]
 pwsh -File fixtures/contract-audit.ps1
 
 # 像素级逐页验证 + 主题切换验证：抓窗口位图断言每页不是空白，并比较浅/深色平均亮度；
-# 同时把 7 张 PNG 落到 target\ui-shots\（人工验收可以先翻图）。补 UIA 的盲区。
+# 同时把 6 个顶级功能 + 记账 3 个子功能共 9 张 PNG 落到 target\ui-shots\（人工验收可以先翻图）。补 UIA 的盲区。
 pwsh -File fixtures/ui-shots.ps1 [-Workspace <ws>] [-OutDir <dir>]
 
 # 图片上传端到端：真的点「添加图片」拉起**原生文件选择框**、选一张自己生成的 600×400 PNG，
@@ -120,7 +124,7 @@ pwsh -File fixtures/window-bounds.ps1 [-Exe <exe>] [-OutDir <dir>]
 pwsh -File fixtures/ui-diary-io.ps1 [-Workspace <ws>] [-OutDir <dir>]
 
 # UI 增删改端到端（断言都落在数据库上）：分类/标签/图表的"新增→删除"、
-# 关键事件"点色板改颜色 / 写 Markdown 描述 / 删除事件"、设置页"新建模板→删除"。
+# 关键事件"点色板改颜色 / 写 Markdown 描述 / 删除事件"、记账·模板子功能"新建模板→删除"。
 pwsh -File fixtures/ui-crud.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
 # 同步到其他账本端到端（此前**零覆盖**：IPC 里没有 sync 命令，界面是"复制 DTO + 换账本 + 清 id"）：
@@ -128,7 +132,7 @@ pwsh -File fixtures/ui-crud.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 # 金额/类型/分类/记录时间一致、**源记录保留**（复制而非移动）→ 切账本后界面里能看到副本。
 pwsh -File fixtures/ui-sync-ledger.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
-# 消费记录页：记三笔 → **编辑一笔**（断言"先建后删"：换 transaction_id、旧记录消失、行数不变）
+# 记账 · 记录子功能：记三笔 → **编辑一笔**（断言"先建后删"：换 transaction_id、旧记录消失、行数不变）
 # → **保存为模板**（记一笔弹窗里的子弹窗：填名称 → 断言模板落库且类型/分类/描述取当前表单）
 # → **排序**（重置 → 加「金额 降序」→ 应用 → 断言表格区金额序列非递增、最大值排第一）
 # → **筛选**（悬浮按钮 → 关键词 → 添加条件 → 确认 → 断言收敛到 1 条）。
@@ -194,7 +198,7 @@ cargo clippy --all-targets -- -D warnings
   （`memory.copy ... requires --enable-bulk-memory-opt`），更新版本又无法下载。
   发布构建统一走 `build/build-ui.ps1`：跑 trunk 的 **debug 模式**（跳过 wasm-opt），
   并用 `CARGO_PROFILE_DEV_OPT_LEVEL=3` + `CARGO_PROFILE_DEV_DEBUG=false` 把优化拉满、去掉调试信息
-  （实测 wasm **7.3 MiB / 7.6 MB**，全 7 个页面都在；P6-a 只有 4 个页面时是 3.9 MB。
+  （实测 wasm **7.3 MiB / 7.6 MB**，6 个顶级功能 + 记账的 3 个子功能都在；P6-a 只有 4 个页面时是 3.9 MB。
   作为对照：完全不优化、带调试信息的 debug 构建约 15 MB）。`tauri.conf.json` 的 `beforeBuildCommand` 已指向该脚本。
 - **`build/*.ps1` 被 `powershell`(5.1) 调用时必须 ASCII-only**：Windows PowerShell 把无 BOM 的 UTF-8
   当 ANSI 解码，中文会破坏脚本解析（`build-ui.ps1` 因此全英文注释，且它**就是**被 `cargo tauri build`
@@ -291,7 +295,7 @@ cargo clippy --all-targets -- -D warnings
 - **启动时要抓"主窗口"而不是"该进程的第一个窗口"**：启动期会先出现初始化窗口（600×560、无侧栏），
   随后才切成主窗口。抓到前者的话后面所有按名字的查找都会落空（整轮 26 项全红的假故障）。
   稳妥做法（见 `fixtures/ui-crud.ps1` 的 `Get-ReadyWindow`）：**轮询**取窗口元素、
-  直到它包含侧栏条目（如「消费记录」）为止，每轮重新查询也顺带规避了句柄失效。
+  直到它包含侧栏条目（如「记账」）为止，每轮重新查询也顺带规避了句柄失效。
 - **托盘图标能抓到，但浮出面板太"脆"，所以没做成常驻护栏**：Win11 下我们的托盘图标在
   `TopLevelWindowForOverflowXamlIsland`（名字「系统托盘溢出窗口」）里，是一个 `Button`，`Name='Transactions'`；
   点任务栏的「显示隐藏的图标」按钮能把它弹出来，右键会开一个 `#32768` 菜单。

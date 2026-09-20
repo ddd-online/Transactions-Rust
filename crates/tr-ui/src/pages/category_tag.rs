@@ -1,6 +1,9 @@
-//! 分类标签页（类型卡片 + 分类 / 标签两栏联动 + 拖拽排序）。
+//! 记账 · **标签**子功能（类型卡片 + 分类 / 标签两栏联动 + 拖拽排序）。
 //!
-//! 页面结构（固定）：顶部工具栏（类型卡片 + 当前账本）+ 左栏分类 / 右栏标签。
+//! 它是记账页（[`crate::pages::accounting`]）三个子功能之一，只提供版心里的
+//! 「工具栏 + 内容区」，标题栏与左侧子功能图标条由 `FeaturePage` 统一渲染。
+//!
+//! 结构（固定）：工具栏（类型卡片）+ 左栏分类 / 右栏标签。
 //!
 //! 本实现的**设计取舍**（均有理由，不改变对外契约）：
 //!
@@ -26,17 +29,14 @@ use tr_domain::dto::{CategoryDto, TagDto};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, DragSortItem, DragSortState, IconButton, IconButtonVariant,
-    Input, Modal, PageHeader,
+    Button, ButtonSize, ButtonVariant, DragSortItem, DragSortState, FeaturePage, IconButton,
+    IconButtonVariant, Input, Modal,
 };
 use crate::error_handler::{get_error_message, notify_error};
 use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::store::AppStores;
-
-/// 页面标题（固定文案，改动即影响界面）。
-pub const PAGE_TITLE: &str = "分类标签";
 
 /// 交易类型顺序（支出 / 收入 / 转账，顺序即渲染顺序）。
 const TRANSACTION_TYPES: [(&str, &str); 3] = [
@@ -123,9 +123,11 @@ enum CtrDeleteKind {
     Tag,
 }
 
-/// 「分类标签」页。
+/// 记账页的「标签」子功能：分类与标签两栏联动。
+///
+/// 只负责工具栏 + 内容区，版心与左侧子功能图标条由 `FeaturePage` 提供。
 #[component]
-pub fn CategoryTagPage() -> impl IntoView {
+pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
     let stores = AppStores::global();
 
     // ---- 交易类型 / 分类 / 标签 ----
@@ -756,15 +758,12 @@ pub fn CategoryTagPage() -> impl IntoView {
     };
 
     view! {
-        <section class="page">
-            <PageHeader title=PAGE_TITLE />
-
-            <div class="page-body">
-                <div class="page-toolbar">
-                    // 工具栏：只有交易类型卡片（当前账本由侧栏顶部的账本按钮显示，这里不再重复）
-                    {type_nav_view}
-                </div>
-
+        <FeaturePage
+            title=super::accounting::PAGE_TITLE
+            rail=view! { <super::accounting::SubFunctionRail sub=sub /> }.into_any()
+            // 工具栏：只有交易类型卡片（当前账本由侧栏顶部的账本按钮显示，这里不再重复）
+            toolbar=view! { {type_nav_view} }.into_any()
+            content=view! {
                 // 主体：240px 分类栏 + 1fr 标签栏
                 <div class="ct-main">
                     <section class="ct-column ct-column--categories">
@@ -809,62 +808,62 @@ pub fn CategoryTagPage() -> impl IntoView {
                         <div class="ct-column-body-wrap">{tag_column}</div>
                     </section>
                 </div>
+            }.into_any()
+        />
+
+        // ---- 新增分类弹窗 ----
+        <Modal
+            open=Signal::derive(move || open_category_modal.get())
+            title=TEXT_MODAL_ADD_CATEGORY
+            width=360
+            ok_text="确认"
+            cancel_text="取消"
+            on_close=move || open_category_modal.set(false)
+            on_ok=move || confirm_add_category()
+        >
+            <div class="ct-modal-form">
+                <Input
+                    value=category_name
+                    placeholder="输入分类名称"
+                    maxlength=NAME_MAX_LENGTH
+                    on_enter=move || confirm_add_category()
+                />
             </div>
+        </Modal>
 
-            // ---- 新增分类弹窗 ----
-            <Modal
-                open=Signal::derive(move || open_category_modal.get())
-                title=TEXT_MODAL_ADD_CATEGORY
-                width=360
-                ok_text="确认"
-                cancel_text="取消"
-                on_close=move || open_category_modal.set(false)
-                on_ok=move || confirm_add_category()
-            >
-                <div class="ct-modal-form">
-                    <Input
-                        value=category_name
-                        placeholder="输入分类名称"
-                        maxlength=NAME_MAX_LENGTH
-                        on_enter=move || confirm_add_category()
-                    />
-                </div>
-            </Modal>
+        // ---- 新增标签弹窗 ----
+        <Modal
+            open=Signal::derive(move || open_tag_modal.get())
+            title=TEXT_MODAL_ADD_TAG
+            width=360
+            ok_text="确认"
+            cancel_text="取消"
+            on_close=move || open_tag_modal.set(false)
+            on_ok=move || confirm_add_tag()
+        >
+            <div class="ct-modal-form">
+                <Input
+                    value=tag_name
+                    placeholder="输入标签名称"
+                    maxlength=NAME_MAX_LENGTH
+                    on_enter=move || confirm_add_tag()
+                />
+            </div>
+        </Modal>
 
-            // ---- 新增标签弹窗 ----
-            <Modal
-                open=Signal::derive(move || open_tag_modal.get())
-                title=TEXT_MODAL_ADD_TAG
-                width=360
-                ok_text="确认"
-                cancel_text="取消"
-                on_close=move || open_tag_modal.set(false)
-                on_ok=move || confirm_add_tag()
-            >
-                <div class="ct-modal-form">
-                    <Input
-                        value=tag_name
-                        placeholder="输入标签名称"
-                        maxlength=NAME_MAX_LENGTH
-                        on_enter=move || confirm_add_tag()
-                    />
-                </div>
-            </Modal>
-
-            // ---- 删除确认弹窗（标题随分类/标签切换，正文是待删除项的消息） ----
-            <Modal
-                open=Signal::derive(move || open_delete_modal.get())
-                title=delete_modal_title(delete_kind.get())
-                width=360
-                ok_text="删除"
-                ok_danger=true
-                cancel_text="取消"
-                on_close=move || open_delete_modal.set(false)
-                on_ok=move || execute_delete()
-            >
-                <p class="ct-delete-message">{move || delete_message.get()}</p>
-            </Modal>
-        </section>
+        // ---- 删除确认弹窗（标题随分类/标签切换，正文是待删除项的消息） ----
+        <Modal
+            open=Signal::derive(move || open_delete_modal.get())
+            title=delete_modal_title(delete_kind.get())
+            width=360
+            ok_text="删除"
+            ok_danger=true
+            cancel_text="取消"
+            on_close=move || open_delete_modal.set(false)
+            on_ok=move || execute_delete()
+        >
+            <p class="ct-delete-message">{move || delete_message.get()}</p>
+        </Modal>
     }
 }
 

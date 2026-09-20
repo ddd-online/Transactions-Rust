@@ -23,7 +23,9 @@ use tr_domain::error::AppError;
 use tr_ipc::{ApiError, ApiResult, AppState};
 
 use crate::assets;
-use crate::config::{ConfigStore, APPEARANCE_SYSTEM, CLOSE_BEHAVIOR_QUIT, CLOSE_BEHAVIOR_TRAY};
+use crate::config::{
+    home_dir, ConfigStore, APPEARANCE_SYSTEM, CLOSE_BEHAVIOR_QUIT, CLOSE_BEHAVIOR_TRAY,
+};
 use crate::logging::LogSinks;
 use crate::shell;
 
@@ -316,13 +318,35 @@ pub fn workspace_open(
 /// 先显示主窗口，再销毁初始化窗口；用 `destroy()` 而不是 `close()`：
 /// 初始化窗口不该走"关闭行为（最小化到托盘）"那套逻辑。
 /// 幂等：当前窗口不是初始化窗口、或初始化窗口已销毁时是空操作。
+///
+/// **必须推迟到本次 IPC 回调之外**（后台线程 + `run_on_main_thread`）：
+/// `workspace_open` 是同步命令，Tauri 在主线程上、且**是在 WebView2 的
+/// `WebMessageReceived` 回调里**执行它；在这个回调里紧接着
+/// `WebviewWindowBuilder::build()` 会建出一个**空壳主窗口** —— 实测现象：
+/// 窗口可见但是纯白、没有任何 `Chrome_WidgetWin_1` 渲染子窗口、界面永远不发出
+/// `config_get`，而且紧随其后的 `destroy()` 也没生效（初始化窗口卡在选择屏、
+/// 按钮停在加载态）。等回调退出后再建就没有这个问题。
 fn transition_from_init(app: &AppHandle, window: &WebviewWindow) {
     if window.label() != shell::INIT_WINDOW {
         return;
     }
     tracing::info!("初始化窗口已选定工作空间，切换主窗口并销毁初始化窗口");
-    shell::show_main_window(app);
-    let _ = window.destroy();
+    let app_handle = app.clone();
+    let init_window = window.clone();
+    std::thread::spawn(move || {
+        // 给当前这次 WebView2 回调留出退出的时间（回调没返回前不碰窗口创建）
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let inner = app_handle.clone();
+        let task = move || {
+            shell::show_main_window(&inner);
+            if let Err(error) = init_window.destroy() {
+                tracing::warn!("销毁初始化窗口失败: {error}");
+            }
+        };
+        if let Err(error) = app_handle.run_on_main_thread(task) {
+            tracing::warn!("切换主窗口的任务投递失败: {error}");
+        }
+    });
 }
 
 /// 初始化窗口选定工作目录后的切换（保留 `workspace:init` 命令面）。
@@ -373,6 +397,17 @@ pub struct DialogOpenResponse {
     pub error: Option<String>,
 }
 
+/// 文件夹对话框的兜底起始目录：用户主目录（正常一定存在）；
+/// 万一它也不存在（一次性 HOME 的冒烟/测试环境），退回程序所在目录。
+fn dialog_fallback_directory() -> PathBuf {
+    let home = home_dir();
+    if home.is_dir() {
+        home
+    } else {
+        shell::app_directory()
+    }
+}
+
 /// 选择目录（工作空间、日记导入/导出目录）。
 ///
 /// 用回调 + 阻塞等待而不是对话框插件的阻塞 API：阻塞 API 在主线程会死锁，
@@ -383,9 +418,17 @@ pub async fn dialog_open(app: AppHandle, req: DialogOpenRequest) -> ApiResult<Di
     if let Some(title) = req.title.as_deref() {
         builder = builder.set_title(title);
     }
-    if let Some(path) = req.default_path.as_deref() {
-        builder = builder.set_directory(path);
-    }
+    // **只把真实存在的目录交给对话框**：路径为空（第一次选工作空间）或已不存在
+    // （目录被删/改名/换机器，配置里还留着旧路径）时，Windows 的文件夹对话框会先弹一个
+    // 「位置不可用：… 不可用」的模态框，把整个选择流程挡在后面 —— 用户只能先点「确定」
+    // 再自己导航。兜底用主目录（一定存在），比让对话框自己落回"桌面"更可预期。
+    let start_directory = req
+        .default_path
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .unwrap_or_else(dialog_fallback_directory);
+    builder = builder.set_directory(start_directory);
     let picked = pick_path(move |callback| {
         builder.pick_folder(callback);
     })

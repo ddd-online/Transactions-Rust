@@ -1,6 +1,9 @@
-//! 应用设置页（P6-a）：5 个分栏。
+//! 应用设置页（P6-a）：4 个分栏。
 //!
-//! 分栏与顺序（固定文案，改动即影响界面）：通用设置 / 消费模板 / 日记配置 / 股票交易 / 关于软件。
+//! 分栏与顺序（固定文案，改动即影响界面）：通用设置 / 日记配置 / 股票交易 / 关于软件。
+//!
+//! 「消费模板」原本是本页的第 2 个分栏，现已迁到记账页的**模板**子功能
+//! （见 [`crate::pages::templates`]）：它属于记账事务，不属于应用配置。
 //!
 //! ## 本实现的设计取舍（逐条，均为有意为之）
 //!
@@ -21,15 +24,10 @@
 //!    **开发者工具不是开关而是按钮**：它的行为是"点击开一个新窗口"，没有可关闭的开关态
 //!    （要关就在 DevTools 自己的窗口上关），所以界面给「打开」按钮，只发 `devtools_toggle(true)`；
 //!    按钮带忙状态防止连点开出两个窗口。
-//! 5. **消费模板·新建模板是增补**：设置页此前**没有**新建入口（模板在「记一笔」弹窗里
-//!    「保存为模板」）。本实现按任务单增补「新建模板」弹窗，固定文案：
-//!    模板名称 / 请输入模板名称 / 保存模板失败 / 保存模板成功。
-//! 6. **消费模板·列表不是 `Table`**：行由 `DragSortItem` 渲染成 `<div>`（整行 draggable），
-//!    而 `<div>` 不能作为 `<tbody>` 的子节点，因此保持原有列宽/表头，但用 `st-table` 的 div 网格实现。
-//! 7. **日记配置**：**没有**「文件勾选」（扫描后顺序导入全部文件），只是每行状态；
+//! 5. **日记配置**：**没有**「文件勾选」（扫描后顺序导入全部文件），只是每行状态；
 //!    「浏览器 dev 模式降级」分支（手输路径）在 Tauri 下不存在，故不实现；
 //!    导入完成后无需刷新日记页，故省略。
-//! 8. **股票交易·费用设置卡片**：换算规则固定——佣金费率按「万分之」（×10000），
+//! 5. **股票交易·费用设置卡片**：换算规则固定——佣金费率按「万分之」（×10000），
 //!    印花税/过户费按「%」（×100）。
 //!    印花税/过户费的 tooltip 本实现放在输入框行尾的图标上（语义不变；
 //!    因 `FormItem` 的 label 是字符串，无法内联到 label 里）。
@@ -37,30 +35,27 @@
 //!    因此显示两位小数（`5.00`）——这是**有意的**：
 //!    金额换算一律过 `tr_domain::money`，不自行实现 `/100`。
 //!    费率输入非法（非数字 / `NaN` / `inf`）时不发请求、只提示（不 panic）。
-//! 9. **关于软件**：GitHub 链接是本轮任务要求增补；**构建时间后端未提供**
+//! 6. **关于软件**：GitHub 链接是本轮任务要求增补；**构建时间后端未提供**
 //!    （`app_info` 只支持 `name` / `version` / `isDev`），故未展示，改为展示构建类型
 //!    （开发版 / 正式版）。更新说明照任务单按**纯文本 + 保留换行**渲染（本仓库没有 Markdown 解析器）；
 //!    下载进度额外用小字显示 `speed`。
-//! 10. 全页不使用 `unwrap` / `expect` 处理用户数据：解析失败、命令失败一律走通知。
+//! 7. 全页不使用 `unwrap` / `expect` 处理用户数据：解析失败、命令失败一律走通知。
 
 use std::cell::RefCell;
 use std::time::Duration;
 
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
-use tr_domain::dto::{DiaryExportFileError, TransactionTemplateDto};
+use tr_domain::dto::DiaryExportFileError;
 use tr_domain::models::StockFeeSetting;
 use tr_domain::money::{cents_to_yuan, yuan_to_cents};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, Checkbox, CheckboxGroup, CheckboxOption, DragSortItem,
-    DragSortState, Empty, Form, FormItem, FormLayout, Input, Modal, PageHeader, Popconfirm,
-    Progress, Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, TabItem, TabPane,
-    Tabs, Tag, TagKind, Tooltip,
+    Button, ButtonSize, ButtonVariant, Form, FormItem, FormLayout, Input, Modal, PageHeader,
+    Progress, Segmented, SegmentedOption, Spin, SpinSize, TabItem, TabPane, Tabs, Tooltip,
 };
 use crate::error_handler::notify_error;
-use crate::format;
 use crate::icons::{self, Icon};
 use crate::ipc;
 use crate::notify::Notifier;
@@ -70,7 +65,6 @@ use crate::store::{AppStores, APPEARANCE_DARK, APPEARANCE_LIGHT, APPEARANCE_SYST
 pub const PAGE_TITLE: &str = "应用设置";
 
 const TAB_GENERAL: &str = "general";
-const TAB_TEMPLATE: &str = "template";
 const TAB_DIARY: &str = "diary";
 const TAB_STOCK: &str = "stock";
 const TAB_ABOUT: &str = "about";
@@ -89,11 +83,8 @@ const GITHUB_URL: &str = "https://github.com/ddd-online/Transactions-Rust";
 #[component]
 pub fn SettingsPage() -> impl IntoView {
     let active = RwSignal::new(TAB_GENERAL.to_string());
-    // 卡片底栏的「新建模板」→ 给「消费模板」分栏发一次请求脉冲（表单重置与弹窗开合都留在那一栏里）
-    let template_create = RwSignal::new(false);
     let items = vec![
         TabItem::new(TAB_GENERAL, "通用设置"),
-        TabItem::new(TAB_TEMPLATE, "消费模板"),
         TabItem::new(TAB_DIARY, "日记配置"),
         TabItem::new(TAB_STOCK, "股票交易"),
         TabItem::new(TAB_ABOUT, "关于软件"),
@@ -112,9 +103,6 @@ pub fn SettingsPage() -> impl IntoView {
                     <TabPane active=active key=TAB_GENERAL>
                         <GeneralSetting />
                     </TabPane>
-                    <TabPane active=active key=TAB_TEMPLATE>
-                        <TemplateSetting create_request=template_create />
-                    </TabPane>
                     <TabPane active=active key=TAB_DIARY>
                         <DiarySetting />
                     </TabPane>
@@ -125,19 +113,6 @@ pub fn SettingsPage() -> impl IntoView {
                         <AboutSetting />
                     </TabPane>
                 </div>
-
-                // 卡片底栏：**只有「消费模板」这一栏有**（它的主动作是"新建"）。
-                // 放在 `.st-panes` 之外，所以它贴在卡片底边，滚动列表时不动。
-                <Show when=move || active.get() == TAB_TEMPLATE>
-                    <div class="page-footer-bar page-footer-bar--end">
-                        <Button
-                            variant=ButtonVariant::Primary
-                            on_click=move |_| template_create.set(true)
-                        >
-                            "新建模板"
-                        </Button>
-                    </div>
-                </Show>
             </div>
         </section>
     }
@@ -339,450 +314,6 @@ fn GeneralSetting() -> impl IntoView {
                 </div>
             </div>
         </div>
-    }
-}
-
-// ---------------------------------------------------------------- 消费模板
-
-/// 消费模板：列表 + 删除 + 拖拽排序 + （增补）新建。
-///
-/// `create_request` 是页面底栏「新建模板」发来的**一次请求脉冲**：
-/// 置 true 时本栏负责重置表单并打开弹窗（表单状态与弹窗都归本栏管），随即把它清回 false。
-#[component]
-fn TemplateSetting(create_request: RwSignal<bool>) -> impl IntoView {
-    let stores = AppStores::global();
-
-    let templates = RwSignal::new(Vec::<TransactionTemplateDto>::new());
-    let loading = RwSignal::new(false);
-    let drag = DragSortState::new();
-
-    // 新建模板弹窗（增补，见文件头注释 5）
-    let create_open = RwSignal::new(false);
-    let creating = RwSignal::new(false);
-    let form_name = RwSignal::new(String::new());
-    let form_type = RwSignal::new("expense".to_string());
-    let form_category = RwSignal::new(String::new());
-    let form_tags = RwSignal::new(Vec::<String>::new());
-    let form_description = RwSignal::new(String::new());
-    let form_outlier = RwSignal::new(false);
-    let categories = RwSignal::new(Vec::<String>::new());
-    let tag_names = RwSignal::new(Vec::<String>::new());
-
-    let reset_form = move || {
-        form_name.set(String::new());
-        form_type.set("expense".to_string());
-        form_category.set(String::new());
-        form_tags.set(Vec::new());
-        form_description.set(String::new());
-        form_outlier.set(false);
-    };
-
-    // ---- 加载：`template_list(ledgerId)`（错误前缀「查询模板失败」，回落空数组） ----
-    let load = move |ledger_id: String| {
-        if ledger_id.is_empty() {
-            templates.set(Vec::new());
-            loading.set(false);
-            return;
-        }
-        loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::template::list(&ledger_id).await {
-                Ok(list) => templates.set(list),
-                Err(error) => {
-                    templates.set(Vec::new());
-                    notify_error("查询模板失败", &error);
-                }
-            }
-            loading.set(false);
-        });
-    };
-
-    // 账本变化 → 重新加载
-    Effect::new(move |_: Option<()>| load(stores.current_ledger_id.get()));
-
-    // ---- 拖拽排序：只对 `sort_order` 变化的项发请求，且逐条互不中断 ----
-    let reorder = move |from: usize, to: usize| {
-        let mut list = templates.get_untracked();
-        if from >= list.len() || to >= list.len() || from == to {
-            return;
-        }
-        let previous: Vec<(String, i32)> = list
-            .iter()
-            .map(|item| (item.template_id.clone(), item.sort_order))
-            .collect();
-
-        let moved = list.remove(from);
-        list.insert(to, moved);
-        for (index, item) in list.iter_mut().enumerate() {
-            item.sort_order = index as i32;
-        }
-
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        let pending: Vec<(String, i32)> = list
-            .iter()
-            .enumerate()
-            .filter(|(index, item)| {
-                previous
-                    .iter()
-                    .any(|(id, order)| id == &item.template_id && *order != *index as i32)
-            })
-            .map(|(index, item)| (item.template_id.clone(), index as i32))
-            .collect();
-
-        templates.set(list);
-
-        if ledger_id.is_empty() {
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            for (id, sort_order) in pending {
-                if let Err(error) = api::template::update_sort(&id, &ledger_id, sort_order).await {
-                    notify_error("更新模板排序失败", &error);
-                }
-            }
-        });
-    };
-
-    // ---- 删除 ----
-    let delete_template = move |template_id: String| {
-        leptos::task::spawn_local(async move {
-            match api::template::delete(&template_id).await {
-                Ok(()) => {
-                    Notifier::global().success("删除模板成功", None);
-                    load(stores.current_ledger_id.get_untracked());
-                }
-                Err(error) => notify_error("删除模板失败", &error),
-            }
-        });
-    };
-
-    // ---- 新建模板 ----
-    let open_create = move || {
-        reset_form();
-        create_open.set(true);
-    };
-
-    // 底栏按「新建模板」→ 消费这次请求脉冲（重置表单 + 开弹窗都在这里，避免两处各写一遍）
-    Effect::new(move |_: Option<bool>| {
-        let requested = create_request.get();
-        if requested {
-            open_create();
-            create_request.set(false);
-        }
-        requested
-    });
-
-    // 分类：随「弹窗打开 / 交易类型 / 账本」变化重新拉取
-    Effect::new(move |_: Option<()>| {
-        let open = create_open.get();
-        let transaction_type = form_type.get();
-        let ledger_id = stores.current_ledger_id.get();
-        if !open {
-            return;
-        }
-        form_category.set(String::new());
-        form_tags.set(Vec::new());
-        if ledger_id.is_empty() {
-            categories.set(Vec::new());
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            match api::category::list(&transaction_type, &ledger_id).await {
-                Ok(list) => categories.set(list.into_iter().map(|item| item.name).collect()),
-                Err(error) => {
-                    categories.set(Vec::new());
-                    notify_error("查询分类失败", &error);
-                }
-            }
-        });
-    });
-
-    // 标签：`tag_list("{分类}:{类型}", ledgerId)`
-    Effect::new(move |_: Option<()>| {
-        let open = create_open.get();
-        let category = form_category.get();
-        let transaction_type = form_type.get();
-        let ledger_id = stores.current_ledger_id.get();
-        form_tags.set(Vec::new());
-        if !open || category.is_empty() || ledger_id.is_empty() {
-            tag_names.set(Vec::new());
-            return;
-        }
-        let key = format!("{category}:{transaction_type}");
-        leptos::task::spawn_local(async move {
-            match api::tag::list(&key, &ledger_id).await {
-                Ok(list) => tag_names.set(list.into_iter().map(|item| item.name).collect()),
-                Err(error) => {
-                    tag_names.set(Vec::new());
-                    notify_error("查询标签失败", &error);
-                }
-            }
-        });
-    });
-
-    let submit_create = move || {
-        if creating.get_untracked() {
-            return;
-        }
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            Notifier::global().error("请先选择工作空间", None);
-            return;
-        }
-        // 前端先挡一道后端 `validate()` 的三条错误（文案与后端一致，中文）
-        let name = form_name.get_untracked().trim().to_string();
-        if name.is_empty() {
-            Notifier::global().error("模板名称不能为空", None);
-            return;
-        }
-        let category = form_category.get_untracked();
-        if category.is_empty() {
-            Notifier::global().error("分类不能为空", None);
-            return;
-        }
-
-        let dto = TransactionTemplateDto {
-            template_id: String::new(),
-            ledger_id: ledger_id.clone(),
-            template_name: name,
-            transaction_type: form_type.get_untracked(),
-            category,
-            tags: form_tags.get_untracked(),
-            // 勾选离群值时写入标记名（逗号分隔的标记串）
-            flags: if form_outlier.get_untracked() {
-                "outlier".to_string()
-            } else {
-                String::new()
-            },
-            description: form_description.get_untracked(),
-            sort_order: 0,
-        };
-
-        creating.set(true);
-        leptos::task::spawn_local(async move {
-            match api::template::create(dto).await {
-                Ok(_id) => {
-                    Notifier::global().success("保存模板成功", None);
-                    create_open.set(false);
-                    reset_form();
-                    load(ledger_id);
-                }
-                Err(error) => notify_error("保存模板失败", &error),
-            }
-            creating.set(false);
-        });
-    };
-
-    view! {
-        <div class="st-pane">
-            // 分区标题与「新建模板」按钮都去掉了：标题由页签承担，
-            // 按钮移到底栏（`.page-footer-bar`，见 `SettingsPage`），表格因此从卡片顶部开始。
-            <div class="st-table">
-                <div class="st-thead">
-                    <div class="st-th st-th--drag"></div>
-                    <div class="st-th">"模板名称"</div>
-                    <div class="st-th st-th--center">"交易类型"</div>
-                    <div class="st-th">"分类"</div>
-                    <div class="st-th">"标签"</div>
-                    <div class="st-th">"标记"</div>
-                    <div class="st-th">"描述"</div>
-                    <div class="st-th st-th--center">"操作"</div>
-                </div>
-
-                <div class="st-tbody">
-                    {move || {
-                        let list = templates.get();
-                        if list.is_empty() {
-                            if loading.get() {
-                                view! {
-                                    <div class="st-loading">
-                                        <Spin spinning=true size=SpinSize::Small />
-                                        <span>"正在加载…"</span>
-                                    </div>
-                                }
-                                    .into_any()
-                            } else {
-                                view! { <Empty title="暂无模板" /> }.into_any()
-                            }
-                        } else {
-                            list
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, template)| {
-                                    template_row(template, index, drag, reorder, delete_template)
-                                })
-                                .collect_view()
-                                .into_any()
-                        }
-                    }}
-                </div>
-            </div>
-
-            <Modal
-                open=create_open
-                title="新建模板"
-                width=520
-                ok_text="保存"
-                cancel_text="取消"
-                ok_loading=creating
-                on_close=move || create_open.set(false)
-                on_ok=move || submit_create()
-            >
-                <Form layout=FormLayout::Vertical>
-                    <FormItem label="模板名称">
-                        <Input value=form_name placeholder="请输入模板名称" maxlength=20 />
-                    </FormItem>
-                    <FormItem label="交易类型">
-                        <Segmented
-                            value=form_type
-                            options=vec![
-                                SegmentedOption::new("expense", "支出"),
-                                SegmentedOption::new("income", "收入"),
-                                SegmentedOption::new("transfer", "转账"),
-                            ]
-                        />
-                    </FormItem>
-                    <FormItem label="分类">
-                        {move || {
-                            let options = categories
-                                .get()
-                                .into_iter()
-                                .map(SelectOption::same)
-                                .collect::<Vec<SelectOption>>();
-                            view! {
-                                <Select
-                                    value=form_category
-                                    options=options
-                                    placeholder="选择消费分类"
-                                    searchable=true
-                                />
-                            }
-                        }}
-                    </FormItem>
-                    <FormItem label="标签">
-                        {move || {
-                            let options = tag_names
-                                .get()
-                                .into_iter()
-                                .map(CheckboxOption::same)
-                                .collect::<Vec<CheckboxOption>>();
-                            if options.is_empty() {
-                                view! { <span class="st-hint">"该分类下暂无标签"</span> }.into_any()
-                            } else {
-                                view! { <CheckboxGroup values=form_tags options=options /> }.into_any()
-                            }
-                        }}
-                    </FormItem>
-                    <FormItem label="描述">
-                        <Input value=form_description placeholder="请输入描述" maxlength=50 />
-                    </FormItem>
-                    <FormItem label="标记">
-                        <Checkbox checked=form_outlier label="离群值" />
-                    </FormItem>
-                </Form>
-            </Modal>
-        </div>
-    }
-}
-
-/// 一行模板：`DragSortItem` 作整行容器（拖拽手柄是视觉元素）。
-fn template_row(
-    template: TransactionTemplateDto,
-    index: usize,
-    drag: DragSortState,
-    on_drop: impl Fn(usize, usize) + Copy + 'static,
-    on_delete: impl Fn(String) + Copy + 'static,
-) -> impl IntoView {
-    let template_id = template.template_id.clone();
-    let name = template.template_name.clone();
-    let name_title = name.clone();
-    let type_text = format::transaction_type_text(&template.transaction_type);
-    let tag_kind = TagKind::from_transaction_type(&template.transaction_type);
-    let category = if template.category.is_empty() {
-        "-".to_string()
-    } else {
-        template.category.clone()
-    };
-    let tags = template.tags.clone();
-    let tags_empty = tags.is_empty();
-    let has_flags = !template.flags.is_empty();
-    let description_raw = template.description.clone();
-    let description = if description_raw.is_empty() {
-        "-".to_string()
-    } else {
-        description_raw.clone()
-    };
-    let delete_title = format!("删除模板「{}」？", template.template_name);
-    let id_for_delete = template_id.clone();
-
-    let drop_handler = UnsyncCallback::new(move |(from, to): (usize, usize)| on_drop(from, to));
-    let delete_handler = UnsyncCallback::new(move |id: String| on_delete(id));
-
-    view! {
-        <DragSortItem index=index state=drag on_drop=drop_handler class="st-tr">
-            <div class="st-td st-td--drag">
-                <span class="ui-drag-handle" title="拖动排序">
-                    {icons::icon(Icon::DragHandle)}
-                </span>
-            </div>
-
-            <div class="st-td">
-                <span class="st-cell-ellipsis" title=name_title>
-                    {name}
-                </span>
-            </div>
-
-            <div class="st-td st-td--center">
-                <Tag kind=tag_kind>{type_text}</Tag>
-            </div>
-
-            <div class="st-td">{category}</div>
-
-            <div class="st-td st-td--tags">
-                {if tags_empty {
-                    view! { <span class="st-dash">"-"</span> }.into_any()
-                } else {
-                    tags
-                        .into_iter()
-                        .map(|tag| view! { <Tag>{tag}</Tag> })
-                        .collect_view()
-                        .into_any()
-                }}
-            </div>
-
-            <div class="st-td">
-                {if has_flags {
-                    view! { <Tag kind=TagKind::Outlier>"离群值"</Tag> }.into_any()
-                } else {
-                    view! { <span class="st-dash">"-"</span> }.into_any()
-                }}
-            </div>
-
-            <div class="st-td">
-                <span class="st-cell-ellipsis" title=description_raw>
-                    {description}
-                </span>
-            </div>
-
-            <div class="st-td st-td--center">
-                <Popconfirm
-                    title=delete_title
-                    ok_text="删除"
-                    cancel_text="取消"
-                    class="ui-popconfirm--end"
-                    on_confirm=move || delete_handler.run(id_for_delete.clone())
-                >
-                    <Button
-                        variant=ButtonVariant::TextDanger
-                        size=ButtonSize::Small
-                        icon_only=true
-                        title="删除"
-                    >
-                        {icons::icon(Icon::Trash)}
-                    </Button>
-                </Popconfirm>
-            </div>
-        </DragSortItem>
     }
 }
 
@@ -1029,7 +560,7 @@ fn DiarySetting() -> impl IntoView {
     };
 
     view! {
-        <div class="st-pane">
+        <div class="page-pane">
             // 分区标题去掉：页签已经说明这是哪一页（见「消费模板」处的同一条说明）
             <div class="st-list">
                 <div class="st-card">
@@ -1495,7 +1026,7 @@ fn StockSetting() -> impl IntoView {
     };
 
     view! {
-        <div class="st-pane">
+        <div class="page-pane">
             // 分区标题去掉：页签已经说明这是哪一页（见「消费模板」处的同一条说明）
             <div class="st-list">
                 // ---- 交易标签 ----
@@ -1662,7 +1193,7 @@ fn StockSetting() -> impl IntoView {
                     </Form>
 
                     <Show when=move || no_ledger()>
-                        <p class="st-hint">"请先选择工作空间"</p>
+                        <p class="page-hint">"请先选择工作空间"</p>
                     </Show>
                 </div>
 

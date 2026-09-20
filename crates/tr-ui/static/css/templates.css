@@ -1,0 +1,143 @@
+/* ============================================
+ * 记账 · **模板**子功能（原「应用设置 → 消费模板」，见 src/pages/templates.rs）
+ *
+ * 这一套原来叫 `st-*`（settings 前缀）留在 settings.css 里 —— 迁到记账页之后前缀就名不副实了，
+ * 因此独立成文件并改名 `tpl-*`。**两个例外**（它们是"版心内的通用容器/提示"，不属于模板）：
+ *   `.page-pane` / `.page-hint` —— 定义在 app.css，设置页与模板页共用。
+ * ============================================ */
+
+/* 模板表：**不是卡片里的卡片**（原来自带描边 + 8px 圆角）。
+ * 表头用软灰底立起来，行之间用发丝线，整块通到版心边缘（左右负外边距抵消 `.page-pane` 的内边距）。 */
+.tpl-table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: none;
+  border-radius: 0;
+  margin: 0 calc(-1 * var(--transactions-space-lg));
+}
+
+.tpl-thead,
+.tpl-tr {
+  display: grid;
+  grid-template-columns:
+    36px
+    minmax(120px, 1.4fr)
+    100px
+    minmax(90px, 1fr)
+    minmax(110px, 1.2fr)
+    minmax(70px, 0.8fr)
+    minmax(140px, 1.6fr)
+    60px;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.tpl-thead {
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  background-color: var(--transactions-color-minor-background);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.tpl-th {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpl-th--center {
+  text-align: center;
+}
+
+/* 拖拽列（列宽由表头网格决定，这里只做居中） */
+.tpl-th--drag {
+  text-align: center;
+}
+
+.tpl-tbody {
+  display: flex;
+  flex-direction: column;
+}
+
+.tpl-tr {
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-major);
+  transition: background-color var(--transactions-transition-fast);
+}
+
+.tpl-tr:last-child {
+  border-bottom: none;
+}
+
+.tpl-tr:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.tpl-td {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpl-td--center {
+  display: flex;
+  justify-content: center;
+}
+
+.tpl-td--tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-2xs);
+}
+
+/* 拖拽把手：统一用 `ui.css` 的 `.ui-drag-handle` + 图标集 `Icon::DragHandle`
+ * （以前这一页内联手画了一个 16 格 6 圆点 SVG，与分类标签页的 CSS 点阵还不一样）。 */
+.tpl-td--drag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ⚠ `:where()` 把权重降到 0：否则会压过 `.ui-drag-handle:hover`，把手悬停不变主色 */
+:where(.tpl-tr:hover) .ui-drag-handle {
+  color: var(--transactions-color-text-secondary);
+}
+
+.tpl-cell-ellipsis {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpl-dash {
+  color: var(--transactions-color-text-disabled);
+}
+
+.tpl-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-2xl);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tpl-tr {
+    transition: none;
+  }
+}
