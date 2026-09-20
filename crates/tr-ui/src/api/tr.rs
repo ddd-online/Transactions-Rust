@@ -76,7 +76,7 @@ pub async fn delete(id: &str) -> Result<(), IpcError> {
     ipc::call_void("tr_delete", IdRequest { id: id.to_string() }).await
 }
 
-/// 关联到关键事件，返回日期。
+/// 关联到事件，返回日期。
 pub async fn link(transaction_id: &str, date: &str) -> Result<String, IpcError> {
     ipc::call(
         "tr_link",

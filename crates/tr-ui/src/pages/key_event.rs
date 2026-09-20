@@ -1,4 +1,4 @@
-//! 关键事件页（`/key_event_view`）—— P6-b 完整实现。
+//! 事件页（`/key_event_view`）—— P6-b 完整实现。
 //!
 //! ## 组成
 //!
@@ -43,7 +43,7 @@ use crate::store::AppStores;
 use crate::time::{split_ymd, today_ymd};
 
 /// 页面标题（固定文案，改动即影响界面）。
-pub const PAGE_TITLE: &str = "关键事件";
+pub const PAGE_TITLE: &str = "事件";
 
 /// 事件颜色（顺序即渲染顺序，共 20 个）。
 const EVENT_COLORS: [&str; 20] = [
@@ -706,7 +706,7 @@ fn load_year(
             }
             Err(error) => {
                 events.set(Vec::new());
-                notify_error("查询关键事件失败", &error);
+                notify_error("查询事件失败", &error);
             }
         }
         match dates {

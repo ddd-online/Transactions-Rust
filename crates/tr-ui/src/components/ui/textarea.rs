@@ -3,7 +3,7 @@
 //! 双向绑定与 [`crate::components::ui::Input`] 一致（调用方传 `RwSignal<String>`，
 //! 组件内部用 `prop:value` 同步 DOM）。样式在 `ui.css` 的 `.ui-textarea*`。
 //!
-//! 使用场合：关键事件正文、本轮复盘、日记正文
+//! 使用场合：事件正文、本轮复盘、日记正文
 //! （日记那里还要更细的等宽字体与撑满高度，用 `class` 覆盖）。
 
 use super::with_class;

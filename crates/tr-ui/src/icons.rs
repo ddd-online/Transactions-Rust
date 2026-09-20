@@ -25,7 +25,7 @@ pub enum Icon {
     LineChart,
     /// 股票
     Stock,
-    /// 关键事件
+    /// 事件
     Star,
     /// 日记管理
     Read,
@@ -69,7 +69,7 @@ pub enum Icon {
     ClockCircle,
     /// 勾选 —— 复选框 / 单选列表
     Check,
-    // ---- P6-b：关键事件 / 日记 / 股票 / 分析 用到的图标 ----
+    // ---- P6-b：事件 / 日记 / 股票 / 分析 用到的图标 ----
     /// 编辑
     Edit,
     /// 下载 / 另存

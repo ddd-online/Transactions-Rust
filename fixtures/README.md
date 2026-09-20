@@ -28,7 +28,7 @@ sqlite3 "$ws\transactions.db" ".schema"
 
 ```powershell
 cargo xtask seed "$env:TEMP\tr-demo-ws"      # 新建并播种：2 账本 / 19 分类 / 57 标签 /
-                                             # 7 条消费记录（含 outlier）/ 关键事件 + 关联 /
+                                             # 7 条消费记录（含 outlier）/ 事件 + 关联 /
                                              # 2 篇日记 / 1 个模板 / 3 个预设图表 + 股票全链路数据
 cargo xtask dump "$env:TEMP\tr-demo-ws"      # 只读导出全部业务表为规范化 JSON（列名升序）
 cargo xtask dump <dir> --table tbl_billadm_stock_trade

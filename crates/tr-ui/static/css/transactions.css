@@ -55,7 +55,7 @@
   font-size: var(--transactions-size-text-caption);
 }
 
-/* 已关联关键事件的星标（标记列） */
+/* 已关联事件的星标（标记列） */
 .tr-cell-mark {
   display: inline-flex;
   align-items: center;
@@ -476,7 +476,7 @@
 }
 
 /* ============================================
- * 8. 关联关键事件弹窗
+ * 8. 关联事件弹窗
  * ============================================ */
 
 .tr-link__footer {

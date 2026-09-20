@@ -36,7 +36,7 @@ pub enum Page {
     Accounting,
     /// 股票
     Stock,
-    /// 关键事件
+    /// 事件
     KeyEvent,
     /// 日记管理
     Diary,
@@ -62,7 +62,7 @@ impl Page {
             // 顶级功能名与页面标题共用一个来源（见 accounting::PAGE_TITLE）
             Page::Accounting => crate::pages::accounting::PAGE_TITLE,
             Page::Stock => "股票",
-            Page::KeyEvent => "关键事件",
+            Page::KeyEvent => "事件",
             Page::Diary => "日记",
             Page::Settings => "应用设置",
         }
@@ -86,7 +86,7 @@ impl Page {
     /// 侧边栏图标（与文案一一对应）。
     pub fn icon(self) -> Icon {
         match self {
-            // 导航图标的排列：记账 / 股票 / 关键事件 / 日记管理，
+            // 导航图标的排列：记账 / 股票 / 事件 / 日记管理，
             // 底部是应用设置（`Icon::LineChart` 现在是记账·分析子功能的图标条图标）
             Page::Accounting => Icon::Transaction,
             Page::Stock => Icon::Stock,

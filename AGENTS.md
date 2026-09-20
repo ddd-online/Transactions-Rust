@@ -125,7 +125,7 @@ pwsh -File fixtures/window-bounds.ps1 [-Exe <exe>] [-OutDir <dir>]
 pwsh -File fixtures/ui-diary-io.ps1 [-Workspace <ws>] [-OutDir <dir>]
 
 # UI 增删改端到端（断言都落在数据库上）：分类/标签/图表的"新增→删除"、
-# 关键事件"点色板改颜色 / 写 Markdown 描述 / 删除事件"、记账·模板子功能"新建模板→删除"。
+# 事件"点色板改颜色 / 写 Markdown 描述 / 删除事件"、记账·模板子功能"新建模板→删除"。
 pwsh -File fixtures/ui-crud.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
 # 同步到其他账本端到端（此前**零覆盖**：IPC 里没有 sync 命令，界面是"复制 DTO + 换账本 + 清 id"）：
@@ -163,12 +163,12 @@ pwsh -File fixtures/ui-diary-ledger.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir 
 # 再启动一次不重复备份（幂等）。它在真库上验证迁移引擎这条最高风险路径。
 pwsh -File fixtures/migrate-workspace.ps1 [-Exe <exe>] [-OutDir <dir>]
 
-# 关键事件「新建」端到端：DatePicker **任选一个不是今天的日期** → 断言事件落在那一天 →
+# 事件「新建」端到端：DatePicker **任选一个不是今天的日期** → 断言事件落在那一天 →
 # 同一天再建一次 → 断言 **upsert（一条、id 保留、标题被覆盖）** → 行内「删除事件」→ 库里清空。
 # （ui-crud 只验了用**默认日期（今天）**建事件 + 改颜色/写描述/删除；日期唯一性这条在这里锁。）
 pwsh -File fixtures/ui-key-event.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
-# 关联/解除关键事件端到端（唯一自动化 DatePicker 的脚本）：记一笔 → 行内「关联到关键事件」→
+# 关联/解除事件端到端（唯一自动化 DatePicker 的脚本）：记一笔 → 行内「关联到事件」→
 # 弹窗里用日期选择器选一个**不是今天**的日子（`link_date` 默认今天，选今天就等于没测选择器）
 # → 断言 触发器显示所选日期 + `key_event_date` 落库 + 该日期懒创建了一条空事件
 # → 再「修改关联」→「解除关联」→ 断言 `key_event_date` 清空。
@@ -427,8 +427,8 @@ cargo clippy --all-targets -- -D warnings
   它与那三处用的是同一个组件、同一条确认链路。改动共享组件后请用 `fixtures/ui-smoke.ps1` 做回归。
 - **弹窗里的下拉面板会被 `overflow: hidden` 裁掉**（真实缺陷，写 `fixtures/ui-link-event.ps1` 时才暴露）：
   DatePicker / Select 的下拉都是**绝对定位的子元素**，而 `.ui-modal__content` 原来带
-  `overflow: hidden`（只为圆角）——小弹窗（如「关联关键事件」，只有一个表单项）里日历被裁到
-  **只剩月份标题和星期行**，日期格子看不见也点不动；中等高度的弹窗（关键事件新增、日记编辑等）
+  `overflow: hidden`（只为圆角）——小弹窗（如「关联事件」，只有一个表单项）里日历被裁到
+  **只剩月份标题和星期行**，日期格子看不见也点不动；中等高度的弹窗（事件新增、日记编辑等）
   则被裁掉一半，看着像"面板画坏了"。下拉面板的正确做法是 **portal 到 body**，挂在弹窗内容里就必然受裁剪影响。
   现已改成 `overflow: visible`（圆角不依赖裁剪：header/footer 都是透明底、
   只有一条边框线，body 有内边距，没有子元素会画到圆角外）。
@@ -501,7 +501,7 @@ cargo clippy --all-targets -- -D warnings
   成功时 promise 直接 resolve 为数据本身；失败时 reject 载荷为
   `{"code":-1,"msg":"...","status":500}`。`msg` 是用户可见文案，**改动即破坏契约**。
 - **JSON 字段命名不统一，但必须保持不变**：核心记账模型是 snake_case
-  （`ledger.created_at`），关键事件/日记/股票模型是 camelCase（`ledgerId`、`createdAt`），
+  （`ledger.created_at`），事件/日记/股票模型是 camelCase（`ledgerId`、`createdAt`），
   DTO 里两种混用（`tr_query_result` 的 `page_size` 与 `trStatistics` 并存）。
   数据库列名恒为 snake_case，列映射在 DAO 层显式书写，不依赖 serde。
 - **金额/时间戳语义**：`transaction_at`、`trade_time` 等是 Unix 秒；

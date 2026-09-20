@@ -209,7 +209,7 @@ pub fn result_class(pnl: i64) -> &'static str {
     }
 }
 
-/// `YYYY-MM-DD` → `M-D`（关键事件列表的短日期；解析失败原样返回）。
+/// `YYYY-MM-DD` → `M-D`（事件列表的短日期；解析失败原样返回）。
 pub fn short_date(date: &str) -> String {
     let parts: Vec<&str> = date.split('-').collect();
     if parts.len() != 3 {

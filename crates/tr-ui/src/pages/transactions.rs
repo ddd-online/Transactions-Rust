@@ -363,7 +363,7 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
         }
     };
 
-    // ---- 关联关键事件 ----
+    // ---- 关联事件 ----
     let confirm_link = move || {
         let Some(record) = link_target.get_untracked() else {
             return;
@@ -565,7 +565,7 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
             condition_items.set(next)
         }))}
 
-        // ---- 关联关键事件弹窗 ----
+        // ---- 关联事件弹窗 ----
         {link_modal(
             link_open,
             link_target,
@@ -907,7 +907,7 @@ fn row_view(
                     // 2. 关联（已关联时 tooltip 显示日期）
                     <crate::components::ui::Tooltip title=link_title>
                         <crate::components::ui::IconButton
-                            label=if has_key_event { "修改关联" } else { "关联关键事件" }
+                            label=if has_key_event { "修改关联" } else { "关联事件" }
                             on_click=move |_| on_action.run((RowAction::Link, link_record.clone()))
                         >
                             {icons::icon(Icon::Link)}
@@ -1026,7 +1026,7 @@ fn sync_ledger_options() -> Vec<(String, String)> {
 ///
 /// 这一页**有**底栏而其它子功能没有，判断依据是"这个功能用不用得上"：
 /// 收支合计是列表页的产物，其余子功能（分析 / 标签 / 模板）与其它顶级功能
-/// （股票、关键事件、日记、设置）不需要，于是它们的版心直接触达窗口底边。
+/// （股票、事件、日记、设置）不需要，于是它们的版心直接触达窗口底边。
 fn statistics_bar() -> AnyView {
     let stores = AppStores::global();
     let value = move |key: &'static str| {
@@ -2430,9 +2430,9 @@ fn sort_row_view(
     .into_any()
 }
 
-// ==================================================================== 关联关键事件弹窗
+// ==================================================================== 关联事件弹窗
 
-/// 关联关键事件弹窗。
+/// 关联事件弹窗。
 fn link_modal(
     open: RwSignal<bool>,
     target: RwSignal<Option<TransactionRecordDto>>,
@@ -2450,7 +2450,7 @@ fn link_modal(
     view! {
         <Modal
             open=Signal::derive(move || open.get())
-            title="关联关键事件"
+            title="关联事件"
             width=480
             ok_text="确认关联"
             cancel_text="取消"

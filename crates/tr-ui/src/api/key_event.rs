@@ -1,6 +1,6 @@
-//! 关键事件域命令。
+//! 事件域命令。
 //!
-//! 关键事件/图片模型是 camelCase（`ledgerId` / `createdAt` / `filePath`），
+//! 事件/图片模型是 camelCase（`ledgerId` / `createdAt` / `filePath`），
 //! 但**请求入参一律 snake_case**（`ledger_id`）—— 照抄 `tr-ipc/src/commands/key_event.rs`。
 //!
 //! `key_event_upsert` 是"有则更新、无则插入"，返回日期；`title` / `content` / `color`
@@ -41,7 +41,7 @@ struct ImageAddRequest {
     data: String,
 }
 
-/// 某年的全部关键事件。
+/// 某年的全部事件。
 pub async fn list_by_year(year: &str, ledger_id: &str) -> Result<Vec<KeyEvent>, IpcError> {
     ipc::call(
         "key_event_list_by_year",
@@ -65,7 +65,7 @@ pub async fn dates_by_year(year: &str, ledger_id: &str) -> Result<Vec<String>, I
     .await
 }
 
-/// 按日期取关键事件（不存在时报错）。
+/// 按日期取事件（不存在时报错）。
 pub async fn get(date: &str, ledger_id: &str) -> Result<KeyEvent, IpcError> {
     ipc::call(
         "key_event_get",
@@ -77,7 +77,7 @@ pub async fn get(date: &str, ledger_id: &str) -> Result<KeyEvent, IpcError> {
     .await
 }
 
-/// 写入关键事件，返回日期。
+/// 写入事件，返回日期。
 pub async fn upsert(
     ledger_id: &str,
     date: &str,

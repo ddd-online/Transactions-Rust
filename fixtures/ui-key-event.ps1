@@ -1,4 +1,4 @@
-# ui-key-event.ps1 —— 关键事件页「新建事件」端到端：**任选日期** + **同一天 upsert（日期唯一）** + 删除。
+# ui-key-event.ps1 —— 事件页「新建事件」端到端：**任选日期** + **同一天 upsert（日期唯一）** + 删除。
 #
 # 为什么需要它：`fixtures/ui-crud.ps1` 里已经用「添加事件」建过事件，但它走的是**默认日期（今天）**，
 # 只验了"能建出来 + 改颜色/写 Markdown/删除"；`fixtures/ui-link-event.ps1` 验的是"记账记录关联到
@@ -167,8 +167,8 @@ try {
     [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Seconds 1
 
-    Write-Host "`n[ke] 打开「关键事件」页（目标日期 $eventDate）"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '关键事件')) '打开「关键事件」页'
+    Write-Host "`n[ke] 打开「事件」页（目标日期 $eventDate）"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '事件')) '打开「事件」页'
     Start-Sleep -Seconds 3
 
     # ================= 1/3 任选日期新建 =================

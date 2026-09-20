@@ -26,7 +26,7 @@
 #       最后**删掉这个事件**并断言：该日期的图片记录清空、原图/缩略图文件被清理、事件行消失，
 #       且别的日期的图片不受影响（`remove_image_files` 只有"文件缺失容错"的单测，这条补集成验证）。
 #
-# 注意：关键事件按 `(ledger_id, date)` upsert，**同一天只有一个事件**；历次跑留下的图片都挂在这一天，
+# 注意：事件按 `(ledger_id, date)` upsert，**同一天只有一个事件**；历次跑留下的图片都挂在这一天，
 #       所以删事件会把这天的图片全清掉——断言要按"日期"而不是"总行数回到基线"（我踩过一次）。
 #
 # 用法（pwsh 7；需要 release 产物）：
@@ -260,7 +260,7 @@ try {
 
     # ---- 建一个事件（新事件会被自动选中，详情区才会出现「添加图片」）----
     Write-Host "`n[ui-upload] 1/4 建事件"
-    Assert-True (Invoke-Element (Find-First $window '关键事件')) '打开「关键事件」页'
+    Assert-True (Invoke-Element (Find-First $window '事件')) '打开「事件」页'
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Find-First $window '新增事件')) '打开「新增事件」弹窗'
     Start-Sleep -Milliseconds 1500
@@ -482,7 +482,7 @@ try {
         Start-Sleep -Seconds 4
     }
 
-    # 注意：关键事件是按 (账本, 日期) upsert 的，所以**同一天只有一个事件**，
+    # 注意：事件是按 (账本, 日期) upsert 的，所以**同一天只有一个事件**，
     # 历次跑留下的图片都挂在这同一天上——删事件会把这天的图片全部清掉（这是对的）。
     # 这里就按"日期"来断言，并额外确认**别的日期**的图片不受影响（不误删）。
     $imagesBeforeDelete = @(Read-ImageRows)

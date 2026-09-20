@@ -9,7 +9,7 @@
 
 - **记账**（含 记录 / 分析 / 标签 / 模板 四个子功能，走左侧图标条切换）：记一笔（模板一键填充）、编辑、删除、复制同步到其他账本、筛选（关键词/类型/分类/标签/离群/时间范围）、排序、分页、统计条；**分析**提供分类占比、时间趋势、标签云、离群消费等图表（引擎为 `charts-rs`，界面层直出 SVG，不引入图表 JS 库）。
 - **股票**：账户与持仓、建仓/加仓/减仓/清仓（真实行情查名与现价）、成交记录与编辑、交易历史归档为轮次、费用设置（佣金/最低佣金/印花税/过户费）、盈亏统计、重置股票数据。
-- **关键事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、图片附件（含 HEIC 在界面层转码后上传）。
+- **事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、图片附件（含 HEIC 在界面层转码后上传）。
 - **日记**：按日期一篇，**按账本隔离**（切账本即切日记，同一天在不同账本各存一篇），Markdown 预览/编辑，导入/导出目录（作用于当前账本），心情标记，字数统计。
 - **账本与工作空间**：多账本切换/新建/删除，单实例运行，托盘菜单，浅色/深色双主题，关闭行为可选。
 - **代理（HTTP）**：行情查询与更新检查可走代理 —— 不使用 / **自动探测**（环境变量 → Windows 系统代理 → 直连）/ 手动 `http://host:port`（可带用户名密码），在「应用设置 → 通用设置 → 代理」里切换，改完立即生效、无需重启。
@@ -27,7 +27,7 @@
 ```
 crates/tr-domain/    # 纯领域层：模型 / DTO / 金额分元换算 / 费用分摊（native + wasm 双可编，无 I/O）
 crates/tr-store/     # 存储层：当前 schema 建库 + 只读格式校验 + 各 Dao
-crates/tr-service/   # 服务层：业务规则（账本 / 交易 / 图表 / 关键事件 / 日记 / 股票），不依赖 tauri
+crates/tr-service/   # 服务层：业务规则（账本 / 交易 / 图表 / 事件 / 日记 / 股票），不依赖 tauri
 crates/tr-ipc/       # IPC 命令面：全部 #[tauri::command] + 统一错误信封
 crates/tr-ui/        # 界面：Leptos CSR + static/{css,fonts,icons}
 src-tauri/           # 桌面外壳：窗口 / 托盘 / 配置 / 日志 / 资产协议 / 更新
@@ -108,7 +108,7 @@ pwsh -File fixtures/ui-diary-edit.ps1       # 日记编辑链路
 pwsh -File fixtures/ui-diary-ledger.ps1     # 日记按账本隔离（切账本互不可见 + 同日各存一篇）
 pwsh -File fixtures/ui-proxy.ps1            # 代理真的生效（假代理端到端：行情 + 更新检查都经代理）
 pwsh -File fixtures/migrate-workspace.ps1   # 旧格式工作空间自动迁移（数据一字不差 + 升级前备份 + 幂等）
-pwsh -File fixtures/ui-key-event.ps1        # 关键事件：任选日期新建 + 同日 upsert
+pwsh -File fixtures/ui-key-event.ps1        # 事件：任选日期新建 + 同日 upsert
 # 其余脚本见 AGENTS.md 的「常用命令」
 ```
 

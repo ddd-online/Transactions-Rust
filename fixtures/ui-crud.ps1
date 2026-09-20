@@ -1,9 +1,9 @@
-# ui-crud.ps1 —— UI 增删改的端到端验收（分类/标签 · 图表 · 关键事件的配色与描述 · 删除）。
+# ui-crud.ps1 —— UI 增删改的端到端验收（分类/标签 · 图表 · 事件的配色与描述 · 删除）。
 #
 # 覆盖快速验收里原先靠人工的第 6、8 项（以及第 7 项的删除半边）：
 #   * 分类标签页：新增分类 → 库里多一行 → 删除 → 库里少一行；标签同理
 #   * 记账 · 分析子功能（原顶级页「数据分析」）：新增图表 → 库里多一行 → 删除（气泡确认）→ 库里少一行
-#   * 关键事件页：点色板改颜色 → 库里 color 变；编辑描述写 Markdown → 保存 → 库里 content 变；
+#   * 事件页：点色板改颜色 → 库里 color 变；编辑描述写 Markdown → 保存 → 库里 content 变；
 #                 删除事件（气泡确认）→ 库里少一行
 # 断言全部落在**数据库**上（不看提示文案），所以和实现的措辞解耦。
 #
@@ -352,9 +352,9 @@ try {
     $chartGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_chart' -OutDir $OutDir | Where-Object { $_.title -eq $chartTitle })
     Assert-True ($chartGone.Count -eq 0) "删除后库里不再有该图表（$chartTitle）"
 
-    # ================= 4/4 关键事件：配色 / 描述 / 删除 =================
-    Write-Host "`n[crud] 4/4 关键事件：建事件 → 改颜色 → 写描述 → 删除"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '关键事件')) '打开「关键事件」页'
+    # ================= 4/4 事件：配色 / 描述 / 删除 =================
+    Write-Host "`n[crud] 4/4 事件：建事件 → 改颜色 → 写描述 → 删除"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '事件')) '打开「事件」页'
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增事件')) '点「新增事件」'
     Start-Sleep -Milliseconds 1000
