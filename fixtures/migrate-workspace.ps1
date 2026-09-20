@@ -87,6 +87,14 @@ Assert-True (-not [string]::IsNullOrWhiteSpace($oldestLedger)) '工作空间里�
 Assert-True ($oldDiary.Count -ge 1) "升级前有老日记可供核对（实际 $($oldDiary.Count) 篇）"
 Write-Host "[migrate] 升级前：日记 $($oldDiary.Count) 篇，最早账本 $oldestLedger" -ForegroundColor Cyan
 
+# 冒充"上一次升级留下的备份"：升级后它必须被清掉（同一工作空间只保留最近一份）
+$staleBackup = Join-Path $ws 'transactions.db.pre-migration-1.bak'
+Set-Content -Path $staleBackup -Value 'stale-backup' -Encoding ascii
+# 顺带放一个不符合命名规则的文件：清理时绝不能碰它
+$bystander = Join-Path $ws '我的手工备份.bak'
+Set-Content -Path $bystander -Value 'keep-me' -Encoding ascii
+Assert-True (Test-Path $staleBackup) '已放入一份旧的迁移备份（用于验证"只留最近一份"）'
+
 @{ width = 1500; height = 950; workspaceDir = $ws; closeBehavior = 'quit'
    appearance = 'light'; smokeTestMarker = 'migrate-workspace.ps1' } |
     ConvertTo-Json | Set-Content -Path (Join-Path $smokeHome '.transactions.json') -Encoding UTF8
@@ -133,9 +141,11 @@ try {
         }
     }
 
-    # ---- 6. 升级前留了备份，且备份里是升级前的样子 ----
+    # ---- 6. 升级前留了备份（且**只留这一份**），备份里是升级前的样子 ----
     $backups = @(Get-ChildItem $ws -Filter 'transactions.db.pre-migration-*.bak')
-    Assert-True ($backups.Count -eq 1) "升级前留了一份备份（实际 $($backups.Count) 份）"
+    Assert-True ($backups.Count -eq 1) "只保留最近一份备份（实际 $($backups.Count) 份）"
+    Assert-True (-not (Test-Path $staleBackup)) '上一次升级留下的旧备份已被清掉'
+    Assert-True (Test-Path $bystander) '不符合命名规则的文件（手工备份）没被动'
     if ($backups.Count -ge 1) {
         $backupColumns = @(& sqlite3 $backups[0].FullName "SELECT name FROM pragma_table_info('tbl_billadm_diary_entry');")
         Assert-True (-not ($backupColumns -contains 'ledger_id')) '备份里是升级前的结构（没有 ledger_id）'

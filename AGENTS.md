@@ -456,7 +456,9 @@ cargo clippy --all-targets -- -D warnings
   ③ **幂等 / 防御式**（先查 `PRAGMA table_info` / `sqlite_master`，结构已在就只补登记行）；
   ④ 只碰本次升级涉及的表，不许"顺手修复"别的结构；⑤ 留单测（旧格式 → 升级后校验通过、
   数据一字不差、重复应用无副作用）。升级前**必须先备份**（`VACUUM INTO` 出
-  `transactions.db.pre-migration-<时间戳>.bak`；备份失败就不升级）。
+  `transactions.db.pre-migration-<时间戳>.bak`；备份失败就不升级），且**同一工作空间只保留最近一份**
+  —— 旧的 `.bak` 在新备份**成功之后**才清掉（备份失败时旧的那份还在），只认自己的命名规则，
+  不动工作空间里别的文件。
   手工升级/验证用 `cargo xtask migrate <workspace-dir>`；`validate` / `dump` 仍然只读
   （`validate` 只**报告**待应用的迁移）。
 - **IPC 契约**：命令统一只收一个 `req` 结构体参数，字段名是**硬契约**——改动即破坏兼容。

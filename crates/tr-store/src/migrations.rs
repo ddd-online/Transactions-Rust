@@ -21,7 +21,10 @@
 //! 只要有待应用的迁移，就先 `VACUUM INTO` 出一份**单文件一致快照**
 //! （`<workspace>/transactions.db.pre-migration-<unix秒>.bak`；含 WAL 里已提交的内容）。
 //! 备份失败 → **不升级**并拒绝打开工作空间：宁可不升级，也不能在没有退路的情况下改用户数据。
-//! 备份文件不自动删除（用户自己决定什么时候清理），路径写进日志。
+//!
+//! **同一工作空间只保留最近一份**：新备份**成功之后**才清掉同目录下按同一命名规则的旧 `.bak`
+//! （刻意不放在备份之前 —— 那样一旦新备份失败，旧的那份也已经被删，退路就没了）。
+//! 只认自己的命名规则（`<DB_NAME>.pre-migration-*.bak`），绝不动工作空间里别的文件。
 //!
 //! ## 历史迁移为什么只做"结构前置检查"
 //!
@@ -103,8 +106,10 @@ pub fn apply_all(conn: &mut Connection, directory: &Path) -> Result<Vec<String>,
 
     let backup = backup_path(directory);
     backup_database(conn, &backup)?;
+    // 备份**成功之后**才清掉上一份：新备份失败时旧的那份还在，退路不会一起丢。
+    prune_older_backups(directory, &backup);
     tracing::info!(
-        "工作空间需要升级（{} 条待应用），已备份到 {}",
+        "工作空间需要升级（{} 条待应用），已备份到 {}（同一工作空间只保留这一份）",
         todo.len(),
         backup.display()
     );
@@ -145,8 +150,48 @@ pub fn backup_path(directory: &Path) -> PathBuf {
     ))
 }
 
+/// 是否是本模块的备份文件名（`<DB_NAME>.pre-migration-*.bak`）。
+///
+/// 清理旧备份时**只认这个规则**：工作空间目录里可能有用户自己放的别的东西，一律不动。
+fn is_backup_file_name(name: &str) -> bool {
+    name.starts_with(&format!("{}.pre-migration-", consts::DB_NAME)) && name.ends_with(".bak")
+}
+
+/// 只保留 `keep` 这一份迁移备份，删掉同目录下同一命名规则的其它备份。
+///
+/// 刻意由 [`apply_all`] 在**新备份成功之后**调用：备份失败时旧备份仍然在。
+/// 删除失败只记警告、不中断升级（旧文件多留一份不影响正确性）。
+fn prune_older_backups(directory: &Path, keep: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == keep {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !is_backup_file_name(name) {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!("已清理上一份迁移备份 {}", path.display()),
+            Err(error) => tracing::warn!("清理旧迁移备份失败 {}: {error}", path.display()),
+        }
+    }
+}
+
 /// `VACUUM INTO` 出一份单文件一致快照（含 WAL 中已提交的内容）。
 fn backup_database(conn: &Connection, path: &Path) -> Result<(), WorkspaceError> {
+    // 同一秒内重复升级会算出一模一样的文件名，而 `VACUUM INTO` 拒绝写到已存在的文件：
+    // 那份旧文件本来就是"同一位置的上一份备份"，先让位。
+    if path.exists() {
+        std::fs::remove_file(path).map_err(|error| {
+            WorkspaceError::Migration(format!("清理同名旧备份 {} 失败: {error}", path.display()))
+        })?;
+    }
     let target = path.to_string_lossy().replace('\'', "''");
     conn.execute_batch(&format!("VACUUM INTO '{target}'"))
         .map_err(|error| {
@@ -401,6 +446,43 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 同一工作空间**只保留最近一份**备份：升级前先放一份旧的，升级后只剩新的那份。
+    #[test]
+    fn older_backups_are_replaced_by_the_newest_one() {
+        let dir = temp_dir("backup-retention");
+        let stale = dir.join(format!(
+            "{}.pre-migration-1.bak",
+            tr_domain::consts::DB_NAME
+        ));
+        // 冒充"上一次升级留下的备份"（内容无所谓，只要文件名符合规则）
+        std::fs::write(&stale, b"stale-backup").unwrap();
+        // 顺带放一个**不符合命名规则**的文件：清理时绝不能碰它
+        let bystander = dir.join("用户自己放的东西.bak");
+        std::fs::write(&bystander, b"keep-me").unwrap();
+
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        insert_diary(&conn, "d1", "2026-01-01", "正文");
+        downgrade_diary(&conn);
+
+        apply_all(&mut conn, &dir).unwrap();
+
+        assert!(!stale.exists(), "上一份迁移备份必须被清掉");
+        assert!(bystander.exists(), "不符合命名规则的文件一律不动");
+
+        let mut backups: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| is_backup_file_name(name))
+            .collect();
+        backups.sort();
+        assert_eq!(backups.len(), 1, "只留最近一份，实际 {backups:?}");
+        assert_ne!(backups[0], "transactions.db.pre-migration-1.bak");
 
         std::fs::remove_dir_all(&dir).ok();
     }
