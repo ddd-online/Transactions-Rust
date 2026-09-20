@@ -33,8 +33,8 @@ use tr_domain::models::ChartLine;
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, CheckboxGroup,
-    CheckboxOption, Divider, Empty, IconButton, IconButtonVariant, Input, LineChart, Modal,
-    PageHeader, Popconfirm, Select, SelectOption, Spin, Tag, TagKind, TimeRangePicker,
+    CheckboxOption, Divider, Empty, FeaturePage, IconButton, IconButtonVariant, Input, LineChart,
+    Modal, Popconfirm, Select, SelectOption, Spin, Tag, TagKind, TimeRangePicker,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -367,202 +367,202 @@ pub fn DataAnalysisPage() -> impl IntoView {
         });
     };
 
-    view! {
-        <section class="page da-page">
-            <PageHeader title=PAGE_TITLE />
+    // 版心两块：工具栏 / 内容区各自建好视图再交给 `FeaturePage`（骨架见 components/ui/feature_page.rs）
+    let toolbar = view! {
+        // 时间范围选择器**与消费记录页同一个共享组件**（`TimeRangePicker`）：
+        // 从前这里自己做了「上一期 / 日-月-年分度 / 下一期」三件套，两页行为不一致。
+        <TimeRangePicker mode=range_mode start=range_start end=range_end />
+    }
+    .into_any();
 
-            <div class="page-body">
-                <div class="page-toolbar">
-                    // 时间范围选择器**与消费记录页同一个共享组件**（`TimeRangePicker`）：
-                    // 从前这里自己做了「上一期 / 日-月-年分度 / 下一期」三件套，两页行为不一致。
-                    <TimeRangePicker mode=range_mode start=range_start end=range_end />
-                </div>
+    let content = view! {
+        <div class="da-main">
+            <aside class="da-sidebar">
+                <Button
+                    variant=ButtonVariant::Primary
+                    block=true
+                    on_click=move |_| {
+                        create_title.set(String::new());
+                        create_granularity.set("year".to_string());
+                        create_open.set(true);
+                    }
+                >
+                    <span class="ui-btn__icon">{icons::icon(Icon::Plus)}</span>
+                    "新增图表"
+                </Button>
 
-                <div class="da-main">
-                    <aside class="da-sidebar">
-                        <Button
-                            variant=ButtonVariant::Primary
-                            block=true
-                            on_click=move |_| {
-                                create_title.set(String::new());
-                                create_granularity.set("year".to_string());
-                                create_open.set(true);
+                <div class="da-list">
+                    {move || {
+                        let items = charts.get();
+                        if items.is_empty() {
+                            return view! {
+                                <div class="da-list__empty">
+                                    {move || {
+                                        if loading.get() { "正在加载…" } else { "暂无图表" }
+                                    }}
+                                </div>
                             }
-                        >
-                            <span class="ui-btn__icon">{icons::icon(Icon::Plus)}</span>
-                            "新增图表"
-                        </Button>
-
-                        <div class="da-list">
-                            {move || {
-                                let items = charts.get();
-                                if items.is_empty() {
-                                    return view! {
-                                        <div class="da-list__empty">
-                                            {move || {
-                                                if loading.get() { "正在加载…" } else { "暂无图表" }
-                                            }}
-                                        </div>
-                                    }
-                                        .into_any();
-                                }
-                                items
-                                    .into_iter()
-                                    .map(|chart| {
-                                        let id = chart.chart_id.clone();
-                                        let is_active = id == selected.get();
-                                        let click_id = id.clone();
-                                        let delete_chart_value = chart.clone();
-                                        // 侧栏项**不再显示曲线颜色点**（一行三四个小圆点纯属视觉噪音，
-                                        // 颜色信息由图例与"曲线合计"承担）
-                                        let title = chart.title.clone();
-                                        // 标题会同时进 `title` 属性与文本节点，各留一份克隆
-                                        let title_for_attr = title.clone();
-                                        let title_for_label = title.clone();
-                                        let confirm_title = format!("删除图表「{title}」？");
-                                        // 回调先建好（`UnsyncCallback` 是 Copy）：`view!` 的 children
-                                        // 可能多次求值，直接 move 捕获 `ChartDto` 会让闭包退化成 FnOnce。
-                                        let delete_click = UnsyncCallback::new({
-                                            let chart = delete_chart_value.clone();
-                                            move |()| delete_chart(chart.clone())
-                                        });
-                                        view! {
-                                            <div
-                                                class="da-list__item"
-                                                class:is-active=is_active
-                                                role="option"
-                                                tabindex="0"
-                                                aria-selected=is_active
-                                                on:click=move |_| selected.set(click_id.clone())
-                                                on:keydown=move |event: leptos::ev::KeyboardEvent| {
-                                                    if event.key() == "Enter" || event.key() == " " {
-                                                        event.prevent_default();
-                                                        selected.set(id.clone());
-                                                    }
-                                                }
-                                            >
-                                                <span
-                                                    class="da-list__title"
-                                                    title=title_for_attr.clone()
-                                                >
-                                                    {title_for_label.clone()}
-                                                </span>
-                                                <Popconfirm
-                                                    title=confirm_title
-                                                    ok_text="删除"
-                                                    cancel_text="取消"
-                                                    on_confirm=move || {
-                                                        delete_chart(delete_chart_value.clone())
-                                                    }
-                                                >
-                                                    <IconButton
-                                                        variant=IconButtonVariant::Danger
-                                                        compact=true
-                                                        label="删除图表"
-                                                        class="da-list__delete"
-                                                        // **不要 stop_propagation**：Popconfirm 的触发挂在
-                                                        // 捕获阶段，这里再吞一次会把气泡自己的开关抵消掉
-                                                        // （点了删除什么都不弹）。列表项的"点按钮别选中整行"
-                                                        // 由 Popconfirm 捕获阶段那一次 stopPropagation 负责。
-                                                        on_click=delete_click
-                                                    >
-                                                        {icons::icon(Icon::Trash)}
-                                                    </IconButton>
-                                                </Popconfirm>
-                                            </div>
+                                .into_any();
+                        }
+                        items
+                            .into_iter()
+                            .map(|chart| {
+                                let id = chart.chart_id.clone();
+                                let is_active = id == selected.get();
+                                let click_id = id.clone();
+                                let delete_chart_value = chart.clone();
+                                // 侧栏项**不再显示曲线颜色点**（一行三四个小圆点纯属视觉噪音，
+                                // 颜色信息由图例与"曲线合计"承担）
+                                let title = chart.title.clone();
+                                // 标题会同时进 `title` 属性与文本节点，各留一份克隆
+                                let title_for_attr = title.clone();
+                                let title_for_label = title.clone();
+                                let confirm_title = format!("删除图表「{title}」？");
+                                // 回调先建好（`UnsyncCallback` 是 Copy）：`view!` 的 children
+                                // 可能多次求值，直接 move 捕获 `ChartDto` 会让闭包退化成 FnOnce。
+                                let delete_click = UnsyncCallback::new({
+                                    let chart = delete_chart_value.clone();
+                                    move |()| delete_chart(chart.clone())
+                                });
+                                view! {
+                                    <div
+                                        class="da-list__item"
+                                        class:is-active=is_active
+                                        role="option"
+                                        tabindex="0"
+                                        aria-selected=is_active
+                                        on:click=move |_| selected.set(click_id.clone())
+                                        on:keydown=move |event: leptos::ev::KeyboardEvent| {
+                                            if event.key() == "Enter" || event.key() == " " {
+                                                event.prevent_default();
+                                                selected.set(id.clone());
+                                            }
                                         }
-                                    })
-                                    .collect_view()
-                                    .into_any()
-                            }}
-                        </div>
-                        </aside>
-
-                    <div class="da-content">
-                        {move || {
-                            let Some(chart) = current_chart() else {
-                                return view! {
-                                    <div class="da-empty">
-                                        <crate::components::ui::Empty title="请选择左侧图表，或点上方「新增图表」" />
+                                    >
+                                        <span
+                                            class="da-list__title"
+                                            title=title_for_attr.clone()
+                                        >
+                                            {title_for_label.clone()}
+                                        </span>
+                                        <Popconfirm
+                                            title=confirm_title
+                                            ok_text="删除"
+                                            cancel_text="取消"
+                                            on_confirm=move || {
+                                                delete_chart(delete_chart_value.clone())
+                                            }
+                                        >
+                                            <IconButton
+                                                variant=IconButtonVariant::Danger
+                                                compact=true
+                                                label="删除图表"
+                                                class="da-list__delete"
+                                                // **不要 stop_propagation**：Popconfirm 的触发挂在
+                                                // 捕获阶段，这里再吞一次会把气泡自己的开关抵消掉
+                                                // （点了删除什么都不弹）。列表项的"点按钮别选中整行"
+                                                // 由 Popconfirm 捕获阶段那一次 stopPropagation 负责。
+                                                on_click=delete_click
+                                            >
+                                                {icons::icon(Icon::Trash)}
+                                            </IconButton>
+                                        </Popconfirm>
                                     </div>
                                 }
-                                    .into_any();
-                            };
-                            let data = data_cache.get().get(&chart.chart_id).cloned();
-                            view! {
-                                {chart_panel(
-                                    chart,
-                                    data,
-                                    RwSignal::new(false),
-                                    UnsyncCallback::new(move |(chart, lines): (
-                                        ChartDto,
-                                        Vec<ChartLine>,
-                                    )| save_chart((chart, lines))),
-                                    UnsyncCallback::new(move |granularity: String| {
-                                        if let Some(chart) = current_chart() {
-                                            change_granularity(
-                                                chart.chart_id.clone(),
-                                                granularity,
-                                            );
-                                        }
-                                    }),
-                                    UnsyncCallback::new(move |()| {
-                                        if let Some(chart) = current_chart() {
-                                            rename_title.set(chart.title.clone());
-                                            rename_open.set(true);
-                                        }
-                                    }),
-                                )}
-                            }
-                                .into_any()
-                        }}
-                    </div>
+                            })
+                            .collect_view()
+                            .into_any()
+                    }}
                 </div>
+                </aside>
+
+            <div class="da-content">
+                {move || {
+                    let Some(chart) = current_chart() else {
+                        return view! {
+                            <div class="da-empty">
+                                <crate::components::ui::Empty title="请选择左侧图表，或点上方「新增图表」" />
+                            </div>
+                        }
+                            .into_any();
+                    };
+                    let data = data_cache.get().get(&chart.chart_id).cloned();
+                    view! {
+                        {chart_panel(
+                            chart,
+                            data,
+                            RwSignal::new(false),
+                            UnsyncCallback::new(move |(chart, lines): (
+                                ChartDto,
+                                Vec<ChartLine>,
+                            )| save_chart((chart, lines))),
+                            UnsyncCallback::new(move |granularity: String| {
+                                if let Some(chart) = current_chart() {
+                                    change_granularity(
+                                        chart.chart_id.clone(),
+                                        granularity,
+                                    );
+                                }
+                            }),
+                            UnsyncCallback::new(move |()| {
+                                if let Some(chart) = current_chart() {
+                                    rename_title.set(chart.title.clone());
+                                    rename_open.set(true);
+                                }
+                            }),
+                        )}
+                    }
+                        .into_any()
+                }}
             </div>
+        </div>
+    }.into_any();
 
-            <Modal
-                open=Signal::derive(move || create_open.get())
-                title="新增图表"
-                width=420
-                ok_text="新增"
-                cancel_text="取消"
-                ok_loading=Signal::derive(move || creating.get())
-                on_close=move || create_open.set(false)
-                on_ok=move || create_chart()
-            >
-                <div class="modal-form-item">
-                    <p class="modal-form-label">"图表名称"</p>
-                    <Input value=create_title placeholder="图表名称" />
-                </div>
-                <div class="modal-form-item">
-                    <p class="modal-form-label">"时间粒度"</p>
-                    <Select
-                        value=create_granularity
-                        options=GRANULARITIES
-                            .iter()
-                            .map(|(value, label)| SelectOption::new(*value, *label))
-                            .collect()
-                        placeholder="选择时间粒度"
-                    />
-                </div>
-            </Modal>
+    view! {
+        <FeaturePage title=PAGE_TITLE toolbar=toolbar content=content />
 
-            <Modal
-                open=Signal::derive(move || rename_open.get())
-                title="重命名图表"
-                width=420
-                ok_text="重命名"
-                cancel_text="取消"
-                ok_loading=Signal::derive(move || renaming.get())
-                on_close=move || rename_open.set(false)
-                on_ok=move || rename_chart()
-            >
-                <div class="modal-form-item">
-                    <p class="modal-form-label">"图表名称"</p>
-                    <Input value=rename_title placeholder="图表名称" />
-                </div>
-            </Modal>
-        </section>
+        <Modal
+            open=Signal::derive(move || create_open.get())
+            title="新增图表"
+            width=420
+            ok_text="新增"
+            cancel_text="取消"
+            ok_loading=Signal::derive(move || creating.get())
+            on_close=move || create_open.set(false)
+            on_ok=move || create_chart()
+        >
+            <div class="modal-form-item">
+                <p class="modal-form-label">"图表名称"</p>
+                <Input value=create_title placeholder="图表名称" />
+            </div>
+            <div class="modal-form-item">
+                <p class="modal-form-label">"时间粒度"</p>
+                <Select
+                    value=create_granularity
+                    options=GRANULARITIES
+                        .iter()
+                        .map(|(value, label)| SelectOption::new(*value, *label))
+                        .collect()
+                    placeholder="选择时间粒度"
+                />
+            </div>
+        </Modal>
+
+        <Modal
+            open=Signal::derive(move || rename_open.get())
+            title="重命名图表"
+            width=420
+            ok_text="重命名"
+            cancel_text="取消"
+            ok_loading=Signal::derive(move || renaming.get())
+            on_close=move || rename_open.set(false)
+            on_ok=move || rename_chart()
+        >
+            <div class="modal-form-item">
+                <p class="modal-form-label">"图表名称"</p>
+                <Input value=rename_title placeholder="图表名称" />
+            </div>
+        </Modal>
     }
 }
 

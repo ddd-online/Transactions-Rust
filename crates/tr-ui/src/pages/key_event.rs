@@ -31,8 +31,8 @@ use tr_domain::models::{KeyEvent, KeyEventImage};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, DatePicker, FileStatus, IconButton, IconButtonVariant,
-    ImagePicker, Input, Modal, PageHeader, Popconfirm, Textarea, UploadFileProgress,
+    Button, ButtonSize, ButtonVariant, DatePicker, FeaturePage, FileStatus, IconButton,
+    IconButtonVariant, ImagePicker, Input, Modal, Popconfirm, Textarea, UploadFileProgress,
     UploadProgress, UploadProgressBar, UploadStatus,
 };
 use crate::error_handler::notify_error;
@@ -371,255 +371,256 @@ pub fn KeyEventPage() -> impl IntoView {
         });
     };
 
-    view! {
-        <section class="page key-event-page">
-            <PageHeader title=PAGE_TITLE />
+    // 版心两块：工具栏 / 内容区各自建好视图再交给 `FeaturePage`（骨架见 components/ui/feature_page.rs）
+    let toolbar = view! {
+        <div class="key-event-yearbar">
+            <button
+                type="button"
+                class="ui-icon-btn"
+                title="上一年"
+                aria-label="上一年"
+                on:click=move |_| year.update(|value| *value -= 1)
+            >
+                {icons::icon(Icon::Left)}
+            </button>
+            <span class="key-event-yearbar__value">{move || year.get().to_string()}</span>
+            <button
+                type="button"
+                class="ui-icon-btn"
+                title="下一年"
+                aria-label="下一年"
+                on:click=move |_| year.update(|value| *value += 1)
+            >
+                {icons::icon(Icon::Right)}
+            </button>
+        </div>
+    }
+    .into_any();
 
-            <div class="page-body">
-                <div class="page-toolbar">
-                    <div class="key-event-yearbar">
-                        <button
-                            type="button"
-                            class="ui-icon-btn"
-                            title="上一年"
-                            aria-label="上一年"
-                            on:click=move |_| year.update(|value| *value -= 1)
-                        >
-                            {icons::icon(Icon::Left)}
-                        </button>
-                        <span class="key-event-yearbar__value">{move || year.get().to_string()}</span>
-                        <button
-                            type="button"
-                            class="ui-icon-btn"
-                            title="下一年"
-                            aria-label="下一年"
-                            on:click=move |_| year.update(|value| *value += 1)
-                        >
-                            {icons::icon(Icon::Right)}
-                        </button>
-                    </div>
-                </div>
+    let content = view! {
+        <div class="key-event-body">
+            <div class="key-event-panel key-event-panel--left">
+                {event_list(
+                    events,
+                    list_loading,
+                    selected_date,
+                    UnsyncCallback::new(move |date: String| select_event(date)),
+                    UnsyncCallback::new(move |date: String| delete_event(date)),
+                    UnsyncCallback::new(move |()| add_open.set(true)),
+                )}
+            </div>
 
-                <div class="key-event-body">
-                    <div class="key-event-panel key-event-panel--left">
-                        {event_list(
-                            events,
-                            list_loading,
-                            selected_date,
-                            UnsyncCallback::new(move |date: String| select_event(date)),
-                            UnsyncCallback::new(move |date: String| delete_event(date)),
-                            UnsyncCallback::new(move |()| add_open.set(true)),
-                        )}
-                    </div>
+            <div class="key-event-panel key-event-panel--center">
+                <div class="key-event-detail">
+                    <Show
+                        when=move || current_event.get().is_some()
+                        fallback=|| {
+                            view! {
+                                <div class="key-event-empty">
+                                    <span class="key-event-empty__text">
+                                        "选择左侧事件查看详情"
+                                    </span>
+                                </div>
+                            }
+                        }
+                    >
+                        <div class="key-event-detail__body">
+                            <ColorToolbar
+                                current_event=current_event
+                                on_color=UnsyncCallback::new(move |color: String| {
+                                    let Some(event) = current_event.get_untracked()
+                                    else {
+                                        return;
+                                    };
+                                    save(Some((
+                                        event.title.clone(),
+                                        event.content.clone(),
+                                        color,
+                                    )));
+                                })
+                            />
 
-                    <div class="key-event-panel key-event-panel--center">
-                        <div class="key-event-detail">
-                            <Show
-                                when=move || current_event.get().is_some()
-                                fallback=|| {
-                                    view! {
-                                        <div class="key-event-empty">
-                                            <span class="key-event-empty__text">
-                                                "选择左侧事件查看详情"
-                                            </span>
-                                        </div>
-                                    }
-                                }
-                            >
-                                <div class="key-event-detail__body">
-                                    <ColorToolbar
-                                        current_event=current_event
-                                        on_color=UnsyncCallback::new(move |color: String| {
-                                            let Some(event) = current_event.get_untracked()
-                                            else {
-                                                return;
-                                            };
-                                            save(Some((
-                                                event.title.clone(),
-                                                event.content.clone(),
-                                                color,
-                                            )));
-                                        })
-                                    />
+                            <ImageUploadHost
+                                images=images
+                                selected_id=selected_image_id
+                                preview_open=preview_open
+                                asset_urls=asset_urls
+                                progress=progress
+                                pending=pending
+                                on_upload=UnsyncCallback::new(move |files: Vec<
+                                    web_sys::File,
+                                >| {
+                                    start_upload(
+                                        files,
+                                        selected_date.get_untracked(),
+                                        upload,
+                                    )
+                                })
+                            />
 
-                                    <ImageUploadHost
-                                        images=images
-                                        selected_id=selected_image_id
-                                        preview_open=preview_open
-                                        asset_urls=asset_urls
-                                        progress=progress
-                                        pending=pending
-                                        on_upload=UnsyncCallback::new(move |files: Vec<
-                                            web_sys::File,
-                                        >| {
-                                            start_upload(
-                                                files,
-                                                selected_date.get_untracked(),
-                                                upload,
-                                            )
-                                        })
-                                    />
-
-                                    <div class="key-event-description">
-                                        <Show
-                                            when=move || !is_editing.get()
-                                            fallback=move || {
-                                                view! {
-                                                    <div class="key-event-description__edit">
-                                                        <Textarea
-                                                            value=draft_content
-                                                            maxlength=CONTENT_MAX
-                                                            placeholder="输入描述内容…"
-                                                            class="key-event-textarea"
-                                                        />
-                                                    </div>
-                                                }
-                                            }
-                                        >
-                                            <div class="key-event-description__content">
-                                                {move || {
-                                                    let content = current_event
-                                                        .get()
-                                                        .map(|event| event.content)
-                                                        .unwrap_or_default();
-                                                    if content.trim().is_empty() {
-                                                        view! {
-                                                            <p class="key-event-description__placeholder">
-                                                                "暂无描述"
-                                                            </p>
-                                                        }
-                                                            .into_any()
-                                                    } else {
-                                                        view! {
-                                                            <crate::components::ui::Markdown
-                                                                source=Signal::derive(move || {
-                                                                    content.clone()
-                                                                })
-                                                                class="key-event-markdown"
-                                                            />
-                                                        }
-                                                            .into_any()
-                                                    }
-                                                }}
+                            <div class="key-event-description">
+                                <Show
+                                    when=move || !is_editing.get()
+                                    fallback=move || {
+                                        view! {
+                                            <div class="key-event-description__edit">
+                                                <Textarea
+                                                    value=draft_content
+                                                    maxlength=CONTENT_MAX
+                                                    placeholder="输入描述内容…"
+                                                    class="key-event-textarea"
+                                                />
                                             </div>
-                                        </Show>
-                                    </div>
-
-                                    <div class="key-event-detail__footer">
-                                        <Show
-                                            when=move || is_editing.get()
-                                            fallback=move || {
+                                        }
+                                    }
+                                >
+                                    <div class="key-event-description__content">
+                                        {move || {
+                                            let content = current_event
+                                                .get()
+                                                .map(|event| event.content)
+                                                .unwrap_or_default();
+                                            if content.trim().is_empty() {
                                                 view! {
-                                                    <Button
-                                                        variant=ButtonVariant::Secondary
-                                                        size=ButtonSize::Small
-                                                        on_click=move |_| {
-                                                            if let Some(event) = current_event
-                                                                .get_untracked()
-                                                            {
-                                                                draft_content.set(event.content);
-                                                            }
-                                                            is_editing.set(true);
-                                                        }
-                                                    >
-                                                        <span class="ui-btn__icon">
-                                                            {icons::icon(Icon::Edit)}
-                                                        </span>
-                                                        "编辑描述"
-                                                    </Button>
+                                                    <p class="key-event-description__placeholder">
+                                                        "暂无描述"
+                                                    </p>
                                                 }
+                                                    .into_any()
+                                            } else {
+                                                view! {
+                                                    <crate::components::ui::Markdown
+                                                        source=Signal::derive(move || {
+                                                            content.clone()
+                                                        })
+                                                        class="key-event-markdown"
+                                                    />
+                                                }
+                                                    .into_any()
                                             }
-                                        >
+                                        }}
+                                    </div>
+                                </Show>
+                            </div>
+
+                            <div class="key-event-detail__footer">
+                                <Show
+                                    when=move || is_editing.get()
+                                    fallback=move || {
+                                        view! {
                                             <Button
                                                 variant=ButtonVariant::Secondary
                                                 size=ButtonSize::Small
-                                                disabled=Signal::derive(move || {
-                                                    progress.get().status
-                                                        == Some(UploadStatus::Uploading)
-                                                })
                                                 on_click=move |_| {
-                                                    is_editing.set(false);
                                                     if let Some(event) = current_event
                                                         .get_untracked()
                                                     {
                                                         draft_content.set(event.content);
                                                     }
+                                                    is_editing.set(true);
                                                 }
                                             >
-                                                "取消"
+                                                <span class="ui-btn__icon">
+                                                    {icons::icon(Icon::Edit)}
+                                                </span>
+                                                "编辑描述"
                                             </Button>
-                                            <Button
-                                                variant=ButtonVariant::Primary
-                                                size=ButtonSize::Small
-                                                on_click=move |_| {
-                                                    // 标题为空时用正文首行
-                                                    let (title, color) = match current_event
+                                        }
+                                    }
+                                >
+                                    <Button
+                                        variant=ButtonVariant::Secondary
+                                        size=ButtonSize::Small
+                                        disabled=Signal::derive(move || {
+                                            progress.get().status
+                                                == Some(UploadStatus::Uploading)
+                                        })
+                                        on_click=move |_| {
+                                            is_editing.set(false);
+                                            if let Some(event) = current_event
+                                                .get_untracked()
+                                            {
+                                                draft_content.set(event.content);
+                                            }
+                                        }
+                                    >
+                                        "取消"
+                                    </Button>
+                                    <Button
+                                        variant=ButtonVariant::Primary
+                                        size=ButtonSize::Small
+                                        on_click=move |_| {
+                                            // 标题为空时用正文首行
+                                            let (title, color) = match current_event
+                                                .get_untracked()
+                                            {
+                                                Some(event)
+                                                    if !event.title.trim().is_empty() =>
+                                                {
+                                                    (event.title.clone(), event.color)
+                                                }
+                                                Some(event) => {
+                                                    let first_line = draft_content
                                                         .get_untracked()
-                                                    {
-                                                        Some(event)
-                                                            if !event.title.trim().is_empty() =>
-                                                        {
-                                                            (event.title.clone(), event.color)
-                                                        }
-                                                        Some(event) => {
-                                                            let first_line = draft_content
-                                                                .get_untracked()
-                                                                .lines()
-                                                                .next()
-                                                                .unwrap_or_default()
-                                                                .trim()
-                                                                .to_string();
-                                                            (
-                                                                format::truncate(
-                                                                    &first_line,
-                                                                    TITLE_MAX,
-                                                                ),
-                                                                event.color,
-                                                            )
-                                                        }
-                                                        None => return,
-                                                    };
-                                                    save(Some((
-                                                        title,
-                                                        draft_content.get_untracked(),
-                                                        color,
-                                                    )));
+                                                        .lines()
+                                                        .next()
+                                                        .unwrap_or_default()
+                                                        .trim()
+                                                        .to_string();
+                                                    (
+                                                        format::truncate(
+                                                            &first_line,
+                                                            TITLE_MAX,
+                                                        ),
+                                                        event.color,
+                                                    )
                                                 }
-                                            >
-                                                "保存"
-                                            </Button>
-                                        </Show>
-                                    </div>
-                                </div>
-                            </Show>
-
-                            <Show when=move || detail_loading.get() && current_event.get().is_none()>
-                                <div class="key-event-skeleton" aria-hidden="true">
-                                    <div class="key-event-skeleton__line is-wide"></div>
-                                    <div class="key-event-skeleton__line"></div>
-                                </div>
-                            </Show>
+                                                None => return,
+                                            };
+                                            save(Some((
+                                                title,
+                                                draft_content.get_untracked(),
+                                                color,
+                                            )));
+                                        }
+                                    >
+                                        "保存"
+                                    </Button>
+                                </Show>
+                            </div>
                         </div>
-                    </div>
+                    </Show>
 
-                    <div class="key-event-panel key-event-panel--right">
-                        {linked_panel(
-                            linked,
-                            selected_date,
-                            UnsyncCallback::new(move |id: String| unlink(id)),
-                        )}
-                    </div>
+                    <Show when=move || detail_loading.get() && current_event.get().is_none()>
+                        <div class="key-event-skeleton" aria-hidden="true">
+                            <div class="key-event-skeleton__line is-wide"></div>
+                            <div class="key-event-skeleton__line"></div>
+                        </div>
+                    </Show>
                 </div>
+            </div>
 
-                {add_modal(
-                    add_open,
-                    add_date,
-                    add_title,
-                    add_loading,
-                    UnsyncCallback::new(move |()| confirm_add()),
+            <div class="key-event-panel key-event-panel--right">
+                {linked_panel(
+                    linked,
+                    selected_date,
+                    UnsyncCallback::new(move |id: String| unlink(id)),
                 )}
             </div>
-        </section>
+        </div>
+
+        {add_modal(
+            add_open,
+            add_date,
+            add_title,
+            add_loading,
+            UnsyncCallback::new(move |()| confirm_add()),
+        )}
+    }
+    .into_any();
+
+    view! {
+        <FeaturePage title=PAGE_TITLE toolbar=toolbar content=content />
     }
 }
 

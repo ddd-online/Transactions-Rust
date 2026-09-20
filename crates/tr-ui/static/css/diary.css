@@ -16,7 +16,7 @@
 }
 
 /* 两栏 = 同一张纸上的两列：一条竖直发丝线分栏（与分类标签/关键事件同一手法）。
- * 内边距下放给两栏自己，竖线才能从卡片顶贯通到底。 */
+ * 内边距下放给两栏自己，竖线才能从版心顶贯通到底。 */
 .diary-body {
   flex: 1;
   display: grid;
@@ -30,7 +30,8 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: var(--transactions-space-lg);
+  /* 顶部不留内边距：两栏内容紧贴工具栏底边线（与其它页同一条约定） */
+  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
 }
 
 .diary-panel--left {

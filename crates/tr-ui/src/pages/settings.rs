@@ -52,7 +52,7 @@ use tr_domain::money::{cents_to_yuan, yuan_to_cents};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, Form, FormItem, FormLayout, Input, Modal, PageHeader,
+    Button, ButtonSize, ButtonVariant, FeaturePage, Form, FormItem, FormLayout, Input, Modal,
     Progress, Segmented, SegmentedOption, Spin, SpinSize, TabItem, TabPane, Tabs, Tooltip,
 };
 use crate::error_handler::notify_error;
@@ -90,31 +90,32 @@ pub fn SettingsPage() -> impl IntoView {
         TabItem::new(TAB_ABOUT, "关于软件"),
     ];
 
+    // 版心两块：工具栏 / 内容区各自建好视图再交给 `FeaturePage`（骨架见 components/ui/feature_page.rs）
+    let toolbar = view! {
+        <Tabs active=active items=items class="st-tabs" />
+    }
+    .into_any();
+
+    let content = view! {
+        <div class="st-panes">
+            <TabPane active=active key=TAB_GENERAL>
+                <GeneralSetting />
+            </TabPane>
+            <TabPane active=active key=TAB_DIARY>
+                <DiarySetting />
+            </TabPane>
+            <TabPane active=active key=TAB_STOCK>
+                <StockSetting />
+            </TabPane>
+            <TabPane active=active key=TAB_ABOUT>
+                <AboutSetting />
+            </TabPane>
+        </div>
+    }
+    .into_any();
+
     view! {
-        <section class="page">
-            <PageHeader title=PAGE_TITLE />
-
-            <div class="page-body">
-                <div class="page-toolbar">
-                    <Tabs active=active items=items class="st-tabs" />
-                </div>
-
-                <div class="st-panes">
-                    <TabPane active=active key=TAB_GENERAL>
-                        <GeneralSetting />
-                    </TabPane>
-                    <TabPane active=active key=TAB_DIARY>
-                        <DiarySetting />
-                    </TabPane>
-                    <TabPane active=active key=TAB_STOCK>
-                        <StockSetting />
-                    </TabPane>
-                    <TabPane active=active key=TAB_ABOUT>
-                        <AboutSetting />
-                    </TabPane>
-                </div>
-            </div>
-        </section>
+        <FeaturePage title=PAGE_TITLE toolbar=toolbar content=content />
     }
 }
 

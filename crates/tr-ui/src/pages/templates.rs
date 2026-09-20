@@ -256,7 +256,7 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
     .into_any();
 
     let content = view! {
-        <div class="page-pane">
+        <div class="page-pane tpl-pane">
             <div class="tpl-table">
                 <div class="tpl-thead">
                     <div class="tpl-th tpl-th--drag"></div>

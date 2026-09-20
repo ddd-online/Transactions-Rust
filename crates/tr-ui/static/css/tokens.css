@@ -55,8 +55,8 @@
   /* Backgrounds — 冷灰层级 */
   --transactions-color-bg-base: #f9fafb;
   --transactions-color-major-background: #ffffff;
-  /* 页面内容卡片的表层面。浅色下就是纯白（页面底色是 #f9fafb 的浅灰，层次由它撑起来）；
-   * 深色下需要单独抬高一点，否则白卡片与页面底几乎同色（见下方 dark 覆盖）。 */
+  /* 页面/版心那层纸面的颜色。浅色下就是纯白（页面底色是 #f9fafb 的浅灰，层次由它撑起来）；
+   * 深色下需要单独抬高一点，否则纸面与页面底几乎同色（见下方 dark 覆盖）。 */
   --transactions-color-card-surface: #ffffff;
   --transactions-color-major-warm: #f9fafb;
   --transactions-color-minor-background: #f3f4f6;

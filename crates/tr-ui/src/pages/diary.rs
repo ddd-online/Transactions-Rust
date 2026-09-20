@@ -33,7 +33,7 @@ use leptos::prelude::*;
 use tr_domain::models::{DiaryDateItem, DiaryEntry};
 
 use crate::api;
-use crate::components::ui::{Button, ButtonVariant, DatePicker, Modal, PageHeader, Textarea};
+use crate::components::ui::{Button, ButtonVariant, DatePicker, FeaturePage, Modal, Textarea};
 use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
@@ -295,108 +295,109 @@ pub fn DiaryPage() -> impl IntoView {
         });
     };
 
-    view! {
-        <section class="page diary-page">
-            <PageHeader title=PAGE_TITLE />
-
-            <div class="page-body">
-                <div class="page-toolbar">
-                    <div class="diary-tools">
-                        <Button
-                            variant=ButtonVariant::Secondary
-                            on_click=move |_| go_to_today()
-                        >
-                            "今天"
-                        </Button>
-                        <Button
-                            variant=ButtonVariant::Secondary
-                            on_click=move |_| {
-                                let years = dates
-                                    .get_untracked()
-                                    .iter()
-                                    .filter_map(|item| {
-                                        split_ymd(&item.date).map(|(year, _, _)| year)
-                                    })
-                                    .collect::<BTreeSet<_>>();
-                                collapsed_years.set(years);
-                                expanded_months.set(BTreeSet::new());
-                            }
-                        >
-                            "全部收起"
-                        </Button>
-                        <div class="diary-jump">
-                            <DatePicker value=jump_date placeholder="选择日期" />
-                        </div>
-                    </div>
-
-                    // 已保存状态与「删除」跟着工具栏走（原来在编辑器底部的那条栏里）
-                    <div class="diary-tools-right">
-                        <span class=move || {
-                            format!("diary-save-status {}", save_status.get().class())
-                        }>{move || save_status.get().label()}</span>
-                        <button
-                            type="button"
-                            class="ui-btn ui-btn--text-danger ui-btn--sm"
-                            on:click=move |_| delete_open.set(true)
-                        >
-                            <span class="ui-btn__icon">{icons::icon(Icon::Trash)}</span>
-                            "删除"
-                        </button>
-                    </div>
-                </div>
-
-                <div class="diary-body">
-                    <div class="diary-panel diary-panel--left">
-                        <DiaryTree
-                            dates=dates
-                            selected_date=selected_date
-                            collapsed_years=collapsed_years
-                            expanded_months=expanded_months
-                            initialized=tree_initialized
-                            on_select=UnsyncCallback::new(move |date: String| go_to_date(date))
-                        />
-                    </div>
-                    <div class="diary-panel diary-panel--right">
-                        <DiaryEditor
-                            entry=entry
-                            draft=draft
-                            mood=mood
-                            on_schedule_save=UnsyncCallback::new(move |()| schedule_save())
-                            on_save_now=UnsyncCallback::new(move |()| {
-                                timer.update_value(|slot| {
-                                    if let Some(handle) = slot.take() {
-                                        handle.clear();
-                                    }
-                                });
-                                do_save();
-                            })
-                            on_mood=UnsyncCallback::new(move |_| schedule_save())
-                        />
-                    </div>
-                </div>
-            </div>
-
-            <Modal
-                open=Signal::derive(move || delete_open.get())
-                title="确认删除"
-                width=400
-                ok_text="删除"
-                cancel_text="取消"
-                ok_danger=true
-                ok_loading=Signal::derive(move || deleting.get())
-                on_close=move || delete_open.set(false)
-                on_ok=move || confirm_delete()
+    // 版心两块：工具栏 / 内容区各自建好视图再交给 `FeaturePage`（骨架见 components/ui/feature_page.rs）
+    let toolbar = view! {
+        <div class="diary-tools">
+            <Button
+                variant=ButtonVariant::Secondary
+                on_click=move |_| go_to_today()
             >
-                <p class="workspace-picker-text">
-                    {move || match entry.get() {
-                        Some(current) => {
-                            format!("确定要删除「{}」的日记吗？", current.date)
-                        }
-                        None => String::new(),
-                    }}
-                </p>
-            </Modal>
-        </section>
+                "今天"
+            </Button>
+            <Button
+                variant=ButtonVariant::Secondary
+                on_click=move |_| {
+                    let years = dates
+                        .get_untracked()
+                        .iter()
+                        .filter_map(|item| {
+                            split_ymd(&item.date).map(|(year, _, _)| year)
+                        })
+                        .collect::<BTreeSet<_>>();
+                    collapsed_years.set(years);
+                    expanded_months.set(BTreeSet::new());
+                }
+            >
+                "全部收起"
+            </Button>
+            <div class="diary-jump">
+                <DatePicker value=jump_date placeholder="选择日期" />
+            </div>
+        </div>
+
+        // 已保存状态与「删除」跟着工具栏走（原来在编辑器底部的那条栏里）
+        <div class="diary-tools-right">
+            <span class=move || {
+                format!("diary-save-status {}", save_status.get().class())
+            }>{move || save_status.get().label()}</span>
+            <button
+                type="button"
+                class="ui-btn ui-btn--text-danger ui-btn--sm"
+                on:click=move |_| delete_open.set(true)
+            >
+                <span class="ui-btn__icon">{icons::icon(Icon::Trash)}</span>
+                "删除"
+            </button>
+        </div>
+    }
+    .into_any();
+
+    let content = view! {
+        <div class="diary-body">
+            <div class="diary-panel diary-panel--left">
+                <DiaryTree
+                    dates=dates
+                    selected_date=selected_date
+                    collapsed_years=collapsed_years
+                    expanded_months=expanded_months
+                    initialized=tree_initialized
+                    on_select=UnsyncCallback::new(move |date: String| go_to_date(date))
+                />
+            </div>
+            <div class="diary-panel diary-panel--right">
+                <DiaryEditor
+                    entry=entry
+                    draft=draft
+                    mood=mood
+                    on_schedule_save=UnsyncCallback::new(move |()| schedule_save())
+                    on_save_now=UnsyncCallback::new(move |()| {
+                        timer.update_value(|slot| {
+                            if let Some(handle) = slot.take() {
+                                handle.clear();
+                            }
+                        });
+                        do_save();
+                    })
+                    on_mood=UnsyncCallback::new(move |_| schedule_save())
+                />
+            </div>
+        </div>
+    }
+    .into_any();
+
+    view! {
+        <FeaturePage title=PAGE_TITLE toolbar=toolbar content=content />
+
+        <Modal
+            open=Signal::derive(move || delete_open.get())
+            title="确认删除"
+            width=400
+            ok_text="删除"
+            cancel_text="取消"
+            ok_danger=true
+            ok_loading=Signal::derive(move || deleting.get())
+            on_close=move || delete_open.set(false)
+            on_ok=move || confirm_delete()
+        >
+            <p class="workspace-picker-text">
+                {move || match entry.get() {
+                    Some(current) => {
+                        format!("确定要删除「{}」的日记吗？", current.date)
+                    }
+                    None => String::new(),
+                }}
+            </p>
+        </Modal>
     }
 }
 

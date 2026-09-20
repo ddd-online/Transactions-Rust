@@ -44,7 +44,7 @@ use tr_domain::models::StockFeeSetting;
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, DatePicker, Empty,
-    Input, LineChart, Modal, PageHeader, Pagination, Segmented, SegmentedOption, Select,
+    FeaturePage, Input, LineChart, Modal, Pagination, Segmented, SegmentedOption, Select,
     SelectOption, TabItem, TabPane, Tabs, Textarea,
 };
 use crate::error_handler::notify_error;
@@ -144,31 +144,32 @@ pub fn StockPage() -> impl IntoView {
         .map(|(key, label)| TabItem::new(*key, *label))
         .collect::<Vec<_>>();
 
+    // 版心两块：工具栏 / 内容区各自建好视图再交给 `FeaturePage`（骨架见 components/ui/feature_page.rs）
+    let toolbar = view! {
+        <Tabs active=active items=items />
+    }
+    .into_any();
+
+    let content = view! {
+        <div class="stock-tab-body">
+            <TabPane active=active key="account">
+                {account_view(active)}
+            </TabPane>
+            <TabPane active=active key="position">
+                {position_view(active)}
+            </TabPane>
+            <TabPane active=active key="trade">
+                {history_view()}
+            </TabPane>
+            <TabPane active=active key="statistics">
+                {statistics_view()}
+            </TabPane>
+        </div>
+    }
+    .into_any();
+
     view! {
-        <section class="page stock-page">
-            <PageHeader title=PAGE_TITLE />
-
-            <div class="page-body">
-                <div class="page-toolbar">
-                    <Tabs active=active items=items />
-                </div>
-
-                <div class="stock-tab-body">
-                    <TabPane active=active key="account">
-                        {account_view(active)}
-                    </TabPane>
-                    <TabPane active=active key="position">
-                        {position_view(active)}
-                    </TabPane>
-                    <TabPane active=active key="trade">
-                        {history_view()}
-                    </TabPane>
-                    <TabPane active=active key="statistics">
-                        {statistics_view()}
-                    </TabPane>
-                </div>
-            </div>
-        </section>
+        <FeaturePage title=PAGE_TITLE toolbar=toolbar content=content />
     }
 }
 

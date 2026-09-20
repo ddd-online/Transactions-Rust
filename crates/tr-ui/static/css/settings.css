@@ -43,7 +43,6 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding-top: 0;
 }
 
 /* 说明：`.st-pane-title`（「消费模板」「日记配置」「股票交易」那三个分区标题）已删除 ——
@@ -64,8 +63,8 @@
 
 /* ---------------------------------------------------------------- 卡片列表 */
 
-/* 设置行 = **卡片里的行**，不是卡片里再套一张卡片：
- * 页面内容区本身就是那张白卡片（`.page-body`），所以行只留一条通到卡片边缘的分隔线、
+/* 设置行 = **版心里的行**，不是卡片里再套一张卡片：
+ * 页面内容区是铺满的版心（`.page-content`），所以行只留一条通到版心边缘的分隔线、
  * 底色透明。以前每行自带边框 + 白底，在白卡片里就是"白套白"，层次全丢。 */
 .st-list {
   display: flex;
@@ -82,7 +81,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  /* 左右负外边距抵消页面内容容器的内边距，让分隔线通到卡片边缘 */
+  /* 左右负外边距抵消页面内容容器的内边距，让分隔线通到版心边缘 */
   margin: 0 calc(-1 * var(--transactions-space-lg));
   padding: var(--transactions-space-md) var(--transactions-space-lg);
   background: none;
@@ -92,7 +91,7 @@
   transition: background-color var(--transactions-transition-fast);
 }
 
-/* 最后一行不再画线：下面就是卡片底边 */
+/* 最后一行不再画线：下面就是版心底边 */
 .st-list > .st-card:last-child {
   border-bottom: none;
 }

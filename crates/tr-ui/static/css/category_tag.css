@@ -83,8 +83,8 @@
 /* ========== 主体：240px 分类栏 + 1fr 标签栏 ========== */
 
 /* 两栏是**同一张纸上的两列**，不是两张卡：
- * 底色透明（卡片本身不填色），靠一条竖直发丝线分栏 ——
- * 之前两栏各自是"白底 + 描边 + 12px 圆角"，正好套在外层白卡里，视觉上成了双层卡片。 */
+ * 底色透明（版心本身不填色），靠一条竖直发丝线分栏 ——
+ * 之前两栏各自是"白底 + 描边 + 12px 圆角"，正好套在版心里，视觉上成了双层卡片。 */
 .ct-main {
   flex: 1;
   display: grid;
@@ -104,11 +104,12 @@
 /* 左栏（分类）与右栏（标签）之间：一条贯通的竖线 */
 .ct-column--categories {
   border-right: 1px solid var(--transactions-color-divider);
-  padding: var(--transactions-space-lg);
+  /* 顶部不留内边距：栏头紧贴工具栏底边线（与记录子功能的表格同一条约定） */
+  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
 }
 
 .ct-column--tags {
-  padding: var(--transactions-space-lg);
+  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
 }
 
 .ct-column-header {
