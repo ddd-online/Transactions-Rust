@@ -682,31 +682,48 @@
   display: none;
 }
 
+/* 「添加图片」现在与「编辑描述 / 取消 / 保存」同在详情底栏，风格也统一成
+ * **Small 次要按钮**（`.ui-btn--sm` + `.ui-btn--secondary`：28px / 左右 12px / 13px）。
+ *
+ * 它渲染成 `<label>` 包一个隐藏的 `<input type=file>`（见 `ImagePicker`），
+ * 复用不了 `.ui-btn--*` 类，只能把那一档的度量手抄到这里 ——
+ * **改 `.ui-btn--sm` / `.ui-btn--secondary` 时请一并对照这两处**。
+ * 禁用态用兄弟选择器 `.image-picker__input:disabled ~ …`（DOM 里 input 在按钮之前），
+ * 取值与 `.ui-btn:disabled` 对齐。 */
 .image-picker__button {
   display: inline-flex;
   align-items: center;
-  gap: var(--transactions-space-xs);
-  height: var(--transactions-btn-height-md);
-  padding: 0 var(--transactions-btn-padding-h-md);
-  border: 1px solid var(--transactions-color-border-l2);
+  gap: var(--transactions-space-sm);
+  height: var(--transactions-btn-height-sm);
+  padding: 0 var(--transactions-btn-padding-h-sm);
+  border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-md);
   background: var(--transactions-color-major-background);
   color: var(--transactions-color-text-major);
-  font-size: var(--transactions-btn-font-size-md);
+  font-size: var(--transactions-btn-font-size-sm);
+  line-height: 1;
   cursor: pointer;
-  transition: border-color var(--transactions-transition-fast),
-    color var(--transactions-transition-fast);
+  transition: all var(--transactions-transition-fast);
+  white-space: nowrap;
 }
 
 .image-picker__button:hover {
-  border-color: var(--transactions-color-primary);
-  color: var(--transactions-color-primary);
+  border-color: var(--transactions-color-border-l2);
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.image-picker__input:disabled ~ .image-picker__button {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .image-picker__icon {
   display: inline-flex;
-  width: 14px;
-  height: 14px;
+  align-items: center;
+  justify-content: center;
+  /* 与 `.ui-btn__icon` 同：随字号缩放（13px 字号 → 13px 图标） */
+  width: 1em;
+  height: 1em;
 }
 
 /* ---------------- 上传进度条 ---------------- */

@@ -440,6 +440,8 @@ pub fn KeyEventPage() -> impl IntoView {
                                 })
                             />
 
+                            // 上传入口（`ImagePicker`）在详情底栏，见下方 `key-event-detail__footer`；
+                            // 这里只留进度条与画廊本体。
                             <ImageUploadHost
                                 images=images
                                 selected_id=selected_image_id
@@ -447,15 +449,6 @@ pub fn KeyEventPage() -> impl IntoView {
                                 asset_urls=asset_urls
                                 progress=progress
                                 pending=pending
-                                on_upload=UnsyncCallback::new(move |files: Vec<
-                                    web_sys::File,
-                                >| {
-                                    start_upload(
-                                        files,
-                                        selected_date.get_untracked(),
-                                        upload,
-                                    )
-                                })
                             />
 
                             <div class="key-event-description">
@@ -508,6 +501,26 @@ pub fn KeyEventPage() -> impl IntoView {
                                     when=move || is_editing.get()
                                     fallback=move || {
                                         view! {
+                                            // 「添加图片」放这里（**下方工具栏**）：与「编辑描述」同一行、
+                                            // 同一档 Small 次要按钮；编辑态不显示（那时底栏是取消/保存）。
+                                            // 进度条仍留在图片区下面（见 `ImageUploadHost` 的注释）。
+                                            <ImagePicker
+                                                label="添加图片"
+                                                multiple=true
+                                                disabled=Signal::derive(move || {
+                                                    progress.get().status
+                                                        == Some(UploadStatus::Uploading)
+                                                })
+                                                on_files=UnsyncCallback::new(move |files: Vec<
+                                                    web_sys::File,
+                                                >| {
+                                                    start_upload(
+                                                        files,
+                                                        selected_date.get_untracked(),
+                                                        upload,
+                                                    )
+                                                })
+                                            />
                                             <Button
                                                 variant=ButtonVariant::Secondary
                                                 size=ButtonSize::Small
@@ -1214,7 +1227,6 @@ fn ImageUploadHost(
     asset_urls: RwSignal<BTreeMap<String, String>>,
     progress: RwSignal<UploadProgress>,
     pending: RwSignal<Option<std::rc::Rc<PendingUpload>>, leptos::prelude::LocalStorage>,
-    on_upload: UnsyncCallback<Vec<web_sys::File>>,
 ) -> impl IntoView {
     let controls = UploadControls {
         progress,
@@ -1238,10 +1250,6 @@ fn ImageUploadHost(
                     .unwrap_or_default(),
             );
         }
-    });
-
-    let on_files = UnsyncCallback::new(move |files: Vec<web_sys::File>| {
-        on_upload.run(files);
     });
 
     let on_retry = UnsyncCallback::new(move |()| {
@@ -1284,14 +1292,8 @@ fn ImageUploadHost(
                 {image_gallery(images, selected_id, preview_open, asset_urls)}
             </div>
             <div class="key-event-gallery__actions">
-                <ImagePicker
-                    label="添加图片"
-                    multiple=true
-                    disabled=Signal::derive(move || {
-                        progress.get().status == Some(UploadStatus::Uploading)
-                    })
-                    on_files=on_files
-                />
+                // 「添加图片」已移到详情底栏（与「编辑描述」同一行、同一档按钮风格），
+                // 这里只剩上传进度：进度条紧贴它要描述的图片区。
                 <Show when=move || !progress.get().is_idle()>
                     <div class="key-event-gallery__progress">
                         <UploadProgressBar
