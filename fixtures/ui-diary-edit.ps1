@@ -59,71 +59,8 @@ function Wait-Like { param($Root, [string]$Pattern, [int]$TimeoutSec = 20)
     } while ((Get-Date) -lt $deadline)
     return $null
 }
-# 编辑器里的多行文本域：placeholder 只在空的时候是它的可访问名，写进内容后就变了，
-# 所以先按 placeholder 找，找不到就退回"编辑器区域里唯一的 Edit"。
-function Get-DiaryTextarea { param($Window)
-    $byPlaceholder = Find-First $Window '写下今天的日记…'
-    if ($byPlaceholder) { return $byPlaceholder }
-    foreach ($element in @(Get-Elements $Window)) {
-        $isEdit = ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
-            ($element.Current.ClassName -eq 'Edit')
-        if (-not $isEdit -or $element.Current.IsOffscreen) { continue }
-        $rect = $element.Current.BoundingRectangle
-        if ($rect.Width -lt 200 -or $rect.Height -lt 60) { continue }
-        return $element
-    }
-    return $null
-}
-# 用**真实粘贴**把文本塞进去：ValuePattern 塞值不一定触发 input 事件，
-# 而自动保存是挂在 input 上的（`on_input` → 1500ms 防抖）。
-function Paste-Text { param($Element, [string]$Text)
-    Set-Clipboard -Value $Text
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 300
-    # 焦点没进去的话（例如刚点过心情按钮、条目被服务端响应重建过），
-    # 后面那串 Ctrl+A/Ctrl+V 就贴到别处去了 —— 实测会导致"内容没改但保存成功"的假绿。
-    $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
-    $isEdit = $focused -and (($focused.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
-        ($focused.Current.ClassName -eq 'Edit'))
-    if (-not $isEdit) {
-        Write-Host '    粘贴前焦点不在文本域，重试一次 SetFocus' -ForegroundColor DarkYellow
-        $Element.SetFocus()
-        Start-Sleep -Milliseconds 400
-    }
-    [System.Windows.Forms.SendKeys]::SendWait('^a')
-    Start-Sleep -Milliseconds 200
-    [System.Windows.Forms.SendKeys]::SendWait('^v')
-    Start-Sleep -Milliseconds 500
-}
-# 写内容：**两条腿走路** —— 先用 ValuePattern 把值塞进去，再走一次真实粘贴（触发 input → 防抖保存），
-# 最后用 ValuePattern 读回来校验。只靠粘贴会偶发失败（窗口不是前台时 SetFocus 静默无效，
-# 于是"内容没改、保存却成功了"，看起来像假绿/假红）。
-function Set-DiaryContent { param($Window, [string]$Text)
-    $textarea = Get-DiaryTextarea -Window $Window
-    if (-not $textarea) { return $false }
-    $pattern = $null
-    if ($textarea.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
-        try { $pattern.SetValue($Text) } catch { Write-Host "    ValuePattern 塞值失败: $_" -ForegroundColor DarkYellow }
-    }
-    [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
-    Start-Sleep -Milliseconds 300
-    Paste-Text -Element $textarea -Text $Text
-    $fresh = Get-DiaryTextarea -Window $Window
-    $readBack = ''
-    $valuePattern = $null
-    if ($fresh -and $fresh.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
-        $readBack = $valuePattern.Current.Value
-    }
-    if ($readBack -ne $Text) { Write-Host "    文本域读回不一致（'$readBack'）" -ForegroundColor DarkYellow }
-    return ($readBack -eq $Text)
-}
-function Save-Now { param($Window)
-    # Ctrl+S：编辑器把快捷保存挂在 Textarea 上（`on_save_shortcut`）
-    [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
-    Start-Sleep -Milliseconds 200
-    [System.Windows.Forms.SendKeys]::SendWait('^s')
-    Start-Sleep -Seconds 2
-}
+# 编辑器里的多行文本域 / 粘贴 / 写内容 / Ctrl+S 这四个助手已抽到 `fixtures/lib/TrUia.ps1`
+# （`Get-DiaryTextarea` / `Paste-Text` / `Set-DiaryContent` / `Save-Now`），与 ui-diary-ledger.ps1 共用。
 
 # ---- 播种 ----
 if (-not $explicitWorkspace) {
@@ -198,6 +135,15 @@ try {
         Assert-True ($rows[0].word_count -eq $contentA.Length) `
             "字数按 Unicode 标量值算（期望 $($contentA.Length)，实际 $($rows[0].word_count)）"
         Assert-True ([string]::IsNullOrEmpty($rows[0].mood)) "刚写时没有心情（实际 '$($rows[0].mood)'）"
+        # 日记按账本隔离：写入必须落在**当前账本** —— 用它里面的种子那两篇（写在主账本）
+        # 反查当前账本的 id，避免把账本名字写死在断言里（种子后续阶段会改账本名）。
+        $seeded = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_diary_entry' -OutDir $OutDir |
+            Where-Object { $_.date -eq '2026-02-10' })
+        Assert-True ($seeded.Count -eq 1) '种子里有 2026-02-10 那篇日记（用来确定当前账本）'
+        if ($seeded.Count -eq 1) {
+            Assert-True ($rows[0].ledger_id -eq $seeded[0].ledger_id) `
+                "日记落在当前账本（期望 $($seeded[0].ledger_id)，实际 '$($rows[0].ledger_id)'）"
+        }
     }
     $firstId = if ($rows.Count -ge 1) { $rows[0].id } else { '' }
     # 界面上的字数提示也要跟上

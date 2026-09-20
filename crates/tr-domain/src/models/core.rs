@@ -229,7 +229,7 @@ pub struct KeyEventImage {
     pub created_at: i64,
 }
 
-/// 日记条目（工作空间级别，不与账本绑定）。表 `tbl_billadm_diary_entry`。
+/// 日记条目（**按账本隔离**，同账本内一天一篇）。表 `tbl_billadm_diary_entry`。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiaryEntry {
@@ -248,6 +248,9 @@ pub struct DiaryEntry {
     pub created_at: i64,
     #[serde(rename = "updatedAt")]
     pub updated_at: i64,
+    /// 所属账本（日记的可见范围：只在本账本里出现）
+    #[serde(rename = "ledgerId")]
+    pub ledger_id: String,
 }
 
 /// 日记日期列表项（返回给前端构建树）。

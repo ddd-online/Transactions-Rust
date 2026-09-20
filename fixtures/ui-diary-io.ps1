@@ -1,4 +1,4 @@
-# ui-diary-io.ps1 —— 日记「选择目录导入 / 导出」的端到端验收（真实原生选目录对话框）。
+# ui-diary-io.ps1 —— 日记「批量导入 / 导出」的端到端验收（真实原生选目录对话框）。
 #
 # 背景：日记导入导出原先被当作人工项（"走原生对话框"）。数据链路早已有单测
 # （`cargo test -p tr-service diary::`：编码回退链、导出→扫描→导入逐字节还原），
@@ -251,15 +251,15 @@ try {
     [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 500
 
-    Write-Host "`n[diary] 1/2 打开「应用设置 → 日记配置」并点「选择目录导入」"
+    Write-Host "`n[diary] 1/2 打开「应用设置 → 日记配置」并点「批量导入」"
     Assert-True (Invoke-Element (Wait-Element -Window $window -Name '应用设置')) '打开「应用设置」'
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Wait-Element -Window $window -Name '日记配置')) '切到「日记配置」页签'
     Start-Sleep -Seconds 2
 
-    $importButton = Wait-Element -Window $window -Name '选择目录导入'
-    Assert-True ([bool]$importButton) '找到「选择目录导入」按钮'
-    if (-not $importButton) { throw '找不到「选择目录导入」按钮' }
+    $importButton = Wait-Element -Window $window -Name '批量导入'
+    Assert-True ([bool]$importButton) '找到「批量导入」按钮'
+    if (-not $importButton) { throw '找不到「批量导入」按钮' }
     $rect = $importButton.Current.BoundingRectangle
     [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 300
@@ -286,20 +286,27 @@ try {
 
     $imported = @($after | Where-Object { $expectedDates -contains $_.date })
     Assert-True ($imported.Count -eq 2) "库里新增 2 篇日记（实际 $($imported.Count)）"
+    $currentLedger = ''
     if ($imported.Count -eq 2) {
         $md = $imported | Where-Object { $_.date -eq '2027-03-01' }
         $txt = $imported | Where-Object { $_.date -eq '2027-03-02' }
         Assert-True ($md.content -eq $utf8Content) 'UTF-8 文件正文逐字节导入（含 emoji 与换行）'
         Assert-True ($txt.content -eq 'GBK 编码的日记') 'GBK 文件按编码回退链正确解码'
         Assert-True ($md.word_count -eq (Get-CharCount $utf8Content)) "word_count 按 Unicode 标量值计数（期望 $(Get-CharCount $utf8Content)，实际 $($md.word_count)）"
+        # 日记按账本隔离：两篇都落在**同一个当前账本**里
+        Assert-True (-not [string]::IsNullOrEmpty($md.ledger_id)) "导入的日记带账本 id（实际 '$($md.ledger_id)'）"
+        Assert-True ($md.ledger_id -eq $txt.ledger_id) '同一次导入的两篇落在同一个账本'
+        $currentLedger = $md.ledger_id
     }
     Assert-True (@($after | Where-Object { $_.content -eq 'should be skipped' }).Count -eq 0) '文件名不合法的文件被跳过（不入库、不报错）'
 
-    Write-Host "`n[diary] 2/2 点「选择目录导出」导出到空目录"
-    $beforeExport = Read-DiaryRows
-    $exportButton = Wait-Element -Window $window -Name '选择目录导出'
-    Assert-True ([bool]$exportButton) '找到「选择目录导出」按钮'
-    if (-not $exportButton) { throw '找不到「选择目录导出」按钮' }
+    Write-Host "`n[diary] 2/2 点「批量导出」导出到空目录（只导当前账本）"
+    # 导出只覆盖**当前账本**：先只取该账本的行来比对（种子的两篇在默认账本，
+    # 而导入落到的当前账本由应用决定，两个账本的行数不能混着数）
+    $beforeExport = @(Read-DiaryRows | Where-Object { $_.ledger_id -eq $currentLedger })
+    $exportButton = Wait-Element -Window $window -Name '批量导出'
+    Assert-True ([bool]$exportButton) '找到「批量导出」按钮'
+    if (-not $exportButton) { throw '找不到「批量导出」按钮' }
     $rect = $exportButton.Current.BoundingRectangle
     [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 300

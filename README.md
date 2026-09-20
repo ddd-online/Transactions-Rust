@@ -11,7 +11,7 @@
 - **数据分析**：分类占比、时间趋势、标签云、离群消费等图表（引擎为 `charts-rs`，界面层直出 SVG，不引入图表 JS 库）。
 - **股票交易**：账户与持仓、建仓/加仓/减仓/清仓（真实行情查名与现价）、成交记录与编辑、交易历史归档为轮次、费用设置（佣金/最低佣金/印花税/过户费）、盈亏统计、重置股票数据。
 - **关键事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、图片附件（含 HEIC 在界面层转码后上传）。
-- **日记**：按日期一篇，Markdown 预览/编辑，导入/导出目录，心情标记，字数统计。
+- **日记**：按日期一篇，**按账本隔离**（切账本即切日记，同一天在不同账本各存一篇），Markdown 预览/编辑，导入/导出目录（作用于当前账本），心情标记，字数统计。
 - **账本与工作空间**：多账本切换/新建/删除，单实例运行，托盘菜单，浅色/深色双主题，关闭行为可选。
 - **数据自主**：除股票行情查询与更新检查外，全部功能离线可用；这两项也可完全不用。
 
@@ -104,6 +104,8 @@ pwsh -File fixtures/ui-smoke.ps1 -WriteFlow # 6 个顶级功能 + 记账 3 个�
 pwsh -File fixtures/ui-stock.ps1            # 股票全生命周期（138 项断言）
 pwsh -File fixtures/ui-transactions.ps1     # 记账·记录：编辑/模板/排序/筛选
 pwsh -File fixtures/ui-diary-edit.ps1       # 日记编辑链路
+pwsh -File fixtures/ui-diary-ledger.ps1     # 日记按账本隔离（切账本互不可见 + 同日各存一篇）
+pwsh -File fixtures/migrate-workspace.ps1   # 旧格式工作空间自动迁移（数据一字不差 + 升级前备份 + 幂等）
 pwsh -File fixtures/ui-key-event.ps1        # 关键事件：任选日期新建 + 同日 upsert
 # 其余脚本见 AGENTS.md 的「常用命令」
 ```

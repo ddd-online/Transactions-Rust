@@ -26,8 +26,8 @@ CREATE TABLE `tbl_billadm_key_event` (`id` text,`date` text NOT NULL,`title` var
 CREATE UNIQUE INDEX `idx_key_event_ledger_date` ON `tbl_billadm_key_event`(`ledger_id`,`date`);
 CREATE TABLE `tbl_billadm_key_event_image` (`id` text,`ledger_id` varchar(36) DEFAULT "",`event_date` text NOT NULL,`file_path` varchar(500) NOT NULL DEFAULT "",`thumb_path` varchar(500) NOT NULL DEFAULT "",`sort_order` integer NOT NULL DEFAULT 0,`created_at` integer NOT NULL,PRIMARY KEY (`id`));
 CREATE INDEX `idx_key_event_image_ledger_date` ON `tbl_billadm_key_event_image`(`ledger_id`,`event_date`);
-CREATE TABLE `tbl_billadm_diary_entry` (`id` text,`date` text NOT NULL,`content` text,`word_count` integer NOT NULL DEFAULT 0,`mood` varchar(20) DEFAULT "",`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
-CREATE UNIQUE INDEX `idx_tbl_billadm_diary_entry_date` ON `tbl_billadm_diary_entry`(`date`);
+CREATE TABLE `tbl_billadm_diary_entry` (`id` text,`date` text NOT NULL,`content` text,`word_count` integer NOT NULL DEFAULT 0,`mood` varchar(20) DEFAULT "",`created_at` integer NOT NULL,`updated_at` integer NOT NULL,`ledger_id` varchar(36) DEFAULT "",PRIMARY KEY (`id`));
+CREATE UNIQUE INDEX `idx_tbl_billadm_diary_entry_ledger_date` ON `tbl_billadm_diary_entry`(`ledger_id`,`date`);
 CREATE TABLE `tbl_billadm_stock_account` (`id` text,`ledger_id` varchar(36) DEFAULT "",`principal` integer NOT NULL DEFAULT 0,`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
 CREATE UNIQUE INDEX `idx_tbl_billadm_stock_account_ledger_id` ON `tbl_billadm_stock_account`(`ledger_id`);
 CREATE TABLE `tbl_billadm_stock_fee_setting` (`id` text,`ledger_id` varchar(36) DEFAULT "",`commission_rate` real NOT NULL DEFAULT 0.0002354,`min_commission` integer NOT NULL DEFAULT 500,`stamp_duty_rate` real NOT NULL DEFAULT 0.0005,`transfer_fee_rate` real NOT NULL DEFAULT 0.00001,`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
@@ -49,9 +49,10 @@ CREATE TABLE `tbl_billadm_stock_trade_tag_setting` (`id` text,`ledger_id` varcha
 CREATE UNIQUE INDEX `idx_tbl_billadm_stock_trade_tag_setting_ledger_id` ON `tbl_billadm_stock_trade_tag_setting`(`ledger_id`);
 CREATE TABLE `tbl_billadm_schema_migration` (`id` text,`applied_at` integer,PRIMARY KEY (`id`));
 
--- 以下 3 条记录是历史迁移的登记（这些迁移对**空库**都是空操作）。
--- 本仓库只复刻建库后的最终状态，不包含任何迁移执行逻辑，
--- 以保证新建库与已升级到当前格式的库逐字节一致。
+-- 以下 4 条记录是迁移登记（这些迁移对**空库**都是空操作）。
+-- 本仓库只复刻建库后的最终状态；迁移的执行逻辑在 `tr-store` 的 `migrations` 模块里
+-- （打开既有工作空间时按登记表逐个应用），新建库与升级后的库结构一致。
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260101_key_event_ledger_date_composite_unique', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260101_key_event_image_backfill_ledger_id', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260918_stock_trade_backfill_order_id', CAST(strftime('%s','now') AS INTEGER));
+INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260920_diary_ledger_scope', CAST(strftime('%s','now') AS INTEGER));

@@ -44,11 +44,13 @@ pub struct DiaryExportResult {
     pub failed: Vec<DiaryExportFileError>,
 }
 
-/// 日记写入请求体：日期、正文与心情。
-/// 缺失字段按空串处理，因此这里用 `Option`。
+/// 日记写入请求体：账本、日期、正文与心情。
+/// 缺失字段按空串处理，因此这里用 `Option`；`ledger_id` 缺席时由 IPC 层拒绝（`ledger_id is required`）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiaryUpsertRequest {
+    #[serde(rename = "ledger_id")]
+    pub ledger_id: String,
     #[serde(rename = "date")]
     pub date: String,
     #[serde(rename = "content")]
@@ -58,9 +60,13 @@ pub struct DiaryUpsertRequest {
 }
 
 /// `POST /diary/export` 请求体：`year`/`month` 缺省为 0（表示不限）。
+///
+/// 导出**只导 `ledger_id` 这一个账本**的日记（与导入对称）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiaryExportRequest {
+    #[serde(rename = "ledger_id")]
+    pub ledger_id: String,
     #[serde(rename = "directory")]
     pub directory: String,
     #[serde(rename = "year")]
@@ -105,8 +111,28 @@ mod tests {
     #[test]
     fn export_request_defaults_year_and_month_to_zero() {
         let request: DiaryExportRequest =
-            serde_json::from_str(r#"{"directory":"D:\\out"}"#).unwrap();
+            serde_json::from_str(r#"{"ledger_id":"l1","directory":"D:\\out"}"#).unwrap();
+        assert_eq!(request.ledger_id, "l1");
         assert_eq!(request.year.unwrap_or(0), 0);
         assert_eq!(request.month.unwrap_or(0), 0);
+    }
+
+    #[test]
+    fn diary_requests_read_ledger_id_and_tolerate_missing_it() {
+        let upsert: DiaryUpsertRequest =
+            serde_json::from_str(r#"{"ledger_id":"l1","date":"2026-02-10","content":"正文"}"#)
+                .unwrap();
+        assert_eq!(upsert.ledger_id, "l1");
+        assert_eq!(upsert.date, "2026-02-10");
+
+        // 老客户端不带 ledger_id：字段退化成空串，由 IPC 层的 `require_ledger_id` 拦下
+        let legacy: DiaryUpsertRequest = serde_json::from_str(r#"{"date":"2026-02-10"}"#).unwrap();
+        assert!(legacy.ledger_id.is_empty());
+
+        let export: DiaryExportRequest =
+            serde_json::from_str(r#"{"ledger_id":"l2","directory":"D:\\out","year":2026}"#)
+                .unwrap();
+        assert_eq!(export.ledger_id, "l2");
+        assert_eq!(export.year, Some(2026));
     }
 }

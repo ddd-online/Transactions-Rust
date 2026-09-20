@@ -1,10 +1,13 @@
-//! 全新工作空间的建库 DDL 与既有工作空间的**只读**格式校验。
+//! 全新工作空间的建库 DDL 与既有工作空间的格式校验。
 //!
-//! ## 为什么是"只读校验"而不是"迁移"
+//! ## 结构变更只有两条路
 //!
-//! 本仓库只兼容**当前** schema。既有数据库要么已经是当前格式（校验通过、原样使用），
-//! 要么是更早格式（明确拒绝并给出可操作的提示）。这样就没有任何"就地改写用户财务数据"的代码路径，
-//! 也就不存在迁移脚本写错导致数据损坏的风险。
+//! 1. **新库**：执行 [`FRESH_SCHEMA_SQL`]（`fixtures/schema/fresh.sql`，当前格式的原始 DDL）；
+//! 2. **既有库**：由 [`crate::migrations`] 的迁移引擎按登记表升级到当前格式（升级前自动备份），
+//!    之后再用本模块的 [`validate_current`] 做**只读**校验。
+//!
+//! 迁移引擎之外没有任何"改写既有数据库"的代码路径：校验本身不写任何数据、不改任何结构。
+//! 校验不通过（结构比当前格式更早/更怪，且没有对应迁移）时明确拒绝并给出可操作的提示。
 //!
 //! ## 为什么 DDL 要逐字节照抄
 //!
@@ -16,14 +19,21 @@ use rusqlite::Connection;
 
 use crate::workspace::WorkspaceError;
 
-/// 当前空库 DDL：19 张表 + 21 个索引 + 3 条迁移登记记录。
+/// 当前空库 DDL：19 张表 + 21 个索引 + 4 条迁移登记记录。
 ///
-/// 文件内**不含任何迁移执行逻辑**，只有建库后的最终状态；末尾 3 条 INSERT 是历史迁移的
-/// 登记记录（那些迁移对空库都是空操作），保留它们只为让新建库与已升级到当前格式的库完全一致。
+/// 末尾 4 条 INSERT 是迁移登记记录（那些迁移对空库都是空操作）：新建库直接就是当前格式，
+/// 不需要再跑迁移；保留这些登记行是为了让新建库与"升级到当前格式的库"在数据层面也一致
+/// （迁移引擎正是按这张表判断"还差哪几条"）。
 pub const FRESH_SCHEMA_SQL: &str = include_str!("../../../fixtures/schema/fresh.sql");
 
-/// 历史遗留的全局唯一索引名；存在即说明该库尚未升级到 (ledger_id, date) 复合唯一索引。
-const LEGACY_GLOBAL_UNIQUE_INDEX: &str = "idx_tbl_billadm_key_event_date";
+/// 历史遗留的全局唯一索引名；**任一存在**即说明该库尚未升级到 (ledger_id, date) 复合唯一索引。
+///
+/// 这是"当前格式"的一部分：迁移引擎负责把旧索引换掉（见 [`crate::migrations`]），
+/// 校验负责在升级**之后**确认它真的换掉了。
+const LEGACY_GLOBAL_UNIQUE_INDEXES: &[&str] = &[
+    "idx_tbl_billadm_key_event_date",
+    "idx_tbl_billadm_diary_entry_date",
+];
 
 /// 最新 schema 要求的表与列。顺序与 DDL 一致，便于人工比对。
 const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
@@ -130,6 +140,7 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
             "mood",
             "created_at",
             "updated_at",
+            "ledger_id",
         ],
     ),
     (
@@ -242,11 +253,11 @@ pub fn create_fresh(conn: &Connection) -> Result<(), WorkspaceError> {
     Ok(())
 }
 
-/// 只读校验：确认既有库已是最新 schema。
+/// 只读校验：确认库已是当前 schema（[`crate::migrations`] 升级之后的自检）。
 ///
 /// 只查 `sqlite_master` 与 `PRAGMA table_info`，不写任何数据、不改任何结构。
-/// 校验失败时返回可操作的提示（引导用户改用其他工作目录，或用能打开该格式的旧版本升级），
-/// 而不是就地修复。
+/// 校验失败时返回可操作的提示（说明是"升级没覆盖到的更老格式"，引导改用其他工作目录，
+/// 或用支持该格式的旧版本升级），而不是就地修复。
 pub fn validate_current(conn: &Connection) -> Result<(), WorkspaceError> {
     let mut problems: Vec<String> = Vec::new();
 
@@ -273,15 +284,15 @@ pub fn validate_current(conn: &Connection) -> Result<(), WorkspaceError> {
         }
     }
 
-    let legacy_index: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
-        [LEGACY_GLOBAL_UNIQUE_INDEX],
-        |row| row.get(0),
-    )?;
-    if legacy_index > 0 {
-        problems.push(format!(
-            "检测到旧版全局唯一索引 {LEGACY_GLOBAL_UNIQUE_INDEX}"
-        ));
+    for legacy_index in LEGACY_GLOBAL_UNIQUE_INDEXES {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+            [legacy_index],
+            |row| row.get(0),
+        )?;
+        if count > 0 {
+            problems.push(format!("检测到旧版全局唯一索引 {legacy_index}"));
+        }
     }
 
     if problems.is_empty() {
@@ -290,7 +301,8 @@ pub fn validate_current(conn: &Connection) -> Result<(), WorkspaceError> {
 
     Err(WorkspaceError::Incompatible(format!(
         "该工作空间不是当前格式（{}）：{}。请在设置中改用其他工作目录，\
-         或用支持该格式的旧版本把它升级到当前格式（本版本不会自动改写既有数据库）。",
+         或用支持该格式的旧版本把它升级到当前格式；本版本只认得比当前格式更早的已知格式，\
+         更早的格式没有可用的升级路径。",
         "格式过旧",
         problems.join("；")
     )))
@@ -331,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_database_records_the_three_legacy_migrations_as_applied() {
+    fn fresh_database_records_the_four_legacy_migrations_as_applied() {
         let conn = fresh_conn();
         let count: i64 = conn
             .query_row(
@@ -340,7 +352,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 4);
         let order_id_indexes: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' \
@@ -370,6 +382,23 @@ mod tests {
             "message = {message}"
         );
         assert!(message.contains("不是当前格式"), "message = {message}");
+    }
+
+    #[test]
+    fn validation_rejects_legacy_diary_global_unique_index() {
+        // 日记已经升过列（迁移引擎能补），但旧的全局唯一索引还在 → 校验必须拦下来
+        let conn = fresh_conn();
+        conn.execute_batch(
+            "DROP INDEX idx_tbl_billadm_diary_entry_ledger_date;
+             CREATE UNIQUE INDEX idx_tbl_billadm_diary_entry_date ON tbl_billadm_diary_entry(date);",
+        )
+        .unwrap();
+
+        let message = validate_current(&conn).unwrap_err().to_string();
+        assert!(
+            message.contains("idx_tbl_billadm_diary_entry_date"),
+            "message = {message}"
+        );
     }
 
     #[test]

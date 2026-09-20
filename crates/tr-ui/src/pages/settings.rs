@@ -349,9 +349,10 @@ impl DiaryImportRow {
     }
 }
 
-/// 日记配置：导入 + 导出。
+/// 日记配置：导入 + 导出（**都作用于当前账本**）。
 #[component]
 fn DiarySetting() -> impl IntoView {
+    let stores = AppStores::global();
     // ---- 导入状态 ----
     let import_status = RwSignal::new("idle".to_string());
     let import_rows = RwSignal::new(Vec::<DiaryImportRow>::new());
@@ -377,8 +378,14 @@ fn DiarySetting() -> impl IntoView {
         });
     };
 
-    // ---- 导入：dialog_open → import_scan → 顺序 import_file ----
+    // ---- 导入：dialog_open → import_scan → 顺序 import_file（落到**当前账本**）----
     let run_import = move |directory: String| {
+        // 账本在开始导入时就定下来：整批文件都进这个账本，中途切账本也不改目标
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().info("请先选择一个账本，再导入日记", None);
+            return;
+        }
         import_status.set("scanning".to_string());
         import_rows.set(Vec::new());
         import_total.set(0);
@@ -419,7 +426,7 @@ fn DiarySetting() -> impl IntoView {
 
             for (index, file) in files.iter().enumerate() {
                 set_row(index, "importing", String::new());
-                match api::diary::import_file(&file.path, &file.date).await {
+                match api::diary::import_file(&file.path, &file.date, &ledger_id).await {
                     Ok(_) => {
                         set_row(index, "done", String::new());
                         completed += 1;
@@ -469,8 +476,13 @@ fn DiarySetting() -> impl IntoView {
         });
     };
 
-    // ---- 导出：dialog_open → diary_export ----
+    // ---- 导出：dialog_open → diary_export（只导**当前账本**）----
     let run_export = move |directory: String| {
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().info("请先选择一个账本，再导出日记", None);
+            return;
+        }
         let scope = export_scope.get_untracked();
         let year_text = export_year.get_untracked();
         let month_text = export_month.get_untracked();
@@ -490,7 +502,7 @@ fn DiarySetting() -> impl IntoView {
         export_status.set("exporting".to_string());
 
         leptos::task::spawn_local(async move {
-            match api::diary::export(&directory, year, month).await {
+            match api::diary::export(&directory, year, month, &ledger_id).await {
                 Ok(result) => {
                     export_status.set("done".to_string());
                     export_total.set(result.total);
@@ -568,13 +580,16 @@ fn DiarySetting() -> impl IntoView {
                     <div class="st-card-info">
                         <span class="st-card-title">"导入日记"</span>
                         <span class="st-card-desc">
-                            "从本地目录批量导入，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md"
+                            "从本地目录批量导入当前账本，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md"
                         </span>
                     </div>
                     <div class="st-card-action">
-                        <Tooltip title="从本地目录批量导入，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md">
+                        <Tooltip title="从本地目录批量导入当前账本，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md">
                             <Button
                                 variant=ButtonVariant::Secondary
+                                disabled=Signal::derive(move || {
+                                    stores.current_ledger_id.get().is_empty()
+                                })
                                 on_click=move || pick_import_directory()
                             >
                                 {icons::icon(Icon::Inbox)}
@@ -588,7 +603,7 @@ fn DiarySetting() -> impl IntoView {
                     <div class="st-card-info">
                         <span class="st-card-title">"导出日记"</span>
                         <span class="st-card-desc">
-                            "将日记导出为 Markdown 文件（YYYY-MM-DD.md），可重新导入"
+                            "把当前账本的日记导出为 Markdown 文件（YYYY-MM-DD.md），可重新导入"
                         </span>
                         <div class="st-scope-row">
                             <Segmented
@@ -612,9 +627,12 @@ fn DiarySetting() -> impl IntoView {
                         </div>
                     </div>
                     <div class="st-card-action">
-                        <Tooltip title="将全部日记导出为 Markdown 文件（YYYY-MM-DD.md）">
+                        <Tooltip title="把当前账本的日记导出为 Markdown 文件（YYYY-MM-DD.md）">
                             <Button
                                 variant=ButtonVariant::Secondary
+                                disabled=Signal::derive(move || {
+                                    stores.current_ledger_id.get().is_empty()
+                                })
                                 loading=Signal::derive(move || {
                                     export_status.get() == "exporting"
                                 })

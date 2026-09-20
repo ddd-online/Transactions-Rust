@@ -2,13 +2,15 @@
 //!
 //! 提供建库护栏与诊断能力：
 //! * `schema-diff`：Rust 建库结果与 `fixtures/schema/fresh.sql` 基线逐条比对
-//! * `validate`   ：只读校验既有工作空间是否为当前格式（不建库、不改写）
+//! * `validate`   ：只读校验既有工作空间是否为当前格式（不建库、不改写；会**报告**待应用的迁移）
+//! * `migrate`    ：把既有工作空间升级到当前格式（升级前自动备份，与打开应用同一条路径）
 //! * `dump`       ：把工作空间的业务表导成规范化 JSON（排障与回归对比用）
 //!
 //! 用法：
 //! ```text
 //! cargo xtask schema-diff                        # 以 fixtures/schema/fresh.sql 为基线
 //! cargo xtask validate <workspace-dir>
+//! cargo xtask migrate <workspace-dir>
 //! cargo xtask dump <workspace-dir> [--table <name>]
 //! ```
 
@@ -18,7 +20,7 @@ use std::process::ExitCode;
 use rusqlite::Connection;
 
 use tr_domain::consts;
-use tr_store::{schema, Workspace};
+use tr_store::{migrations, schema, Workspace};
 
 mod seed;
 
@@ -49,6 +51,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("schema-diff") => schema_diff(&args[1..]),
         Some("validate") => validate_workspace(&args[1..]),
+        Some("migrate") => migrate_workspace(&args[1..]),
         Some("dump") => dump_workspace(&args[1..]),
         Some("seed") => seed_workspace(&args[1..]),
         Some(other) => {
@@ -69,12 +72,81 @@ fn usage() {
          cargo xtask schema-diff\n      \
          校验 Rust 建库结果与 fixtures/schema/fresh.sql 基线逐条一致\n  \
          cargo xtask validate <workspace-dir>\n      \
-         只读校验某个工作空间是否为当前格式（不会创建或修改任何文件）\n  \
+         只读校验某个工作空间是否为当前格式（不会创建或修改任何文件；会报告待应用的迁移）\n  \
+         cargo xtask migrate <workspace-dir>\n      \
+         把既有工作空间升级到当前格式（升级前自动备份，与应用打开时同一条路径）\n  \
          cargo xtask dump <workspace-dir> [--table <name>]\n      \
          把业务表导成规范化 JSON（只读）\n  \
          cargo xtask seed <workspace-dir>\n      \
          新建（若不存在）并用服务层写入一份可复现的示例数据"
     );
+}
+
+/// 升级既有工作空间到当前格式（先备份；已经是当前格式时什么都不做）。
+fn migrate_workspace(args: &[String]) -> ExitCode {
+    let Some(raw_dir) = args.first() else {
+        eprintln!("migrate 需要一个工作空间目录参数");
+        return ExitCode::FAILURE;
+    };
+
+    let directory = PathBuf::from(raw_dir);
+    if !directory.is_dir() {
+        eprintln!("工作空间目录不存在: {}", directory.display());
+        return ExitCode::FAILURE;
+    }
+
+    let db_path = directory.join(consts::DB_NAME);
+    if !db_path.exists() {
+        eprintln!(
+            "该目录下没有 {}：这是新建工作空间，不需要升级",
+            consts::DB_NAME
+        );
+        return ExitCode::FAILURE;
+    }
+
+    // 待应用的迁移（只读）——先打印出来，升级失败时也看得到原本要做什么
+    let todo = match open_readonly(&db_path) {
+        Some(conn) => match migrations::pending(&conn) {
+            Ok(todo) => todo,
+            Err(error) => {
+                eprintln!("读取迁移登记失败: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => return ExitCode::FAILURE,
+    };
+    if todo.is_empty() {
+        println!("{} 已是当前格式，无需升级", directory.display());
+        return ExitCode::SUCCESS;
+    }
+    println!("待应用迁移（{} 条）：{}", todo.len(), todo.join(", "));
+    println!(
+        "备份文件命名：{}",
+        migrations::backup_path(&directory).display()
+    );
+
+    // 走 `Workspace::open`：与应用启动时完全同一条迁移路径
+    match Workspace::open(&directory) {
+        Ok(_workspace) => {}
+        Err(error) => {
+            eprintln!("升级失败: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    match open_readonly(&db_path) {
+        Some(conn) => match schema::validate_current(&conn) {
+            Ok(()) => {
+                println!("已升级到当前格式：{}", directory.display());
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("升级后校验失败: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        None => ExitCode::FAILURE,
+    }
 }
 
 /// 新建（必要时）并播种一个工作空间。
@@ -280,6 +352,25 @@ fn validate_workspace(args: &[String]) -> ExitCode {
     let Some(conn) = open_readonly(&db_path) else {
         return ExitCode::FAILURE;
     };
+
+    // 待应用的迁移（只读；本命令**不**应用它们，只报告）
+    match migrations::pending(&conn) {
+        Ok(todo) if !todo.is_empty() => {
+            println!(
+                "ℹ️ 该工作空间需要升级（{} 条待应用迁移）：{}\n   \
+                 打开应用时会自动升级（升级前自动备份），也可先跑 \
+                 `cargo xtask migrate {}`。",
+                todo.len(),
+                todo.join(", "),
+                directory.display()
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("读取迁移登记失败: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
 
     match schema::validate_current(&conn) {
         Ok(()) => {

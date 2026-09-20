@@ -9,7 +9,7 @@ Transactions 是一款桌面个人记账应用，每个工作空间是一个独�
 
 ```
 crates/tr-domain/    # 纯领域层：models / dto / 金额换算 / 费用分摊（native + wasm 双可编，无 I/O）
-crates/tr-store/     # 存储层：当前 schema 建库 + 只读格式校验 + 各 Dao（rusqlite）
+crates/tr-store/     # 存储层：建库 + 迁移引擎（migrations）+ 格式校验 + 各 Dao（rusqlite）
 crates/tr-service/   # 服务层：业务规则（账本/交易/…/股票），不依赖 tauri
 crates/tr-ipc/       # IPC 命令面：全部 #[tauri::command] + 统一错误信封
 crates/tr-ui/        # 界面：Leptos CSR（cdylib，仅编译到 wasm32）+ static/{css,fonts,icons}
@@ -73,7 +73,8 @@ cargo tauri build                                 # 产出 NSIS 安装包
 
 # 验证护栏
 cargo xtask schema-diff                           # Rust 建库结构与 fixtures/schema/fresh.sql 逐条一致
-cargo xtask validate <workspace-dir>              # 只读校验既有工作空间是否为当前格式
+cargo xtask validate <workspace-dir>              # 只读校验既有工作空间是否为当前格式（会报告待应用的迁移）
+cargo xtask migrate <workspace-dir>               # 升级既有工作空间到当前格式（升级前自动备份）
 cargo xtask seed <workspace-dir>                  # 新建并播种一份示例数据（人工冒烟用）
 cargo xtask dump <workspace-dir> [--table <name>] # 只读导出业务表为规范化 JSON（排障与回归对比）
 
@@ -151,6 +152,16 @@ pwsh -File fixtures/ui-stock.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 # 输入后 1500ms 防抖自动保存）→ 断言 正文/字数/心情落库 → 点心情「开心」→ 断言 mood=😊
 # 且 **id 不变**（同一天 upsert）→ 改写内容再断言 →「预览」里 Markdown 渲染出标题 → 删除。
 pwsh -File fixtures/ui-diary-edit.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
+# 日记**按账本隔离**端到端：当前账本写一篇 → 切到另一个账本（编辑器里看不见它）→
+# 在**同一天**写不同内容 → 断言库里两行、分别属于两个账本（复合唯一键的回归）→ 切回来正文原样。
+pwsh -File fixtures/ui-diary-ledger.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
+# 工作空间**自动迁移**端到端：复制一份已播种的工作空间 → 降级成旧格式（日记去掉 ledger_id、
+# 旧的全工作空间唯一索引回来、抹掉登记行）→ 启动真实外壳 → 断言 能正常打开（迁移成功）、
+# 结构升级到位、**老日记正文一字不差并归到最早账本**、升级前留了备份（且备份里是旧结构）、
+# 再启动一次不重复备份（幂等）。它在真库上验证迁移引擎这条最高风险路径。
+pwsh -File fixtures/migrate-workspace.ps1 [-Exe <exe>] [-OutDir <dir>]
 
 # 关键事件「新建」端到端：DatePicker **任选一个不是今天的日期** → 断言事件落在那一天 →
 # 同一天再建一次 → 断言 **upsert（一条、id 保留、标题被覆盖）** → 行内「删除事件」→ 库里清空。
@@ -435,13 +446,19 @@ cargo clippy --all-targets -- -D warnings
   以及启动期构建失败（`main.rs`）。新增这类调用前先问"它真的不可失败吗"。
 - **金额恒为整数分**：数据库、IPC、算法全用 `i64` 分；只有展示层做分/元换算
   （`tr_domain::money`）。这两个换算函数的行为是硬契约（含负号、`.5` 输入）。
-- **数据库结构只认当前 schema**：`transactions.db` 不存在时用
-  `fixtures/schema/fresh.sql` 建库；已存在时**只做只读校验**，
-  **绝不执行任何 DDL/DML 去改结构**。更早格式的工作空间会被明确拒绝，
-  用户可见文案是 `该工作空间不是当前格式（格式过旧）：…`，
-  并提示改用其他工作目录、或用支持该格式的旧版本把它升级到当前格式。
-- **本仓库没有迁移代码**，也不要新增：没有自动建表/补列/加索引、
-  没有版本化迁移、没有数据库文件改名。任何"顺手修复旧库"的代码都属于越界。
+- **数据库结构变更只走迁移引擎**：`transactions.db` 不存在时用
+  `fixtures/schema/fresh.sql` 建库（当前格式）；已存在时先由 `tr-store/src/migrations.rs`
+  的**迁移引擎**按 `tbl_billadm_schema_migration` 登记表升级到当前格式，再按当前格式**只读校验**
+  （`schema::validate_current`）。校验不通过（比已知格式更早、且没有对应迁移）时明确拒绝，
+  用户可见文案是 `该工作空间不是当前格式（格式过旧）：…`。
+- **迁移的写法是硬规范**（`migrations::MIGRATIONS` 是唯一入口，新增迁移必须逐条满足）：
+  ① id 唯一稳定（`YYYYMMDD_描述`）；② 一个事务（执行 + 写登记行，失败整体回滚）；
+  ③ **幂等 / 防御式**（先查 `PRAGMA table_info` / `sqlite_master`，结构已在就只补登记行）；
+  ④ 只碰本次升级涉及的表，不许"顺手修复"别的结构；⑤ 留单测（旧格式 → 升级后校验通过、
+  数据一字不差、重复应用无副作用）。升级前**必须先备份**（`VACUUM INTO` 出
+  `transactions.db.pre-migration-<时间戳>.bak`；备份失败就不升级）。
+  手工升级/验证用 `cargo xtask migrate <workspace-dir>`；`validate` / `dump` 仍然只读
+  （`validate` 只**报告**待应用的迁移）。
 - **IPC 契约**：命令统一只收一个 `req` 结构体参数，字段名是**硬契约**——改动即破坏兼容。
   成功时 promise 直接 resolve 为数据本身；失败时 reject 载荷为
   `{"code":-1,"msg":"...","status":500}`。`msg` 是用户可见文案，**改动即破坏契约**。

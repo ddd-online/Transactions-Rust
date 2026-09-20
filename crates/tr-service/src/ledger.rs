@@ -14,7 +14,7 @@ use tr_store::Workspace;
 use crate::{assets, ServiceError, ServiceResult};
 
 /// 删除账本时的级联清理顺序（**逐条固定**，新增业务表必须同步补进这个数组）：
-/// 交易标签 → 交易 → 分类 → 标签 → 图表 → 模板 → 关键事件图片 → 关键事件
+/// 交易标签 → 交易 → 分类 → 标签 → 图表 → 模板 → 关键事件图片 → 关键事件 → 日记
 /// → 股票（资金记录/费用设置/标签设置/交易/轮次/历史/持仓/账户）→ 账本本身。
 const LEDGER_CASCADE: &[&str] = &[
     "DELETE FROM tbl_billadm_transaction_record_tag WHERE ledger_id = ?1",
@@ -25,6 +25,7 @@ const LEDGER_CASCADE: &[&str] = &[
     "DELETE FROM tbl_billadm_transaction_tpl WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_key_event_image WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_key_event WHERE ledger_id = ?1",
+    "DELETE FROM tbl_billadm_diary_entry WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_fund_record WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_fee_setting WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_trade_tag_setting WHERE ledger_id = ?1",
@@ -187,6 +188,9 @@ mod tests {
              VALUES (?2, ?1, '2026-01-01', 'a.jpg', 'thumb_a.jpg', 0, 1)",
             "INSERT INTO tbl_billadm_key_event (id, ledger_id, date, title, content, color, created_at, updated_at) \
              VALUES (?2, ?1, '2026-01-01', '标题', '内容', '', 1, 1)",
+            "INSERT INTO tbl_billadm_diary_entry \
+             (id, ledger_id, date, content, word_count, mood, created_at, updated_at) \
+             VALUES (?2, ?1, '2026-01-01', '正文', 2, '', 1, 1)",
             "INSERT INTO tbl_billadm_stock_fund_record \
              (id, ledger_id, record_date, event_type, event_text, amount_change, cash_balance, net_pnl, remark, created_at) \
              VALUES (?2, ?1, '2026-01-01', 'add_principal', '', 100, 100, NULL, '', 1)",

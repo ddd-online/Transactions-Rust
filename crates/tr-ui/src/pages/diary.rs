@@ -38,6 +38,7 @@ use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
+use crate::store::AppStores;
 use crate::time::{format_ymd_cn, split_ymd, today_ymd, weekday_cn};
 
 /// 页面标题（固定文案，改动即影响界面）。
@@ -94,6 +95,7 @@ impl SaveStatus {
 /// 页面根组件。
 #[component]
 pub fn DiaryPage() -> impl IntoView {
+    let stores = AppStores::global();
     let today = today_ymd();
     let selected_date = RwSignal::new(today.clone());
     let dates = RwSignal::new(Vec::<DiaryDateItem>::new());
@@ -107,6 +109,9 @@ pub fn DiaryPage() -> impl IntoView {
     let delete_open = RwSignal::new(false);
     let deleting = RwSignal::new(false);
     let jump_date = RwSignal::new(String::new());
+    // **草稿所属账本**：在 `schedule_save` 时快照。切账本时草稿仍写回这个账本，
+    // 既不会丢字，也不会把 A 账本的正文写进 B 账本。
+    let draft_ledger = RwSignal::new(String::new());
 
     // 折叠状态：年份集合 + `${year}-${month}` 集合
     let collapsed_years = RwSignal::new(BTreeSet::<i32>::new());
@@ -116,12 +121,37 @@ pub fn DiaryPage() -> impl IntoView {
     // 防抖句柄
     let timer = StoredValue::new(Option::<leptos::leptos_dom::helpers::TimeoutHandle>::None);
 
-    let load_entry = move |date: String| {
+    let clear_pending_save = move || {
+        timer.update_value(|slot| {
+            if let Some(handle) = slot.take() {
+                handle.clear();
+            }
+        });
+    };
+
+    let load_dates = move |ledger_id: String| {
+        leptos::task::spawn_local(async move {
+            if let Ok(items) = api::diary::list_dates(&ledger_id).await {
+                // 陈旧响应守卫：账本已经切走就丢弃，别把上一个账本的日期树画出来
+                if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+                    return;
+                }
+                dates.set(items);
+            }
+        });
+    };
+
+    let load_entry = move |ledger_id: String, date: String| {
         selected_date.set(date.clone());
         // 换日期后状态从零起算：否则上一条的「编辑中 / 保存中… / 保存失败」会被带过来
         save_status.set(SaveStatus::Idle);
         leptos::task::spawn_local(async move {
-            match api::diary::get(&date).await {
+            let loaded = api::diary::get(&date, &ledger_id).await;
+            // 陈旧响应守卫：账本已经切走就丢弃
+            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+                return;
+            }
+            match loaded {
                 Ok(item) => {
                     draft.set(item.content.clone());
                     mood.set(item.mood.clone());
@@ -133,6 +163,7 @@ pub fn DiaryPage() -> impl IntoView {
                     mood.set(String::new());
                     entry.set(Some(DiaryEntry {
                         date: date.clone(),
+                        ledger_id: ledger_id.clone(),
                         ..DiaryEntry::default()
                     }));
                 }
@@ -140,15 +171,12 @@ pub fn DiaryPage() -> impl IntoView {
         });
     };
 
-    // 首次挂载：并发拉日期表与今天的日记
-    leptos::task::spawn_local(async move {
-        if let Ok(items) = api::diary::list_dates().await {
-            dates.set(items);
-        }
-    });
-    load_entry(today.clone());
-
     let do_save = move || {
+        // 草稿属于哪个账本就写哪个账本（切账本后仍在飞的这次保存不会串账本）
+        let ledger_id = draft_ledger.get_untracked();
+        if ledger_id.is_empty() {
+            return;
+        }
         let Some(current) = entry.get_untracked() else {
             return;
         };
@@ -166,7 +194,13 @@ pub fn DiaryPage() -> impl IntoView {
         let content_at_start = content.clone();
         let mood_at_start = mood_value.clone();
         leptos::task::spawn_local(async move {
-            match api::diary::upsert(&date, &content, &mood_value).await {
+            let saved = api::diary::upsert(&date, &content, &mood_value, &ledger_id).await;
+            saving.set(false);
+            // 账本已经切走：这次写入属于**旧**账本，界面此刻是新账本的数据，不能合并回去
+            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+                return;
+            }
+            match saved {
                 Ok(saved) => {
                     save_status.set(SaveStatus::Saved);
                     // 用返回的条目覆盖（含服务端 wordCount）
@@ -189,7 +223,6 @@ pub fn DiaryPage() -> impl IntoView {
                     notify_error("保存日记失败", &error);
                 }
             }
-            saving.set(false);
             // 保存期间草稿又变了（在飞的请求撞上了一波输入）→ 补排一次防抖保存。
             // 没有这一步的话「编辑中」会一直挂着，最新内容也永远不会落库。
             let same_entry = entry.get_untracked().is_some_and(|item| item.date == date);
@@ -205,12 +238,10 @@ pub fn DiaryPage() -> impl IntoView {
     let schedule_save = move || {
         // 「编辑中」：改动已进草稿、还没落库（防抖窗口内就显示这个）
         save_status.set(SaveStatus::Editing);
+        // 记下这次草稿属于哪个账本（切账本时按它写回）
+        draft_ledger.set(stores.current_ledger_id.get_untracked());
         // 先清掉上一次的待触发任务
-        timer.update_value(|slot| {
-            if let Some(handle) = slot.take() {
-                handle.clear();
-            }
-        });
+        clear_pending_save();
         let handle = set_timeout_with_handle(
             do_save,
             std::time::Duration::from_millis(AUTOSAVE_DEBOUNCE_MS),
@@ -229,16 +260,42 @@ pub fn DiaryPage() -> impl IntoView {
         schedule_save();
     });
 
-    let go_to_date = move |date: String| {
-        if date.is_empty() {
+    // 账本变化 → 拉该账本的日期树与选中那天的日记；切账本前先把待落库的草稿写回**旧**账本。
+    //
+    // 只读信号、只做副作用（不在这里创建任何响应式值 —— 那会被随后的重跑 dispose）。
+    Effect::new(move |_| {
+        let ledger_id = stores.current_ledger_id.get();
+        // ① 取消防抖；有未落库的草稿 → 立刻写回草稿所属账本（旧账本）
+        clear_pending_save();
+        if save_status.get_untracked() == SaveStatus::Editing
+            && !draft_ledger.get_untracked().is_empty()
+        {
+            do_save();
+        }
+        // ② 换账本后让日期树对新数据重新做一次"首次收起"
+        tree_initialized.set(false);
+        // ③ 一个账本都没有 → 清空并展示「未选择账本」引导
+        if ledger_id.is_empty() {
+            dates.set(Vec::new());
+            entry.set(None);
+            draft.set(String::new());
+            mood.set(String::new());
+            save_status.set(SaveStatus::Idle);
+            draft_ledger.set(String::new());
             return;
         }
-        timer.update_value(|slot| {
-            if let Some(handle) = slot.take() {
-                handle.clear();
-            }
-        });
-        load_entry(date);
+        // ④ 账本内换数据：日期树重拉，**保持同一天**（同记账页保留时间范围的做法）
+        load_dates(ledger_id.clone());
+        load_entry(ledger_id, selected_date.get_untracked());
+    });
+
+    let go_to_date = move |date: String| {
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if date.is_empty() || ledger_id.is_empty() {
+            return;
+        }
+        clear_pending_save();
+        load_entry(ledger_id, date);
     };
 
     // 日期选择器**选到某天就直接跳过去**（不再需要「跳转日期」按钮）。
@@ -269,16 +326,18 @@ pub fn DiaryPage() -> impl IntoView {
     };
 
     let confirm_delete = move || {
+        // 显示中的条目必属当前账本；账本为空时无从删起
+        let ledger_id = stores.current_ledger_id.get_untracked();
         let Some(current) = entry.get_untracked() else {
             return;
         };
         let date = current.date.clone();
-        if date.is_empty() {
+        if date.is_empty() || ledger_id.is_empty() {
             return;
         }
         deleting.set(true);
         leptos::task::spawn_local(async move {
-            match api::diary::delete(&date).await {
+            match api::diary::delete(&date, &ledger_id).await {
                 Ok(()) => {
                     Notifier::global().success("日记已删除".to_string(), None);
                     dates.update(|items| items.retain(|item| item.date != date));
@@ -342,36 +401,49 @@ pub fn DiaryPage() -> impl IntoView {
     }
     .into_any();
 
+    // 内容区：有账本 → 日期树 + 编辑器；一个账本都没有 → 「未选择账本」引导
+    // （与记账页同一套结构，复用既有 `.empty-guide*` 样式）
     let content = view! {
-        <div class="diary-body">
-            <div class="diary-panel diary-panel--left">
-                <DiaryTree
-                    dates=dates
-                    selected_date=selected_date
-                    collapsed_years=collapsed_years
-                    expanded_months=expanded_months
-                    initialized=tree_initialized
-                    on_select=UnsyncCallback::new(move |date: String| go_to_date(date))
-                />
+        <Show
+            when=move || !stores.current_ledger_id.get().is_empty()
+            fallback=move || {
+                view! {
+                    <div class="empty-guide">
+                        <span class="empty-guide-icon">{icons::icon(Icon::Book)}</span>
+                        <p class="empty-guide-title">"未选择账本"</p>
+                        <p class="empty-guide-text">
+                            "请在左上角「选择账本」里新建或选择一个账本；日记按账本分开记录。"
+                        </p>
+                    </div>
+                }
+            }
+        >
+            <div class="diary-body">
+                <div class="diary-panel diary-panel--left">
+                    <DiaryTree
+                        dates=dates
+                        selected_date=selected_date
+                        collapsed_years=collapsed_years
+                        expanded_months=expanded_months
+                        initialized=tree_initialized
+                        on_select=UnsyncCallback::new(move |date: String| go_to_date(date))
+                    />
+                </div>
+                <div class="diary-panel diary-panel--right">
+                    <DiaryEditor
+                        entry=entry
+                        draft=draft
+                        mood=mood
+                        on_schedule_save=UnsyncCallback::new(move |()| schedule_save())
+                        on_save_now=UnsyncCallback::new(move |()| {
+                            clear_pending_save();
+                            do_save();
+                        })
+                        on_mood=UnsyncCallback::new(move |_| schedule_save())
+                    />
+                </div>
             </div>
-            <div class="diary-panel diary-panel--right">
-                <DiaryEditor
-                    entry=entry
-                    draft=draft
-                    mood=mood
-                    on_schedule_save=UnsyncCallback::new(move |()| schedule_save())
-                    on_save_now=UnsyncCallback::new(move |()| {
-                        timer.update_value(|slot| {
-                            if let Some(handle) = slot.take() {
-                                handle.clear();
-                            }
-                        });
-                        do_save();
-                    })
-                    on_mood=UnsyncCallback::new(move |_| schedule_save())
-                />
-            </div>
-        </div>
+        </Show>
     }
     .into_any();
 

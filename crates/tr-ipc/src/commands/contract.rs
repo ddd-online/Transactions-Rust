@@ -132,17 +132,26 @@ fn key_event_requests_mix_snake_case_body_with_dto_naming() {
 
 #[test]
 fn diary_and_transaction_link_requests_are_snake_case() {
-    // 日期并入请求体
-    let date: diary::DiaryDateRequest = serde_json::from_str(r#"{"date":"2026-02-10"}"#).unwrap();
+    // 日期并入请求体；日记按账本隔离，`ledger_id` 与日期一起传
+    let date: diary::DiaryDateRequest =
+        serde_json::from_str(r#"{"date":"2026-02-10","ledger_id":"l1"}"#).unwrap();
     assert_eq!(date.date, "2026-02-10");
+    assert_eq!(date.ledger_id, "l1");
 
+    // 日期列表只带账本
+    let list: diary::DiaryLedgerRequest = serde_json::from_str(r#"{"ledger_id":"l1"}"#).unwrap();
+    assert_eq!(list.ledger_id, "l1");
+
+    // 扫描不碰数据库，因此**没有** ledger_id（保持原契约）
     let scan: diary::DiaryScanRequest =
         serde_json::from_str(r#"{"directory":"D:\\diary"}"#).unwrap();
     assert_eq!(scan.directory, r"D:\diary");
 
     let import: diary::DiaryImportFileRequest =
-        serde_json::from_str(r#"{"path":"D:\\diary\\a.md","date":"2026-02-10"}"#).unwrap();
+        serde_json::from_str(r#"{"path":"D:\\diary\\a.md","date":"2026-02-10","ledger_id":"l1"}"#)
+            .unwrap();
     assert_eq!(import.date, "2026-02-10");
+    assert_eq!(import.ledger_id, "l1");
 
     // 关联交易：请求体里取 `transaction_id`（不是 transactionId）
     let link: tr::LinkRequest =

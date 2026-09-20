@@ -248,15 +248,22 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     transaction_record::link_to_key_event(workspace, &record_ids[2], "2026-02-10")?;
     log.push_str("关键事件 1 条（已关联 1 笔消费记录）\n");
 
-    // ---- 日记 ----
+    // ---- 日记（归到主账本；日记按账本隔离）----
     diary::upsert(
         workspace,
+        &main_ledger,
         "2026-02-10",
         "# 2026-02-10\n\n今天买了耳机，复盘一下。",
         "开心",
     )?;
-    diary::upsert(workspace, "2026-03-15", "发工资了，先存一半。", "平静")?;
-    log.push_str("日记 2 篇\n");
+    diary::upsert(
+        workspace,
+        &main_ledger,
+        "2026-03-15",
+        "发工资了，先存一半。",
+        "平静",
+    )?;
+    log.push_str("日记 2 篇（默认账本）\n");
 
     // ---- 消费模板 ----
     let template_id = transaction_template::create(
@@ -394,7 +401,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     log.push_str("批量A：关联 2026-04-01 → 取消关联 → 删除\n");
 
     // ---- 2. 日记：删除 2026-03-15 那篇 ----
-    diary::delete_by_date(workspace, "2026-03-15")?;
+    diary::delete_by_date(workspace, &main_ledger, "2026-03-15")?;
     log.push_str("日记：删除 2026-03-15\n");
 
     // ---- 3. 分类与标签：各新建一个再各自删除 ----

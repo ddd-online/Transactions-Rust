@@ -390,3 +390,87 @@ function Stop-TrApp {
         $Process.WaitForExit(5000) | Out-Null
     }
 }
+
+# ---------------------------------------------------------------------------
+# 日记编辑（ui-diary-edit.ps1 与 ui-diary-ledger.ps1 共用；原来只在 edit 那份里）
+# ---------------------------------------------------------------------------
+
+# 编辑器里的多行文本域：placeholder 只在空的时候是它的可访问名，写进内容后就变了，
+# 所以先按 placeholder 找，找不到就退回"编辑器区域里唯一的 Edit"。
+function Get-DiaryTextarea { param($Window)
+    $byPlaceholder = Find-First $Window '写下今天的日记…'
+    if ($byPlaceholder) { return $byPlaceholder }
+    foreach ($element in @(Get-Elements $Window)) {
+        $isEdit = ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
+            ($element.Current.ClassName -eq 'Edit')
+        if (-not $isEdit -or $element.Current.IsOffscreen) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if ($rect.Width -lt 200 -or $rect.Height -lt 60) { continue }
+        return $element
+    }
+    return $null
+}
+
+# 用**真实粘贴**把文本塞进去：ValuePattern 塞值不一定触发 input 事件，
+# 而自动保存是挂在 input 上的（`on_input` → 1500ms 防抖）。
+function Paste-Text { param($Element, [string]$Text)
+    Set-Clipboard -Value $Text
+    $Element.SetFocus()
+    Start-Sleep -Milliseconds 300
+    # 焦点没进去的话（例如刚点过心情按钮、条目被服务端响应重建过），
+    # 后面那串 Ctrl+A/Ctrl+V 就贴到别处去了 —— 实测会导致"内容没改但保存成功"的假绿。
+    $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+    $isEdit = $focused -and (($focused.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
+        ($focused.Current.ClassName -eq 'Edit'))
+    if (-not $isEdit) {
+        Write-Host '    粘贴前焦点不在文本域，重试一次 SetFocus' -ForegroundColor DarkYellow
+        $Element.SetFocus()
+        Start-Sleep -Milliseconds 400
+    }
+    [System.Windows.Forms.SendKeys]::SendWait('^a')
+    Start-Sleep -Milliseconds 200
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
+    Start-Sleep -Milliseconds 500
+}
+
+# 写内容：**两条腿走路** —— 先用 ValuePattern 把值塞进去，再走一次真实粘贴（触发 input → 防抖保存），
+# 最后用 ValuePattern 读回来校验。只靠粘贴会偶发失败（窗口不是前台时 SetFocus 静默无效，
+# 于是"内容没改、保存却成功了"，看起来像假绿/假红）。
+function Set-DiaryContent { param($Window, [string]$Text)
+    $textarea = Get-DiaryTextarea -Window $Window
+    if (-not $textarea) { return $false }
+    $pattern = $null
+    if ($textarea.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+        try { $pattern.SetValue($Text) } catch { Write-Host "    ValuePattern 塞值失败: $_" -ForegroundColor DarkYellow }
+    }
+    [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
+    Start-Sleep -Milliseconds 300
+    Paste-Text -Element $textarea -Text $Text
+    $fresh = Get-DiaryTextarea -Window $Window
+    $readBack = ''
+    $valuePattern = $null
+    if ($fresh -and $fresh.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
+        $readBack = $valuePattern.Current.Value
+    }
+    if ($readBack -ne $Text) { Write-Host "    文本域读回不一致（'$readBack'）" -ForegroundColor DarkYellow }
+    return ($readBack -eq $Text)
+}
+
+# Ctrl+S：编辑器把快捷保存挂在 Textarea 上（`on_save_shortcut`）
+function Save-Now { param($Window)
+    [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
+    Start-Sleep -Milliseconds 200
+    [System.Windows.Forms.SendKeys]::SendWait('^s')
+    Start-Sleep -Seconds 2
+}
+
+# 读一条日记的正文（ValuePattern）；用于断言"切账本后编辑器里是什么"。
+function Get-DiaryContent { param($Window)
+    $textarea = Get-DiaryTextarea -Window $Window
+    if (-not $textarea) { return $null }
+    $pattern = $null
+    if ($textarea.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+        return $pattern.Current.Value
+    }
+    return $null
+}

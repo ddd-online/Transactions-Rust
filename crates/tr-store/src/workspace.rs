@@ -13,7 +13,7 @@ use rusqlite::Connection;
 
 use tr_domain::consts;
 
-use crate::schema;
+use crate::{migrations, schema};
 
 /// 打开工作空间时可能出现的失败。
 #[derive(Debug, thiserror::Error)]
@@ -24,9 +24,12 @@ pub enum WorkspaceError {
     Sqlite(#[from] rusqlite::Error),
     #[error("数据库连接池错误: {0}")]
     Pool(#[from] r2d2::Error),
-    /// 既有数据库不是最新格式（本版本不做迁移，见 `schema` 模块说明）
+    /// 既有数据库比当前格式更早，且**没有**可用的升级路径（见 [`crate::schema::validate_current`]）。
     #[error("{0}")]
     Incompatible(String),
+    /// 升级既有数据库时失败（已回滚，库保持升级前的样子；备份路径见日志与错误文本）。
+    #[error("工作空间升级失败: {0}")]
+    Migration(String),
 }
 
 /// 打开中的工作空间。
@@ -50,7 +53,8 @@ impl Workspace {
     ///
     /// * 目录不存在 → 创建
     /// * `transactions.db` 不存在 → 执行最新 schema DDL 建库
-    /// * 已存在 → **只读校验**格式，不通过则返回 [`WorkspaceError::Incompatible`]
+    /// * 已存在 → 先跑**迁移引擎**把更早格式升级到当前格式（升级前自动备份），
+    ///   再按当前格式**只读校验**；没有可用升级路径时返回 [`WorkspaceError::Incompatible`]
     pub fn open(directory: &Path) -> Result<Self, WorkspaceError> {
         if !directory.is_dir() {
             std::fs::create_dir_all(directory)?;
@@ -84,9 +88,13 @@ impl Workspace {
         if is_new {
             let conn = workspace.connection();
             schema::create_fresh(&conn)?;
+        } else {
+            // 既有库：先按登记表升级（无待应用迁移时是纯只读的 no-op），再校验。
+            let mut conn = workspace.connection();
+            migrations::apply_all(&mut conn, directory)?;
         }
 
-        // 新库建完立刻自检一次，避免 DDL 与校验规则漂移
+        // 建库/升级后立刻自检一次，避免 DDL、迁移与校验规则三者漂移
         let conn = workspace.connection();
         schema::validate_current(&conn)?;
 
@@ -196,11 +204,12 @@ mod tests {
     }
 
     #[test]
-    fn reopen_does_not_touch_schema() {
+    fn reopen_does_not_touch_schema_when_already_current() {
         let dir = temp_dir("reopen");
         {
             let workspace = Workspace::open(&dir).unwrap();
-            // 去掉一个索引，模拟"库被动过"：再次打开应原样保留，不被自动补回
+            // 去掉一个索引，模拟"库被动过"：已是最新格式时重开应原样保留，不被自动补回
+            // （迁移只按登记表逐条应用，不会"顺手修复"无关结构）
             workspace
                 .connection()
                 .execute_batch("DROP INDEX idx_chart_ledger")
@@ -216,7 +225,7 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(chart_index, 0, "重开工作空间不得执行任何 DDL");
+            assert_eq!(chart_index, 0, "已是最新格式时重开不得执行任何 DDL");
         }
         std::fs::remove_dir_all(&dir).ok();
     }

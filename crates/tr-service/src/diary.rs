@@ -1,5 +1,8 @@
 //! 日记服务：日期树（列表/查询）、导入（扫描目录 + 逐文件导入）、导出（按月/年筛选后写 `<date>.md`）。
 //!
+//! **日记按账本隔离**：所有读写都必须带 `ledger_id`（唯一键是 `(ledger_id, date)`），
+//! 导入落到指定账本，导出只导指定账本。
+//!
 //! 编码回退链：合法 UTF-8 直接用；带 BOM 的 UTF-16 解码；
 //! 否则按 GBK 解码；仍不合法则把非法序列替换为 `?`。
 //! 这条链子是历史日记文件（Windows 记事本保存的 ANSI/UTF-16）能正确导入的关键。
@@ -13,20 +16,29 @@ use tr_store::Workspace;
 
 use crate::{ServiceError, ServiceResult};
 
-/// 日期列表（倒序）。
-pub fn list_dates(workspace: &Workspace) -> ServiceResult<Vec<DiaryDateItem>> {
-    let entries = DiaryDao::list_dates(&workspace.connection())?;
+/// 某账本的日期列表（倒序）。
+pub fn list_dates(workspace: &Workspace, ledger_id: &str) -> ServiceResult<Vec<DiaryDateItem>> {
+    let entries = DiaryDao::list_dates(&workspace.connection(), ledger_id)?;
     Ok(entries.into_iter().map(DiaryDateItem::from).collect())
 }
 
-/// 按日期取日记；不存在时报错（而不是返回空条目）。
-pub fn get_by_date(workspace: &Workspace, date: &str) -> ServiceResult<DiaryEntry> {
-    Ok(DiaryDao::query_by_date(&workspace.connection(), date)?)
+/// 按账本 + 日期取日记；不存在时报错（而不是返回空条目）。
+pub fn get_by_date(
+    workspace: &Workspace,
+    ledger_id: &str,
+    date: &str,
+) -> ServiceResult<DiaryEntry> {
+    Ok(DiaryDao::query_by_date(
+        &workspace.connection(),
+        ledger_id,
+        date,
+    )?)
 }
 
 /// 保存日记，返回写入后的条目（字数按 Unicode 字符数计算）。
 pub fn upsert(
     workspace: &Workspace,
+    ledger_id: &str,
     date: &str,
     content: &str,
     mood: &str,
@@ -41,19 +53,22 @@ pub fn upsert(
         mood: mood.to_string(),
         created_at: now,
         updated_at: now,
+        ledger_id: ledger_id.to_string(),
     };
     DiaryDao::upsert(&workspace.connection(), &entry)?;
     Ok(entry)
 }
 
-/// 删除日记。
-pub fn delete_by_date(workspace: &Workspace, date: &str) -> ServiceResult<()> {
-    tracing::info!("删除日记, 日期: {}", date);
-    DiaryDao::delete_by_date(&workspace.connection(), date)?;
+/// 删除某账本某天的日记（别的账本的同一天不受影响）。
+pub fn delete_by_date(workspace: &Workspace, ledger_id: &str, date: &str) -> ServiceResult<()> {
+    tracing::info!("删除日记, 账本: {}, 日期: {}", ledger_id, date);
+    DiaryDao::delete_by_date(&workspace.connection(), ledger_id, date)?;
     Ok(())
 }
 
 /// 递归扫描目录，找出 `YYYY-MM-DD.txt` / `YYYY-MM-DD.md` 并按日期升序返回。
+///
+/// 只读文件系统、不碰数据库，因此**不需要账本**。
 pub fn scan_directory(directory: &str) -> ServiceResult<DiaryScanResponse> {
     let mut files: Vec<DiaryFileItem> = Vec::new();
     collect_diary_files(Path::new(directory), &mut files)
@@ -62,22 +77,28 @@ pub fn scan_directory(directory: &str) -> ServiceResult<DiaryScanResponse> {
     Ok(DiaryScanResponse { files })
 }
 
-/// 导入单个文件（编码自动识别），导入后返回条目。
-pub fn import_file(workspace: &Workspace, path: &str, date: &str) -> ServiceResult<DiaryEntry> {
+/// 导入单个文件（编码自动识别）到指定账本，导入后返回条目。
+pub fn import_file(
+    workspace: &Workspace,
+    ledger_id: &str,
+    path: &str,
+    date: &str,
+) -> ServiceResult<DiaryEntry> {
     let raw = std::fs::read(path)
         .map_err(|error| ServiceError::Internal(format!("读取文件失败 {path}: {error}")))?;
     let content = decode_text(&raw);
-    upsert(workspace, date, &content, "")
+    upsert(workspace, ledger_id, date, &content, "")
 }
 
-/// 导出日记到目录：`year`/`month` 为 0 表示不限（month 需配合 year）。
+/// 把某账本的日记导出到目录：`year`/`month` 为 0 表示不限（month 需配合 year）。
 pub fn export_to_directory(
     workspace: &Workspace,
+    ledger_id: &str,
     directory: &str,
     year: i64,
     month: i64,
 ) -> ServiceResult<DiaryExportResult> {
-    let mut entries = DiaryDao::list_all(&workspace.connection())?;
+    let mut entries = DiaryDao::list_by_ledger(&workspace.connection(), ledger_id)?;
 
     if year > 0 || month > 0 {
         entries.retain(|entry| {
@@ -231,6 +252,9 @@ mod tests {
     use super::*;
     use crate::test_support::workspace;
 
+    /// 测试统一用的账本 id（服务层不校验账本是否存在，DAO 也不做外键约束）。
+    const LEDGER: &str = "l1";
+
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "tr-diary-files-{tag}-{}-{}",
@@ -247,22 +271,22 @@ mod tests {
     #[test]
     fn upsert_counts_characters_and_returns_entry() {
         let (workspace, dir) = workspace("upsert");
-        let entry = upsert(&workspace, "2026-01-01", "中文abc", "开心").unwrap();
+        let entry = upsert(&workspace, LEDGER, "2026-01-01", "中文abc", "开心").unwrap();
         assert_eq!(entry.word_count, 5, "字数按 Unicode 字符数");
         assert_eq!(entry.mood, "开心");
         assert!(!entry.id.is_empty());
 
-        let loaded = get_by_date(&workspace, "2026-01-01").unwrap();
+        let loaded = get_by_date(&workspace, LEDGER, "2026-01-01").unwrap();
         assert_eq!(loaded.content, "中文abc");
         assert_eq!(loaded.word_count, 5);
 
         // 覆盖保存：内容更新、id 保留
-        upsert(&workspace, "2026-01-01", "改了", "").unwrap();
-        let loaded = get_by_date(&workspace, "2026-01-01").unwrap();
+        upsert(&workspace, LEDGER, "2026-01-01", "改了", "").unwrap();
+        let loaded = get_by_date(&workspace, LEDGER, "2026-01-01").unwrap();
         assert_eq!(loaded.content, "改了");
         assert_eq!(loaded.word_count, 2);
 
-        let dates = list_dates(&workspace).unwrap();
+        let dates = list_dates(&workspace, LEDGER).unwrap();
         assert_eq!(dates.len(), 1);
         assert_eq!(dates[0].word_count, 2);
 
@@ -272,7 +296,7 @@ mod tests {
     #[test]
     fn missing_entry_reports_error() {
         let (workspace, dir) = workspace("missing");
-        let error = get_by_date(&workspace, "2000-01-01").unwrap_err();
+        let error = get_by_date(&workspace, LEDGER, "2000-01-01").unwrap_err();
         assert_eq!(error.to_string(), "record not found");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -331,13 +355,19 @@ mod tests {
             (&utf16_path, "2026-01-02"),
             (&gbk_path, "2026-01-03"),
         ] {
-            let entry = import_file(&workspace, path.to_str().unwrap(), date).unwrap();
+            let entry = import_file(&workspace, LEDGER, path.to_str().unwrap(), date).unwrap();
             assert_eq!(entry.content, "中文内容", "{path:?} 解码失败");
             assert_eq!(entry.word_count, 4);
             assert_eq!(entry.mood, "");
         }
 
-        let broken = import_file(&workspace, broken_path.to_str().unwrap(), "2026-01-04").unwrap();
+        let broken = import_file(
+            &workspace,
+            LEDGER,
+            broken_path.to_str().unwrap(),
+            "2026-01-04",
+        )
+        .unwrap();
         assert!(
             broken.content.contains('?'),
             "非法字节应被替换: {:?}",
@@ -351,13 +381,13 @@ mod tests {
     #[test]
     fn export_filters_by_year_and_month() {
         let (workspace, dir) = workspace("export");
-        upsert(&workspace, "2025-12-31", "去年", "").unwrap();
-        upsert(&workspace, "2026-01-01", "一月", "").unwrap();
-        upsert(&workspace, "2026-02-01", "二月", "").unwrap();
+        upsert(&workspace, LEDGER, "2025-12-31", "去年", "").unwrap();
+        upsert(&workspace, LEDGER, "2026-01-01", "一月", "").unwrap();
+        upsert(&workspace, LEDGER, "2026-02-01", "二月", "").unwrap();
 
         let out = temp_dir("export-out");
         // 全部导出
-        let result = export_to_directory(&workspace, out.to_str().unwrap(), 0, 0).unwrap();
+        let result = export_to_directory(&workspace, LEDGER, out.to_str().unwrap(), 0, 0).unwrap();
         assert_eq!(result.total, 3);
         assert_eq!(result.success, 3);
         assert!(result.failed.is_empty());
@@ -369,20 +399,22 @@ mod tests {
 
         // 按年
         let year_out = temp_dir("export-year");
-        let result = export_to_directory(&workspace, year_out.to_str().unwrap(), 2026, 0).unwrap();
+        let result =
+            export_to_directory(&workspace, LEDGER, year_out.to_str().unwrap(), 2026, 0).unwrap();
         assert_eq!(result.total, 2);
         assert!(!year_out.join("2025-12-31.md").exists());
 
         // 按年月
         let month_out = temp_dir("export-month");
-        let result = export_to_directory(&workspace, month_out.to_str().unwrap(), 2026, 2).unwrap();
+        let result =
+            export_to_directory(&workspace, LEDGER, month_out.to_str().unwrap(), 2026, 2).unwrap();
         assert_eq!(result.total, 1);
         assert!(month_out.join("2026-02-01.md").exists());
         assert!(!month_out.join("2026-01-01.md").exists());
 
         // 目录不存在时自动创建
         let nested = out.join("a").join("b");
-        assert!(export_to_directory(&workspace, nested.to_str().unwrap(), 2026, 1).is_ok());
+        assert!(export_to_directory(&workspace, LEDGER, nested.to_str().unwrap(), 2026, 1).is_ok());
 
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&out).ok();
@@ -417,11 +449,11 @@ mod tests {
             ("2026-01-03", "无结尾换行"),
         ];
         for (date, content) in contents {
-            upsert(&source, date, content, "开心").unwrap();
+            upsert(&source, LEDGER, date, content, "开心").unwrap();
         }
 
         let out = temp_dir("roundtrip-out");
-        let result = export_to_directory(&source, out.to_str().unwrap(), 0, 0).unwrap();
+        let result = export_to_directory(&source, LEDGER, out.to_str().unwrap(), 0, 0).unwrap();
         assert_eq!((result.total, result.success), (3, 3));
 
         // 扫描出的文件按日期升序，且能被 import_file 逐个吃下
@@ -431,14 +463,14 @@ mod tests {
         assert_eq!(dates, vec!["2026-01-01", "2026-01-02", "2026-01-03"]);
 
         for file in &scan.files {
-            let entry = import_file(&target, &file.path, &file.date).unwrap();
+            let entry = import_file(&target, LEDGER, &file.path, &file.date).unwrap();
             assert_eq!(entry.date, file.date);
             // 导出格式是纯 Markdown，只有正文；mood 不随文件走
             assert_eq!(entry.mood, "");
         }
 
         for (date, content) in contents {
-            let loaded = get_by_date(&target, date).unwrap();
+            let loaded = get_by_date(&target, LEDGER, date).unwrap();
             assert_eq!(loaded.content, content, "{date} 正文未逐字节还原");
             assert_eq!(loaded.word_count, tr_store::util::char_count(content));
         }
@@ -451,10 +483,67 @@ mod tests {
     #[test]
     fn delete_is_idempotent() {
         let (workspace, dir) = workspace("delete");
-        upsert(&workspace, "2026-01-01", "内容", "").unwrap();
-        delete_by_date(&workspace, "2026-01-01").unwrap();
-        delete_by_date(&workspace, "2026-01-01").unwrap();
-        assert!(list_dates(&workspace).unwrap().is_empty());
+        upsert(&workspace, LEDGER, "2026-01-01", "内容", "").unwrap();
+        delete_by_date(&workspace, LEDGER, "2026-01-01").unwrap();
+        delete_by_date(&workspace, LEDGER, "2026-01-01").unwrap();
+        assert!(list_dates(&workspace, LEDGER).unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 同一天在两个账本里各存一篇：互不覆盖、互不可见（复合唯一键的行为）。
+    #[test]
+    fn same_date_in_two_ledgers_is_independent() {
+        let (workspace, dir) = workspace("two-ledgers");
+        let other = "l2";
+
+        upsert(&workspace, LEDGER, "2026-01-01", "账本一的正文", "开心").unwrap();
+        upsert(&workspace, other, "2026-01-01", "账本二的正文", "平静").unwrap();
+
+        assert_eq!(
+            get_by_date(&workspace, LEDGER, "2026-01-01")
+                .unwrap()
+                .content,
+            "账本一的正文"
+        );
+        assert_eq!(
+            get_by_date(&workspace, other, "2026-01-01")
+                .unwrap()
+                .content,
+            "账本二的正文"
+        );
+        assert_eq!(list_dates(&workspace, LEDGER).unwrap().len(), 1);
+        assert_eq!(list_dates(&workspace, other).unwrap().len(), 1);
+
+        // 删掉账本一那篇，账本二不受影响
+        delete_by_date(&workspace, LEDGER, "2026-01-01").unwrap();
+        assert!(list_dates(&workspace, LEDGER).unwrap().is_empty());
+        assert_eq!(list_dates(&workspace, other).unwrap().len(), 1);
+
+        // 保存返回的条目带着账本 id
+        let saved = upsert(&workspace, other, "2026-01-02", "第二天", "").unwrap();
+        assert_eq!(saved.ledger_id, other);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 导出只导指定账本（与导入对称）：另一个账本的日记绝不落盘。
+    #[test]
+    fn export_only_covers_the_given_ledger() {
+        let (workspace, dir) = workspace("export-ledger");
+        let other = "l2";
+        upsert(&workspace, LEDGER, "2026-01-01", "我的日记", "").unwrap();
+        upsert(&workspace, other, "2026-01-02", "别人的日记", "").unwrap();
+
+        let out = temp_dir("export-ledger-out");
+        let result = export_to_directory(&workspace, LEDGER, out.to_str().unwrap(), 0, 0).unwrap();
+        assert_eq!((result.total, result.success), (1, 1));
+        assert!(out.join("2026-01-01.md").exists());
+        assert!(
+            !out.join("2026-01-02.md").exists(),
+            "别的账本的日记不得被导出"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&out).ok();
     }
 }
