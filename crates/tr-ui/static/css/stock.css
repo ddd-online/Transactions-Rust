@@ -70,10 +70,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 面板内的空态：**吃掉面板剩余高度并居中**（`flex: 1`）—— 父级都是弹性列
+ * （`.stock-panel` / `.stock-position__cards` 等），所以它会占满并把文案摆在面板中间，
+ * 而不是顶着面板上沿（原来只有 `min-height: 160px`，"暂无持仓"就浮在顶部）。
+ * `min-height` 保留：面板本身很矮时仍保证一块可读的留白。 */
 .stock-empty {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex: 1;
   min-height: 160px;
   padding: var(--transactions-space-lg);
   font-size: var(--transactions-size-text-body-sm);
@@ -380,8 +385,12 @@
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   gap: var(--transactions-space-lg);
-  /* 两列都拉伸到整行高；网格自身也吃掉分页签剩余高度 → 左栏通栏到底 */
+  /* 两列都拉伸到整行高；网格自身也吃掉分页签剩余高度 → 左栏通栏到底
+   * （「建仓」按钮因此贴在分栏底栏，`.stock-empty` 也能在面板里居中）。
+   * `grid-auto-rows` 与账户/成交记录两栏保持一致：隐式行按 1fr 撑满，
+   * 内容多时由面板内部的滚动容器接管。 */
   align-items: stretch;
+  grid-auto-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -808,11 +817,19 @@
   color: var(--transactions-color-text-major);
 }
 
+/* 仓位历史（成交记录分栏）的网格：**吃掉分栏剩余高度**，两栏面板才会撑满，
+ * 里面的 `.stock-empty` 也才有剩余空间可居中（`.stock-history` 自己早就是填满的弹性列，
+ * 断链断在这一层：网格没有 `flex: 1` → 面板只有内容高，"暂无已清仓股票"就浮在顶部）。
+ * `align-items: stretch`（而不是 `start`）+ `grid-auto-rows: minmax(0, 1fr)`：单个隐式行撑满，
+ * 面板跟着长高；内容多时由 `.stock-history__cards` 自己滚动。 */
 .stock-history__grid {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   gap: var(--transactions-space-lg);
-  align-items: start;
+  align-items: stretch;
+  grid-auto-rows: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
   padding: var(--transactions-space-md);
 }
 
@@ -1568,5 +1585,27 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* 交易统计（`.stock-statistics`）：**可以长高，但绝不压缩** —— `flex: 1 0 auto`。
+ *   * 内容比可视区矮时（空态「还没有结算记录」、加载态）它长到填满分栏，
+ *     里面的 `.stock-empty` / `Empty` 才有剩余空间可居中；
+ *   * 内容比可视区高时保持自然高度，交给 `.stock-tab-body` 滚动。
+ *
+ * 关键在 `flex-shrink: 0`：早前那一刀切用的是可压缩的 `flex: 1`，内容被压进分栏高度，
+ * 曲线面板的实测宽度塌到 213px（图表按实测尺寸出 SVG，压一次就画坏了）。 */
+.stock-statistics {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+
+/* 统计栏**空态那个面板**才填满分栏（`--empty` 由 stock.rs 只在空态分支加）：
+ * 空态链路是 `.stock-statistics > .stock-panel > .stock-empty > Empty`，而 `.stock-panel`
+ * 自己是"内容高"的（有数据时它必须由内容决定高度，不能被 flex 分配）——
+ * 少了这一环，上面给根容器和 `.stock-empty` 的 `flex: 1` 全都没有剩余空间可用。 */
+.stock-statistics > .stock-panel--empty {
+  flex: 1;
+  min-height: 0;
 }
 

@@ -620,7 +620,7 @@ pub fn KeyEventPage() -> impl IntoView {
     .into_any();
 
     view! {
-        <FeaturePage title=PAGE_TITLE toolbar=toolbar content=content />
+        <FeaturePage title=PAGE_TITLE class="key-event-page" toolbar=toolbar content=content />
     }
 }
 
@@ -1125,9 +1125,12 @@ fn event_list(
                                                 variant=IconButtonVariant::Danger
                                                 label="删除事件"
                                                 class="key-event-card__delete"
-                                                // 不要 stop_propagation：外层 Popconfirm 的触发在捕获阶段，
-                                                // 这里再吞一次会把气泡的开关抵消（点删除什么都不弹）
-                                                on_click=delete_click
+                                                // 删除动作**只挂在 `on_confirm` 上**：这个按钮只负责
+                                                // "打开确认气泡"。曾经这里挂着 `on_click=<删除>`，
+                                                // 于是第一下点击就直接删掉了 —— 二次确认形同虚设。
+                                                // `stop_propagation` 让点删除不顺带选中整行；它**不影响**
+                                                // 气泡开关（`Popconfirm` 的触发在**捕获阶段**，先于冒泡）。
+                                                stop_propagation=true
                                             >
                                                 {icons::icon(Icon::Close)}
                                             </IconButton>
@@ -1427,16 +1430,24 @@ fn image_gallery(
                                         loading="lazy"
                                         on:click=move |_| selected_id.set(click_id.clone())
                                     />
-                                    <IconButton
-                                        variant=IconButtonVariant::Danger
-                                        compact=true
-                                        label="删除图片"
-                                        class="key-event-thumb__delete"
-                                        stop_propagation=true
-                                        on_click=move |_| delete_image(delete_id.clone())
+                                    // 删除图片也走**二次确认**（全站删除都确认；这里原来是一点就删）
+                                    <Popconfirm
+                                        title="删除这张图片？"
+                                        ok_text="删除"
+                                        cancel_text="取消"
+                                        on_confirm=move || delete_image(delete_id.clone())
                                     >
-                                        {icons::icon(Icon::Close)}
-                                    </IconButton>
+                                        <IconButton
+                                            variant=IconButtonVariant::Danger
+                                            compact=true
+                                            label="删除图片"
+                                            class="key-event-thumb__delete"
+                                            // 点删除别把缩略图也选中（气泡开关在捕获阶段，不受影响）
+                                            stop_propagation=true
+                                        >
+                                            {icons::icon(Icon::Close)}
+                                        </IconButton>
+                                    </Popconfirm>
                                 </div>
                             }
                         })
@@ -1663,8 +1674,8 @@ fn linked_panel(
                                                     variant=IconButtonVariant::Danger
                                                     label="删除交易"
                                                     class="key-event-linked__delete"
-                                                    // 同上：气泡的开关在捕获阶段，这里不能吞掉
-                                                    on_click=delete_click
+                                                    // 同上：删除只走 `on_confirm`，这里只管开气泡
+                                                    stop_propagation=true
                                                 >
                                                     {icons::icon(Icon::Trash)}
                                                 </IconButton>

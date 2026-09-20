@@ -39,6 +39,7 @@ use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
 
 use super::page_header::PageHeader;
+use super::with_class;
 
 /// 功能页骨架（标题栏 + 铺满的版心）。
 #[component]
@@ -47,6 +48,10 @@ pub fn FeaturePage(
     title: &'static str,
     /// 内容区（必给）
     content: AnyView,
+    /// 页面级类名（如 `stock-page`）：**页面自己的样式钩子**，会追加到 `page` 之后。
+    /// 迁移到本组件时曾漏掉它，导致 `.stock-page …` 那批规则整体失效（股票页高度链断裂）。
+    #[prop(optional, into)]
+    class: Option<String>,
     /// 工具栏（本页操作）
     #[prop(optional, into)]
     toolbar: Option<AnyView>,
@@ -60,8 +65,9 @@ pub fn FeaturePage(
     #[prop(optional)]
     footer_end: bool,
 ) -> impl IntoView {
+    let classes = with_class("page", class.as_deref());
     view! {
-        <section class="page">
+        <section class=classes>
             <PageHeader title=title />
             <div class="page-region">
                 {rail.map(|rail| view! { <aside class="page-rail">{rail}</aside> })}

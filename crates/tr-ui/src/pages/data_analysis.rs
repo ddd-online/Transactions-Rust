@@ -418,12 +418,6 @@ pub fn DataAnalysisPage() -> impl IntoView {
                                 let title_for_attr = title.clone();
                                 let title_for_label = title.clone();
                                 let confirm_title = format!("删除图表「{title}」？");
-                                // 回调先建好（`UnsyncCallback` 是 Copy）：`view!` 的 children
-                                // 可能多次求值，直接 move 捕获 `ChartDto` 会让闭包退化成 FnOnce。
-                                let delete_click = UnsyncCallback::new({
-                                    let chart = delete_chart_value.clone();
-                                    move |()| delete_chart(chart.clone())
-                                });
                                 view! {
                                     <div
                                         class="da-list__item"
@@ -458,11 +452,12 @@ pub fn DataAnalysisPage() -> impl IntoView {
                                                 compact=true
                                                 label="删除图表"
                                                 class="da-list__delete"
-                                                // **不要 stop_propagation**：Popconfirm 的触发挂在
-                                                // 捕获阶段，这里再吞一次会把气泡自己的开关抵消掉
-                                                // （点了删除什么都不弹）。列表项的"点按钮别选中整行"
-                                                // 由 Popconfirm 捕获阶段那一次 stopPropagation 负责。
-                                                on_click=delete_click
+                                                // 删除动作**只挂在 `on_confirm` 上**：这个按钮只负责
+                                                // "打开确认气泡"。曾经这里挂着 `on_click=<删除>`，
+                                                // 第一下点击就直接删掉了 —— 二次确认形同虚设。
+                                                // `stop_propagation` 让点删除不顺带选中整行；它**不影响**
+                                                // 气泡开关（`Popconfirm` 的触发在**捕获阶段**，先于冒泡）。
+                                                stop_propagation=true
                                             >
                                                 {icons::icon(Icon::Trash)}
                                             </IconButton>

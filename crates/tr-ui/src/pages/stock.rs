@@ -169,7 +169,7 @@ pub fn StockPage() -> impl IntoView {
     .into_any();
 
     view! {
-        <FeaturePage title=PAGE_TITLE toolbar=toolbar content=content />
+        <FeaturePage title=PAGE_TITLE class="stock-page" toolbar=toolbar content=content />
     }
 }
 
@@ -1264,6 +1264,18 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                             }}
                         </div>
                     </Show>
+                    // 主操作「建仓」：`d2d89b5` 那次重构把这块删掉了，而空态文案还写着
+                    // "先点下方「建仓」" —— 按钮补回左栏底栏（`.stock-panel__footer` 自带顶部分隔线，
+                    // 与「资金变化记录」的底栏同一套）。
+                    <div class="stock-panel__footer">
+                        <Button
+                            variant=ButtonVariant::Primary
+                            block=true
+                            on_click=move |_| open_trade("open")
+                        >
+                            "建仓"
+                        </Button>
+                    </div>
                 </div>
 
                 <div class="stock-panel stock-panel--detail">
@@ -3252,7 +3264,9 @@ fn statistics_view() -> AnyView {
                 };
                 if data.round_count == 0 && !is_filtered() {
                     return view! {
-                        <div class="stock-panel">
+                        // `--empty`：只给这一个面板"填满分栏"的放行（见 stock.css）。
+                        // 有数据时 `.stock-panel` 必须保持内容高，不能被 flex 分配高度。
+                        <div class="stock-panel stock-panel--empty">
                             <div class="stock-empty">
                                 <Empty
                                     title="还没有结算记录"
