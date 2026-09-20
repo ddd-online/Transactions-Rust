@@ -461,8 +461,22 @@ fn build_chart(
     chart.x_axis_font_size = TICK_FONT_PX;
     chart.x_axis_height = 26.0;
     chart.x_axis_name_gap = 8.0;
-    // 折线式：首尾点贴边，不学柱状图留半格
-    chart.x_boundary_gap = Some(false);
+    // **X 轴两端各留半格**（charts-rs 的 `x_boundary_gap = true`，也是它的默认值）。
+    //
+    // 这个开关就是"X 轴起点从哪儿开始"：false = 第一个数据点**正好压在 Y 轴**上，
+    // true = 起点内缩半格、首个点落在第一个格子的中线上（末点同理）。取 true 的三个理由：
+    //
+    // 1. **单点时它是唯一正确解**：false 时 charts-rs 用 `unit_width = 绘图宽 / (数据点数 - 1)`
+    //    定位（`charts/base.rs` 的 `split_unit_count = series_data_count - 1`），单点会**除以 0**
+    //    → `unit_width = ∞`、`x = ∞ × 0 = NaN`，圆点被画到未定义位置（浏览器把 `cx="NaN"`
+    //    的圆画在 SVG 最左边、半个圆被裁掉 —— 实测「统计曲线」只有一笔时点就漂到那里压住 Y 轴刻度）；
+    //    true 时改用 `宽 / 点数` 再加半格偏移，单点正好落在绘图区中间。
+    // 2. 多点时首点不再与 Y 轴的刻度文字/轴线贴在一起（原先贴边，读起来像"点在轴外"）。
+    // 3. 与柱状图的分格一致 —— 每条折线的采样点都占一个格子，而不是格子的边界。
+    //
+    // 代价：折线不再从绘图区最左/最右边缘起止，两端各空半格（约 `绘图宽 / 点数 / 2`）。
+    // 若哪天要回到"多点首尾贴边"，把这里改成"仅单点为 true"即可（单点必须为 true，否则见第 1 条）。
+    chart.x_boundary_gap = Some(true);
 
     // ---- 折线 ----
     chart.series_colors = palette.clone();
