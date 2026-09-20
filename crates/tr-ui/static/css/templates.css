@@ -21,6 +21,9 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* 弹性列：下面的 `.tpl-tbody` 才能撑满，空态/加载态才能在表格区里居中 */
+  display: flex;
+  flex-direction: column;
   border: none;
   border-radius: 0;
   margin: 0 calc(-1 * var(--transactions-space-lg));
@@ -70,9 +73,16 @@
   text-align: center;
 }
 
+/* 撑满表格区：行从顶部排；空态（`.ui-empty`，自带 `flex: 1`）与加载态因此会垂直居中 */
 .tpl-tbody {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.tpl-tbody > .tpl-loading {
+  flex: 1;
 }
 
 .tpl-tr {

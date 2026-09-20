@@ -1062,7 +1062,7 @@ fn statistics_bar() -> AnyView {
     .into_any()
 }
 
-/// 空态三态（加载中 / 查询失败 / 无记录引导）。
+/// 空态（未选择账本 / 加载中 / 查询失败 / 无记录引导）。
 #[allow(clippy::too_many_arguments)]
 fn empty_state_view(
     loading: RwSignal<bool>,
@@ -1078,6 +1078,24 @@ fn empty_state_view(
     on_last_month: UnsyncCallback<()>,
     on_this_year: UnsyncCallback<()>,
 ) -> AnyView {
+    // **一个账本都没有**：先说这件事 —— 没有账本时"时间范围 / 记一笔 / 筛选"都无从谈起。
+    //
+    // 这一支必须放在**最前面**：账本被删空之后，`items` / `loaded` / `has_any_records`
+    // 可能还留着上一次查询的旧值，于是会错显示成"这段时间还没有记录"（实测就是这个现象）。
+    // 账本列表非空时 `AppStores::set_ledgers` 一定会选中第一个，所以"未选中"就等于"一个都没有"。
+    if AppStores::global().current_ledger_id.get().is_empty() {
+        return view! {
+            <div class="empty-guide">
+                <span class="empty-guide-icon">{icons::icon(Icon::Book)}</span>
+                <p class="empty-guide-title">"未选择账本"</p>
+                <p class="empty-guide-text">
+                    "请在左上角「选择账本」里新建或选择一个账本；记录、统计与图表都按账本分开。"
+                </p>
+            </div>
+        }
+        .into_any();
+    }
+
     if loading.get() || !loaded.get() {
         return view! {
             <div class="empty-guide">

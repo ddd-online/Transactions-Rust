@@ -706,6 +706,9 @@
  * Empty —— 空态
  * ============================================ */
 
+/* 空态：**可增长**（`flex: 1`）—— 父级是"填满剩余高度"的弹性列时（表格区、面板、侧栏列表），
+ * 空态才会占满并把图标与文案**垂直居中**，而不是贴在容器顶部。
+ * 父级是块级容器时 `flex: 1` 无副作用；父级是弹性行时它只吃掉横向剩余空间。 */
 .ui-empty {
   display: flex;
   flex-direction: column;
@@ -714,6 +717,8 @@
   gap: var(--transactions-space-md);
   padding: var(--transactions-space-3xl);
   text-align: center;
+  flex: 1;
+  min-height: 0;
 }
 
 .ui-empty__icon {

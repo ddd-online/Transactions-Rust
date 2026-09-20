@@ -26,13 +26,22 @@
   overflow-y: auto;
 }
 
+/* 侧栏列表：**撑满侧栏剩余高度** —— 列表为空时空态才能在剩余空间里垂直居中
+ * （否则「暂无图表」紧贴在「新增图表」按钮下面，看着像没排版）。 */
 .da-list {
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-2xs);
+  flex: 1;
+  min-height: 0;
 }
 
+/* 空态：吃掉剩余高度并居中（与右侧 `.da-empty` 同一套做法） */
 .da-list__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: var(--transactions-space-lg);
   text-align: center;
   font-size: var(--transactions-size-text-body-sm);
