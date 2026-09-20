@@ -12,3 +12,4 @@ pub mod error;
 pub mod fee;
 pub mod models;
 pub mod money;
+pub mod proxy;

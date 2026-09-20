@@ -10,6 +10,8 @@
 //! | [`config_get`] | 无参数 |
 //! | [`config_set_appearance`] | `{ appearance: light\|dark\|system }` |
 //! | [`config_set_close_behavior`] | `{ behavior: quit\|tray\|"" }` |
+//! | [`config_set_proxy`] | `{ mode: off\|auto\|manual, url }`（返回归一化后的设置） |
+//! | [`proxy_detect`] | 无参数（报告当前设置最终会用哪个代理） |
 //! | [`workspace_get`] | 无参数 |
 //! | [`workspace_set`] | `{ workspaceDir }` |
 //! | [`workspace_open`] | `{ workspaceDir }` |
@@ -23,6 +25,8 @@
 //! （`{ canceled, filePaths, error? }` / `{ success, canceled?, error? }`）。
 
 use serde::{Deserialize, Serialize};
+
+use tr_domain::proxy::ProxySetting;
 
 use crate::ipc::{self, IpcError};
 
@@ -99,6 +103,25 @@ pub struct ConfigSnapshot {
     pub config_path: String,
     #[serde(rename = "isDev")]
     pub is_dev: bool,
+    /// 代理设置（`mode` / `url`）。
+    ///
+    /// 这里**直接复用 `tr_domain::proxy::ProxySetting`**（两侧同一份类型，不是手抄，
+    /// 所以不存在字段漂移）；缺省值是 `auto`，后端漏发该字段时也按自动探测处理。
+    pub proxy: ProxySetting,
+}
+
+/// `proxy_detect` 的返回（逐字段照抄 `commands.rs` 的 `ProxyDetectResponse`）。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ProxyDetectResponse {
+    /// 会用到的代理地址（空串 = 直连）
+    pub url: String,
+    /// env / system / manual / none
+    pub source: String,
+    /// 系统是否配置了 PAC 自动配置脚本（本版本不解析）
+    pub pac: bool,
+    /// 直接展示给用户的说明
+    pub message: String,
 }
 
 /// `dialog_open` 的返回（固定契约）。
@@ -179,6 +202,19 @@ pub async fn config_set_close_behavior(behavior: &str) -> Result<(), IpcError> {
         },
     )
     .await
+}
+
+/// 保存代理设置（`off` / `auto` / `manual`）。
+///
+/// 参数**直接复用 `tr_domain::proxy::ProxySetting`**（与后端同一个类型）；
+/// 后端会校验并归一化地址，成功时返回可落盘的那份（界面用它回显）。
+pub async fn config_set_proxy(setting: ProxySetting) -> Result<ProxySetting, IpcError> {
+    ipc::call("config_set_proxy", setting).await
+}
+
+/// 检测：按当前设置报告最终会用哪个代理（只读，不写配置、不改系统设置）。
+pub async fn proxy_detect() -> Result<ProxyDetectResponse, IpcError> {
+    ipc::call_no_args("proxy_detect").await
 }
 
 /// 读取已保存的工作空间目录（空串表示尚未选择）。

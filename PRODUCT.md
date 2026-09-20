@@ -33,7 +33,9 @@ windows desktop (Tauri 2 + Rust)
 - 支持 HEIC 图片导入（界面层在 WebView2 内转换后上传，后端只接受 JPEG/PNG/GIF/WebP），
   图表为界面层自绘 SVG（不引入图表 JS 库）。
 - 技术约束：浅色/深色双主题、默认跟随系统、单一强调色 `#3964fe`（见 DESIGN.md）、CSS 变量统一使用 `--transactions-` 前缀；界面为 Rust(Leptos/WASM)，仓库内无 Node 依赖；金额恒为整数分。
-- 明确边界：除股票行情查询外，其余功能完全离线可用。
+- 明确边界：除股票行情查询（含股票名称查询）与更新检查外，其余功能完全离线可用。
+- 网络请求可走 **HTTP 代理**（不做 SOCKS/HTTPS 代理、不解析 PAC）：`自动探测` 读环境变量与
+  Windows 系统代理，也可手动指定 `http://host:port`；「不使用代理」= 真正直连。
 
 ## Brand Commitments
 

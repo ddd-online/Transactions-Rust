@@ -7,6 +7,8 @@
 //! * P2：账本 / 消费记录（含筛选、统计、图表分桶）/ 分类 / 标签 / 模板 / 图表
 //! * P3：关键事件 / 资产与缩略图 / 日记
 //! * P4：股票（账户 / 委托与费用 / 持仓重放 / 轮次历史 / 统计 / 行情）
+//!
+//! 另外：`proxy` 是**进程级代理设置**（行情与外壳的更新器共用；探测系统代理）。
 
 pub mod assets;
 pub mod category;
@@ -15,6 +17,7 @@ pub mod diary;
 pub mod error;
 pub mod key_event;
 pub mod ledger;
+pub mod proxy;
 pub mod quote;
 pub mod stock;
 pub mod stock_statistics;

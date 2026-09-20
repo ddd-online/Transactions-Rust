@@ -13,6 +13,8 @@ tauri-build = { version = "2", features = [] }
 tr-domain = { workspace = true }
 tr-store = { workspace = true }
 tr-ipc = { workspace = true }
+# 代理设置：行情与更新器共用 tr-service 的进程级槽位（见 tr-service/src/proxy.rs）
+tr-service = { workspace = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -35,25 +35,45 @@ pub trait StockQuoteFetcher: Send + Sync {
 }
 
 /// 腾讯行情实现（`qt.gtimg.cn`）。名称查询与行情查询同源。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TencentStockQuoteFetcher;
+///
+/// `proxy_url` 是**代理地址**（`None` = 直连）：`new()` 取"通用设置 → 代理"里的当前设置
+/// （见 [`crate::proxy`]），`with_proxy` 用于显式注入（测试与未来的按调用覆盖）。
+#[derive(Debug, Clone, Default)]
+pub struct TencentStockQuoteFetcher {
+    proxy_url: Option<String>,
+}
 
 impl TencentStockQuoteFetcher {
     pub fn new() -> Self {
-        Self
+        Self {
+            proxy_url: crate::proxy::resolved_url(),
+        }
     }
 
-    /// 建立带 3 秒全局超时的 agent（每次调用都用同一份配置）。
-    fn agent() -> ureq::Agent {
+    /// 显式指定代理（`None` = 直连）；空串按"未指定"处理。
+    pub fn with_proxy(url: Option<&str>) -> Self {
+        Self {
+            proxy_url: url
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+                .map(str::to_string),
+        }
+    }
+
+    /// 建立带 3 秒全局超时的 agent（每次调用都用同一份配置，代理按本实例的地址）。
+    fn agent(&self) -> ureq::Agent {
         ureq::Agent::config_builder()
             .timeout_global(Some(QUOTE_TIMEOUT))
+            // 显式给 `proxy`：`off`/未配置时是 `None`，否则会退回 ureq 默认的"读环境变量"
+            // （那样设置里的「不使用代理」就形同虚设）
+            .proxy(crate::proxy::proxy_from_url(self.proxy_url.as_deref()))
             .build()
             .into()
     }
 
     /// 发起一次行情请求并按 GBK 解码；任何失败都返回 `None`。
-    fn fetch_payload(url: &str) -> Option<Vec<u8>> {
-        let mut response = match Self::agent().get(url).call() {
+    fn fetch_payload(&self, url: &str) -> Option<Vec<u8>> {
+        let mut response = match self.agent().get(url).call() {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!("查询股票行情失败(网络): {} ({})", url, error);
@@ -96,7 +116,7 @@ impl StockQuoteFetcher for TencentStockQuoteFetcher {
         }
 
         let url = format!("http://qt.gtimg.cn/q={}", query.join(","));
-        let Some(payload) = Self::fetch_payload(&url) else {
+        let Some(payload) = self.fetch_payload(&url) else {
             return result;
         };
         let payload = decode_gbk(&payload);
@@ -116,7 +136,7 @@ impl StockQuoteFetcher for TencentStockQuoteFetcher {
             return String::new();
         }
         let url = format!("http://qt.gtimg.cn/q={}{}", market_prefix(code), code);
-        let Some(payload) = Self::fetch_payload(&url) else {
+        let Some(payload) = self.fetch_payload(&url) else {
             return String::new();
         };
         let payload = decode_gbk(&payload);

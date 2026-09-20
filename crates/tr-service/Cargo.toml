@@ -25,3 +25,8 @@ ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzi
 # 日期换算：严格的日期/月份解析，与 strftime(..., 'unixepoch') 的 UTC 口径一致
 chrono = "0.4"
 serde_json = "1.0.151"
+
+# Windows 系统代理探测（「Internet 选项」的 ProxyEnable/ProxyServer，只读）。
+# 非 Windows 上不编译这段代码，也不需要这个依赖。
+[target.'cfg(windows)'.dependencies]
+winreg = { workspace = true }

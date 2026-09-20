@@ -98,9 +98,14 @@ pub struct UpdateDownloadRequest {
 }
 
 /// 建立带全局超时的 agent（与 `tr-service::quote` 用同一套 ureq 配置方式）。
+///
+/// **代理**：显式传入当前设置解析出的 `ureq::Proxy`（`off` / 探测不到时是 `None`）——
+/// 不显式给的话 ureq 会退回它默认的"读环境变量"，那样「不使用代理」就形同虚设。
+/// `update_check` 与下载都走这一个函数，两条链路不会半生效。
 fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
+        .proxy(tr_service::proxy::agent_proxy())
         .build()
         .into()
 }

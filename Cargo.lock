@@ -5314,6 +5314,7 @@ dependencies = [
  "tr-store",
  "tracing",
  "ureq",
+ "winreg",
 ]
 
 [[package]]
@@ -5422,6 +5423,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tr-domain",
  "tr-ipc",
+ "tr-service",
  "tr-store",
  "tracing",
  "tracing-subscriber",

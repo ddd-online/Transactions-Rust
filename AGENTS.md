@@ -175,6 +175,12 @@ pwsh -File fixtures/ui-key-event.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <di
 # 它同时是"弹窗里的下拉面板被 `overflow: hidden` 裁掉"这个真实缺陷的回归（见下方经验）。
 pwsh -File fixtures/ui-link-event.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 
+# 代理端到端：起一个**本机假 HTTP 代理**（记录请求行、对行情返回固定名称），
+# 界面把「通用设置 → 代理」设成手动指向它 → 断言 行情（qt.gtimg.cn）与更新检查（api.github.com）
+# 都出现在假代理日志里、行情名称显示的是假代理返回的名字 → 切「不使用」→ 断言假代理一条都收不到。
+# 它锁的是"代理只写进配置文件、请求其实还是直连"这种假生效。
+pwsh -File fixtures/ui-proxy.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+
 # 代码规范
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -442,14 +448,28 @@ cargo clippy --all-targets -- -D warnings
   命令：`update_check` / `update_download`（发 `update:download-progress|complete|error` 事件）/ `update_cancel` / `update_install`；
   行为：仅 GitHub 域名白名单、已下载复用、`.part` 中转、取消清理、打开安装包后退出。
   因此 `tauri.conf.json` 里**不要**加 `plugins.updater`，capabilities 里也不需要 `updater:default`。
-- **更新/行情的 HTTP 客户端不读系统代理**（已知偏差）：`src-tauri/src/updater.rs` 与
-  `tr-service/src/quote.rs` 用的是 `ureq`，只按直连走（既不读 WinINET 的 `ProxyEnable/ProxyServer`，
-  也不读 `HTTP(S)_PROXY`）。
-  本机实测两个端点直连都能通（`api.github.com`、`qt.gtimg.cn` 均成功，更新检查返回"已是最新版本"），
-  所以当前不影响使用；但若哪天直连被挡（历史上 GitHub 资产下载就失败过），更新检查/下载会失败。
-  **要不要修需要权衡**：直接改成"有系统代理就走代理"会在代理没开时把本来能用的直连也弄坏
-  （ureq 没有代理失败回退），所以正确的做法是"环境变量优先 + 系统代理仅在直连失败后回退"
-  并加单测；截至本轮**刻意未做**，先在文档里记明这个偏差与取舍。
+- **代理：三态设置 + 自动探测系统代理**（原"客户端不读系统代理"的偏差已修掉）：
+  「应用设置 → 通用设置 → 代理」= `off`（不使用）/ `auto`（自动探测，**默认**）/ `manual`（手动 `http://host:port`），
+  落在 `~/.transactions.json` 的 `proxy: { mode, url }`（缺该键的老配置按 `auto` 处理）。
+  * **生效路径**：配置由外壳持有 → `src-tauri/main.rs` 启动时 `tr_service::proxy::set(...)`，
+    `config_set_proxy` 落盘后立即再推一次；`tr-service/src/quote.rs`（行情）与
+    `src-tauri/updater.rs`（更新检查/下载，`agent()` 是两处共用的唯一入口）都从同一处取，
+    **不会出现"更新走代理、行情不走"的半生效**。`tauri-plugin-opener` 打开浏览器那次跳转不受影响。
+  * **`auto` 的探测顺序**：`ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY`（含小写变体，与 ureq 的
+    `Proxy::try_from_env()` 同序）→ WinINET 注册表 `HKCU\…\Internet Settings`
+    （`ProxyEnable=1` 时取 `ProxyServer` 的 `http=` 段）→ 同路径 `HKLM` → 直连。
+    **只读注册表**（`winreg`，`cfg(windows)`），每次请求重新探测，改系统代理不必重启。
+  * **只支持 HTTP 代理**：地址只认 `http://`（`host:port` 会自动补 scheme；可带 `user:pass@`）。
+    `socks*://` 与 `https://` 明确拒绝并给中文文案；HTTPS 目标（GitHub）走同一个 HTTP 代理的 CONNECT 隧道。
+    **不支持**：PAC 自动配置脚本（`AutoConfigURL` 只作为提示上报，不解析）、`ProxyOverride` 绕过列表
+    （环境变量路径下由 ureq 的 `NO_PROXY` 处理）。
+  * **`off` 会显式 `.proxy(None)`**：ureq 的 `Config::default()` 本身就会读环境变量代理，
+    不显式覆盖的话"不使用代理"会名不副实 —— 这也是本仓库唯一一处必须传 `Option` 的地方。
+  * 回归：`fixtures/ui-proxy.ps1` —— 起一个**本机假 HTTP 代理**当判据：手动代理下
+    `qt.gtimg.cn` 与 `api.github.com` 必须出现在假代理的请求日志里（行情还断言界面显示假代理返回的名称），
+    切「不使用」后假代理**一条都收不到**。只断言配置文件写了什么等于什么都没验。
+  * 失败形态：代理不可达时更新检查报错、行情静默失败（计入既有的 `quote_failed_count`），都不 panic；
+    手改配置成非法值时按"未配置"处理（直连）并记日志。
 
 ## 关键约定与陷阱
 

@@ -23,6 +23,9 @@ fn main() {
     let is_dev = cfg!(debug_assertions);
 
     let desktop_state = commands::DesktopState::new(is_dev);
+    // 代理设置推给 tr-service 的进程槽位（行情）——必须在任何 IPC 之前：
+    // 更新器自己读同一处（见 updater::agent），于是"更新走代理、行情不走"这类半生效不会发生。
+    tr_service::proxy::set(desktop_state.config.snapshot().proxy);
     logging::init_tracing(desktop_state.logs.clone());
     tracing::info!(
         "--------- 启动 Transactions (Rust, dev={is_dev}) --------- 配置: {} 应用日志: {}",
@@ -61,6 +64,8 @@ fn main() {
             commands::config_get,
             commands::config_set_close_behavior,
             commands::config_set_appearance,
+            commands::config_set_proxy,
+            commands::proxy_detect,
             commands::config_file_path,
             commands::workspace_get,
             commands::workspace_set,

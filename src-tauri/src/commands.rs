@@ -10,7 +10,7 @@
 //! * `dialog_open`：选择文件或目录
 //! * `file_save_image`：把工作空间资产另存到用户选择的位置
 //! * `app_info`：应用信息（field: name / version / isDev）
-//! * `config_*`：配置读写
+//! * `config_*`：配置读写（含 `config_set_proxy` / `proxy_detect`：代理设置与系统代理探测）
 //! * `devtools_*`：开发者工具状态与开合
 
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 use tr_domain::error::AppError;
+use tr_domain::proxy::ProxySetting;
 use tr_ipc::{ApiError, ApiResult, AppState};
 
 use crate::assets;
@@ -169,6 +170,9 @@ pub struct ConfigSnapshot {
     pub config_path: String,
     #[serde(rename = "isDev")]
     pub is_dev: bool,
+    /// 代理设置（`mode` / `url`）；界面「通用设置 → 代理」直接编辑它
+    #[serde(rename = "proxy")]
+    pub proxy: ProxySetting,
 }
 
 #[tauri::command]
@@ -176,9 +180,10 @@ pub fn config_get(state: State<'_, DesktopState>) -> ApiResult<ConfigSnapshot> {
     // 界面启动的第一个调用；打一条 info 便于排障（"窗口空白/PII 没反应"时先看这里有没有出现）
     let config = state.config.snapshot();
     tracing::info!(
-        "IPC config_get: workspaceDir={:?} appearance={:?}",
+        "IPC config_get: workspaceDir={:?} appearance={:?} proxy={}",
         config.workspace_dir,
-        config.appearance
+        config.appearance,
+        config.proxy.mode
     );
     Ok(ConfigSnapshot {
         workspace_dir: config.workspace_dir,
@@ -190,6 +195,7 @@ pub fn config_get(state: State<'_, DesktopState>) -> ApiResult<ConfigSnapshot> {
         },
         config_path: state.config.path().to_string_lossy().to_string(),
         is_dev: state.is_dev,
+        proxy: config.proxy,
     })
 }
 
@@ -241,6 +247,59 @@ pub fn config_set_appearance(
         let _ = window.set_theme(theme);
     }
     Ok(())
+}
+
+// ------------------------------------------------------------ 代理设置
+
+/// 校验 + 归一化（**纯函数**，单测直接断言用户看到的文案）。
+///
+/// 地址只支持 `http://`：见 `tr_domain::proxy::normalize_http_proxy`。
+fn validate_proxy_setting(request: &ProxySetting) -> ApiResult<ProxySetting> {
+    ProxySetting::validated(&request.mode, &request.url)
+        .map_err(|message| ApiError::from(AppError::bad_request(message)))
+}
+
+/// 保存代理设置：校验 → 落盘 → **立即推给 tr-service 的进程槽位**（行情随即生效）。
+///
+/// 返回归一化后的设置（界面用它回显，例如把 `127.0.0.1:7890` 显示成 `http://127.0.0.1:7890`）。
+#[tauri::command]
+pub fn config_set_proxy(
+    state: State<'_, DesktopState>,
+    req: ProxySetting,
+) -> ApiResult<ProxySetting> {
+    let setting = validate_proxy_setting(&req)?;
+    state.config.update(|config| config.proxy = setting.clone());
+    tr_service::proxy::set(setting.clone());
+    tracing::info!(
+        "IPC config_set_proxy: mode={} url={:?}",
+        setting.mode,
+        setting.url
+    );
+    Ok(setting)
+}
+
+/// `proxy_detect` 的返回：探测到的地址 + 来源 + 一句给用户看的说明。
+#[derive(Debug, Serialize)]
+pub struct ProxyDetectResponse {
+    /// 会用到的代理地址（空串 = 直连）
+    pub url: String,
+    /// env / system / manual / none
+    pub source: String,
+    /// 系统是否配置了 PAC 自动配置脚本（本版本不解析）
+    pub pac: bool,
+    pub message: String,
+}
+
+/// 「检测」按钮：按**当前设置**报告最终会用哪个代理（只读：不写配置、不改系统设置）。
+#[tauri::command]
+pub fn proxy_detect(state: State<'_, DesktopState>) -> ApiResult<ProxyDetectResponse> {
+    let resolved = tr_service::proxy::resolve(&state.config.snapshot().proxy);
+    Ok(ProxyDetectResponse {
+        url: resolved.url.unwrap_or_default(),
+        source: resolved.source.to_string(),
+        pac: resolved.pac,
+        message: resolved.detail,
+    })
 }
 
 // ------------------------------------------------------------ 工作空间
@@ -627,5 +686,78 @@ mod tests {
                 serde_json::from_str(&format!(r#"{{"action":"{action}"}}"#)).unwrap();
             assert_eq!(request.action, action);
         }
+    }
+
+    /// `config_get` 的返回体是界面手抄的（`tr-ui/src/api/desktop.rs` 的 `ConfigSnapshot`），
+    /// 而契约审计只比对**请求**结构体（命令没有 `req` 形参就比不到）——这条单测补上响应侧：
+    /// 键名一旦改名，界面会静默读不到（`#[serde(default)]` 兜底成默认值），必须在这里锁住。
+    #[test]
+    fn config_snapshot_serializes_the_documented_keys() {
+        let snapshot = ConfigSnapshot {
+            workspace_dir: r"D:\ws".to_string(),
+            close_behavior: "quit".to_string(),
+            appearance: "system".to_string(),
+            config_path: r"C:\Users\x\.transactions.json".to_string(),
+            is_dev: false,
+            proxy: ProxySetting::manual("http://127.0.0.1:7890"),
+        };
+        let value = serde_json::to_value(&snapshot).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "appearance",
+                "closeBehavior",
+                "configPath",
+                "isDev",
+                "proxy",
+                "workspaceDir"
+            ]
+        );
+        assert_eq!(value["proxy"]["mode"], "manual");
+        assert_eq!(value["proxy"]["url"], "http://127.0.0.1:7890");
+    }
+
+    #[test]
+    fn proxy_setting_validation_reports_chinese_messages() {
+        // 手动模式：归一化 + 回显
+        let ok = validate_proxy_setting(&ProxySetting {
+            mode: "manual".to_string(),
+            url: " 127.0.0.1:7890 ".to_string(),
+        })
+        .unwrap();
+        assert_eq!(ok.url, "http://127.0.0.1:7890");
+
+        // 只看 http：socks / https 明确拒绝
+        let err = validate_proxy_setting(&ProxySetting {
+            mode: "manual".to_string(),
+            url: "socks5://127.0.0.1:1080".to_string(),
+        })
+        .unwrap_err();
+        assert_eq!(err.status, 400);
+        assert!(err.msg.contains("仅支持"), "文案: {}", err.msg);
+
+        // 未知模式
+        let err = validate_proxy_setting(&ProxySetting {
+            mode: "on".to_string(),
+            url: String::new(),
+        })
+        .unwrap_err();
+        assert!(err.msg.contains("无效的代理模式"), "文案: {}", err.msg);
+
+        // off / auto 下地址原样保留（切回手动时还在）
+        let auto = validate_proxy_setting(&ProxySetting {
+            mode: "auto".to_string(),
+            url: "127.0.0.1:7890".to_string(),
+        })
+        .unwrap();
+        assert_eq!(auto.mode, "auto");
+        assert_eq!(auto.url, "127.0.0.1:7890");
     }
 }

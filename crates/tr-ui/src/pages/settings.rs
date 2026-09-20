@@ -50,6 +50,7 @@ use leptos::tachys::view::any_view::IntoAny;
 use tr_domain::dto::DiaryExportFileError;
 use tr_domain::models::StockFeeSetting;
 use tr_domain::money::{cents_to_yuan, yuan_to_cents};
+use tr_domain::proxy::{ProxySetting, PROXY_MODE_AUTO, PROXY_MODE_MANUAL, PROXY_MODE_OFF};
 
 use crate::api;
 use crate::components::ui::{
@@ -122,19 +123,85 @@ pub fn SettingsPage() -> impl IntoView {
 
 // ---------------------------------------------------------------- 通用设置
 
-/// 通用设置：工作空间 / 外观 / 关闭行为 / 开发者工具。
+/// 通用设置：工作空间 / 外观 / 关闭行为 / 代理 / 开发者工具。
 #[component]
 fn GeneralSetting() -> impl IntoView {
     let stores = AppStores::global();
 
     let close_behavior = RwSignal::new(String::new());
     let appearance = RwSignal::new(stores.appearance.get_untracked());
+    // 代理：模式 + 手动地址（切换模式立即保存；地址靠回车或「保存」按钮提交）
+    let proxy_mode = RwSignal::new(PROXY_MODE_AUTO.to_string());
+    let proxy_url = RwSignal::new(String::new());
+    // 「当前生效：…」那一行（由 `proxy_detect` 填；切换模式/保存后刷新）
+    let proxy_note = RwSignal::new(String::new());
+    let proxy_detecting = RwSignal::new(false);
     // 开发者工具的按钮忙状态（防连点开出两个窗口）
     let devtools_opening = RwSignal::new(false);
     let switching = RwSignal::new(false);
 
+    // ---- 代理 ----
+    // 「当前生效」那一行：后端按**当前设置**解析（`auto` 会现场探测环境变量/系统代理），
+    // 所以模式一改就得重新问一次，否则界面显示的还是上一次的结论。
+    let refresh_proxy_note = move || {
+        proxy_detecting.set(true);
+        leptos::task::spawn_local(async move {
+            match api::desktop::proxy_detect().await {
+                Ok(response) => proxy_note.set(response.message),
+                Err(error) => notify_error("检测代理", &error),
+            }
+            proxy_detecting.set(false);
+        });
+    };
+
+    // 保存失败时把界面拉回**磁盘上的真实值**。
+    // ⚠ 不能"记住点击前的值"：`Segmented` 在触发 `on_change` **之前**就已经把绑定信号改成新值了，
+    // 回调里读到的"之前"其实就是刚点的那一项（回滚会变成空操作）——只有重读配置才权威。
+    let reload_proxy = move || {
+        leptos::task::spawn_local(async move {
+            match api::desktop::config_get().await {
+                Ok(config) => {
+                    proxy_mode.set(config.proxy.effective_mode().to_string());
+                    proxy_url.set(config.proxy.url);
+                }
+                Err(error) => notify_error("读取配置", &error),
+            }
+        });
+    };
+
+    // 提交给后端：成功后用**归一化的值**回显并刷新「当前生效」。
+    // `rollback` 只在"切模式"这条路径上为真 —— 手动地址保存失败时**不能**回滚，
+    // 否则输入框会消失，用户没法改那个地址。
+    let submit_proxy = move |mode: String, url: String, rollback: bool| {
+        leptos::task::spawn_local(async move {
+            let setting = ProxySetting { mode, url };
+            match api::desktop::config_set_proxy(setting).await {
+                Ok(saved) => {
+                    proxy_mode.set(saved.mode);
+                    proxy_url.set(saved.url);
+                    refresh_proxy_note();
+                }
+                Err(error) => {
+                    if rollback {
+                        reload_proxy();
+                    }
+                    notify_error("设置代理", &error);
+                }
+            }
+        });
+    };
+
+    // 模式切换：「手动」只把输入框露出来（地址还没填，提交必然失败），其余两种立即保存。
+    let switch_proxy_mode = move |mode: String| {
+        if mode == PROXY_MODE_MANUAL {
+            proxy_mode.set(mode);
+        } else {
+            submit_proxy(mode, proxy_url.get_untracked(), true);
+        }
+    };
+
     // 首屏：`config_get()` 一次拿全（workspace_dir / close_behavior / appearance /
-    // config_path / is_dev）。
+    // config_path / is_dev / proxy）。
     leptos::task::spawn_local(async move {
         match api::desktop::config_get().await {
             Ok(config) => {
@@ -148,6 +215,11 @@ fn GeneralSetting() -> impl IntoView {
                 appearance.set(mode.clone());
                 stores.appearance.set(mode);
                 stores.apply_appearance();
+                // 空/未知模式一律回落到「自动探测」（与 `ProxySetting::effective_mode` 同口径）
+                proxy_mode.set(config.proxy.effective_mode().to_string());
+                proxy_url.set(config.proxy.url);
+                // 首屏就把"当前到底走不走代理"显示出来（auto 模式尤其需要）
+                refresh_proxy_note();
             }
             Err(error) => notify_error("读取配置", &error),
         }
@@ -296,6 +368,63 @@ fn GeneralSetting() -> impl IntoView {
                         ]
                         on_change=move |mode: String| change_close_behavior(mode)
                     />
+                </div>
+            </div>
+
+            <div class="st-card">
+                <div class="st-card-info">
+                    <span class="st-card-title">"代理"</span>
+                    <span class="st-card-desc">
+                        "网络请求（行情、更新检查）走 HTTP 代理；自动探测读取环境变量与 Windows 系统代理"
+                    </span>
+                    <span class="st-card-desc st-card-desc--mono">{proxy_note}</span>
+                </div>
+                <div class="st-card-action">
+                    <Show when=move || proxy_mode.get() == PROXY_MODE_MANUAL>
+                        <div class="st-proxy-url">
+                            <Input
+                                value=proxy_url
+                                placeholder="http://127.0.0.1:7890"
+                                on_enter=move || {
+                                    submit_proxy(
+                                        PROXY_MODE_MANUAL.to_string(),
+                                        proxy_url.get_untracked(),
+                                        false,
+                                    )
+                                }
+                            />
+                        </div>
+                    </Show>
+                    <Segmented
+                        value=proxy_mode
+                        options=vec![
+                            SegmentedOption::new(PROXY_MODE_OFF, "不使用"),
+                            SegmentedOption::new(PROXY_MODE_AUTO, "自动探测"),
+                            SegmentedOption::new(PROXY_MODE_MANUAL, "手动"),
+                        ]
+                        on_change=move |mode: String| switch_proxy_mode(mode)
+                    />
+                    <Show when=move || proxy_mode.get() == PROXY_MODE_MANUAL>
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            on_click=move |_| {
+                                submit_proxy(
+                                    PROXY_MODE_MANUAL.to_string(),
+                                    proxy_url.get_untracked(),
+                                    false,
+                                )
+                            }
+                        >
+                            "保存"
+                        </Button>
+                    </Show>
+                    <Button
+                        variant=ButtonVariant::Secondary
+                        loading=proxy_detecting
+                        on_click=move |_| refresh_proxy_note()
+                    >
+                        "检测"
+                    </Button>
                 </div>
             </div>
 

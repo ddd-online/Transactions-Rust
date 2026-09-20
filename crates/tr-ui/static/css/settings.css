@@ -166,6 +166,11 @@
   width: 140px;
 }
 
+/* 「代理」行的手动地址输入框：与分段控制器/按钮同一行，固定宽度免得把行撑变形 */
+.st-proxy-url {
+  width: 220px;
+}
+
 .st-progress-card {
   margin-top: var(--transactions-space-md);
   padding: var(--transactions-space-md);

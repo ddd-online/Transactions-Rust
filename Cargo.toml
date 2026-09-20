@@ -24,6 +24,9 @@ tr-store = { path = "crates/tr-store" }
 tr-service = { path = "crates/tr-service" }
 tr-ipc = { path = "crates/tr-ipc" }
 
+# Windows 注册表（只用于读系统代理设置；版本与 Cargo.lock 里已有的传递依赖一致）
+winreg = "0.55"
+
 # 桌面发行版：体积与速度优先（Tauri 官方推荐配置）
 [profile.release]
 codegen-units = 1

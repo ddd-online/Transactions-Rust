@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use tr_domain::proxy::ProxySetting;
 
 /// 生产配置文件名（用户数据契约，不可更改）。
 pub const CONFIG_FILE: &str = ".transactions.json";
@@ -42,6 +43,10 @@ pub struct AppConfig {
     /// 外观：light / dark / system
     #[serde(rename = "appearance")]
     pub appearance: String,
+    /// 代理（HTTP）：`{ mode: off|auto|manual, url }`，见 `tr_domain::proxy`。
+    /// 缺省 = `auto`（自动探测本机代理）；老配置里没有这个键也按 `auto` 处理。
+    #[serde(rename = "proxy")]
+    pub proxy: ProxySetting,
     /// 未识别字段（其它版本写入的配置项）原样保留
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -58,6 +63,7 @@ impl Default for AppConfig {
             workspace_dir: String::new(),
             close_behavior: String::new(),
             appearance: APPEARANCE_SYSTEM.to_string(),
+            proxy: ProxySetting::default(),
             extra: serde_json::Map::new(),
         }
     }
@@ -162,6 +168,31 @@ mod tests {
         assert_eq!(config.appearance, "system");
         assert!(config.workspace_dir.is_empty());
         assert!(config.close_behavior.is_empty());
+        // 代理缺省 = 自动探测（不是 off）：本机有代理就跟着走
+        assert_eq!(config.proxy.mode, tr_domain::proxy::PROXY_MODE_AUTO);
+        assert!(config.proxy.url.is_empty());
+    }
+
+    #[test]
+    fn proxy_key_roundtrips_and_missing_key_means_auto() {
+        let path = temp_path("proxy");
+        // 老配置（没有 proxy 键）→ auto
+        std::fs::write(&path, r#"{"width": 800, "workspaceDir": "D:\\ws"}"#).unwrap();
+        let mut config = AppConfig::load(&path);
+        assert_eq!(config.proxy.mode, tr_domain::proxy::PROXY_MODE_AUTO);
+
+        config.proxy = ProxySetting::manual("http://127.0.0.1:7890");
+        config.save(&path).unwrap();
+
+        let reloaded: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded["proxy"]["mode"], "manual");
+        assert_eq!(reloaded["proxy"]["url"], "http://127.0.0.1:7890");
+
+        let back = AppConfig::load(&path);
+        assert_eq!(back.proxy, config.proxy);
+
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
