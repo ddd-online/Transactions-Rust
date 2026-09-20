@@ -60,6 +60,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build/build-ui.ps1   # 发�
 cargo tauri dev
 cargo tauri build                                 # 产出 NSIS 安装包
 
+# fixtures 下的端到端脚本**共用** fixtures/lib/TrUia.ps1（0.2.1 起）：
+# 装配加载 + C# 类 TrUia（Click/SetForegroundWindow/ShowWindow…）+ Assert-True/找元素/等待/截图/
+# 启动与收尾（Initialize-TrSmokeHome / Assert-NoRepoInstance / Start-App / Stop-TrApp / Show-TrSummary）。
+# 新增脚本请 `. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')`，**不要再抄一份**；
+# 单个脚本里若仍留着同名函数，那是因为它的默认超时/守卫/文案与共享版不同（刻意保留的变体）。
+# 共享版 Assert-True 找不到调用方的 `$failures` 时会直接抛错（防"断言静默不计数"的假绿）；
+# Read-Table / Start-App 需要显式传 -Repo/-Workspace/-OutDir/-SmokeHome/-Exe，别依赖隐式作用域。
+
 # 验证护栏
 cargo xtask schema-diff                           # Rust 建库结构与 fixtures/schema/fresh.sql 逐条一致
 cargo xtask validate <workspace-dir>              # 只读校验既有工作空间是否为当前格式

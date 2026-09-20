@@ -3,7 +3,7 @@
 桌面端个人记账应用：**Tauri 2 外壳 + Leptos(WASM) 界面 + rusqlite 内核**，全部由 Rust 实现。
 所有记账数据保存在你自己选择的本地工作空间（一个 SQLite 数据库）里，无云端账户、无后台服务、无 Node 依赖。
 
-本文档描述 **0.2.0**。
+本文档描述 **0.2.1**。
 
 ## 功能
 
@@ -50,7 +50,7 @@ fixtures/            # schema 基线、端到端脚本（**不含任何真实个
 ## 下载安装
 
 到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载
-`Transactions-x64-v0.2.0.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
+`Transactions-x64-v0.2.1.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
 
 首次启动会让你选择一个工作空间目录：空目录会按当前 schema 建库，已经是当前格式的目录会直接打开。
 应用内「设置 → 关于软件」会检查本仓库的 Release，发现新版本可下载并校验 `sha256` 后安装。
@@ -72,7 +72,7 @@ cargo tauri dev
 pwsh -File build/build.ps1
 ```
 
-产物：`build\target\Transactions-x64-v0.2.0.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
+产物：`build\target\Transactions-x64-v0.2.1.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
 发布流程：`build/clean.ps1` → `build/build.ps1` → `build/release.ps1`（`gh release create` + 上传安装包）。
 版本号唯一来源是 `src-tauri/tauri.conf.json`。
 

@@ -2,6 +2,63 @@
 
 本文件记录本仓库的版本变更。版本号以 `src-tauri/tauri.conf.json` 为唯一来源。
 
+## [0.2.1] - 2026-09-20
+
+**全仓去重与死代码清理**（110 个文件，净删约 2600 行），外加两处护栏修复。
+**行为不变**：数据格式、IPC 字段名与用户可见文案、界面渲染结果、配置键名全部未动，
+单测数量与既有断言逐条保留。
+
+### 清理
+
+- **界面 `tr-ui`**：删掉 12 个零引用的 `pub` 项（`ipc::call_batch`、`api::tr::batch_create`、
+  `api::stock::principal_set`、`format::money_axis_text`、`time::ym_to_seconds`、
+  `AppStores::statistic`、`error_handler` 的三个空转 async 入口、`transactions::apply_result`、
+  两处"注释理由是假的" `#[allow(dead_code)]` 函数等），以及 `base.css` 里 17 个零引用
+  `.u-*` 工具类与 `@mixin` 清单（191 行）。
+  - 费用预估改走 `tr_domain::fee::compute_order_fee`，股票代码校验与沪市判定改走
+    `tr_domain::fee::{is_valid_stock_code, is_shanghai_code}` —— 此前界面自己抄了一份，
+    属于"前后端各写一份、靠人工同步"的破口；界面仍保留 `amount <= 0` 守卫与饱和求和。
+  - `YYYY-MM-DD` 解析与「闭区间 Unix 秒」换算收敛到 `crate::time`（消费记录页与数据分析页共用一份）。
+  - 24 处类名拼接 → `ui::with_class`；弹窗/抽屉关闭按钮、浮层遮罩、日历翻页按钮、
+    7 处页头、两处复盘编辑块抽成共享实现；`ui.css` / `app.css` 两处整段重复的声明合并。
+- **内核 `tr-store` / `tr-domain` / `tr-ipc`**：category 与 tag 两个**逐字节相同**的分组统计
+  合成 `dao::count_grouped_by`（表名/列名仍是常量、值仍是占位符）；删 9 个只有测试在调的
+  `delete_by_ledger_id`（级联删除的活路径在服务层单事务里）与 `ApiError::new`、`TAG_POLICY_NOT`；
+  `create_fund_record` 里写了两遍的 INSERT 合一；10 份测试夹具合成 `test_workspace`；
+  tr-ipc 的 `require_ledger_id` / 日记参数校验 / `QueryNumber` 解析收敛为公共函数（文案逐字不变）。
+- **服务层与外壳**：删 3 个零调用服务函数；行情解析的 first/all 两套扫描合一；
+  日记日期校验复用 `parse_strict_date`（chrono），去掉手写公历实现；
+  `stock` 的三对「workspace 版 / 事务内 `_in` 版」委托化；百分比、成本结转、标签判断、
+  图表预设等抽公共实现；9 份测试夹具与 2 处 round 播种夹具合一；
+  外壳的 `FileSaveResponse::failed`、`pick_path`、`theme_of` 收敛；删掉 `src-tauri` 两个
+  未使用依赖（`thiserror`、`tr-service`）；`xtask` 的只读打开抽成一处。
+- **护栏脚本 `fixtures`**：20 个端到端脚本此前**各自抄了一份** UIA 辅助函数
+  （`Assert-True` 15 份、`Invoke-Element` 12 份、`Save-Screenshot` 11 份、C# 鼠标类 18 份…）。
+  新增 `fixtures/lib/TrUia.ps1` 作为唯一底座（装配加载、C# `TrUia`、24 个共享函数），
+  18 个脚本改为 dot-source：**18 个脚本合计 7162 → 5566 行**。
+  语义不同的变体（更强的失效守卫、不同的默认超时/文案）按"宁可少抽"保留在各自脚本里。
+
+### 修复
+
+- `fixtures/contract-audit.ps1`：界面侧请求结构体表改为**跨 `crates/tr-ui/src/api/*.rs` 合并**
+  （`api/mod.rs` 优先），共享结构体重新纳入逐字段比对 —— 比较数 **57 → 66**，
+  "跳过（界面直接传 tr_domain 共享类型）"的原因说明恢复准确。
+- `fixtures/lib/TrUia.ps1` 的 `Assert-True` 在找不到调用方脚本的 `$failures` 时**直接抛错**
+  （原来会静默不计数 = 假绿）；`Read-Table` / `Start-App` 改为显式传参，
+  避免模块作用域看不到脚本变量、让 cargo 在错误的工作目录里跑。
+- `fixtures/ui-about.ps1` / 共享模块：本机**别的目录下**装着同款应用在跑时，
+  单实例插件会顶掉脚本启动；现在会给出明确报错而不是等满超时。
+
+### 验证
+
+- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 全绿；
+  `cargo test` 单测数量不变（tr-domain 64 / tr-store 39 / tr-ipc 15 / tr-service 126 / 外壳 35），
+  既有断言一条未删。
+- `cargo xtask schema-diff` 通过：**数据库结构一字未动**。
+- 端到端护栏与 **0.2.0 产物上的基线逐条对比**：同一批脚本、同样的断言数、无新增失败。
+  （基线里本就有 9 个脚本为红，是 0.2.0 产物在本机环境/界面改版下的既有问题，
+  与本次清理无关，逐条差异见 0.2.1 的 Release 说明。）
+
 ## [0.2.0] - 2026-09-20
 
 图表引擎换代 + 界面布局与组件全面细化。**数据格式与配置键名均无变化**，
@@ -67,5 +124,6 @@
 - 已知偏差与取舍（行情与更新检查的 HTTP 客户端不读系统代理、资金记录 `created_at` 的严格递增规则等）
   记在 `AGENTS.md`。
 
+[0.2.1]: https://github.com/ddd-online/Transactions-Rust/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ddd-online/Transactions-Rust/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ddd-online/Transactions-Rust/releases/tag/v0.1.0
