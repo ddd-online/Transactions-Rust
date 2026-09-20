@@ -171,7 +171,7 @@ pub fn lots_of(shares: i64) -> i64 {
     shares.div_euclid(100)
 }
 
-/// 股票交易类型 → 中文标签（未知值回落到原始字符串）。
+/// 股票类型 → 中文标签（未知值回落到原始字符串）。
 pub fn trade_type_label(trade_type: &str) -> String {
     match trade_type {
         "open" => "建仓".to_string(),

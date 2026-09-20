@@ -1,6 +1,6 @@
 # ui-about.ps1 —— 「设置 → 关于软件」端到端：**打包产物自报的版本号必须等于 tauri.conf.json 的版本号**。
 #
-# 为什么需要它：应用名/版本/构建类型来自外壳的 `app_info`（`app.package_info()`，即 tauri.conf.json
+# 为什么需要它：应用名/版本来自外壳的 `app_info`（`app.package_info()`，即 tauri.conf.json
 # 的 `version` 与 `productName`），而**发布资产名、Release tag、应用内更新比对**都依赖那个数字。
 # 两侧一旦漂移（改了 tauri.conf.json 却没重新构建，或反过来只改了 Cargo.toml），
 # 界面会照常显示、更新检查却会一直给出错误结论 —— 这类"看不见的错"没有别的护栏能挡住：
@@ -8,8 +8,9 @@
 #   * `fixtures/smoke.ps1` / `ui-smoke.ps1` 只断言"界面起来了、7 页渲染了"。
 # 所以这里做两件事：
 #   1. 从 `src-tauri/tauri.conf.json` 读**期望版本**，断言关于页显示「版本 X.Y.Z」与之一致；
-#   2. 断言关于页其余固定内容（应用名 / 构建类型 / GitHub 链接 / 版权行）确实渲染，
+#   2. 断言关于页其余固定内容（应用名 / GitHub 链接 / 版权行）确实渲染，
 #      并等更新检查走到**终态**（成功或失败都算，网络不可用时不该让脚本红）。
+# 另外反向断言「构建类型：…」那行**不再出现**（按需求移除，别再长回来）。
 #
 # 用法（pwsh 7；需要打包产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/ui-about.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
@@ -175,14 +176,16 @@ try {
 
     Write-Host "[about] 2/3 切到「关于软件」页签"
     Assert-True (Select-Tab -Window $window -Name '关于软件') '页签「关于软件」可选中'
-    $paneReady = Wait-Like -Root $window -Pattern '构建类型：' -TimeoutSec 15
-    Assert-True ([bool]$paneReady) '关于面板已渲染（出现「构建类型：…」）'
+    $paneReady = Wait-Like -Root $window -Pattern '版本 ' -TimeoutSec 15
+    Assert-True ([bool]$paneReady) '关于面板已渲染（出现「版本 …」）'
 
     $names = Get-Names $window
     Assert-True ($names -contains $expectedName) "显示应用名「$expectedName」"
     $versionShown = "版本 $expectedVersion"
     Assert-True ($names -contains $versionShown) "显示「$versionShown」（与 tauri.conf.json 一致；实际版本文案: $(($names | Where-Object { $_ -like '版本 *' }) -join '/')）"
-    Assert-True ($names -contains '构建类型：正式版') '构建类型显示「正式版」（打包产物不该是开发版）'
+    # 反向断言：这一行已按需求移除，不该再出现在关于页
+    $buildType = @($names | Where-Object { $_ -like '*构建类型*' })
+    Assert-True ($buildType.Count -eq 0) "关于页没有「构建类型」行（实际: $($buildType -join '/')）"
     Assert-True ($names -contains 'GitHub') '关于页有「GitHub」链接'
     Assert-True ($names -contains $copyright) "版权行正确（$copyright）"
 

@@ -4,8 +4,8 @@
  * 覆盖内容：
  *   - 分栏骨架（页签 + 内容区）
  *   - 分栏标题 + 卡片列表
- *   - 通用设置 / 消费模板 / 日记配置 / 股票交易 / 关于软件
- *   - 「交易费用设置」那一组表单（挂在股票交易分栏下）
+ *   - 通用设置 / 消费模板 / 日记配置 / 股票 / 关于软件
+ *   - 「交易费用设置」那一组表单（挂在股票分栏下）
  *
  * 约定：
  *   - 类名一律 st- 前缀；
@@ -45,7 +45,7 @@
   flex-direction: column;
 }
 
-/* 说明：`.st-pane-title`（「消费模板」「日记配置」「股票交易」那三个分区标题）已删除 ——
+/* 说明：`.st-pane-title`（「消费模板」「日记配置」「股票」那三个分区标题）已删除 ——
  * 页签本身已经说明当前在看哪一页，标题只是重复一遍。若将来某一页内容复杂到需要
  * 二级分区，再按"分区标题 + 发丝线"的样式新加，不要恢复到"标题重复页签"的老样子。 */
 
@@ -77,6 +77,9 @@
   padding-top: var(--transactions-space-sm);
 }
 
+/* **最后一行同样画线**（不再有 `:last-child { border-bottom: none }` 那个例外）：
+ * 少了这条线时，列表在最后一行看起来像被截断 —— 而且同一页里"上面三行有线、最后一行没有"
+ * 会被读成渲染坏了。所有设置行列表（通用设置 / 日记配置 / 股票）都以一条线收尾。 */
 .st-card {
   display: flex;
   align-items: center;
@@ -91,10 +94,9 @@
   transition: background-color var(--transactions-transition-fast);
 }
 
-/* 最后一行不再画线：下面就是版心底边 */
-.st-list > .st-card:last-child {
-  border-bottom: none;
-}
+/* 说明：这里曾经有一条 `.st-list > .st-card:last-child { border-bottom: none }`
+ * （"最后一行下面就是版心底边，不必再画线"）。实测观感是列表被截断、且与上面几行不一致，
+ * 已删除 —— **每一行都有下边线**，包括最后一行。 */
 
 .st-card:hover {
   background-color: var(--transactions-color-hover-bg);
@@ -325,7 +327,7 @@
   color: var(--transactions-color-expense);
 }
 
-/* ---------------------------------------------------------------- 股票交易 */
+/* ---------------------------------------------------------------- 股票 */
 
 .st-tag-head {
   display: flex;
@@ -454,13 +456,28 @@
 }
 
 /* 费用说明是多行文案：`data-tooltip` 里带换行，按原样折行显示。
- * 提示气泡**向左展开**（默认是居中展开）：这个图标在整行最右侧，
- * 居中时气泡会越出面板右缘，既把 `.st-panes` 顶出横向滚动条，自己也容易被裁掉。 */
+ *
+ * 两个变体按**触发器在行内的位置**选（错选会让 320px 的气泡越出版心，压到侧栏或窗口外）：
+ *   * `.st-fee-tip`（**行尾**的图标：印花税 / 过户费）→ 右对齐，向左铺开；
+ *   * `.st-fee-tip--start`（**标题行**里的图标：交易费用设置）→ 左对齐，向右铺开。
+ *
+ * ⚠ 这里**不能只写 `max-width`**：气泡是绝对定位的，包含块是那个 ~14px 宽的图标触发器，
+ * shrink-to-fit 的可用宽度就等于它 —— 只给上限的话文案会被压成一列窄条（实测 bug）。
+ * 宽度由基类 `.ui-tooltip::after` 的 `width: max-content` 铺开，这里只收上限与对齐。 */
 .st-fee-tip::after {
   left: auto;
   right: 0;
   transform: none;
-  white-space: pre-line;
+  max-width: 320px;
+  line-height: var(--transactions-height-snug);
+}
+
+/* 标题行那个图标（在面板左半边）：**左对齐向右铺开**。
+ * 若沿用右对齐，320px 的气泡会从图标往左伸出面板、压到侧栏上。 */
+.st-fee-tip--start::after {
+  left: 0;
+  right: auto;
+  transform: none;
   max-width: 320px;
   line-height: var(--transactions-height-snug);
 }
@@ -562,12 +579,8 @@
   color: var(--transactions-color-text-secondary);
 }
 
-.st-app-build {
-  margin: 0;
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-tertiary);
-}
+/* 说明：旧的 `.st-app-build`（「构建类型：开发版 / 正式版」那行小字）已随该行一起删除，
+ * 不要再加回来 —— 详见 `settings.rs` 第 6 条约定。 */
 
 .st-about-update {
   display: flex;
@@ -650,13 +663,23 @@
 }
 
 .st-about-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-primary);
   text-decoration: none;
 }
 
-.st-about-link:hover {
+/* 外链图标：文案是 12px 的 caption，`.icon` 默认 1em 会偏小，提一档到正文尺寸 */
+.st-about-link .icon {
+  width: var(--transactions-size-text-body);
+  height: var(--transactions-size-text-body);
+}
+
+/* 下划线只画在文字上：整条 flex 一起加下划线的话，线会从图标底下穿过去 */
+.st-about-link:hover .st-about-link-text {
   text-decoration: underline;
 }
 

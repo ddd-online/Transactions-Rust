@@ -57,7 +57,7 @@ public class TrShot {
 }
 '@ -Language CSharp
 
-$pages = @('记账', '数据分析', '股票交易', '关键事件', '日记', '应用设置')
+$pages = @('记账', '数据分析', '股票', '关键事件', '日记', '应用设置')
 # 记账页的三个子功能（左侧图标条切换）：每个也各抓一张，界面上它们是三块不同的内容
 $subPages = @('记录', '标签', '模板')
 $failures = New-Object System.Collections.Generic.List[string]

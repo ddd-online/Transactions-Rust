@@ -1,4 +1,4 @@
-//! 股票交易页（`/stock_view`）—— P6-b 完整实现：账户 / 持仓 / 交易历史 / 交易统计 四个分栏。
+//! 股票页（`/stock_view`）—— P6-b 完整实现：账户 / 持仓 / 交易历史 / 交易统计 四个分栏。
 //!
 //! ## 页面组成
 //!
@@ -55,7 +55,7 @@ use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd};
 
 /// 页面标题（固定文案，改动即影响界面）。
-pub const PAGE_TITLE: &str = "股票交易";
+pub const PAGE_TITLE: &str = "股票";
 
 /// 四个分栏（默认 `account`）。
 const TABS: [(&str, &str); 4] = [
@@ -231,7 +231,7 @@ fn account_view(active: RwSignal<String>) -> AnyView {
         });
     };
 
-    // 费用设置只**读取**：编辑入口在「应用设置 → 股票交易」，
+    // 费用设置只**读取**：编辑入口在「应用设置 → 股票」，
     // 这里读回来是给下单弹窗估算费用用的（不再在本页渲染表单）。
     let load_fee_settings = move || {
         let ledger_id = stores.current_ledger_id.get_untracked();

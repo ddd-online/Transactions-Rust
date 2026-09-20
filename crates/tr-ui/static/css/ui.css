@@ -696,12 +696,36 @@
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-caption);
   line-height: var(--transactions-height-snug);
-  white-space: nowrap;
+  /* 宽度：**先按内容铺开、再被上限收窄**。
+   * 只写 `max-width` 会被包含块坑死：绝对定位的包含块是触发器本身（可能只有十几像素宽），
+   * shrink-to-fit 的"可用宽度"就是它 —— 长文案会被压成一列窄条、贴着窗口边缘（实测 bug）。
+   * `max-content` 让盒子先按文案铺开，`max-width` 再把过长的收住；上限同时受视口约束，
+   * 贴着窗口边的提示不会顶出窗口被裁。 */
+  width: max-content;
+  max-width: min(320px, calc(100vw - var(--transactions-space-2xl)));
+  /* `pre-line`：普通短提示与 `nowrap` 表现一致；带显式换行的多行说明（费用设置那三条）按原样折行。 */
+  white-space: pre-line;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
   transition: opacity var(--transactions-transition-fast),
     visibility var(--transactions-transition-fast);
+}
+
+/* 触发器贴近窗口/版心右边缘时用这个（与 `.ui-dropdown--end` 同一套命名）：
+ * 气泡改为**右对齐**，于是它向左铺开、不会顶出窗口被裁。 */
+.ui-tooltip--end::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+/* 触发器在版心**左半边**时用这个：气泡左对齐、向右铺开。
+ * 居中的长气泡在这个位置会往左顶出面板（越过版心左缘、压到侧栏上）。 */
+.ui-tooltip--start::after {
+  left: 0;
+  right: auto;
+  transform: none;
 }
 
 .ui-tooltip:hover::after,

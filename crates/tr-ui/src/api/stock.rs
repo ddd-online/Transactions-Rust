@@ -23,7 +23,7 @@
 //! ## 尚未接入的只读命令
 //!
 //! `stock_overview` / `stock_positions` / `stock_trades` / `stock_history` 等
-//! 在 P6-b 已全部接入（见下方「股票交易页」一节）。
+//! 在 P6-b 已全部接入（见下方「股票页」一节）。
 
 use serde::Serialize;
 use tr_domain::dto::{
@@ -114,7 +114,7 @@ pub async fn tag_settings_put(
     .await
 }
 
-/// 清空指定账本的全部股票交易数据（后端返回 `true`）。
+/// 清空指定账本的全部股票数据（后端返回 `true`）。
 pub async fn reset(ledger_id: &str) -> Result<bool, IpcError> {
     ipc::call(
         "stock_reset",
@@ -125,7 +125,7 @@ pub async fn reset(ledger_id: &str) -> Result<bool, IpcError> {
     .await
 }
 
-// ================================================================ 股票交易页
+// ================================================================ 股票页
 //
 // P6-b 接入。字段名逐字照抄 `crates/tr-ipc/src/commands/stock.rs`：
 // 请求全 snake_case，响应全 camelCase（DTO 里已 rename）。

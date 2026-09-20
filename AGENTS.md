@@ -43,7 +43,7 @@ cargo test  -p tr-domain -p tr-store -p tr-service
 #    带 -ShotDir 时还会把刷新后的窗口存成 target\dev-shots\current.png（不用手动截图）。
 #    原理：trunk 的自动刷新信号浏览器吃、Tauri 的 WebView2 不吃，但 WebView2 吃键盘刷新（实测 0.8s）。
 # 2) 想单独看某一页/全部页面（**不重建、不重启**）：
-#       pwsh -File fixtures/dev-shot.ps1 -Page 股票交易
+#       pwsh -File fixtures/dev-shot.ps1 -Page 股票
 #       pwsh -File fixtures/dev-shot.ps1 -AllPages
 #    它用真实鼠标点侧栏并**轮询确认页面真的切过去了**再截图（固定 sleep 会抓到上一页）。
 # 3) 只有需要"内嵌界面的 release 产物"（端到端护栏、发布）才做完整构建：
@@ -326,6 +326,22 @@ cargo clippy --all-targets -- -D warnings
     修法改成"行信号池"：最多 4 行的信号在**页面 owner** 下一次建好，打开只回填值、
     增删只改一个 `count`（见 `sort_modal` 注释）。
   正确姿势：状态建在组件/根 owner 下，`Effect` 里只**读**、只做副作用。
+- **Tip 的宽度：只写 `max-width` 会被"包含块"坑死**（真实缺陷："应用设置 → 股票 → 过户费 ⓘ"
+  的气泡被压成一列窄条、贴着窗口右缘）：气泡是 `.ui-tooltip::after` 的绝对定位伪元素，
+  **包含块是触发器本身**（那个 ⓘ 只有 ~14px 宽），于是 shrink-to-fit 的"可用宽度"就是 14px ——
+  只给 `max-width: 320px` 的话文案会被压成十几像素宽的一列（还带出滚动条）。
+  正确写法是 **`width: max-content` 先按文案铺开，再用 `max-width` 收上限**
+  （上限同时受视口约束：`min(320px, calc(100vw - …))`，贴窗口边的提示不再顶出去被裁）。
+  换行语义用 `white-space: pre-line`：普通短提示与 `nowrap` 表现一致，而带显式 `\n` 的多行说明
+  （如股票费用那三条）能按原样折行。触发器在版心右缘时套 `.ui-tooltip--end`（右对齐向左铺开）——
+  居中的长气泡在那会越出窗口。
+- **删/改一条 CSS 规则前先 grep 谁还在用那个类名**（真实缺陷："应用设置 → 关于软件"的内容
+  不再垂直居中）：`8d55b17` 把设置页的面板从 `.st-pane` 换成 `.page-pane`（前者整套规则被删），
+  但 `<div class="st-pane st-about">` 这个类名漏改了 —— 它退化成**普通块级容器**，
+  于是 `.st-about` 的 `align-items/justify-content: center` 全部失效、`margin: auto` 也垂直居中不了
+  （`auto` 外边距只在 flex/grid 容器里吃掉剩余空间），内容就停在顶部。
+  **症状很有欺骗性**：样式没报错、面板照常渲染，只是"居中没了"。
+  改 CSS 结构时用 `grep -rn 'st-pane\b' crates/tr-ui` 之类核一遍调用点，别只改样式。
 - **`scrollbar-width` 会让 `::-webkit-scrollbar` 整套失效**（真实缺陷，且它把设计"静默作废"了）：
   CSS 规范里只要 `scrollbar-width` / `scrollbar-color` 被设成非 `auto`，`::-webkit-scrollbar-*`
   伪元素就**整体不生效**。`base.css` 原来那个 `.u-custom-scrollbar` 两个都写，

@@ -11,7 +11,7 @@
 #     `realized_pnl = amount - fee - cost_basis`，数量与成本按比例结转；清空时成本归零并归档本轮
 #   * 费用设置：佣金费率（UI 单位**万分之**）/最低佣金（元）/印花税/过户费（%）→ 保存后
 #     **新委托立刻按新费率计费**（买入 = 佣金 + 过户费；卖出 = 佣金 + 印花税 + 过户费），逐项断言到分
-#   * 重置股票交易数据：清空该账本股票侧全部表，而**记账数据与账本本身不动**；
+#   * 重置股票数据：清空该账本股票侧全部表，而**记账数据与账本本身不动**；
 #     费用设置/交易标签会被界面"重新拉一遍"按默认值重建 —— 对这两张表断言的是"回到默认值"
 #   * 资金记录：`cash_balance` 恒等于 `principal + Σ amount_change`（不变量，逐步校验）
 #
@@ -33,7 +33,7 @@
 #     所以资金记录也只能按"变动额"认，不能用"条数/相邻两条"这种全局判据；
 #   * 「建仓」按钮在**持仓**页签、费用设置在**账户**页签、重置在**设置页**——
 #     换页签后再下单，必须先切回去，否则会出现"设置存好了但下单弹窗压根没弹"的假象；
-#   * 设置页里「股票交易」这个名字**侧栏导航也有**，按名字取第一个会点到导航（跑错页）；
+#   * 设置页里「股票」这个名字**侧栏导航也有**，按名字取第一个会点到导航（跑错页）；
 #     只认 `ControlType == TabItem` 的那个。
 #
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
@@ -386,7 +386,7 @@ try {
 
     # ================= 1/7 建仓 =================
     Write-Host "`n[stock] 1/7 建仓 $code × $buyLots 手 @ $buyPrice"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票交易')) '打开「股票交易」页'
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票')) '打开「股票」页'
     Start-Sleep -Seconds 3
     Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '持仓')) '切到「持仓」页签（建仓按钮在这里）'
     Start-Sleep -Seconds 2
@@ -720,28 +720,28 @@ try {
         }
     }
     # ================= 6/7 交易费用设置：改完费率，**新委托立刻按新费率计费** =================
-    # ⚠ 费用设置的编辑入口**在「应用设置 → 股票交易」**（股票页只读取它来估费，不渲染表单）。
+    # ⚠ 费用设置的编辑入口**在「应用设置 → 股票」**（股票页只读取它来估费，不渲染表单）。
     # 费用设置的 UI 单位：佣金费率是**万分之**（÷10000 落库）、最低佣金是**元**（转分）、
     # 印花税/过户费是**百分比**（÷100）；公式见 `tr-domain/src/fee.rs`：
     #   佣金 = max(round(金额×费率), 最低佣金)；买入 = 佣金 + 过户费(沪市)；
     #   卖出 = 佣金 + 印花税 + 过户费(沪市)（印花税只卖出收）。
-    Write-Host "`n[stock] 6/7 费用设置（应用设置 → 股票交易）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
+    Write-Host "`n[stock] 6/7 费用设置（应用设置 → 股票）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置')) '打开「应用设置」'
     Start-Sleep -Seconds 2
-    # ⚠ 侧栏也有个「股票交易」，按名字取第一个会点到导航！只认 ControlType 是 TabItem 的那个
+    # ⚠ 侧栏也有个「股票」，按名字取第一个会点到导航！只认 ControlType 是 TabItem 的那个
     $feeTab = $null
     $feeTabDeadline = (Get-Date).AddSeconds(15)
     do {
         foreach ($element in @(Get-Elements $window)) {
             if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem) { continue }
-            if ($element.Current.Name -ne '股票交易') { continue }
+            if ($element.Current.Name -ne '股票') { continue }
             if ($element.Current.IsOffscreen) { continue }
             $feeTab = $element
             break
         }
         if (-not $feeTab) { Start-Sleep -Milliseconds 400 }
     } while (-not $feeTab -and (Get-Date) -lt $feeTabDeadline)
-    Assert-True ([bool]$feeTab) '切到「股票交易」设置分栏'
+    Assert-True ([bool]$feeTab) '切到「股票」设置分栏'
     if ($feeTab) { Invoke-Element $feeTab | Out-Null }
     Start-Sleep -Seconds 2
     Assert-True ([bool](Wait-Element -Root $window -Name '佣金费率' -TimeoutSec 15)) '设置页出现费用表单'
@@ -772,13 +772,13 @@ try {
     }
 
     # ---- 买入：3,000,000 分 → 佣金 300 + 过户费 60 = 360 分（印花税 0）----
-    # ⚠ 费用设置改在「应用设置」里，下单要回「股票交易」页的**持仓**页签；
+    # ⚠ 费用设置改在「应用设置」里，下单要回「股票」页的**持仓**页签；
     # 不回页面会导致"设置存好了，但下单弹窗压根没弹"。
-    # 侧栏的「股票交易」与设置页的页签同名，这里按**非 TabItem**筛出侧栏导航项。
+    # 侧栏的「股票」与设置页的页签同名，这里按**非 TabItem**筛出侧栏导航项。
     $stockNav = $null
     $navDeadline = (Get-Date).AddSeconds(15)
     do {
-        foreach ($element in @(Find-All $window '股票交易')) {
+        foreach ($element in @(Find-All $window '股票')) {
             if ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::TabItem) { continue }
             if ($element.Current.IsOffscreen) { continue }
             $stockNav = $element
@@ -786,7 +786,7 @@ try {
         }
         if (-not $stockNav) { Start-Sleep -Milliseconds 400 }
     } while (-not $stockNav -and (Get-Date) -lt $navDeadline)
-    Assert-True ([bool]$stockNav) '从设置页回到「股票交易」'
+    Assert-True ([bool]$stockNav) '从设置页回到「股票」'
     if ($stockNav) { Invoke-Element $stockNav | Out-Null }
     Start-Sleep -Seconds 3
     Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '持仓')) '切回「持仓」再下单'
@@ -821,8 +821,8 @@ try {
         Assert-True (([int64]$feeSellTrade.fee) -eq 1344) `
             "卖出费用 = 120 + 1200 + 24 = 1344 分（实际 $($feeSellTrade.fee)）"
     }
-    # ================= 7/7 重置股票交易数据：清空股票侧、**不动记账数据** =================
-    Write-Host "`n[stock] 7/7 重置股票交易数据（设置页 → 股票交易 → 重置）"
+    # ================= 7/7 重置股票数据：清空股票侧、**不动记账数据** =================
+    Write-Host "`n[stock] 7/7 重置股票数据（设置页 → 股票 → 重置）"
     $recordsBeforeReset = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     $stockTables = @(
         'tbl_billadm_stock_account', 'tbl_billadm_stock_position', 'tbl_billadm_stock_trade',
@@ -837,20 +837,20 @@ try {
 
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置')) '打开「应用设置」'
     Start-Sleep -Seconds 2
-    # ⚠ 侧栏也有个「股票交易」，按名字取第一个会点到导航！只认 ControlType 是 TabItem 的那个
+    # ⚠ 侧栏也有个「股票」，按名字取第一个会点到导航！只认 ControlType 是 TabItem 的那个
     $stockTab = $null
     $deadline = (Get-Date).AddSeconds(15)
     do {
         foreach ($element in @(Get-Elements $window)) {
             if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem) { continue }
-            if ($element.Current.Name -ne '股票交易') { continue }
+            if ($element.Current.Name -ne '股票') { continue }
             if ($element.Current.IsOffscreen) { continue }
             $stockTab = $element
             break
         }
         if (-not $stockTab) { Start-Sleep -Milliseconds 400 }
     } while (-not $stockTab -and (Get-Date) -lt $deadline)
-    Assert-True ([bool]$stockTab) '切到「股票交易」设置分栏（TabItem）'
+    Assert-True ([bool]$stockTab) '切到「股票」设置分栏（TabItem）'
     if ($stockTab) { Invoke-Element $stockTab | Out-Null }
     Start-Sleep -Seconds 3
 
@@ -858,8 +858,8 @@ try {
     Assert-True ([bool]$resetButton) '找到设置页的「重置」按钮'
     if ($resetButton) { Invoke-Element $resetButton | Out-Null }
     Start-Sleep -Seconds 2
-    Assert-True ([bool](Wait-Element -Root $window -Name '重置股票交易数据' -TimeoutSec 10)) `
-        '弹窗「重置股票交易数据」已打开'
+    Assert-True ([bool](Wait-Element -Root $window -Name '重置股票数据' -TimeoutSec 10)) `
+        '弹窗「重置股票数据」已打开'
     $resetWarning = Get-Elements $window | ForEach-Object { $_.Current.Name } |
         Where-Object { $_ -and $_ -like '*将清空当前账本*' } | Select-Object -First 1
     Assert-True ([bool]$resetWarning) '弹窗里写明了会清空什么（账户本金/持仓/交易/资金记录/费用设置/交易标签）'

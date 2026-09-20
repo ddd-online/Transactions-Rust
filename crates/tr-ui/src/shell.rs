@@ -38,7 +38,7 @@ pub enum Page {
     Accounting,
     /// 数据分析
     DataAnalysis,
-    /// 股票交易
+    /// 股票
     Stock,
     /// 关键事件
     KeyEvent,
@@ -73,7 +73,7 @@ impl Page {
             // 顶级功能名与页面标题共用一个来源（见 accounting::PAGE_TITLE）
             Page::Accounting => crate::pages::accounting::PAGE_TITLE,
             Page::DataAnalysis => "数据分析",
-            Page::Stock => "股票交易",
+            Page::Stock => "股票",
             Page::KeyEvent => "关键事件",
             Page::Diary => "日记",
             Page::Settings => "应用设置",
@@ -81,6 +81,10 @@ impl Page {
     }
 
     /// 页面的稳定标识（仅用于调试与占位页展示，不随界面改动）。
+    ///
+    /// ⚠ **不要拿它当界面文案**：侧栏导航曾把它当悬浮提示（`title=page.route()`），
+    /// 于是鼠标停在侧栏任何一项上，提示都是 `/accounting_view` 这类内部标识。
+    /// 用户可见的名字一律走 [`Page::label`]。
     pub fn route(self) -> &'static str {
         match self {
             Page::Accounting => "/accounting_view",
@@ -95,7 +99,7 @@ impl Page {
     /// 侧边栏图标（与文案一一对应）。
     pub fn icon(self) -> Icon {
         match self {
-            // 导航图标的排列：记账 / 数据分析 / 股票交易 / 关键事件 / 日记管理，
+            // 导航图标的排列：记账 / 数据分析 / 股票 / 关键事件 / 日记管理，
             // 底部是应用设置
             Page::Accounting => Icon::Transaction,
             Page::DataAnalysis => Icon::LineChart,
@@ -566,7 +570,9 @@ fn nav_button(page: Page, current_page: RwSignal<Page>) -> impl IntoView {
             type="button"
             class=classes
             class:active=move || current_page.get() == page
-            title=page.route()
+            // 悬浮提示文案 = 功能名（曾经错写成 `page.route()`，于是侧栏 6 项全在提示
+            // `/accounting_view` 这类内部标识 —— 那是"页面的稳定标识"，只该出现在调试里）。
+            title=page.label()
             aria-label=page.label()
             on:click=move |_| current_page.set(page)
         >

@@ -1,6 +1,6 @@
 //! 应用设置页（P6-a）：4 个分栏。
 //!
-//! 分栏与顺序（固定文案，改动即影响界面）：通用设置 / 日记配置 / 股票交易 / 关于软件。
+//! 分栏与顺序（固定文案，改动即影响界面）：通用设置 / 日记配置 / 股票 / 关于软件。
 //!
 //! 「消费模板」原本是本页的第 2 个分栏，现已迁到记账页的**模板**子功能
 //! （见 [`crate::pages::templates`]）：它属于记账事务，不属于应用配置。
@@ -14,11 +14,11 @@
 //! 2. **通用设置·工作空间**：按钮固定文案「切换」、弹窗标题「选择工作目录」、输入框占位
 //!    「请输入或选择工作目录路径」（任务单里概括成「更换目录…」，未采用）。
 //!    本仓库没有 `transactions-file-select` 组件，直接用 `dialog_open` 选目录。
-//! 3. **通用设置不展示版本信息**：该分栏只有 4 张卡片；`app_info` 的 version/isDev
+//! 3. **通用设置不展示版本信息**：该分栏只有 4 张卡片；`app_info` 的 version
 //!    只出现在「关于软件」。`config_get()` 仍一次取全
 //!    （workspace_dir / close_behavior / appearance / config_path / is_dev），
-//!    其中 `config_path` 与 `is_dev` **不渲染**（本页没有对应 UI；
-//!    构建类型改用关于页的 `app_info("isDev")` 展示）。
+//!    其中 `config_path` / `is_dev` 与 `app_info("isDev")` 在本页**都没有对应 UI**
+//!    （曾经在关于页展示过"构建类型"，已按需求移除），只保留后端能力，界面不消费。
 //! 4. **通用设置·外观/关闭行为**：持久化失败时提示并**回滚界面选中值**（任务单要求），
 //!    不静默吞掉。
 //!    **开发者工具不是开关而是按钮**：它的行为是"点击开一个新窗口"，没有可关闭的开关态
@@ -27,7 +27,7 @@
 //! 5. **日记配置**：**没有**「文件勾选」（扫描后顺序导入全部文件），只是每行状态；
 //!    「浏览器 dev 模式降级」分支（手输路径）在 Tauri 下不存在，故不实现；
 //!    导入完成后无需刷新日记页，故省略。
-//! 5. **股票交易·费用设置卡片**：换算规则固定——佣金费率按「万分之」（×10000），
+//! 5. **股票·费用设置卡片**：换算规则固定——佣金费率按「万分之」（×10000），
 //!    印花税/过户费按「%」（×100）。
 //!    印花税/过户费的 tooltip 本实现放在输入框行尾的图标上（语义不变；
 //!    因 `FormItem` 的 label 是字符串，无法内联到 label 里）。
@@ -35,9 +35,10 @@
 //!    因此显示两位小数（`5.00`）——这是**有意的**：
 //!    金额换算一律过 `tr_domain::money`，不自行实现 `/100`。
 //!    费率输入非法（非数字 / `NaN` / `inf`）时不发请求、只提示（不 panic）。
-//! 6. **关于软件**：GitHub 链接是本轮任务要求增补；**构建时间后端未提供**
-//!    （`app_info` 只支持 `name` / `version` / `isDev`），故未展示，改为展示构建类型
-//!    （开发版 / 正式版）。更新说明照任务单按**纯文本 + 保留换行**渲染（本仓库没有 Markdown 解析器）；
+//! 6. **关于软件**：GitHub 链接是本轮任务要求增补；只展示**应用名 / 版本 / GitHub / 版权行**
+//!    —— **构建时间与构建类型都不展示**（`app_info` 支持 `name` / `version` / `isDev`，
+//!    但开发版/正式版这行按需求移除了）。
+//!    更新说明照任务单按**纯文本 + 保留换行**渲染（本仓库没有 Markdown 解析器）；
 //!    下载进度额外用小字显示 `speed`。
 //! 7. 全页不使用 `unwrap` / `expect` 处理用户数据：解析失败、命令失败一律走通知。
 
@@ -69,7 +70,7 @@ const TAB_DIARY: &str = "diary";
 const TAB_STOCK: &str = "stock";
 const TAB_ABOUT: &str = "about";
 
-/// 交易费用说明（「股票交易」分栏标题旁的说明浮层；与「股票交易」页的费用说明同口径）。
+/// 交易费用说明（「股票」分栏标题旁的说明浮层；与「股票」页的费用说明同口径）。
 const FEE_TOOLTIP: &str = "佣金：委托成交总额 × 费率，不足最低佣金时按最低佣金收取（买卖双向）\n一笔委托分多笔成交时，费用按委托成交总额计算一次，再按各笔成交金额比例分摊\n买入实际成本 = 成交金额 + 佣金 + 过户费";
 /// 印花税说明（固定文案）。
 const STAMP_TOOLTIP: &str = "卖出时按成交金额 × 费率收取";
@@ -86,7 +87,7 @@ pub fn SettingsPage() -> impl IntoView {
     let items = vec![
         TabItem::new(TAB_GENERAL, "通用设置"),
         TabItem::new(TAB_DIARY, "日记配置"),
-        TabItem::new(TAB_STOCK, "股票交易"),
+        TabItem::new(TAB_STOCK, "股票"),
         TabItem::new(TAB_ABOUT, "关于软件"),
     ];
 
@@ -584,7 +585,11 @@ fn DiarySetting() -> impl IntoView {
                         </span>
                     </div>
                     <div class="st-card-action">
-                        <Tooltip title="从本地目录批量导入当前账本，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md">
+                        // 触发器在卡片右列（≈版心右缘）：气泡改为右对齐，否则居中的长文案会顶出窗口被裁
+                        <Tooltip
+                            title="从本地目录批量导入当前账本，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md"
+                            class="ui-tooltip--end"
+                        >
                             <Button
                                 variant=ButtonVariant::Secondary
                                 disabled=Signal::derive(move || {
@@ -627,7 +632,11 @@ fn DiarySetting() -> impl IntoView {
                         </div>
                     </div>
                     <div class="st-card-action">
-                        <Tooltip title="把当前账本的日记导出为 Markdown 文件（YYYY-MM-DD.md）">
+                        // 同上：右对齐展开，长文案不越出窗口
+                        <Tooltip
+                            title="把当前账本的日记导出为 Markdown 文件（YYYY-MM-DD.md），可在别的账本重新导入"
+                            class="ui-tooltip--end"
+                        >
                             <Button
                                 variant=ButtonVariant::Secondary
                                 disabled=Signal::derive(move || {
@@ -789,9 +798,9 @@ fn diary_failed_row(item: DiaryExportFileError) -> impl IntoView {
     }
 }
 
-// ---------------------------------------------------------------- 股票交易
+// ---------------------------------------------------------------- 股票
 
-/// 股票交易：交易费用设置 + 交易标签 + 重置股票数据。
+/// 股票：交易费用设置 + 交易标签 + 重置股票数据。
 #[component]
 fn StockSetting() -> impl IntoView {
     let stores = AppStores::global();
@@ -1008,7 +1017,7 @@ fn StockSetting() -> impl IntoView {
         }
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() {
-            Notifier::global().error("重置股票交易数据失败", Some("请先选择工作空间".to_string()));
+            Notifier::global().error("重置股票数据失败", Some("请先选择工作空间".to_string()));
             return;
         }
         resetting.set(true);
@@ -1019,9 +1028,9 @@ fn StockSetting() -> impl IntoView {
                     // 重置会清掉费用设置与交易标签，重新拉一遍
                     load_fee(ledger_id.clone());
                     load_tags(ledger_id);
-                    Notifier::global().success("股票交易数据已重置", None);
+                    Notifier::global().success("股票数据已重置", None);
                 }
-                Err(error) => notify_error("重置股票交易数据失败", &error),
+                Err(error) => notify_error("重置股票数据失败", &error),
             }
             resetting.set(false);
         });
@@ -1142,7 +1151,8 @@ fn StockSetting() -> impl IntoView {
                     <div class="st-panel-head">
                         <div class="st-panel-title-row">
                             <h3 class="st-panel-title">"交易费用设置"</h3>
-                            <Tooltip title=FEE_TOOLTIP class="st-fee-tip">
+                            // 这个图标在面板**左半边**：气泡左对齐向右铺开（右对齐会往左伸出面板压到侧栏）
+                            <Tooltip title=FEE_TOOLTIP class="st-fee-tip--start">
                                 <span class="st-panel-tip" aria-label="查看交易费用说明">
                                     {icons::icon(Icon::InfoCircle)}
                                 </span>
@@ -1238,7 +1248,7 @@ fn StockSetting() -> impl IntoView {
 
             <Modal
                 open=confirm_open
-                title="重置股票交易数据"
+                title="重置股票数据"
                 width=440
                 ok_text="确认重置"
                 cancel_text="取消"
@@ -1267,7 +1277,6 @@ fn StockSetting() -> impl IntoView {
 struct UpdateState {
     app_name: RwSignal<String>,
     version: RwSignal<String>,
-    is_dev: RwSignal<bool>,
     /// idle / checking / available / no-update / downloading / downloaded / error
     status: RwSignal<String>,
     latest_version: RwSignal<String>,
@@ -1300,7 +1309,6 @@ impl UpdateState {
         Self {
             app_name: RwSignal::new(String::new()),
             version: RwSignal::new(String::new()),
-            is_dev: RwSignal::new(false),
             status: RwSignal::new("idle".to_string()),
             latest_version: RwSignal::new(String::new()),
             download_url: RwSignal::new(String::new()),
@@ -1362,14 +1370,13 @@ impl UpdateState {
 
 /// 关于软件：应用信息 + 更新检查 + 下载进度 + GitHub 链接。
 ///
-/// **构建时间后端未提供**（`app_info` 只支持 `name` / `version` / `isDev`），
-/// 因此这里只展示「应用名 / 版本 / 构建类型（开发版 / 正式版）」，不显示构建时间。
+/// 只展示**应用名 / 版本 / GitHub / 版权行**：构建时间后端未提供
+/// （`app_info` 只支持 `name` / `version` / `isDev`），构建类型那行按需求移除。
 #[component]
 fn AboutSetting() -> impl IntoView {
     let state = UpdateState::global();
     let app_name = state.app_name;
     let version = state.version;
-    let is_dev = state.is_dev;
     let status = state.status;
     let latest_version = state.latest_version;
     let download_url = state.download_url;
@@ -1387,11 +1394,6 @@ fn AboutSetting() -> impl IntoView {
         }
         match api::desktop::app_info("version").await {
             Ok(value) => version.set(value),
-            Err(error) => notify_error("读取应用信息", &error),
-        }
-        match api::desktop::app_info("isDev").await {
-            // isDev 是字符串 "true" / "false"
-            Ok(value) => is_dev.set(value == "true"),
             Err(error) => notify_error("读取应用信息", &error),
         }
     });
@@ -1522,14 +1524,6 @@ fn AboutSetting() -> impl IntoView {
         }
     };
 
-    let build_type = move || {
-        if is_dev.get() {
-            "构建类型：开发版"
-        } else {
-            "构建类型：正式版"
-        }
-    };
-
     // 更新说明在 available / downloading / downloaded / error 阶段保留展示
     let show_release_body = move || {
         let status_now = status.get();
@@ -1541,7 +1535,7 @@ fn AboutSetting() -> impl IntoView {
     };
 
     view! {
-        <div class="st-pane st-about">
+        <div class="page-pane st-about">
             <div class="st-about-main">
                 <div class="st-about-header">
                     <div class="st-app-logo">
@@ -1569,7 +1563,6 @@ fn AboutSetting() -> impl IntoView {
                         }}
                     </h2>
                     <p class="st-app-version">{version_text}</p>
-                    <p class="st-app-build">{build_type}</p>
                 </div>
 
                 <div class="st-about-update">
@@ -1717,7 +1710,8 @@ fn AboutSetting() -> impl IntoView {
                         target="_blank"
                         rel="noreferrer"
                     >
-                        "GitHub"
+                        {icons::icon(Icon::GitHub)}
+                        <span class="st-about-link-text">"GitHub"</span>
                     </a>
                     <p class="st-about-copyright">
                         {move || {
