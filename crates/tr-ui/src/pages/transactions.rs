@@ -532,6 +532,8 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
             </div>
 
             <div class="tr-footer">
+                // 结果条数就放在分页组件的**左侧**（底栏只留收支合计）
+                <span class="tr-footer-total">{move || format!("共 {} 条", total.get())}</span>
                 <Pagination
                     page=page
                     total_pages=Signal::derive(move || total_pages.get())
@@ -550,7 +552,9 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
             rail=view! { <super::accounting::SubFunctionRail sub=sub /> }.into_any()
             toolbar=toolbar
             content=content
-            footer=statistics_footer(total)
+            // 底栏只放收支合计，且**贴右**（结果条数在分页行里，见上面的 `.tr-footer`）
+            footer=statistics_bar()
+            footer_end=true
         />
 
         // ---- 排序弹窗 ----
@@ -1017,12 +1021,13 @@ fn sync_ledger_options() -> Vec<(String, String)> {
 
 // ==================================================================== 空态
 
-/// 版心底栏：左侧结果条数，右侧收支合计。
+/// 版心底栏里的**收支合计**（内容由 `FeaturePage` 的 `footer` 插槽包在 `.page-footer-bar` 里，
+/// 这里只给"里面的东西"；结果条数「共 N 条」在分页行里，见 [`record_footer_row`]）。
 ///
-/// 这一页**有**底栏而其它页没有，判断依据是"这个功能用不用得上"：
-/// 结果条数与收支合计是列表页的产物，其余功能（分类标签、数据分析、股票、关键事件、日记、设置）
+/// 这一页**有**底栏而其它子功能没有，判断依据是"这个功能用不用得上"：
+/// 收支合计是列表页的产物，其余功能（标签、模板、数据分析、股票、关键事件、日记、设置）
 /// 不需要，于是它们的版心直接触达窗口底边。
-fn statistics_footer(total: RwSignal<i64>) -> AnyView {
+fn statistics_bar() -> AnyView {
     let stores = AppStores::global();
     let value = move |key: &'static str| {
         stores
@@ -1031,31 +1036,26 @@ fn statistics_footer(total: RwSignal<i64>) -> AnyView {
     };
 
     view! {
-        <div class="page-footer-bar">
-            <span class="tr-footer-total">
-                {move || format!("共 {} 条", total.get())}
-            </span>
-            <div class="statistics-footer">
-                <div class="statistics-footer-item">
-                    <span class="statistics-footer-item-label">"收入"</span>
-                    <span class="statistics-footer-item-value income">
-                        {move || format::amount(value("income"))}
-                    </span>
-                </div>
-                <div class="statistics-footer-divider"></div>
-                <div class="statistics-footer-item">
-                    <span class="statistics-footer-item-label">"支出"</span>
-                    <span class="statistics-footer-item-value expense">
-                        {move || format::amount(value("expense"))}
-                    </span>
-                </div>
-                <div class="statistics-footer-divider"></div>
-                <div class="statistics-footer-item">
-                    <span class="statistics-footer-item-label">"转账"</span>
-                    <span class="statistics-footer-item-value transfer">
-                        {move || format::amount(value("transfer"))}
-                    </span>
-                </div>
+        <div class="statistics-footer">
+            <div class="statistics-footer-item">
+                <span class="statistics-footer-item-label">"收入"</span>
+                <span class="statistics-footer-item-value income">
+                    {move || format::amount(value("income"))}
+                </span>
+            </div>
+            <div class="statistics-footer-divider"></div>
+            <div class="statistics-footer-item">
+                <span class="statistics-footer-item-label">"支出"</span>
+                <span class="statistics-footer-item-value expense">
+                    {move || format::amount(value("expense"))}
+                </span>
+            </div>
+            <div class="statistics-footer-divider"></div>
+            <div class="statistics-footer-item">
+                <span class="statistics-footer-item-label">"转账"</span>
+                <span class="statistics-footer-item-value transfer">
+                    {move || format::amount(value("transfer"))}
+                </span>
             </div>
         </div>
     }

@@ -56,6 +56,9 @@ pub fn FeaturePage(
     /// 底栏（可选；只在**主列**里，图标条在它左边一路通到底）
     #[prop(optional, into)]
     footer: Option<AnyView>,
+    /// 底栏内容贴右（只有一段内容、且语义上是"汇总/动作"时用；默认两端对齐）
+    #[prop(optional)]
+    footer_end: bool,
 ) -> impl IntoView {
     view! {
         <section class="page">
@@ -67,7 +70,14 @@ pub fn FeaturePage(
                         .map(|toolbar| view! { <div class="page-toolbar">{toolbar}</div> })}
                     <div class="page-content">{content}</div>
                     {footer
-                        .map(|footer| view! { <div class="page-footer-bar">{footer}</div> })}
+                        .map(|footer| {
+                            view! {
+                                <div
+                                    class="page-footer-bar"
+                                    class:page-footer-bar--end=footer_end
+                                >{footer}</div>
+                            }
+                        })}
                 </div>
             </div>
         </section>

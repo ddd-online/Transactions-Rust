@@ -674,8 +674,8 @@
 }
 
 /* 子功能图标条：**同一顶级功能下的子功能切换**（不是内容里的栏目）。
- * 用与外壳侧栏相同的色调 + 一条右发丝线，读起来就是"又一层导航"。
- *
+ * **不填色**：底色与版心完全一致，只靠一条右发丝线把自己与主列分开
+ * （曾经用侧栏那档软灰，看着像"又一层侧栏"，与版心割裂）。
  * 它从标题栏下面开始（标题栏横跨整宽，见 `.page-region`），上下内边距与工具栏同档。 */
 .page-rail {
   flex-shrink: 0;
@@ -685,7 +685,6 @@
   align-items: center;
   gap: var(--transactions-space-2xs);
   padding: var(--transactions-space-sm) 0;
-  background-color: var(--transactions-color-sidebar-fill);
   border-right: 1px solid var(--transactions-color-border-l1);
 }
 
@@ -996,7 +995,8 @@
   overflow: auto;
 }
 
-/* 分页行（版心的最后一行，底栏之上）：只有翻页控件，条数与收支合计在底栏。 */
+/* 分页行（版心的最后一行，底栏之上）：左侧「共 N 条」+ 右侧翻页控件，整行贴右。
+ * 收支合计在底栏（`.page-footer-bar`）。 */
 .tr-footer {
   display: flex;
   align-items: center;
