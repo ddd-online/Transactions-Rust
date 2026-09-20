@@ -11,8 +11,6 @@ use rusqlite::{params, Connection};
 
 use tr_domain::models::DiaryEntry;
 
-use super::now_unix;
-
 pub struct DiaryDao;
 
 const COLUMNS: &str = "id, date, content, word_count, mood, created_at, updated_at";
@@ -61,7 +59,7 @@ impl DiaryDao {
 
     /// 幂等写入（按日期冲突则更新正文/字数/心情）。
     pub fn upsert(conn: &Connection, entry: &DiaryEntry) -> rusqlite::Result<()> {
-        let now = now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_diary_entry \
              (id, date, content, word_count, mood, created_at, updated_at) \
@@ -117,19 +115,6 @@ fn from_date_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DiaryEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-dao-diary-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn entry(id: &str, date: &str, content: &str, mood: &str) -> DiaryEntry {
         DiaryEntry {
@@ -145,7 +130,7 @@ mod tests {
 
     #[test]
     fn upsert_by_date_keeps_id_and_updated_at() {
-        let (workspace, dir) = workspace("upsert");
+        let (workspace, dir) = crate::dao::test_workspace("dao-diary-upsert");
         let conn = workspace.connection();
 
         DiaryDao::upsert(&conn, &entry("d1", "2026-01-02", "第一天", "开心")).unwrap();
@@ -174,7 +159,7 @@ mod tests {
 
     #[test]
     fn list_dates_is_desc_and_keyword_uses_instr() {
-        let (workspace, dir) = workspace("list");
+        let (workspace, dir) = crate::dao::test_workspace("dao-diary-list");
         let conn = workspace.connection();
         DiaryDao::upsert(&conn, &entry("d1", "2026-01-01", "今天读书", "")).unwrap();
         DiaryDao::upsert(&conn, &entry("d2", "2025-12-31", "今天跑步 100%", "")).unwrap();
@@ -209,7 +194,7 @@ mod tests {
 
     #[test]
     fn delete_and_missing_lookup() {
-        let (workspace, dir) = workspace("delete");
+        let (workspace, dir) = crate::dao::test_workspace("dao-diary-delete");
         let conn = workspace.connection();
         DiaryDao::upsert(&conn, &entry("d1", "2026-01-01", "内容", "")).unwrap();
 

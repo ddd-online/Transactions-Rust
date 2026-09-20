@@ -53,4 +53,12 @@ mod tests {
         assert_eq!(truncate_chars("关键事件标题", 4), "关键事件");
         assert_eq!(truncate_chars("ab", 5), "ab");
     }
+
+    #[test]
+    fn now_unix_is_plausible_seconds() {
+        // 2020-01-01 之后、2100 年之前
+        let now = now_unix();
+        assert!(now > 1_577_836_800, "now = {now}");
+        assert!(now < 4_102_444_800, "now = {now}");
+    }
 }

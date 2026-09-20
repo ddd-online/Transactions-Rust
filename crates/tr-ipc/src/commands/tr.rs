@@ -15,6 +15,8 @@ use tr_service::transaction_record;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
+use super::require_ledger_id;
+
 /// 条件查询（条件项之间 OR，项内 AND）。
 #[tauri::command]
 pub fn tr_query(state: State<'_, AppState>, req: TrQueryCondition) -> ApiResult<TrQueryResult> {
@@ -139,11 +141,7 @@ pub fn tr_linked_by_date(
     if req.date.is_empty() {
         return Err(ApiError::from(AppError::bad_request("date is required")));
     }
-    if req.ledger_id.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "ledger_id is required",
-        )));
-    }
+    require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
     Ok(transaction_record::query_linked_by_date(
         &workspace,

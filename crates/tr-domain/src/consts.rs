@@ -71,8 +71,6 @@ pub fn default_stock_trade_tags() -> Vec<String> {
 pub const TAG_POLICY_ANY: &str = "any";
 /// 标签匹配策略：全部命中。
 pub const TAG_POLICY_ALL: &str = "all";
-/// 标签匹配：取反。
-pub const TAG_POLICY_NOT: &str = "not";
 
 #[cfg(test)]
 mod tests {

@@ -10,8 +10,6 @@ use rusqlite::{params, Connection};
 
 use tr_domain::models::Ledger;
 
-use super::now_unix;
-
 pub struct LedgerDao;
 
 const COLUMNS: &str = "id, name, description, created_at, updated_at";
@@ -19,7 +17,7 @@ const COLUMNS: &str = "id, name, description, created_at, updated_at";
 impl LedgerDao {
     /// 新建账本（自动填充时间戳）。
     pub fn create(conn: &Connection, ledger: &Ledger) -> rusqlite::Result<()> {
-        let now = now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_ledger (id, name, description, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?4)",
@@ -33,7 +31,12 @@ impl LedgerDao {
         conn.execute(
             "UPDATE tbl_billadm_ledger SET name = ?2, description = ?3, updated_at = ?4 \
              WHERE id = ?1",
-            params![ledger.id, ledger.name, ledger.description, now_unix()],
+            params![
+                ledger.id,
+                ledger.name,
+                ledger.description,
+                crate::util::now_unix()
+            ],
         )?;
         Ok(())
     }
@@ -86,19 +89,6 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Ledger> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace() -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-ledger-dao-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn ledger(id: &str, name: &str) -> Ledger {
         Ledger {
@@ -112,7 +102,7 @@ mod tests {
 
     #[test]
     fn create_fills_timestamps_and_roundtrips() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("ledger-dao");
         let conn = workspace.connection();
 
         LedgerDao::create(&conn, &ledger("l1", "默认账本")).unwrap();
@@ -127,7 +117,7 @@ mod tests {
 
     #[test]
     fn update_changes_name_and_description_only() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("ledger-dao");
         let conn = workspace.connection();
         LedgerDao::create(&conn, &ledger("l1", "旧名")).unwrap();
         let created = LedgerDao::query_by_id(&conn, "l1").unwrap();
@@ -145,7 +135,7 @@ mod tests {
 
     #[test]
     fn missing_ledger_reports_not_found() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("ledger-dao");
         let error = LedgerDao::query_by_id(&workspace.connection(), "nope").unwrap_err();
         assert!(super::super::is_not_found(&error), "error = {error:?}");
         std::fs::remove_dir_all(&dir).ok();
@@ -153,7 +143,7 @@ mod tests {
 
     #[test]
     fn list_all_and_query_by_name() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("ledger-dao");
         let conn = workspace.connection();
         LedgerDao::create(&conn, &ledger("l1", "甲")).unwrap();
         LedgerDao::create(&conn, &ledger("l2", "乙")).unwrap();
@@ -170,7 +160,7 @@ mod tests {
 
     #[test]
     fn update_on_missing_id_is_silent() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("ledger-dao");
         LedgerDao::update(&workspace.connection(), &ledger("absent", "x")).unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }

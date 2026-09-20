@@ -38,15 +38,6 @@ impl TrTagDao {
         Ok(())
     }
 
-    /// 删除某账本的全部标签关联。
-    pub fn delete_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
-        conn.execute(
-            "DELETE FROM tbl_billadm_transaction_record_tag WHERE ledger_id = ?1",
-            [ledger_id],
-        )?;
-        Ok(())
-    }
-
     /// 删除某账本下某个标签的全部关联（删除标签时调用）。
     pub fn delete_by_tag(conn: &Connection, ledger_id: &str, tag: &str) -> rusqlite::Result<()> {
         conn.execute(
@@ -95,19 +86,6 @@ impl TrTagDao {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace() -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-dao-trtag-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn tag(tr_id: &str, name: &str) -> TrTag {
         TrTag {
@@ -119,7 +97,7 @@ mod tests {
 
     #[test]
     fn batch_insert_query_and_delete() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("dao-trtag");
         let conn = workspace.connection();
 
         TrTagDao::create_batch(
@@ -149,7 +127,7 @@ mod tests {
     #[test]
     fn duplicate_rows_are_allowed_by_the_table_definition() {
         // 该表无主键：重复写入会产生重复行，服务层靠"先删后插"避免
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("dao-trtag");
         let conn = workspace.connection();
         TrTagDao::create_batch(&conn, &[tag("t1", "三餐")]).unwrap();
         TrTagDao::create_batch(&conn, &[tag("t1", "三餐")]).unwrap();

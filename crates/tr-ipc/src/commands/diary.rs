@@ -6,12 +6,13 @@ use tauri::State;
 use tr_domain::dto::{
     DiaryExportRequest, DiaryExportResult, DiaryScanResponse, DiaryUpsertRequest,
 };
-use tr_domain::error::AppError;
 use tr_domain::models::DiaryEntry;
 use tr_service::diary;
 
-use crate::error::{ApiError, ApiResult};
+use crate::error::ApiResult;
 use crate::AppState;
+
+use super::require;
 
 /// 日期列表（倒序）。
 #[tauri::command]
@@ -28,14 +29,20 @@ pub struct DiaryDateRequest {
     pub date: String,
 }
 
+/// `date` 必填（空串报 `missing date parameter`）。
+fn require_date_parameter(date: &str) -> ApiResult<()> {
+    require(!date.is_empty(), "missing date parameter")
+}
+
+/// `directory` 必填（空串报 `directory is required`）。
+fn require_directory(directory: &str) -> ApiResult<()> {
+    require(!directory.is_empty(), "directory is required")
+}
+
 /// 取某天日记（不存在时报错）。
 #[tauri::command]
 pub fn diary_get(state: State<'_, AppState>, req: DiaryDateRequest) -> ApiResult<DiaryEntry> {
-    if req.date.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "missing date parameter",
-        )));
-    }
+    require_date_parameter(&req.date)?;
     let workspace = state.workspace()?;
     Ok(diary::get_by_date(&workspace, &req.date)?)
 }
@@ -43,11 +50,7 @@ pub fn diary_get(state: State<'_, AppState>, req: DiaryDateRequest) -> ApiResult
 /// 保存日记，返回写入后的条目。
 #[tauri::command]
 pub fn diary_upsert(state: State<'_, AppState>, req: DiaryUpsertRequest) -> ApiResult<DiaryEntry> {
-    if req.date.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "missing date parameter",
-        )));
-    }
+    require_date_parameter(&req.date)?;
     let workspace = state.workspace()?;
     Ok(diary::upsert(
         &workspace,
@@ -60,11 +63,7 @@ pub fn diary_upsert(state: State<'_, AppState>, req: DiaryUpsertRequest) -> ApiR
 /// 删除日记。
 #[tauri::command]
 pub fn diary_delete(state: State<'_, AppState>, req: DiaryDateRequest) -> ApiResult<()> {
-    if req.date.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "missing date parameter",
-        )));
-    }
+    require_date_parameter(&req.date)?;
     let workspace = state.workspace()?;
     Ok(diary::delete_by_date(&workspace, &req.date)?)
 }
@@ -77,11 +76,7 @@ pub struct DiaryScanRequest {
 /// 扫描目录里的日记文件。
 #[tauri::command]
 pub fn diary_import_scan(req: DiaryScanRequest) -> ApiResult<DiaryScanResponse> {
-    if req.directory.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "directory is required",
-        )));
-    }
+    require_directory(&req.directory)?;
     Ok(diary::scan_directory(&req.directory)?)
 }
 
@@ -97,11 +92,10 @@ pub fn diary_import_file(
     state: State<'_, AppState>,
     req: DiaryImportFileRequest,
 ) -> ApiResult<DiaryEntry> {
-    if req.path.is_empty() || req.date.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "path and date are required",
-        )));
-    }
+    require(
+        !req.path.is_empty() && !req.date.is_empty(),
+        "path and date are required",
+    )?;
     let workspace = state.workspace()?;
     Ok(diary::import_file(&workspace, &req.path, &req.date)?)
 }
@@ -115,19 +109,14 @@ pub fn diary_export(
     state: State<'_, AppState>,
     req: DiaryExportRequest,
 ) -> ApiResult<DiaryExportResult> {
-    if req.directory.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "directory is required",
-        )));
-    }
+    require_directory(&req.directory)?;
 
     let year = req.year.unwrap_or(0);
     let month = req.month.unwrap_or(0);
-    if year < 0 || !(0..=12).contains(&month) || (year == 0 && month != 0) {
-        return Err(ApiError::from(AppError::bad_request(
-            "invalid year/month range",
-        )));
-    }
+    require(
+        year >= 0 && (0..=12).contains(&month) && !(year == 0 && month != 0),
+        "invalid year/month range",
+    )?;
 
     let workspace = state.workspace()?;
     Ok(diary::export_to_directory(

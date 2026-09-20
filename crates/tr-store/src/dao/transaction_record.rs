@@ -18,8 +18,6 @@ use tr_domain::dto::{
 };
 use tr_domain::models::TransactionRecord;
 
-use super::now_unix;
-
 pub struct TransactionRecordDao;
 
 /// 按交易类型的金额汇总（income / expense / transfer 三个口径）。
@@ -44,7 +42,7 @@ const COLUMNS: &str = "transaction_id, ledger_id, price, transaction_type, categ
 impl TransactionRecordDao {
     /// 新建一条记录（自动填充时间戳）。
     pub fn create(conn: &Connection, record: &TransactionRecord) -> rusqlite::Result<()> {
-        let now = now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_transaction_record \
              (transaction_id, ledger_id, price, transaction_type, category, description, flags, \
@@ -108,7 +106,7 @@ impl TransactionRecordDao {
         let affected = conn.execute(
             "UPDATE tbl_billadm_transaction_record SET key_event_date = ?2, updated_at = ?3 \
              WHERE transaction_id = ?1",
-            rusqlite::params![transaction_id, date, now_unix()],
+            rusqlite::params![transaction_id, date, crate::util::now_unix()],
         )?;
         if affected == 0 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -137,15 +135,6 @@ impl TransactionRecordDao {
             [ledger_id],
             |row| row.get(0),
         )
-    }
-
-    /// 清空某账本的全部记录。
-    pub fn delete_all_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
-        conn.execute(
-            "DELETE FROM tbl_billadm_transaction_record WHERE ledger_id = ?1",
-            [ledger_id],
-        )?;
-        Ok(())
     }
 
     /// 条件查询：先取总数，再排序分页，最后按「账本 + 时间范围」统计。
@@ -424,19 +413,6 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TransactionRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-dao-tr-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn record(
         id: &str,
@@ -485,7 +461,7 @@ mod tests {
 
     #[test]
     fn create_and_query_by_id_roundtrip() {
-        let (workspace, dir) = workspace("roundtrip");
+        let (workspace, dir) = crate::dao::test_workspace("dao-tr-roundtrip");
         let conn = workspace.connection();
         TransactionRecordDao::create(
             &conn,
@@ -506,7 +482,7 @@ mod tests {
 
     #[test]
     fn filtered_query_supports_tag_policies_and_or_items() {
-        let (workspace, dir) = workspace("filter");
+        let (workspace, dir) = crate::dao::test_workspace("dao-tr-filter");
         let conn = workspace.connection();
         TransactionRecordDao::create(&conn, &record("t1", 100, "expense", "餐饮美食", 10, false))
             .unwrap();
@@ -576,7 +552,7 @@ mod tests {
 
     #[test]
     fn description_match_uses_instr_not_like() {
-        let (workspace, dir) = workspace("instr");
+        let (workspace, dir) = crate::dao::test_workspace("dao-tr-instr");
         let conn = workspace.connection();
         let mut first = record("t1", 100, "expense", "餐饮美食", 10, false);
         first.description = "午餐 100%".to_string();
@@ -614,7 +590,7 @@ mod tests {
 
     #[test]
     fn statistics_ignore_items_and_respect_time_range() {
-        let (workspace, dir) = workspace("stats");
+        let (workspace, dir) = crate::dao::test_workspace("dao-tr-stats");
         let conn = workspace.connection();
         TransactionRecordDao::create(&conn, &record("t1", 100, "expense", "餐饮美食", 10, false))
             .unwrap();
@@ -651,7 +627,7 @@ mod tests {
 
     #[test]
     fn sort_whitelist_and_default_order() {
-        let (workspace, dir) = workspace("sort");
+        let (workspace, dir) = crate::dao::test_workspace("dao-tr-sort");
         let conn = workspace.connection();
         TransactionRecordDao::create(&conn, &record("t1", 300, "expense", "b", 10, false)).unwrap();
         TransactionRecordDao::create(&conn, &record("t2", 100, "expense", "a", 30, false)).unwrap();
@@ -699,7 +675,7 @@ mod tests {
 
     #[test]
     fn chart_line_data_buckets_by_month_and_year_excluding_outliers() {
-        let (workspace, dir) = workspace("chart");
+        let (workspace, dir) = crate::dao::test_workspace("dao-tr-chart");
         let conn = workspace.connection();
         // 2026-01-15 与 2026-02-15（UTC 秒）
         let january = 1_768_435_200_i64;
@@ -754,7 +730,7 @@ mod tests {
 
     #[test]
     fn update_key_event_date_reports_missing_row() {
-        let (workspace, dir) = workspace("link");
+        let (workspace, dir) = crate::dao::test_workspace("dao-tr-link");
         let conn = workspace.connection();
         TransactionRecordDao::create(&conn, &record("t1", 100, "expense", "a", 10, false)).unwrap();
 

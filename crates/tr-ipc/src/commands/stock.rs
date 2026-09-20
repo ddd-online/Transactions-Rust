@@ -25,14 +25,7 @@ use tr_service::stock::{self, TradeFill};
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
-/// 所有请求体的公共约束：缺失字段等价于零值，
-/// 因此所有请求结构体都带上 `#[serde(default)]`。
-fn require_ledger_id(ledger_id: &str) -> Result<(), ApiError> {
-    if ledger_id.is_empty() {
-        return Err(AppError::bad_request("ledger_id is required").into());
-    }
-    Ok(())
-}
+use super::require_ledger_id;
 
 /// 价格（元）→ 分，四舍五入到整数分。
 fn yuan_to_price_cents(price_yuan: f64) -> i64 {
@@ -136,7 +129,10 @@ pub fn stock_fee_settings_get(
 ) -> ApiResult<StockFeeSetting> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
-    Ok(stock::get_fee_settings(&workspace, &req.ledger_id)?)
+    Ok(stock::get_or_create_fee_setting(
+        &workspace,
+        &req.ledger_id,
+    )?)
 }
 
 /// 保存费用设置。`commission_rate` 必填（缺省即 0 → 触发"必须大于 0"的错误）；
@@ -237,27 +233,20 @@ pub struct StockFundRecordsRequest {
 
 /// 解析正整数参数，非法或缺失时返回默认值。
 fn parse_positive_int(raw: Option<&QueryNumber>, default: i64) -> i64 {
-    let Some(raw) = raw else {
-        return default;
-    };
-    let value = match raw {
-        QueryNumber::Text(text) => {
-            if text.is_empty() {
-                return default;
-            }
-            match text.parse::<i64>() {
-                Ok(value) => value,
-                // 非整数字符串直接回退默认值
-                Err(_) => return default,
-            }
-        }
-        QueryNumber::Integer(value) => *value,
-        QueryNumber::Float(value) => *value as i64,
-    };
-    if value >= 1 {
-        value
-    } else {
-        default
+    match query_number_as_i64(raw) {
+        Some(value) if value >= 1 => value,
+        _ => default,
+    }
+}
+
+/// `QueryNumber` → `i64`：数字字符串解析失败、或字符串为空一律得 `None`
+/// （空串与非数字串的调用方口径不同，由调用方在拿不到值时自行处理）。
+fn query_number_as_i64(raw: Option<&QueryNumber>) -> Option<i64> {
+    let raw = raw?;
+    match raw {
+        QueryNumber::Text(text) => text.parse::<i64>().ok(),
+        QueryNumber::Integer(value) => Some(*value),
+        QueryNumber::Float(value) => Some(*value as i64),
     }
 }
 
@@ -622,17 +611,8 @@ pub fn stock_statistics(
     require_ledger_id(&req.ledger_id)?;
     let mut recent = 0_i64;
     if let Some(raw) = req.recent.as_ref() {
-        let parsed = match raw {
-            QueryNumber::Text(text) => {
-                if text.is_empty() {
-                    None
-                } else {
-                    text.parse::<i64>().ok()
-                }
-            }
-            QueryNumber::Integer(value) => Some(*value),
-            QueryNumber::Float(value) => Some(*value as i64),
-        };
+        // 空串按"没传"处理（保持宽松）；非数字串或 <= 0 一律报错
+        let parsed = query_number_as_i64(Some(raw));
         match parsed {
             None => {}
             Some(value) if value > 0 => recent = value,

@@ -35,14 +35,19 @@ pub fn compute_commission(amount: i64, setting: &StockFeeSetting) -> i64 {
     commission.max(setting.min_commission)
 }
 
-/// 买入费用 = 佣金 + 过户费（仅沪市）。
-pub fn compute_buy_fee(amount: i64, is_shanghai: bool, setting: &StockFeeSetting) -> FeeBreakdown {
-    let commission = compute_commission(amount, setting);
-    let transfer_fee = if is_shanghai {
+/// 过户费（仅沪市收取，买入与卖出双向）。
+fn transfer_fee(amount: i64, is_shanghai: bool, setting: &StockFeeSetting) -> i64 {
+    if is_shanghai {
         round_to_cents(amount, setting.transfer_fee_rate)
     } else {
         0
-    };
+    }
+}
+
+/// 买入费用 = 佣金 + 过户费（仅沪市）。
+pub fn compute_buy_fee(amount: i64, is_shanghai: bool, setting: &StockFeeSetting) -> FeeBreakdown {
+    let commission = compute_commission(amount, setting);
+    let transfer_fee = transfer_fee(amount, is_shanghai, setting);
     FeeBreakdown {
         commission,
         stamp_duty: 0,
@@ -55,11 +60,7 @@ pub fn compute_buy_fee(amount: i64, is_shanghai: bool, setting: &StockFeeSetting
 pub fn compute_sell_fee(amount: i64, is_shanghai: bool, setting: &StockFeeSetting) -> FeeBreakdown {
     let commission = compute_commission(amount, setting);
     let stamp_duty = round_to_cents(amount, setting.stamp_duty_rate);
-    let transfer_fee = if is_shanghai {
-        round_to_cents(amount, setting.transfer_fee_rate)
-    } else {
-        0
-    };
+    let transfer_fee = transfer_fee(amount, is_shanghai, setting);
     FeeBreakdown {
         commission,
         stamp_duty,

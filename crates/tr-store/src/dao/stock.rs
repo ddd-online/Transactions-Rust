@@ -23,8 +23,6 @@ use tr_domain::models::{
     StockTradeRound, StockTradeTagSetting,
 };
 
-use super::now_unix;
-
 pub struct StockDao;
 
 const ACCOUNT_COLUMNS: &str = "id, ledger_id, principal, created_at, updated_at";
@@ -43,6 +41,9 @@ const HISTORY_COLUMNS: &str = "id, ledger_id, stock_code, stock_name, created_at
 const ROUND_COLUMNS: &str =
     "id, ledger_id, stock_code, history_id, round_no, opened_at, closed_at, \
      tag, review, created_at";
+
+/// 「未挂接轮次」的判定片段（`round_id` 为空串或 NULL），常量拼接，值仍走占位符。
+const UNATTACHED_ROUND_SQL: &str = "(round_id = '' OR round_id IS NULL)";
 
 /// 重置时清空的股票表（这个顺序是有意的：避免外键/触发器顺序差异）。
 const STOCK_TABLES: [&str; 8] = [
@@ -73,7 +74,7 @@ impl StockDao {
 
     /// 新建账户（时间戳由 DAO 补齐）。
     pub fn create_account(conn: &Connection, account: &StockAccount) -> rusqlite::Result<()> {
-        let now = now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_stock_account (id, ledger_id, principal, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?4)",
@@ -91,7 +92,7 @@ impl StockDao {
         conn.execute(
             "UPDATE tbl_billadm_stock_account SET principal = ?2, updated_at = ?3 \
              WHERE ledger_id = ?1",
-            params![ledger_id, principal, now_unix()],
+            params![ledger_id, principal, crate::util::now_unix()],
         )?;
         Ok(())
     }
@@ -116,7 +117,7 @@ impl StockDao {
         conn: &Connection,
         setting: &StockFeeSetting,
     ) -> rusqlite::Result<()> {
-        let now = now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_stock_fee_setting \
              (id, ledger_id, commission_rate, min_commission, stamp_duty_rate, transfer_fee_rate, \
@@ -149,7 +150,7 @@ impl StockDao {
                 setting.min_commission,
                 setting.stamp_duty_rate,
                 setting.transfer_fee_rate,
-                now_unix(),
+                crate::util::now_unix(),
             ],
         )?;
         Ok(())
@@ -175,7 +176,7 @@ impl StockDao {
         conn: &Connection,
         setting: &StockTradeTagSetting,
     ) -> rusqlite::Result<()> {
-        let now = now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_stock_trade_tag_setting \
              (id, ledger_id, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
@@ -192,7 +193,7 @@ impl StockDao {
         conn.execute(
             "UPDATE tbl_billadm_stock_trade_tag_setting SET tags = ?2, updated_at = ?3 \
              WHERE ledger_id = ?1",
-            params![ledger_id, tags_json, now_unix()],
+            params![ledger_id, tags_json, crate::util::now_unix()],
         )?;
         Ok(())
     }
@@ -210,36 +211,20 @@ impl StockDao {
     ///
     /// 服务层在重放时显式给出 `created_at`（复刻被重放记录的录入位置），此时原样采用。
     pub fn create_fund_record(conn: &Connection, record: &StockFundRecord) -> rusqlite::Result<()> {
-        if record.created_at > 0 {
-            conn.execute(
-                "INSERT INTO tbl_billadm_stock_fund_record \
-                 (id, ledger_id, record_date, event_type, event_text, amount_change, cash_balance, \
-                  net_pnl, remark, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    record.id,
-                    record.ledger_id,
-                    record.record_date,
-                    record.event_type,
-                    record.event_text,
-                    record.amount_change,
-                    record.cash_balance,
-                    record.net_pnl,
-                    record.remark,
-                    record.created_at,
-                ],
-            )?;
-            return Ok(());
-        }
         // 单调递增：同一秒录入的多条记录必须能按 created_at 区分（见上方文档）。
-        // 这里显式取本账本已有最大值再自增，避免依赖 SQL 参数编号在子查询里的绑定行为。
-        let max_existing: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(created_at), 0) FROM tbl_billadm_stock_fund_record \
-             WHERE ledger_id = ?1",
-            [&record.ledger_id],
-            |row| row.get(0),
-        )?;
-        let created_at = now_unix().max(max_existing + 1);
+        // 服务层显式给出 `created_at` 时原样采用，否则才查本账本已有最大值再自增
+        // （避免依赖 SQL 参数编号在子查询里的绑定行为）。
+        let created_at = if record.created_at > 0 {
+            record.created_at
+        } else {
+            let max_existing: i64 = conn.query_row(
+                "SELECT COALESCE(MAX(created_at), 0) FROM tbl_billadm_stock_fund_record \
+                 WHERE ledger_id = ?1",
+                [&record.ledger_id],
+                |row| row.get(0),
+            )?;
+            crate::util::now_unix().max(max_existing + 1)
+        };
         conn.execute(
             "INSERT INTO tbl_billadm_stock_fund_record \
              (id, ledger_id, record_date, event_type, event_text, amount_change, cash_balance, \
@@ -403,7 +388,7 @@ impl StockDao {
     }
 
     pub fn create_position(conn: &Connection, position: &StockPosition) -> rusqlite::Result<()> {
-        let now = now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_stock_position \
              (id, ledger_id, stock_code, stock_name, quantity, total_cost, realized_pnl, review, \
@@ -436,7 +421,7 @@ impl StockDao {
                 position.realized_pnl,
                 position.stock_name,
                 position.review,
-                now_unix(),
+                crate::util::now_unix(),
             ],
         )?;
         Ok(())
@@ -489,7 +474,7 @@ impl StockDao {
                 trade.realized_pnl,
                 trade.trade_time,
                 trade.remark,
-                now_unix(),
+                crate::util::now_unix(),
             ],
         )?;
         Ok(())
@@ -660,7 +645,7 @@ impl StockDao {
         conn: &Connection,
         history: &StockTradeHistory,
     ) -> rusqlite::Result<()> {
-        let now = now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_stock_trade_history \
              (id, ledger_id, stock_code, stock_name, created_at, updated_at) \
@@ -712,7 +697,7 @@ impl StockDao {
         conn.execute(
             "UPDATE tbl_billadm_stock_trade_history SET stock_name = ?3, updated_at = ?4 \
              WHERE ledger_id = ?1 AND stock_code = ?2",
-            params![ledger_id, stock_code, stock_name, now_unix()],
+            params![ledger_id, stock_code, stock_name, crate::util::now_unix()],
         )?;
         Ok(())
     }
@@ -754,7 +739,7 @@ impl StockDao {
                 round.closed_at,
                 round.tag,
                 round.review,
-                now_unix(),
+                crate::util::now_unix(),
             ],
         )?;
         Ok(())
@@ -872,8 +857,10 @@ impl StockDao {
         stock_code: &str,
     ) -> rusqlite::Result<i64> {
         conn.query_row(
-            "SELECT COALESCE(MIN(trade_time), 0) FROM tbl_billadm_stock_trade \
-             WHERE ledger_id = ?1 AND stock_code = ?2 AND (round_id = '' OR round_id IS NULL)",
+            &format!(
+                "SELECT COALESCE(MIN(trade_time), 0) FROM tbl_billadm_stock_trade \
+                 WHERE ledger_id = ?1 AND stock_code = ?2 AND {UNATTACHED_ROUND_SQL}"
+            ),
             params![ledger_id, stock_code],
             |row| row.get(0),
         )
@@ -887,8 +874,10 @@ impl StockDao {
         round_id: &str,
     ) -> rusqlite::Result<()> {
         conn.execute(
-            "UPDATE tbl_billadm_stock_trade SET round_id = ?3 \
-             WHERE ledger_id = ?1 AND stock_code = ?2 AND (round_id = '' OR round_id IS NULL)",
+            &format!(
+                "UPDATE tbl_billadm_stock_trade SET round_id = ?3 \
+                 WHERE ledger_id = ?1 AND stock_code = ?2 AND {UNATTACHED_ROUND_SQL}"
+            ),
             params![ledger_id, stock_code, round_id],
         )?;
         Ok(())
@@ -929,17 +918,6 @@ impl StockDao {
     }
 
     // ---------- 删除与重置 ----------
-
-    /// 删除某账本的全部股票数据（逐表删除，顺序见 [`STOCK_TABLES`]）。
-    pub fn delete_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
-        for table in STOCK_TABLES {
-            conn.execute(
-                &format!("DELETE FROM {table} WHERE ledger_id = ?1"),
-                [ledger_id],
-            )?;
-        }
-        Ok(())
-    }
 
     /// 「重置」：在**单个事务**里清空某账本的全部股票表。
     ///
@@ -1073,19 +1051,6 @@ fn round_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockTradeRound> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace(tag: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-dao-stock-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn account(ledger_id: &str, principal: i64) -> StockAccount {
         StockAccount {
@@ -1117,7 +1082,7 @@ mod tests {
 
     #[test]
     fn account_roundtrip_and_missing_row() {
-        let (workspace, dir) = workspace("account");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-account");
         let conn = workspace.connection();
 
         StockDao::create_account(&conn, &account("l1", 10_000_000)).unwrap();
@@ -1139,7 +1104,7 @@ mod tests {
 
     #[test]
     fn trade_create_persists_remark_like_go() {
-        let (workspace, dir) = workspace("trade-remark");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-trade-remark");
         let conn = workspace.connection();
 
         StockDao::create_trade(&conn, &trade("t1", "o1", 1, 100)).unwrap();
@@ -1165,7 +1130,7 @@ mod tests {
     /// 导致「卖出数量超过持仓」——根因是 WAL 下连接被复用后仍固定旧快照。
     #[test]
     fn pooled_connection_sees_writes_from_other_connections() {
-        let (workspace, dir) = workspace("read-your-writes");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-read-your-writes");
         let reader = workspace.connection();
 
         for round in 0..4 {
@@ -1191,7 +1156,7 @@ mod tests {
 
     #[test]
     fn trade_order_ordering_uses_order_seq() {
-        let (workspace, dir) = workspace("trade-order");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-trade-order");
         let conn = workspace.connection();
 
         StockDao::create_trade(&conn, &trade("t2", "o1", 2, 100)).unwrap();
@@ -1218,7 +1183,7 @@ mod tests {
 
     #[test]
     fn fund_record_created_at_is_monotonic_per_ledger() {
-        let (workspace, dir) = workspace("fund-monotonic");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-fund-monotonic");
         let conn = workspace.connection();
 
         for index in 0..3 {
@@ -1295,7 +1260,7 @@ mod tests {
 
     #[test]
     fn fund_record_chain_helpers() {
-        let (workspace, dir) = workspace("fund");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-fund");
         let conn = workspace.connection();
         let record =
             |id: &str, date: &str, event: &str, change: i64, balance: i64| StockFundRecord {
@@ -1358,7 +1323,7 @@ mod tests {
 
     #[test]
     fn position_helpers_and_cost_sum() {
-        let (workspace, dir) = workspace("position");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-position");
         let conn = workspace.connection();
 
         let position = StockPosition {
@@ -1395,7 +1360,7 @@ mod tests {
 
     #[test]
     fn round_and_history_helpers() {
-        let (workspace, dir) = workspace("round");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-round");
         let conn = workspace.connection();
 
         let history = StockTradeHistory {
@@ -1472,7 +1437,7 @@ mod tests {
 
     #[test]
     fn stock_name_lookup_is_cross_ledger_and_rejects_empty() {
-        let (workspace, dir) = workspace("name");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-name");
         let conn = workspace.connection();
 
         assert!(super::super::is_not_found(
@@ -1500,8 +1465,8 @@ mod tests {
     }
 
     #[test]
-    fn reset_and_delete_by_ledger_clear_only_that_ledger() {
-        let (workspace, dir) = workspace("reset");
+    fn reset_by_ledger_id_clears_only_that_ledger() {
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-reset");
         let conn = workspace.connection();
 
         for ledger in ["l1", "l2"] {
@@ -1512,6 +1477,7 @@ mod tests {
             StockDao::create_trade(&conn, &item).unwrap();
         }
 
+        // 活路径：重置账本 l1 后本账本清零、其它账本不受影响
         StockDao::reset_by_ledger_id(&conn, "l1").unwrap();
         assert!(super::super::is_not_found(
             &StockDao::get_account(&conn, "l1").unwrap_err()
@@ -1519,17 +1485,21 @@ mod tests {
         assert_eq!(StockDao::get_account(&conn, "l2").unwrap().principal, 100);
         assert_eq!(StockDao::list_all_trades_asc(&conn, "l2").unwrap().len(), 1);
 
-        StockDao::delete_by_ledger_id(&conn, "l2").unwrap();
+        // 反向再验一次：另一账本仍可被单独重置（账本隔离不依赖调用顺序）
+        StockDao::reset_by_ledger_id(&conn, "l2").unwrap();
         assert!(super::super::is_not_found(
             &StockDao::get_account(&conn, "l2").unwrap_err()
         ));
+        assert!(StockDao::list_all_trades_asc(&conn, "l2")
+            .unwrap()
+            .is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn tag_setting_roundtrip_keeps_json_untouched() {
-        let (workspace, dir) = workspace("tag-setting");
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-tag-setting");
         let conn = workspace.connection();
 
         let setting = StockTradeTagSetting {

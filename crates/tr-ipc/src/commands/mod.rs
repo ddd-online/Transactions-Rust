@@ -32,6 +32,10 @@ pub use tr::*;
 
 use serde::Deserialize;
 
+use tr_domain::error::AppError;
+
+use crate::error::{ApiError, ApiResult};
+
 /// 无参数命令的占位入参。
 ///
 /// 约定：**每个命令都只收一个 `req`**（界面侧的 `call()` 统一发送 `{ req: ... }`），
@@ -39,3 +43,17 @@ use serde::Deserialize;
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct EmptyRequest {}
+
+/// 条件不满足时返回 400 与固定文案（`msg` 是用户可见契约，逐字不得改动）。
+pub(crate) fn require(cond: bool, msg: &'static str) -> ApiResult<()> {
+    if cond {
+        return Ok(());
+    }
+    Err(ApiError::from(AppError::bad_request(msg)))
+}
+
+/// 公共约束：缺失字段等价于零值（所有请求结构体都带 `#[serde(default)]`），
+/// 因此 `ledger_id` 为空即报 `ledger_id is required`。
+pub(crate) fn require_ledger_id(ledger_id: &str) -> ApiResult<()> {
+    require(!ledger_id.is_empty(), "ledger_id is required")
+}

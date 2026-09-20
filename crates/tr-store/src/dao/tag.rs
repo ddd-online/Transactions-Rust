@@ -97,15 +97,6 @@ impl TagDao {
         Ok(())
     }
 
-    /// 删除某账本的全部标签。
-    pub fn delete_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
-        conn.execute(
-            "DELETE FROM tbl_billadm_tag WHERE ledger_id = ?1",
-            params![ledger_id],
-        )?;
-        Ok(())
-    }
-
     /// 更新排序号。
     pub fn update_sort(
         conn: &Connection,
@@ -132,41 +123,23 @@ impl TagDao {
         )
     }
 
-    /// 批量统计每个标签名下的关联交易数（`SELECT tag, COUNT(*) ... WHERE
-    /// ledger_id = ? AND tag IN (...) GROUP BY tag`）。
+    /// 批量统计每个标签名下的关联交易数（`SELECT tag, COUNT(*) … WHERE
+    /// ledger_id = ? AND tag IN (…) GROUP BY tag`）。
+    /// SQL 与 [`super::count_grouped_by`] 共用（与分类侧
+    /// `count_records_by_categories` 逐字一致），表名/列名以常量传入。
     /// `names` 为空时直接返回空 map，不查库。
     pub fn count_records_by_tags(
         conn: &Connection,
         ledger_id: &str,
         names: &[String],
     ) -> rusqlite::Result<BTreeMap<String, i64>> {
-        let mut counts = BTreeMap::new();
-        if names.is_empty() {
-            return Ok(counts);
-        }
-
-        let placeholders = vec!["?"; names.len()].join(", ");
-        let sql = format!(
-            "SELECT tag, COUNT(*) FROM tbl_billadm_transaction_record_tag \
-             WHERE ledger_id = ? AND tag IN ({placeholders}) GROUP BY tag"
-        );
-
-        let mut args = vec![rusqlite::types::Value::Text(ledger_id.to_string())];
-        args.extend(
-            names
-                .iter()
-                .map(|name| rusqlite::types::Value::Text(name.clone())),
-        );
-
-        let mut statement = conn.prepare(&sql)?;
-        let rows = statement.query_map(rusqlite::params_from_iter(args), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        for row in rows {
-            let (name, count) = row?;
-            counts.insert(name, count);
-        }
-        Ok(counts)
+        super::count_grouped_by(
+            conn,
+            ledger_id,
+            names,
+            "tag",
+            "tbl_billadm_transaction_record_tag",
+        )
     }
 }
 
@@ -182,19 +155,6 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tag> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace() -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-tag-dao-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn tag(ledger_id: &str, name: &str, category_transaction_type: &str, sort_order: i32) -> Tag {
         Tag {
@@ -216,7 +176,7 @@ mod tests {
 
     #[test]
     fn query_orders_by_sort_then_name_desc_and_filters_category() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("tag-dao");
         let conn = workspace.connection();
 
         TagDao::create(&conn, &tag("l1", "三餐", "餐饮美食:expense", 1)).unwrap();
@@ -240,7 +200,7 @@ mod tests {
 
     #[test]
     fn max_sort_update_sort_and_unique_index() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("tag-dao");
         let conn = workspace.connection();
 
         assert_eq!(
@@ -271,7 +231,7 @@ mod tests {
 
     #[test]
     fn record_counts_use_transaction_tag_table() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("tag-dao");
         let conn = workspace.connection();
 
         record_tag(&conn, "l1", "t1", "三餐");
@@ -297,7 +257,7 @@ mod tests {
 
     #[test]
     fn delete_by_category_and_ledger_cleanup() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("tag-dao");
         let conn = workspace.connection();
 
         TagDao::create(&conn, &tag("l1", "三餐", "餐饮美食:expense", 0)).unwrap();
@@ -315,7 +275,12 @@ mod tests {
             1
         );
 
-        TagDao::delete_by_ledger_id(&conn, "l1").unwrap();
+        // 账本级联清理走活路径（语句与 tr-service 的 LEDGER_CASCADE 一致）
+        conn.execute(
+            "DELETE FROM tbl_billadm_tag WHERE ledger_id = ?1",
+            params!["l1"],
+        )
+        .unwrap();
         assert!(TagDao::query_by_ledger(&conn, "l1", "all")
             .unwrap()
             .is_empty());

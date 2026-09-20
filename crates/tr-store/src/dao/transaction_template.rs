@@ -18,7 +18,7 @@ const COLUMNS: &str = "template_id, ledger_id, template_name, transaction_type, 
 impl TransactionTemplateDao {
     /// 新建模板（自动填充时间戳）。
     pub fn create(conn: &Connection, template: &TransactionTemplate) -> rusqlite::Result<()> {
-        let now = super::now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_transaction_tpl \
              (template_id, ledger_id, template_name, transaction_type, category, tags, flags, \
@@ -45,15 +45,6 @@ impl TransactionTemplateDao {
         conn.execute(
             "DELETE FROM tbl_billadm_transaction_tpl WHERE template_id = ?1",
             params![template_id],
-        )?;
-        Ok(())
-    }
-
-    /// 删除某账本的全部模板。
-    pub fn delete_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
-        conn.execute(
-            "DELETE FROM tbl_billadm_transaction_tpl WHERE ledger_id = ?1",
-            params![ledger_id],
         )?;
         Ok(())
     }
@@ -90,7 +81,7 @@ impl TransactionTemplateDao {
         conn.execute(
             "UPDATE tbl_billadm_transaction_tpl SET sort_order = ?2, updated_at = ?3 \
              WHERE template_id = ?1",
-            params![template_id, sort_order, super::now_unix()],
+            params![template_id, sort_order, crate::util::now_unix()],
         )?;
         Ok(())
     }
@@ -115,19 +106,6 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TransactionTemplate> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace() -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-template-dao-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn template(id: &str, ledger_id: &str, name: &str, sort_order: i32) -> TransactionTemplate {
         TransactionTemplate {
@@ -147,7 +125,7 @@ mod tests {
 
     #[test]
     fn create_fills_timestamps_and_roundtrips() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("template-dao");
         let conn = workspace.connection();
 
         TransactionTemplateDao::create(&conn, &template("t1", "l1", "模板", 1)).unwrap();
@@ -174,7 +152,7 @@ mod tests {
 
     #[test]
     fn query_orders_by_sort_then_created_at_desc() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("template-dao");
         let conn = workspace.connection();
 
         // 直接插入以控制 created_at（DAO 的 create 只写当前秒）
@@ -211,7 +189,7 @@ mod tests {
 
     #[test]
     fn update_sort_refreshes_updated_at_only() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("template-dao");
         let conn = workspace.connection();
 
         TransactionTemplateDao::create(&conn, &template("t1", "l1", "模板", 1)).unwrap();
@@ -238,7 +216,7 @@ mod tests {
 
     #[test]
     fn delete_by_id_and_by_ledger() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("template-dao");
         let conn = workspace.connection();
 
         TransactionTemplateDao::create(&conn, &template("t1", "l1", "甲", 0)).unwrap();
@@ -253,7 +231,12 @@ mod tests {
             1
         );
 
-        TransactionTemplateDao::delete_by_ledger_id(&conn, "l1").unwrap();
+        // 账本级联清理走活路径（语句与 tr-service 的 LEDGER_CASCADE 一致）
+        conn.execute(
+            "DELETE FROM tbl_billadm_transaction_tpl WHERE ledger_id = ?1",
+            params!["l1"],
+        )
+        .unwrap();
         assert!(TransactionTemplateDao::query_by_ledger_id(&conn, "l1")
             .unwrap()
             .is_empty());

@@ -9,8 +9,6 @@ use rusqlite::{params, Connection};
 
 use tr_domain::models::KeyEvent;
 
-use super::now_unix;
-
 pub struct KeyEventDao;
 
 const COLUMNS: &str = "id, date, title, content, color, created_at, updated_at, ledger_id";
@@ -21,7 +19,7 @@ pub const TITLE_MAX_CHARS: usize = 200;
 impl KeyEventDao {
     /// 幂等写入：`(ledger_id, date)` 冲突时更新正文相关字段。
     pub fn upsert(conn: &Connection, event: &KeyEvent) -> rusqlite::Result<()> {
-        let now = now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_key_event \
              (id, date, title, content, color, created_at, updated_at, ledger_id) \
@@ -82,17 +80,6 @@ impl KeyEventDao {
         Ok(())
     }
 
-    /// 删除某账本的全部关键事件。
-    ///
-    /// 注意：删除账本走的是服务层的单事务级联 SQL，本方法供关键事件域之外的小范围清理使用。
-    pub fn delete_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
-        conn.execute(
-            "DELETE FROM tbl_billadm_key_event WHERE ledger_id = ?1",
-            [ledger_id],
-        )?;
-        Ok(())
-    }
-
     /// 确保某天存在关键事件：不存在则自动创建一条空事件
     /// （标题/正文/颜色均为空串），返回是否发生了创建。
     pub fn ensure_exists(conn: &Connection, ledger_id: &str, date: &str) -> rusqlite::Result<bool> {
@@ -132,19 +119,6 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<KeyEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace() -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-dao-keyevent-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn event(id: &str, date: &str, title: &str) -> KeyEvent {
         KeyEvent {
@@ -160,7 +134,7 @@ mod tests {
 
     #[test]
     fn upsert_keeps_original_id_and_created_at() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("key-event-dao");
         let conn = workspace.connection();
 
         KeyEventDao::upsert(&conn, &event("e1", "2026-01-01", "标题一")).unwrap();
@@ -187,7 +161,7 @@ mod tests {
 
     #[test]
     fn same_date_in_different_ledgers_coexists() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("key-event-dao");
         let conn = workspace.connection();
 
         KeyEventDao::upsert(&conn, &event("e1", "2026-01-01", "甲的标题")).unwrap();
@@ -213,7 +187,7 @@ mod tests {
 
     #[test]
     fn query_by_year_filters_ledger_and_year() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("key-event-dao");
         let conn = workspace.connection();
 
         KeyEventDao::upsert(&conn, &event("e1", "2025-12-31", "去年")).unwrap();
@@ -236,7 +210,12 @@ mod tests {
             1
         );
 
-        KeyEventDao::delete_by_ledger_id(&conn, "l1").unwrap();
+        // 账本级联清理走活路径（语句与 tr-service 的 LEDGER_CASCADE 一致）
+        conn.execute(
+            "DELETE FROM tbl_billadm_key_event WHERE ledger_id = ?1",
+            ["l1"],
+        )
+        .unwrap();
         assert!(KeyEventDao::query_by_year(&conn, "l1", "2026")
             .unwrap()
             .is_empty());
@@ -246,7 +225,7 @@ mod tests {
 
     #[test]
     fn ensure_exists_creates_empty_event_only_once() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("key-event-dao");
         let conn = workspace.connection();
 
         assert!(KeyEventDao::ensure_exists(&conn, "l1", "2026-02-02").unwrap());

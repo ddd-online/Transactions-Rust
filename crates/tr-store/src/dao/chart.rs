@@ -19,7 +19,7 @@ const COLUMNS: &str = "chart_id, ledger_id, title, granularity, chart_lines, cha
 impl ChartDao {
     /// 新建图表（自动填充时间戳）。
     pub fn create(conn: &Connection, chart: &Chart) -> rusqlite::Result<()> {
-        let now = super::now_unix();
+        let now = crate::util::now_unix();
         conn.execute(
             "INSERT INTO tbl_billadm_chart \
              (chart_id, ledger_id, title, granularity, chart_lines, chart_type, is_preset, \
@@ -45,15 +45,6 @@ impl ChartDao {
         conn.execute(
             "DELETE FROM tbl_billadm_chart WHERE chart_id = ?1",
             params![chart_id],
-        )?;
-        Ok(())
-    }
-
-    /// 删除某账本的全部图表。
-    pub fn delete_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
-        conn.execute(
-            "DELETE FROM tbl_billadm_chart WHERE ledger_id = ?1",
-            params![ledger_id],
         )?;
         Ok(())
     }
@@ -111,7 +102,7 @@ impl ChartDao {
                 chart.is_preset,
                 chart.sort_order,
                 chart.created_at,
-                super::now_unix()
+                crate::util::now_unix()
             ],
         )?;
         Ok(())
@@ -136,19 +127,6 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Chart> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace() -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-chart-dao-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     /// 与 `tr-service` 预设曲线同构的一行 JSON（仅用于 DAO 往返断言）。
     const LINES: &str =
@@ -171,7 +149,7 @@ mod tests {
 
     #[test]
     fn create_fills_timestamps_and_reads_back_every_column() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("chart-dao");
         let conn = workspace.connection();
 
         ChartDao::create(&conn, &chart("c1", "l1", "月度消费趋势", true, 0)).unwrap();
@@ -197,7 +175,7 @@ mod tests {
 
     #[test]
     fn missing_chart_reports_not_found() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("chart-dao");
         let error = ChartDao::query_by_id(&workspace.connection(), "nope").unwrap_err();
         assert!(super::super::is_not_found(&error), "error = {error:?}");
         std::fs::remove_dir_all(&dir).ok();
@@ -205,7 +183,7 @@ mod tests {
 
     #[test]
     fn query_orders_preset_first_then_sort_then_created_desc() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("chart-dao");
         let conn = workspace.connection();
 
         let insert = "INSERT INTO tbl_billadm_chart \
@@ -233,7 +211,7 @@ mod tests {
 
     #[test]
     fn save_writes_back_all_fields_and_refreshes_updated_at() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("chart-dao");
         let conn = workspace.connection();
 
         ChartDao::create(&conn, &chart("c1", "l1", "旧标题", true, 0)).unwrap();
@@ -263,7 +241,7 @@ mod tests {
 
     #[test]
     fn delete_by_id_and_by_ledger() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("chart-dao");
         let conn = workspace.connection();
 
         ChartDao::create(&conn, &chart("c1", "l1", "甲", false, 0)).unwrap();
@@ -273,7 +251,12 @@ mod tests {
         ChartDao::delete_by_id(&conn, "c1").unwrap();
         assert_eq!(ChartDao::count_by_ledger_id(&conn, "l1").unwrap(), 1);
 
-        ChartDao::delete_by_ledger_id(&conn, "l1").unwrap();
+        // 账本级联清理走活路径（语句与 tr-service 的 LEDGER_CASCADE 一致）
+        conn.execute(
+            "DELETE FROM tbl_billadm_chart WHERE ledger_id = ?1",
+            params!["l1"],
+        )
+        .unwrap();
         assert_eq!(ChartDao::count_by_ledger_id(&conn, "l1").unwrap(), 0);
         assert_eq!(ChartDao::count_by_ledger_id(&conn, "l2").unwrap(), 1);
         // 删除不存在的记录视为成功

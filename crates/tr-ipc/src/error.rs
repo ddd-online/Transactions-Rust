@@ -17,8 +17,8 @@ pub struct ApiError {
     pub status: u16,
 }
 
-impl ApiError {
-    pub fn new(error: AppError) -> Self {
+impl From<AppError> for ApiError {
+    fn from(error: AppError) -> Self {
         Self {
             code: -1,
             msg: error.msg,
@@ -27,15 +27,9 @@ impl ApiError {
     }
 }
 
-impl From<AppError> for ApiError {
-    fn from(error: AppError) -> Self {
-        Self::new(error)
-    }
-}
-
 impl From<ServiceError> for ApiError {
     fn from(error: ServiceError) -> Self {
-        Self::new(error.into_app_error())
+        Self::from(error.into_app_error())
     }
 }
 

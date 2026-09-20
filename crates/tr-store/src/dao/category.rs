@@ -85,15 +85,6 @@ impl CategoryDao {
         Ok(())
     }
 
-    /// 删除某账本的全部分类。
-    pub fn delete_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
-        conn.execute(
-            "DELETE FROM tbl_billadm_category WHERE ledger_id = ?1",
-            params![ledger_id],
-        )?;
-        Ok(())
-    }
-
     /// 更新排序号。
     pub fn update_sort(
         conn: &Connection,
@@ -133,43 +124,24 @@ impl CategoryDao {
         )
     }
 
-    /// 批量统计每个分类名下的交易记录数（`SELECT category, COUNT(*) ... WHERE
-    /// ledger_id = ? AND category IN (...) GROUP BY category`）。
+    /// 批量统计每个分类名下的交易记录数（`SELECT category, COUNT(*) … WHERE
+    /// ledger_id = ? AND category IN (…) GROUP BY category`）。
     ///
-    /// 返回的 map 只包含**确实有记录**的分类名（调用方用
-    /// `counts[name]` 取不到时得 0）；`names` 为空时直接返回空 map，不查库。
+    /// SQL 与 [`super::count_grouped_by`] 共用（与标签侧 `count_records_by_tags`
+    /// 逐字一致），表名/列名以常量传入。返回的 map 只包含**确实有记录**的分类名
+    /// （调用方用 `counts[name]` 取不到时得 0）；`names` 为空时直接返回空 map，不查库。
     pub fn count_records_by_categories(
         conn: &Connection,
         ledger_id: &str,
         names: &[String],
     ) -> rusqlite::Result<BTreeMap<String, i64>> {
-        let mut counts = BTreeMap::new();
-        if names.is_empty() {
-            return Ok(counts);
-        }
-
-        let placeholders = vec!["?"; names.len()].join(", ");
-        let sql = format!(
-            "SELECT category, COUNT(*) FROM tbl_billadm_transaction_record \
-             WHERE ledger_id = ? AND category IN ({placeholders}) GROUP BY category"
-        );
-
-        let mut args = vec![rusqlite::types::Value::Text(ledger_id.to_string())];
-        args.extend(
-            names
-                .iter()
-                .map(|name| rusqlite::types::Value::Text(name.clone())),
-        );
-
-        let mut statement = conn.prepare(&sql)?;
-        let rows = statement.query_map(rusqlite::params_from_iter(args), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        for row in rows {
-            let (name, count) = row?;
-            counts.insert(name, count);
-        }
-        Ok(counts)
+        super::count_grouped_by(
+            conn,
+            ledger_id,
+            names,
+            "category",
+            "tbl_billadm_transaction_record",
+        )
     }
 }
 
@@ -185,19 +157,6 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Category> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
-
-    fn workspace() -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-category-dao-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (Workspace::open(&dir).unwrap(), dir)
-    }
 
     fn category(ledger_id: &str, name: &str, transaction_type: &str, sort_order: i32) -> Category {
         Category {
@@ -220,7 +179,7 @@ mod tests {
 
     #[test]
     fn query_orders_by_sort_then_name_desc_and_filters_type() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("category-dao");
         let conn = workspace.connection();
 
         CategoryDao::create(&conn, &category("l1", "甲", "expense", 1)).unwrap();
@@ -248,7 +207,7 @@ mod tests {
 
     #[test]
     fn max_sort_and_update_sort() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("category-dao");
         let conn = workspace.connection();
 
         assert_eq!(
@@ -280,7 +239,7 @@ mod tests {
 
     #[test]
     fn duplicate_category_violates_unique_index() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("category-dao");
         let conn = workspace.connection();
 
         CategoryDao::create(&conn, &category("l1", "餐饮美食", "expense", 0)).unwrap();
@@ -299,7 +258,7 @@ mod tests {
 
     #[test]
     fn record_counts_are_grouped_by_name() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("category-dao");
         let conn = workspace.connection();
 
         record(&conn, "l1", "t1", "餐饮美食");
@@ -333,7 +292,7 @@ mod tests {
 
     #[test]
     fn delete_and_count_by_ledger() {
-        let (workspace, dir) = workspace();
+        let (workspace, dir) = crate::dao::test_workspace("category-dao");
         let conn = workspace.connection();
 
         CategoryDao::create(&conn, &category("l1", "甲", "expense", 0)).unwrap();
@@ -348,7 +307,12 @@ mod tests {
         CategoryDao::delete(&conn, "l1", "乙", "expense").unwrap();
         assert_eq!(CategoryDao::count_by_ledger_id(&conn, "l1").unwrap(), 1);
 
-        CategoryDao::delete_by_ledger_id(&conn, "l1").unwrap();
+        // 账本级联清理走活路径（语句与 tr-service 的 LEDGER_CASCADE 一致）
+        conn.execute(
+            "DELETE FROM tbl_billadm_category WHERE ledger_id = ?1",
+            params!["l1"],
+        )
+        .unwrap();
         assert_eq!(CategoryDao::count_by_ledger_id(&conn, "l1").unwrap(), 0);
         assert_eq!(CategoryDao::count_by_ledger_id(&conn, "l2").unwrap(), 1);
 

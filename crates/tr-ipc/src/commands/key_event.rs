@@ -13,6 +13,8 @@ use tr_service::key_event;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
+use super::{require, require_ledger_id};
+
 #[derive(Debug, Deserialize)]
 pub struct YearRequest {
     pub year: String,
@@ -20,17 +22,8 @@ pub struct YearRequest {
 }
 
 fn require_year_and_ledger(req: &YearRequest) -> ApiResult<()> {
-    if req.year.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "missing year parameter",
-        )));
-    }
-    if req.ledger_id.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "ledger_id is required",
-        )));
-    }
-    Ok(())
+    require(!req.year.is_empty(), "missing year parameter")?;
+    require_ledger_id(&req.ledger_id)
 }
 
 /// 某年的全部关键事件。
@@ -70,17 +63,8 @@ pub struct KeyEventDateRequest {
 }
 
 fn require_date_and_ledger(req: &KeyEventDateRequest) -> ApiResult<()> {
-    if req.date.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "missing date parameter",
-        )));
-    }
-    if req.ledger_id.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "ledger_id is required",
-        )));
-    }
-    Ok(())
+    require(!req.date.is_empty(), "missing date parameter")?;
+    require_ledger_id(&req.ledger_id)
 }
 
 /// 按日期取关键事件（不存在时报错）。
@@ -113,11 +97,7 @@ pub fn key_event_upsert(
     state: State<'_, AppState>,
     req: KeyEventUpsertRequest,
 ) -> ApiResult<String> {
-    if req.ledger_id.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "ledger_id is required",
-        )));
-    }
+    require_ledger_id(&req.ledger_id)?;
     // 只要求 date 字段存在（可以为空串），保留同样的宽松度
     let workspace = state.workspace()?;
     key_event::upsert_key_event(
@@ -172,19 +152,11 @@ pub fn key_event_image_add(
     state: State<'_, AppState>,
     req: KeyEventImageAddRequest,
 ) -> ApiResult<KeyEventImage> {
-    if req.date.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "missing date parameter",
-        )));
-    }
+    require(!req.date.is_empty(), "missing date parameter")?;
     let Some(data) = req.data.as_deref().filter(|data| !data.is_empty()) else {
         return Err(ApiError::from(AppError::bad_request("invalid image data")));
     };
-    if req.ledger_id.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "ledger_id is required",
-        )));
-    }
+    require_ledger_id(&req.ledger_id)?;
 
     let workspace = state.workspace()?;
     Ok(key_event::add_image(

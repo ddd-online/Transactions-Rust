@@ -6,8 +6,6 @@ use rusqlite::{params, Connection};
 
 use tr_domain::models::KeyEventImage;
 
-use super::now_unix;
-
 pub struct KeyEventImageDao;
 
 const COLUMNS: &str = "id, ledger_id, event_date, file_path, thumb_path, sort_order, created_at";
@@ -26,7 +24,7 @@ impl KeyEventImageDao {
                 image.file_path,
                 image.thumb_path,
                 image.sort_order,
-                now_unix(),
+                crate::util::now_unix(),
             ],
         )?;
         Ok(())
@@ -88,15 +86,6 @@ impl KeyEventImageDao {
         )?;
         Ok(())
     }
-
-    /// 删除某账本的全部图片记录。
-    pub fn delete_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
-        conn.execute(
-            "DELETE FROM tbl_billadm_key_event_image WHERE ledger_id = ?1",
-            [ledger_id],
-        )?;
-        Ok(())
-    }
 }
 
 fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<KeyEventImage> {
@@ -114,19 +103,10 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<KeyEventImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Workspace;
 
     #[test]
     fn lists_images_only_for_requested_ledger() {
-        let dir = std::env::temp_dir().join(format!(
-            "tr-key-event-image-dao-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let workspace = Workspace::open(&dir).unwrap();
+        let (workspace, dir) = crate::dao::test_workspace("key-event-image-dao");
         let conn = workspace.connection();
         for (id, ledger) in [("i1", "l1"), ("i2", "l1"), ("i3", "l2")] {
             conn.execute(
