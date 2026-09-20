@@ -555,9 +555,11 @@ fn nav_button(page: Page, current_page: RwSignal<Page>) -> impl IntoView {
             type="button"
             class=classes
             class:active=move || current_page.get() == page
-            // 悬浮提示文案 = 功能名（曾经错写成 `page.route()`，于是侧栏 6 项全在提示
-            // `/accounting_view` 这类内部标识 —— 那是"页面的稳定标识"，只该出现在调试里）。
-            title=page.label()
+            // **不给 `title`**：按钮里本来就有可见文字（`.nav-btn-text`），
+            // 再挂一个同名悬浮提示只是"把旁边的字又说一遍"，还多出一块盖住界面的浮层。
+            // （历史上这里写过 `title=page.route()`，于是提示全是 `/accounting_view` 这类
+            // 内部标识 —— 那是"页面的稳定标识"，只该出现在调试里。）
+            // 无障碍名保留 `aria-label`，读屏仍然能念出功能名。
             aria-label=page.label()
             on:click=move |_| current_page.set(page)
         >
