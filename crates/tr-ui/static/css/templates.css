@@ -73,12 +73,12 @@
   text-align: center;
 }
 
-/* 撑满表格区：行从顶部排；空态（`.ui-empty`，自带 `flex: 1`）与加载态因此会垂直居中 */
+/* 撑满表格区：行从顶部排；空态（`.ui-empty`，自带 `flex: 1`）与加载态因此会垂直居中。
+ * 同样是"有空余时长高、内容高时按内容"（`flex: 1 0 auto`）—— 行数多时由 `.tpl-table` 滚动。 */
 .tpl-tbody {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
+  flex: 1 0 auto;
 }
 
 .tpl-tbody > .tpl-loading {

@@ -127,8 +127,9 @@
   flex-direction: column;
   gap: var(--transactions-space-md);
   min-width: 0;
-  /* 撑满分栏高度：画布吃掉多余空间，把「曲线配置」**压到版心下沿**
-   * （`.da-main` 的底部内边距已经去掉，所以表格最后一行正好贴版心底边） */
+  /* 撑满分栏高度：画布吃掉多余空间，「曲线配置」因此被推到内容区底部。
+   * 内容比可视区高时由外层 `.page-content` 滚动；`.da-main` 的 16px 底部内边距
+   * 保证滚到底时最后一行与窗口底边之间仍有留白（不再被窗口底边切掉）。 */
   flex: 1;
 }
 
@@ -137,8 +138,10 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--transactions-space-sm);
-  /* 标题（+ 粒度/重命名）之下一条发丝线，把标题带与图表区分开 */
-  padding-bottom: var(--transactions-space-md);
+  /* 标题（+ 粒度/重命名）之下一条发丝线，把标题带与图表区分开。
+   * `space-lg` 与 `.da-main` 的顶部内边距**等值** —— 标题带的上下留白因此对称
+   * （以前这里是 12px 且上方为 0：标题贴着工具栏的线、下面却空一截）。 */
+  padding-bottom: var(--transactions-space-lg);
   border-bottom: 1px solid var(--transactions-color-divider);
 }
 
@@ -176,7 +179,7 @@
   gap: var(--transactions-space-lg);
   min-width: 0;
   /* 吃掉图表列的剩余高度：否则空间全堆在「曲线配置」**下面**，
-   * 表格贴不到版心下沿（实测差 134px） */
+   * 表格会被推出可视区（实测差 134px） */
   flex: 1;
   min-height: 0;
 }
@@ -249,7 +252,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-sm);
-  /* 底部对齐版心下沿：表格最后一行不额外留白（单元格自带内边距） */
+  /* 表格最后一行不额外留白（单元格自带内边距）；与窗口底边之间的留白由
+   * `.da-main` 的 16px 底部内边距提供。 */
   margin-bottom: 0;
   /* **不许被压扁**：图表区变高时不许把「曲线配置」（以及它的空态）挤掉——
    * 宁可让画布溢出，也不能让这块消失。 */

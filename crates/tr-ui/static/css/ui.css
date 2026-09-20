@@ -472,6 +472,9 @@
   z-index: 1040;
 }
 
+/* 选项列表：**行与行之间留 2px** —— 否则相邻两行的悬停/选中底色会连成一片，
+ * 看不出那是两行（实测在「记一笔 → 分类」这种长列表里尤其明显）。
+ * 用 `gap` 而不是给每行加 margin：最后一行不会多出一条尾隙。 */
 .ui-select__panel {
   position: absolute;
   z-index: 1050;
@@ -485,6 +488,11 @@
   border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-md);
   box-shadow: var(--transactions-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  /* 4px（`space-xs`）：2px 在 150% 缩放下几乎看不出来（实测看不出间隔），
+   * 4px 才稳定读成两块 —— 与面板自身的 4px 内边距同档，节奏也一致。 */
+  gap: var(--transactions-space-xs);
 }
 
 .ui-select__search {
@@ -1203,6 +1211,7 @@
   display: inline-flex;
 }
 
+/* 菜单项同理：**行与行之间留 2px**（与 `.ui-select__panel` 同一套，见那里的注释）。 */
 .ui-dropdown__panel {
   position: absolute;
   z-index: 1050;
@@ -1214,6 +1223,11 @@
   border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-md);
   box-shadow: var(--transactions-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  /* 4px（`space-xs`）：2px 在 150% 缩放下几乎看不出来（实测看不出间隔），
+   * 4px 才稳定读成两块 —— 与面板自身的 4px 内边距同档，节奏也一致。 */
+  gap: var(--transactions-space-xs);
 }
 
 .ui-dropdown--end .ui-dropdown__panel {
