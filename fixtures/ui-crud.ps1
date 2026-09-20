@@ -343,7 +343,10 @@ try {
         $deadline = (Get-Date).AddSeconds(6)
         $popButtons = @()
         do {
-            $popButtons = @(Find-All $window '删除' | Where-Object { -not $_.Current.IsOffscreen })
+            # 只看"矩形有效"（排除幽灵节点的 ±∞），**不**用 `IsOffscreen` 过滤 ——
+            # 浮层的 UIA 可见性本身就不稳定，本文件 4/4 的事件删除正是靠"不过滤可见性、
+            # 取同名里最后一个"才点的动（见下面的删除事件段落）。
+            $popButtons = @(Find-All $window '删除' | Where-Object { (Test-Rect $_.Current.BoundingRectangle) })
             if ($popButtons.Count -eq 0) { Start-Sleep -Milliseconds 300 }
         } while ($popButtons.Count -eq 0 -and (Get-Date) -lt $deadline)
         if ($popButtons.Count -gt 0) { Invoke-Element $popButtons[$popButtons.Count - 1] | Out-Null }
@@ -432,6 +435,10 @@ try {
     # ================= 5/5 记账 · 模板子功能：新建 → 删除 =================
     Write-Host "`n[crud] 5/5 记账 · 模板子功能：新建 → 删除"
     $templateName = "UIA模板$stamp"
+    # ⚠ 先回「记账」页：上一段停在事件页，那里**没有**子功能图标条，
+    # `Invoke-SubFunction` 只是"按名字点图标条"，不会替你切页面（以前漏了这一步，整段连坐全红）。
+    Invoke-Element (Wait-Element -Root $window -Name '记账') | Out-Null
+    Start-Sleep -Seconds 2
     Assert-True (Invoke-SubFunction -Window $window -Name '模板') '切到记账页的「模板」子功能'
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新建模板')) '点「新建模板」'

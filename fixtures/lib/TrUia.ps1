@@ -302,16 +302,76 @@ function Read-Table {
 
 # ---------------------------------------------------------------- 记账小工具
 
-# 「记一笔」→ 填描述/金额 → 点最后一个「确认」。
-# 注意 ui-transactions 的本地版本走 `Invoke-ButtonByName -Name '保存'`（弹窗出口不同），刻意保留。
+# 按名字找一个**真正的输入框**：同名元素里可能还有外层容器（`Input` 组件渲染成
+# `.ui-input` 包着 `input`），拿容器去 `SetFocus()` 会抛"目标元素无法接收焦点"。
+# 判据用 **ControlType.Edit 或 ClassName='Edit'**（本项目的输入框 ClassName 不是 'Edit'，见 AGENTS）。
+function Find-EditByName { param($Window, [string]$Name, [int]$TimeoutSec = 10)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        foreach ($el in @(Find-All $Window $Name)) {
+            $isEdit = ($el.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
+                ($el.Current.ClassName -eq 'Edit')
+            if (-not $isEdit) { continue }
+            if ($el.Current.IsOffscreen) { continue }
+            if (-not (Test-Rect $el.Current.BoundingRectangle)) { continue }
+            return $el
+        }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
+
+# 往一个"按占位符/名字定位"的输入框写值，**必须触发真实 input 事件**。
+#
+# 为什么不能只用 `ValuePattern.SetValue`：它不触发 DOM `input`，而本项目的输入框是
+# **受控**的（Leptos `<input value=signal>`）—— 下一次重渲染会把 DOM 值刷回信号里的空串。
+# 现象极具欺骗性：字段看起来被填过，点保存却弹「请输入金额」（`ui-link-event` / `ui-sync-ledger`
+# 就是卡在这里：`Add-Record` 返回 true、库里却没有记录）。
+# 做法与日记正文同一套（见 `Set-DiaryContent`）：剪贴板 `Ctrl+A/Ctrl+V` + 用 ValuePattern 读回校验，失败重试。
+function Set-InputByPaste { param($Window, [string]$Name, [string]$Text, [int]$Retry = 3)
+    for ($attempt = 1; $attempt -le $Retry; $attempt++) {
+        $input = Find-EditByName -Window $Window -Name $Name -TimeoutSec 10
+        if (-not $input) { return $false }
+        [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 250
+        try { $input.SetFocus() } catch { Write-Host "    输入框「$Name」无法聚焦：$_" -ForegroundColor DarkYellow }
+        Start-Sleep -Milliseconds 250
+        Set-Clipboard -Value $Text
+        [System.Windows.Forms.SendKeys]::SendWait('^a')
+        Start-Sleep -Milliseconds 150
+        [System.Windows.Forms.SendKeys]::SendWait('^v')
+        Start-Sleep -Milliseconds 400
+        # 读回用**同一个元素引用**：粘贴成功后占位符被值顶掉，按名字再找就找不到了。
+        $pattern = $null
+        $readBack = ''
+        try {
+            if ($input.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+                $readBack = $pattern.Current.Value
+            }
+        }
+        catch { $readBack = '' }
+        if ($readBack -eq $Text) { return $true }
+        Write-Host "    输入框「$Name」读回 '$readBack' ≠ '$Text'，第 $attempt 次重试" -ForegroundColor DarkYellow
+        Start-Sleep -Milliseconds 300
+    }
+    return $false
+}
+
+# 「记一笔」→ 填描述/金额 → 点弹窗的「保存」。
+#
+# ⚠ 「记一笔」弹窗的主按钮文案是 **「保存」**，不是「确认」——这里以前按最后一个「确认」找，
+# 于是**点了个空**：弹窗一直开着、记录没落库，表现为 `ui-link-event` 在第一步就红
+# （`Add-Record` 返回 false）。同名按钮可能有多个（别的页/隐藏面板），只点**可见且在窗口内**的最后一个。
 function Add-Record { param($Window, [string]$Description, [string]$Amount)
     if (-not (Invoke-Element (Wait-Element -Root $Window -Name '记一笔'))) { return $false }
     Start-Sleep -Seconds 2
-    $okDesc = Set-Value (Wait-Element -Root $Window -Name '描述消费内容') $Description
-    $okAmount = Set-Value (Wait-Element -Root $Window -Name '0.00') $Amount
+    $okDesc = Set-InputByPaste -Window $Window -Name '描述消费内容' -Text $Description
+    $okAmount = Set-InputByPaste -Window $Window -Name '0.00' -Text $Amount
     Start-Sleep -Milliseconds 800
-    $confirm = Find-All $Window '确认'
-    if ($confirm.Count -gt 0) { Invoke-Element $confirm[$confirm.Count - 1] | Out-Null }
+    $visible = @(Find-All $Window '保存' | Where-Object {
+            -not $_.Current.IsOffscreen -and (Test-Rect $_.Current.BoundingRectangle)
+        })
+    if ($visible.Count -gt 0) { Invoke-Element $visible[$visible.Count - 1] | Out-Null }
     Start-Sleep -Seconds 3
     return ($okDesc -and $okAmount)
 }

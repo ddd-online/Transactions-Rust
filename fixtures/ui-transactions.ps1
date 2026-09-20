@@ -105,17 +105,10 @@ function Get-ModalEdits { param($Window, [string]$ModalTitle)
     return $edits
 }
 
-# 记一笔：点入口 → 填描述与金额 → 确认
-function Add-Record { param($Window, [string]$Description, [string]$Amount)
-    if (-not (Invoke-Element (Wait-Element -Root $Window -Name '记一笔'))) { return $false }
-    Start-Sleep -Seconds 2
-    $okDesc = Set-Value (Wait-Element -Root $Window -Name '描述消费内容') $Description
-    $okAmount = Set-Value (Wait-Element -Root $Window -Name '0.00') $Amount
-    Start-Sleep -Milliseconds 800
-    Invoke-ButtonByName -Window $Window -Name '保存' | Out-Null
-    Start-Sleep -Seconds 3
-    return ($okDesc -and $okAmount)
-}
+# 记一笔：**用共享版** `Add-Record`（`fixtures/lib/TrUia.ps1`）。
+# 这里曾有一份本地变体，唯一差别是它点「保存」而不是「确认」——共享版已改成同一套出口，
+# 而且本地的 `Set-Value` 写法触发不了 `input`（受控输入框会被刷回空串，保存时报「请输入金额」），
+# 所以本地变体已删除，避免两处各错一次。
 
 # ---- 播种（断言绝对状态，默认每次都重播）----
 if (-not $explicitWorkspace) {
@@ -271,7 +264,13 @@ try {
         if ($amountOption) { Invoke-Element $amountOption | Out-Null }
         Start-Sleep -Milliseconds 800
     }
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用')) '点「应用」'
+    # 「应用」用本文件里的 `Invoke-ButtonByName`（可见 + 在窗口内的**最后一个**同名按钮）：
+    # 弹窗是浮层，`Invoke-Element (Wait-Element …)` 可能拿到重渲染留下的**幽灵节点**
+    # （矩形 ±∞、点它等于没点）→ 那条断言会假红，而下面的金额顺序断言才是真判据。
+    # 所以这里 click 只做尽力而为，**不**用点击本身当断言。
+    if (-not (Invoke-ButtonByName -Window $window -Name '应用')) {
+        Write-Host '    没点到「应用」（浮层节点不稳定），以金额顺序断言为准' -ForegroundColor DarkYellow
+    }
     Start-Sleep -Seconds 4
 
     # 界面上的金额顺序应当是**非递增**（金额降序）。

@@ -306,6 +306,18 @@ cargo clippy --all-targets -- -D warnings
   于是 `Ctrl+A/Ctrl+V` 贴到别处，"内容没改、保存却成功了"，看着像偶发假绿/假红。
   现在的做法：先 `SetForegroundWindow` → `SetFocus` → 校验 `FocusedElement` 是 Edit →
   粘贴 → **用 ValuePattern 读回校验** → 断言失败就整段重试（最多 3 次）。
+  共享版已有 `Set-InputByPaste`（单行输入框版，`Find-EditByName` 只认 ControlType/ClassName 是 Edit 的节点）
+  与 `Paste-Text` / `Set-DiaryContent`（文本域版），新脚本直接用，别再各写一份。
+  **受控 `<input>` 上尤其致命**（实测："记一笔"弹窗填金额）：`SetValue` 不触发 `input`，
+  Leptos 的 `<input value=signal>` 会在下一次重渲染时把 DOM 值刷回信号里的空串 ——
+  字段看着被填过，点保存却弹「请输入金额」，而脚本的 `Set-Value` 还返回 `true`。
+- **浮层里的按钮别拿 `IsOffscreen` 当判据**（真实假红：`ui-crud` 的「删除图表」气泡确认、
+  `ui-transactions` 排序弹窗的「应用」）：弹窗/气泡是 portal 出去的浮层节点，
+  它们的 UIA 可见性不稳（有时报 `IsOffscreen=true`），而重渲染留下的**幽灵节点**反而报 `false`。
+  两条正解：① 按名字取**可见且在窗口内**的最后一个（`ui-transactions` 的 `Invoke-ButtonByName`、
+  共享版的 `Add-Record` 都这么做）；② 只排除"矩形 ±∞"的幽灵、**不**过滤可见性
+  （`ui-crud` 删图表/删事件就是这么点的）。更稳的是**别把"点到没点到"当断言**——
+  改成断言结果（库里少一行、表格顺序变了），点击只做尽力而为。
 - **别用 `| Select-Object -First N` 截断界面脚本的输出**：管道提前关闭会**终止上游脚本**，
   它的 `finally`（关掉测试实例）不执行，于是下一个脚本会因"本仓库已有实例在运行"而拒绝启动——
   我为此白查了一轮。要么 `-Last N`，要么 `*> 文件` 再读文件。
