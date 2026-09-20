@@ -18,6 +18,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'build\target\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\smoke\home-close' }
@@ -30,8 +32,6 @@ if (-not (Test-Path $smokeHome)) { New-Item -ItemType Directory -Force -Path $sm
 $ws = [System.IO.Path]::GetFullPath($Workspace)
 if (-not (Test-Path (Join-Path $ws 'transactions.db'))) { throw "工作空间里没有 transactions.db: $ws" }
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -69,34 +69,14 @@ public class TrClose {
 }
 '@ -Language CSharp
 
-$UIA = [System.Windows.Automation.AutomationElement]
 $BTN = [System.Windows.Automation.ControlType]::Button
 $failures = New-Object System.Collections.Generic.List[string]
-
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
 
 function Write-Config {
     param([string]$CloseBehavior)
     @{ width = 1280; height = 860; workspaceDir = $ws; closeBehavior = $CloseBehavior
        appearance = 'light'; smokeTestMarker = 'close-behavior.ps1' } |
         ConvertTo-Json | Set-Content -Path (Join-Path $smokeHome '.transactions.json') -Encoding UTF8
-}
-
-function Start-App {
-    $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME }
-    try {
-        $env:USERPROFILE = $smokeHome
-        $env:HOME = $smokeHome
-        return Start-Process -FilePath $Exe -PassThru
-    }
-    finally {
-        $env:USERPROFILE = $saved.USERPROFILE
-        $env:HOME = $saved.HOME
-    }
 }
 
 function Get-MainWindow {
@@ -171,7 +151,7 @@ function Wait-Exit {
 # ---------- 场景 1：closeBehavior = quit ----------
 Write-Host "`n[close] 场景 1/3：closeBehavior=quit → 点关闭应退出进程" -ForegroundColor Cyan
 Write-Config -CloseBehavior 'quit'
-$p = Start-App
+$p = Start-App -SmokeHome $smokeHome -Exe $Exe
 try {
     $win = Get-MainWindow -ProcessId $p.Id
     if (-not $win) { throw '场景 1 拿不到窗口' }
@@ -185,7 +165,7 @@ finally { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction Si
 # ---------- 场景 2：closeBehavior = tray ----------
 Write-Host "`n[close] 场景 2/3：closeBehavior=tray → 点关闭应隐藏到托盘、进程仍在" -ForegroundColor Cyan
 Write-Config -CloseBehavior 'tray'
-$p = Start-App
+$p = Start-App -SmokeHome $smokeHome -Exe $Exe
 try {
     $win = Get-MainWindow -ProcessId $p.Id
     if (-not $win) { throw '场景 2 拿不到窗口' }
@@ -202,7 +182,7 @@ finally { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction Si
 # ---------- 场景 3：closeBehavior = "" → 询问框 ----------
 Write-Host "`n[close] 场景 3/3：closeBehavior 为空 → 弹「关闭选项」询问框，选「是」应退出" -ForegroundColor Cyan
 Write-Config -CloseBehavior ''
-$p = Start-App
+$p = Start-App -SmokeHome $smokeHome -Exe $Exe
 try {
     $win = Get-MainWindow -ProcessId $p.Id
     if (-not $win) { throw '场景 3 拿不到窗口' }

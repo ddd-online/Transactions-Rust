@@ -38,6 +38,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
 if (-not $WorkspaceRoot) { $WorkspaceRoot = Join-Path $repo 'target\smoke' }
@@ -101,12 +103,6 @@ public class TrSmokeWindows {
 
 $failures = New-Object System.Collections.Generic.List[string]
 
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
-
 function Write-AppConfig {
     param([string]$WorkspaceDir)
     $json = [ordered]@{
@@ -162,20 +158,6 @@ function Stop-App {
     }
 }
 
-# 用临时 HOME 启动：子进程继承改过的 USERPROFILE/HOME，读写的是一次性配置。
-function Start-App {
-    $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME }
-    try {
-        $env:USERPROFILE = $smokeHome
-        $env:HOME = $smokeHome
-        return Start-Process -FilePath $Exe -PassThru
-    }
-    finally {
-        $env:USERPROFILE = $saved.USERPROFILE
-        $env:HOME = $saved.HOME
-    }
-}
-
 if ($Case -in @('all', 'configured')) {
     Write-Host "`n[smoke] 场景 1/2：已配置工作空间启动" -ForegroundColor Cyan
     if ($Workspace) {
@@ -198,7 +180,7 @@ if ($Case -in @('all', 'configured')) {
     Write-AppConfig -WorkspaceDir $ws
     if (Test-Path $appLog) { Remove-Item $appLog -Force }
 
-    $process = Start-App
+    $process = Start-App -SmokeHome $smokeHome -Exe $Exe
     try {
         Wait-AppWindow -Process $process -TimeoutSec $StartupTimeoutSec | Out-Null
         Wait-AppLog -Pattern '工作空间已打开' -TimeoutSec 30 | Out-Null
@@ -222,7 +204,7 @@ if ($Case -in @('all', 'first-run')) {
     Write-AppConfig -WorkspaceDir ''
     if (Test-Path $appLog) { Remove-Item $appLog -Force }
 
-    $process = Start-App
+    $process = Start-App -SmokeHome $smokeHome -Exe $Exe
     try {
         Wait-AppWindow -Process $process -TimeoutSec $StartupTimeoutSec | Out-Null
         Wait-AppLog -Pattern 'IPC config_get' -TimeoutSec 30 | Out-Null

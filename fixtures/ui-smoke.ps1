@@ -28,6 +28,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\smoke\home-ui' }
@@ -64,10 +66,6 @@ $markers = [ordered]@{
     '分类标签' = @('新增分类', '新增标签', '分类', '标签')
     '应用设置' = @('工作空间', '外观', '关闭行为', '开发者工具')
 }
-
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-$UIA = [System.Windows.Automation.AutomationElement]
 
 function Get-AppWindow {
     param([int]$ProcessId, [int]$TimeoutSec = 40)
@@ -119,22 +117,10 @@ function Invoke-ByName {
 
 function Set-CursorAndClick {
     param($Rect)
-    Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public class TrMouse {
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  public static void Click(int x, int y) {
-    SetCursorPos(x, y);
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);   // LEFTDOWN
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);   // LEFTUP
-  }
-}
-'@ -Language CSharp -ErrorAction SilentlyContinue
+    # 鼠标点击统一走 fixtures/lib/TrUia.ps1 的 TrUia（原来这里每次调用都重新 Add-Type 一个 TrMouse）
     $x = [int]($Rect.X + $Rect.Width / 2)
     $y = [int]($Rect.Y + $Rect.Height / 2)
-    [TrMouse]::Click($x, $y)
+    [TrUia]::Click($x, $y)
     return $true
 }
 
@@ -178,26 +164,6 @@ function Stop-AppSession {
         Stop-Process -Id $Session.Process.Id -Force -ErrorAction SilentlyContinue
         $Session.Process.WaitForExit(5000) | Out-Null
     }
-}
-
-# 通过 ValuePattern 写入输入框。注意：Chromium 不会把 DOM 值回读给 UIA
-# （`Current.Value` 仍是空），所以**不能**用读回来验证，要靠提交后的界面结果验证。
-function Set-ElementValue {
-    param($Window, [string]$Name, [string]$Value, [int]$TimeoutSec = 15)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        $cond = New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)
-        $el = $Window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
-        if ($el) {
-            $pattern = $null
-            if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
-                $pattern.SetValue($Value)
-                return $true
-            }
-        }
-        Start-Sleep -Milliseconds 400
-    }
-    return $false
 }
 
 function Invoke-NavigationChecks {
@@ -284,12 +250,6 @@ function Invoke-WriteFlow {
     Assert-True ($names -contains $WriteDescription) "列表里出现了新记录（$WriteDescription）"
     Assert-True ([bool]($names | Where-Object { $_ -match [regex]::Escape($WriteAmount) })) "列表里出现了金额 $WriteAmount"
     Assert-True (-not $Session.Process.HasExited) "保存后进程仍然存活"
-}
-
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
 }
 
 # 账本菜单的回归：**必须用真实鼠标点**菜单项。

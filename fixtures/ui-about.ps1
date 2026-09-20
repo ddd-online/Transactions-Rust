@@ -23,6 +23,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 $explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
 if (-not $Exe) { $Exe = Join-Path $repo 'build\target\transactions.exe' }
@@ -39,82 +41,18 @@ $expectedVersion = $conf.version
 $expectedName = $conf.productName
 if (-not $expectedVersion) { throw "$confPath 里没有 version" }
 
-$smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
-$OutDir = [System.IO.Path]::GetFullPath($OutDir)
-if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
-    throw '拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置'
-}
-foreach ($dir in @($smokeHome, (Join-Path $smokeHome 'Desktop'), $OutDir)) {
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-}
-
-$repoPrefix = $repo.TrimEnd('\') + '\'
-$blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
-        $path = try { $_.Path } catch { $null }
-        $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-    })
-if ($blockers.Count -gt 0) {
-    throw "本仓库已有 Transactions 实例在运行（PID $($blockers.Id -join ', ')），单实例插件会顶掉本次启动。"
-}
-# 别的目录下装着的同一款应用也算数：单实例插件认的是应用标识、不是 exe 路径，
-# 所以用户自己那份（例如 D:\software\Transactions\）开着时，本次启动会被顶掉、
-# 表现为"启动后 60 秒内没有拿到主窗口"（排查过一轮才发现是这个原因）。
-$foreign = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
-        $path = try { $_.Path } catch { $null }
-        $path -and -not $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-    })
-if ($foreign.Count -gt 0) {
-    throw "本机另有 Transactions 实例在运行（PID $($foreign.Id -join ', ')：$($foreign.Path -join '; ')）—— 单实例插件会顶掉本次启动，请先退出它。"
-}
+$trPaths = Initialize-TrSmokeHome -SmokeHome $SmokeHome -OutDir $OutDir
+$smokeHome = $trPaths.SmokeHome
+$OutDir = $trPaths.OutDir
+Assert-NoRepoInstance -Repo $repo
 
 $ws = [System.IO.Path]::GetFullPath($Workspace)
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$UIA = [System.Windows.Automation.AutomationElement]
-
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public class TrAbout {
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  public static void Click(int x, int y) {
-    SetCursorPos(x, y);
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-  }
-}
-'@ -Language CSharp -ErrorAction SilentlyContinue
+# 公共鼠标 P/Invoke 类（TrAbout）已统一到 fixtures/lib/TrUia.ps1 的 TrUia（调用点是 [TrUia]::…）
 
 $failures = New-Object System.Collections.Generic.List[string]
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
-function Get-Elements { param($Root)
-    return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-}
 function Get-Names { param($Root)
     return @(Get-Elements $Root | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
-}
-function Find-First { param($Root, [string]$Name)
-    $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)))
-    if ($all.Count -eq 0) { return $null }
-    return $all[0]
-}
-function Find-Like { param($Root, [string]$Pattern)
-    foreach ($element in @(Get-Elements $Root)) {
-        $name = $element.Current.Name
-        if ($name -and $name.Contains($Pattern)) { return $element }
-    }
-    return $null
 }
 function Wait-Like { param($Root, [string]$Pattern, [int]$TimeoutSec = 20)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -125,12 +63,6 @@ function Wait-Like { param($Root, [string]$Pattern, [int]$TimeoutSec = 20)
     } while ((Get-Date) -lt $deadline)
     return $null
 }
-function Test-Rect { param($Rect)
-    foreach ($value in @($Rect.X, $Rect.Y, $Rect.Width, $Rect.Height)) {
-        if ([double]::IsNaN($value) -or [double]::IsInfinity($value)) { return $false }
-    }
-    return ($Rect.Width -gt 0 -and $Rect.Height -gt 0)
-}
 function Invoke-Element { param($Element)
     if (-not $Element) { return $false }
     $pattern = $null
@@ -139,37 +71,10 @@ function Invoke-Element { param($Element)
     }
     $rect = $Element.Current.BoundingRectangle
     if (Test-Rect $rect) {
-        [TrAbout]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
         return $true
     }
     return $false
-}
-function Save-Screenshot { param([string]$Path)
-    try {
-        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bounds.Size)
-        $graphics.Dispose()
-        $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
-        $bitmap.Dispose()
-        Write-Host "  截图: $Path" -ForegroundColor DarkYellow
-    }
-    catch { Write-Host "  截图失败: $_" -ForegroundColor DarkYellow }
-}
-function Get-ReadyWindow { param([int]$ProcessId, [int]$TimeoutSec = 60)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    $last = $null
-    while ((Get-Date) -lt $deadline) {
-        $candidate = $UIA::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
-            (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $ProcessId)))
-        if ($candidate) {
-            $last = $candidate
-            if (Find-First $candidate '消费记录') { return $candidate }
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    return $last
 }
 function Wait-Element { param($Root, [string]$Name, [int]$TimeoutSec = 20)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -201,7 +106,7 @@ function Select-Tab { param($Window, [string]$Name, [int]$TimeoutSec = 15)
                 return $true
             }
             $rect = $element.Current.BoundingRectangle
-            [TrAbout]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+            [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
             Start-Sleep -Milliseconds 800
             return $true
         }
@@ -258,8 +163,8 @@ try {
     $window = Get-ReadyWindow -ProcessId $process.Id -TimeoutSec 60
     if (-not $window) { throw '启动后 60 秒内没有拿到主窗口' }
     $hwnd = [IntPtr]$window.Current.NativeWindowHandle
-    [TrAbout]::ShowWindow($hwnd, 9) | Out-Null
-    [TrAbout]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::ShowWindow($hwnd, 9) | Out-Null
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Seconds 1
 
     Write-Host "`n[about] 1/3 打开「应用设置」页"
@@ -299,18 +204,6 @@ try {
         Write-Host "[about] 更新检查结果：$finalText" -ForegroundColor Cyan
     }
 }
-finally {
-    if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
-    if ($process -and -not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $process.WaitForExit(5000) | Out-Null
-    }
-}
+finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Write-Host ''
-if ($failures.Count -gt 0) {
-    Write-Host "[about] 失败 $($failures.Count) 项：" -ForegroundColor Red
-    $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host "[about] 全部通过：关于页版本 $expectedVersion 与 tauri.conf.json 一致" -ForegroundColor Green
+Show-TrSummary -Failures $failures -Tag 'about' -SuccessMessage "[about] 全部通过：关于页版本 $expectedVersion 与 tauri.conf.json 一致"

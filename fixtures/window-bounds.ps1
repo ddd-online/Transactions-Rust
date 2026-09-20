@@ -23,6 +23,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\bounds-smoke\home' }
@@ -32,24 +34,12 @@ if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 carg
 
 # `-OutDir` 归一化成绝对路径：它会被写进应用配置（`workspaceDir`）由应用去打开，
 # 相对路径会依赖"应用的当前目录"，结果不可预期 —— 与选目录框那边是同一类坑。
-$OutDir = [System.IO.Path]::GetFullPath($OutDir)
-$smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
-if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
-    throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"
-}
-foreach ($dir in @($smokeHome, (Join-Path $smokeHome 'Desktop'), $OutDir)) {
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-}
+$trPaths = Initialize-TrSmokeHome -SmokeHome $SmokeHome -OutDir $OutDir
+$smokeHome = $trPaths.SmokeHome
+$OutDir = $trPaths.OutDir
 
 # 判重必须按**完整路径**，不能按进程名（本机别的目录下可能有同名 exe）
-$repoPrefix = $repo.TrimEnd('\') + '\'
-$blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
-    $path = try { $_.Path } catch { $null }
-    $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-})
-if ($blockers.Count -gt 0) {
-    throw "本仓库已有 Transactions 实例在运行（PID $($blockers.Id -join ', ')），单实例插件会顶掉本次启动。"
-}
+Assert-NoRepoInstance -Repo $repo
 
 $ws = Join-Path $OutDir 'ws'
 if (-not (Test-Path (Join-Path $ws 'transactions.db'))) {
@@ -62,10 +52,6 @@ if (-not (Test-Path (Join-Path $ws 'transactions.db'))) {
     Write-Host "[bounds] 播种工作空间: $ws" -ForegroundColor Cyan
 }
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-$UIA = [System.Windows.Automation.AutomationElement]
-
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -73,18 +59,13 @@ public class TrBounds {
   [DllImport("user32.dll")] public static extern int GetDpiForSystem();
   [DllImport("user32.dll")] public static extern int GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  // 公共 P/Invoke 已统一到 fixtures/lib/TrUia.ps1 的 TrUia（本脚本的调用点用 [TrUia]::…）
   public const uint WM_CLOSE = 0x0010;
   public static void CloseWindow(IntPtr hWnd) { PostMessage(hWnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero); }
 }
 '@ -Language CSharp -ErrorAction SilentlyContinue
 
 $failures = New-Object System.Collections.Generic.List[string]
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
 
 $configPath = Join-Path $smokeHome '.transactions.json'
 function Write-Config {
@@ -100,19 +81,6 @@ function Write-Config {
     } | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
 }
 function Read-Config { return Get-Content $configPath -Raw | ConvertFrom-Json }
-
-function Start-App {
-    $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME }
-    try {
-        $env:USERPROFILE = $smokeHome
-        $env:HOME = $smokeHome
-        return Start-Process -FilePath $Exe -PassThru
-    }
-    finally {
-        $env:USERPROFILE = $saved.USERPROFILE
-        $env:HOME = $saved.HOME
-    }
-}
 
 function Get-AppWindow {
     param([System.Diagnostics.Process]$Process, [int]$TimeoutSec = 40)
@@ -157,7 +125,7 @@ $logicalWidth = 1600
 $logicalHeight = 1100
 Write-Host "`n[bounds] 1/4 用逻辑尺寸 ${logicalWidth}×${logicalHeight} 启动"
 Write-Config -Width $logicalWidth -Height $logicalHeight -X 120 -Y 90
-$process = Start-App
+$process = Start-App -SmokeHome $smokeHome -Exe $Exe
 try {
     $window = Get-AppWindow -Process $process
     if (-not $window) { throw '启动后 40 秒内没有拿到应用窗口' }
@@ -184,7 +152,7 @@ try {
     Assert-True ([Math]::Abs([int]$saved.height - $logicalHeight) -le 8) "写回的高度仍是逻辑像素（$($saved.height) ≈ $logicalHeight）"
 
     Write-Host "`n[bounds] 3/4 再启动一次，尺寸应与第一次一致"
-    $process = Start-App
+    $process = Start-App -SmokeHome $smokeHome -Exe $Exe
     $window = Get-AppWindow -Process $process
     if (-not $window) { throw '第二次启动也没拿到窗口' }
     Start-Sleep -Seconds 2
@@ -206,7 +174,7 @@ $minWidth = 1500
 $minHeight = 1000
 Write-Host "`n[bounds] 4/4 写入比最小尺寸更小的配置（1200×800），窗口应被夹到 ${minWidth}×${minHeight}"
 Write-Config -Width 1200 -Height 800 -X 120 -Y 90
-$process = Start-App
+$process = Start-App -SmokeHome $smokeHome -Exe $Exe
 try {
     $window = Get-AppWindow -Process $process
     if (-not $window) { throw '夹取场景里没拿到窗口' }
@@ -235,10 +203,4 @@ finally {
     }
 }
 
-Write-Host ''
-if ($failures.Count -gt 0) {
-    Write-Host "[bounds] 失败 $($failures.Count) 项：" -ForegroundColor Red
-    $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host '[bounds] 全部通过：逻辑尺寸生效 → 关闭写回逻辑值 → 重启尺寸/位置不变' -ForegroundColor Green
+Show-TrSummary -Failures $failures -Tag 'bounds' -SuccessMessage "[bounds] 全部通过：逻辑尺寸生效 → 关闭写回逻辑值 → 重启尺寸/位置不变"

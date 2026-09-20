@@ -22,6 +22,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'build\target\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\smoke\home-shot' }
@@ -44,9 +46,6 @@ $sameExe = Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-
 }
 if ($sameExe) { throw "同一个可执行文件已有实例在运行（PID $($sameExe.Id -join ', ')），请先关掉" }
 
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -54,11 +53,10 @@ public class TrShot {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  // 公共 P/Invoke 已统一到 fixtures/lib/TrUia.ps1 的 TrUia（本脚本的调用点用 [TrUia]::…）
 }
 '@ -Language CSharp
 
-$UIA = [System.Windows.Automation.AutomationElement]
 $pages = @('消费记录', '数据分析', '股票交易', '关键事件', '日记', '分类标签', '应用设置')
 $failures = New-Object System.Collections.Generic.List[string]
 $rows = New-Object System.Collections.Generic.List[object]
@@ -104,7 +102,7 @@ function Save-WindowShot {
     $ok = [TrShot]::PrintWindow($Handle, $hdc, 2)   # PW_RENDERFULLCONTENT
     $g.ReleaseHdc($hdc)
     if (-not $ok) {
-        [void][TrShot]::SetForegroundWindow($Handle)
+        [void][TrUia]::SetForegroundWindow($Handle)
         Start-Sleep -Milliseconds 400
         $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object System.Drawing.Size($w, $h)))
     }

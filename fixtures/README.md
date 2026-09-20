@@ -45,3 +45,42 @@ cargo xtask dump <dir> --table tbl_billadm_stock_trade
 真机启动应用并用 UI Automation 驱动界面，逐个页面验证渲染、写入闭环与各条已知缺陷的回归
 （拖拽排序、窗口几何、图片上传、日记导入导出、股票全生命周期等）。
 每个脚本的用途与用法见 `AGENTS.md` 的「常用命令」。
+
+## `lib/TrUia.ps1`（共享 UIA 底座）
+
+所有 `fixtures/*.ps1` 共用**同一份**界面自动化底座：`fixtures/lib/TrUia.ps1`。
+每个脚本在 `param()` 之后（`$ErrorActionPreference = 'Stop'` 之后）dot-source 它：
+
+```powershell
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+```
+
+**新增脚本请 dot-source 它，不要从别的脚本再抄一份**。里面是这些内容：
+
+- 程序集加载（`UIAutomationClient` / `UIAutomationTypes` / `System.Drawing` / `System.Windows.Forms`）与 `$UIA`；
+- C# 鼠标/窗口 P/Invoke 类 `TrUia`（`SetCursorPos` / `mouse_event` / `Click` / `SetForegroundWindow` / `ShowWindow`）
+  —— 各脚本的 `Add-Type` 里**只留自己独有的方法**（如 `ui-drag` 的 `Move/ButtonDown/ButtonUp`、
+  `ui-upload` 的 `SendMessage/PressDefaultButton`、`ui-diary-io` 的 `SetWindowText/GetWindowText`、
+  `window-bounds` 的 `GetDpiForSystem/GetDpiForWindow/PostMessage/CloseWindow`、
+  `ui-shots`/`dev-shot`/`dev-hot` 的 `GetWindowRect/PrintWindow` 等），公共调用的写法统一是 `[TrUia]::…`；
+- 基础查询/激活/取值/等待：`Assert-True`、`Show-TrSummary`、`Get-Elements`、`Find-First`、`Find-All`、`Find-Like`、
+  `Find-ElementLike`、`Test-Rect`、`Wait-Element`、`Wait-Like`、`Get-ReadyWindow`、`Set-Value`、`Invoke-Element`、
+  `Click-Element`、`Find-RowButton`、`Find-DateTrigger`、`Find-DateCell`、`Save-Screenshot`、`Add-Record`；
+- 前导/收尾样板：`Initialize-TrSmokeHome`、`Assert-NoRepoInstance`、`Start-App`、`Stop-TrApp`；
+- `Read-Table -Repo <repo> -Workspace <ws> -Table <表名> -OutDir <dir>`
+  （**必须显式传参**：早先它靠调用方作用域里的 `$repo`/`$ws`/`$OutDir`，
+  正是"断言走文件系统、被测进程走另一个 cwd"那类坑的来源）。
+
+两条使用约束：
+
+1. **它靠 dot-source（不是 `Import-Module`）才能工作**：脚本作用域里的 `$failures` / `$UIA` 要对模块里的函数可见
+   （`Assert-True` 就靠动态作用域取调用方的 `$failures`，取不到会**抛错**而不是静默漏计）。
+   因此各脚本仍然自己 `$failures = New-Object System.Collections.Generic.List[string]`，这一行不要动。
+2. **单独把某个 `.ps1` 拷出仓库将无法运行**（缺 `fixtures/lib/`）；
+   同样地，只改 `lib/TrUia.ps1` 就会同时影响所有护栏脚本。
+
+各脚本里刻意保留了**语义不同**的本地同名实现（例如 `ui-crud` 的 `Click-Element` 多了
+`SetForegroundWindow` + 窗口矩形校验、`ui-transactions` 的 `Invoke-Element` 多了 `try/catch`、
+`ui-upload` 的 `Find-First` 走 `Find-ByName`、`Wait-Element` 的默认超时在不同脚本里是 20/25/30 秒）。
+脚本里后定义的同名函数会覆盖模块版，这是刻意的——**不要把较弱变体统一成较强变体**
+（那属于行为改变，可能把假红变绿）。

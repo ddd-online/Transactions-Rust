@@ -44,6 +44,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\upload-smoke\home' }
@@ -52,20 +54,12 @@ if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
-$smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
-if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
-    throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"
-}
-if (-not (Test-Path $smokeHome)) { New-Item -ItemType Directory -Force -Path $smokeHome | Out-Null }
 # 文件框的起始目录是"桌面"，临时 HOME 下必须有它，否则会先弹「位置不可用」
-if (-not (Test-Path (Join-Path $smokeHome 'Desktop'))) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $smokeHome 'Desktop') | Out-Null
-}
 # `-OutDir` 归一化成绝对路径：这个目录里的文件会被**填进原生文件框**（见 `Select-Directory` 那套结论），
 # 而对话框把相对路径按它自己的"当前目录"解析 —— 传相对路径会落到别处（实测踩过）。
-$OutDir = [System.IO.Path]::GetFullPath($OutDir)
-if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
-
+$trPaths = Initialize-TrSmokeHome -SmokeHome $SmokeHome -OutDir $OutDir
+$smokeHome = $trPaths.SmokeHome
+$OutDir = $trPaths.OutDir
 $ws = [System.IO.Path]::GetFullPath($Workspace)
 if (-not $Workspace) { $ws = [System.IO.Path]::GetFullPath((Join-Path $OutDir 'ws')) }
 
@@ -73,37 +67,14 @@ $exeFull = [System.IO.Path]::GetFullPath($Exe)
 # 单实例插件按 identifier 判重：本仓库里**任何**构建在跑都会顶掉本次启动
 # （包括隐藏到托盘的、以及 build\target 下的便携版）。判重按**完整路径**，
 # 不能按进程名——本机别的目录下可能有同名 exe，与我们的 identifier 无关。
-$repoPrefix = $repo.TrimEnd('\') + '\'
-$running = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
-    $path = try { $_.Path } catch { $null }
-    $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-})
-if ($running) {
-    $paths = $running | ForEach-Object { try { $_.Path } catch { '(unknown)' } }
-    throw "本仓库已有 Transactions 实例在运行（PID $($running.Id -join ', ')）：$($paths -join ' / ')`n" +
-        "单实例插件会顶掉本次启动，请先退掉它们（注意：隐藏到托盘也算在运行）。"
-}
-
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms   # SendKeys：给文件框里的「文件名」输入路径
-$UIA = [System.Windows.Automation.AutomationElement]
+Assert-NoRepoInstance -Repo $repo
 
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public class TrUploadMouse {
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  // 公共方法已统一到 fixtures/lib/TrUia.ps1 的 TrUia（原来的调用点都改成了 [TrUia]::…）。
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-  public static void Click(int x, int y) {
-    SetCursorPos(x, y);
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);   // LEFTDOWN
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);   // LEFTUP
-  }
   // 按下对话框的默认按钮：WM_COMMAND + IDOK(1)，不依赖焦点与坐标
   public static void PressDefaultButton(IntPtr hWnd) {
     SendMessage(hWnd, 0x0111, new IntPtr(1), IntPtr.Zero);
@@ -112,11 +83,6 @@ public class TrUploadMouse {
 '@ -Language CSharp -ErrorAction SilentlyContinue
 
 $failures = New-Object System.Collections.Generic.List[string]
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
 
 # 读图片表行（删除事件后要复查行数是否回到基线）
 function Read-ImageRows {
@@ -144,11 +110,6 @@ function Save-Screenshot {
     catch { Write-Host "  截图失败: $_" -ForegroundColor DarkYellow }
 }
 
-function Get-Elements {
-    param($Root)
-    return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-}
-
 function Find-ByName {
     param($Root, [string]$Name)
     return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
@@ -160,31 +121,6 @@ function Find-First {
     $all = Find-ByName $Root $Name
     if ($all.Count -eq 0) { return $null }
     return $all[0]
-}
-
-function Invoke-Element {
-    param($Element)
-    if (-not $Element) { return $false }
-    $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        $pattern.Invoke(); return $true
-    }
-    $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -gt 0) {
-        [TrUploadMouse]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-        return $true
-    }
-    return $false
-}
-
-function Set-Value {
-    param($Element, [string]$Value)
-    if (-not $Element) { return $false }
-    $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
-        $pattern.SetValue($Value); return $true
-    }
-    return $false
 }
 
 # 文件框里的按钮：**不能按 AutomationId 找**！那个对话框里文件列表项（`.agents`、`.ssh`…）
@@ -207,7 +143,7 @@ function Click-Element {
     if ($rect.Width -le 0 -or $rect.Height -le 0) { return $false }
     $x = [int]($rect.X + $rect.Width / 2)
     $y = [int]($rect.Y + $rect.Height / 2)
-    [TrUploadMouse]::Click($x, $y)
+    [TrUia]::Click($x, $y)
     return $true
 }
 
@@ -297,8 +233,8 @@ try {
     Write-Host "[ui-upload] UIA 可读元素 $($elements.Count) 个" -ForegroundColor Cyan
 
     $hwnd = [IntPtr]$window.Current.NativeWindowHandle
-    [TrUploadMouse]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE
-    [TrUploadMouse]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 500
 
     # ---- 上传前的基线：脚本可以在同一个工作空间上反复跑，断言只看"增量" ----
@@ -344,9 +280,9 @@ try {
     if (-not $pickButton) { throw '找不到「添加图片」按钮' }
     $rect = $pickButton.Current.BoundingRectangle
     if ($rect.Height -le 0) { throw '「添加图片」没有可点击的包围盒' }
-    [TrUploadMouse]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 300
-    [TrUploadMouse]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
 
     $dialog = Find-FileDialog -Window $window -TimeoutSec 20
     Assert-True ([bool]$dialog) '原生文件选择框已弹出'
@@ -410,7 +346,7 @@ try {
         if (Find-FileDialog -Window $window -TimeoutSec 2) {
             Write-Host '  第一次提交没生效，再回车一次' -ForegroundColor DarkYellow
             $dialogHwnd = [IntPtr]$dialog.Current.NativeWindowHandle
-            [TrUploadMouse]::SetForegroundWindow($dialogHwnd) | Out-Null
+            [TrUia]::SetForegroundWindow($dialogHwnd) | Out-Null
             Start-Sleep -Milliseconds 300
             [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
             Start-Sleep -Seconds 4
@@ -572,18 +508,6 @@ try {
         Where-Object { $_.title -eq $eventCardTitle })
     Assert-True ($remaining.Count -eq 0) "事件行也已删除（$eventCardTitle）"
 }
-finally {
-    if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
-    if ($process -and -not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $process.WaitForExit(5000) | Out-Null
-    }
-}
+finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Write-Host ''
-if ($failures.Count -gt 0) {
-    Write-Host "[ui-upload] 失败 $($failures.Count) 项：" -ForegroundColor Red
-    $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host '[ui-upload] 全部通过：原生文件框 → 落盘 → 缩略图 → 入库 → 界面刷新 → 删事件清理资产' -ForegroundColor Green
+Show-TrSummary -Failures $failures -Tag 'ui-upload' -SuccessMessage "[ui-upload] 全部通过：原生文件框 → 落盘 → 缩略图 → 入库 → 界面刷新 → 删事件清理资产"

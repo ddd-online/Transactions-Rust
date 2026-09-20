@@ -28,14 +28,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 if (-not $OutDir) { $OutDir = Join-Path $repo 'target\dev-shots' }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -43,7 +42,7 @@ public class TrDevShot {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  // 公共 P/Invoke 已统一到 fixtures/lib/TrUia.ps1 的 TrUia（本脚本的调用点用 [TrUia]::…）
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
   public static void Click(int x, int y) {
@@ -54,7 +53,6 @@ public class TrDevShot {
 }
 '@ -Language CSharp
 
-$UIA = [System.Windows.Automation.AutomationElement]
 $ALL_PAGES = @('消费记录', '数据分析', '股票交易', '关键事件', '日记', '分类标签', '应用设置')
 
 function Get-RepoAppWindow {
@@ -108,7 +106,7 @@ function Save-WindowShot {
     $ok = [TrDevShot]::PrintWindow($handle, $hdc, 2)
     $g.ReleaseHdc($hdc)
     if (-not $ok) {
-        [void][TrDevShot]::SetForegroundWindow($handle)
+        [void][TrUia]::SetForegroundWindow($handle)
         Start-Sleep -Milliseconds 350
         $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object System.Drawing.Size($w, $h)))
     }
@@ -157,7 +155,7 @@ foreach ($name in $targets) {
         $nav = Find-NamedElement -Window $window -Name $name
         if (-not $nav) { Write-Host "[dev-shot] ✗ 侧栏里找不到「$name」" -ForegroundColor Yellow; break }
         $r = $nav.Current.BoundingRectangle
-        [void][TrDevShot]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle)
+        [void][TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle)
         Start-Sleep -Milliseconds 150
         [TrDevShot]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
         # 轮询等页面真的切过去（固定 sleep 会抓到上一页：实测「数据分析」抓成了「分类标签」）

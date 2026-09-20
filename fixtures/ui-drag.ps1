@@ -25,6 +25,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\drag-smoke\home' }
@@ -33,57 +35,29 @@ if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
-$smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
 # `-OutDir`/工作空间都归一化成绝对路径：配置里写的是 `workspaceDir`，相对路径会依赖应用的当前目录
 # （同一类坑在选目录框那边踩过：对话框按自己的当前目录解析相对路径）。
-$OutDir = [System.IO.Path]::GetFullPath($OutDir)
-if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
-    throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"
-}
-if (-not (Test-Path $smokeHome)) { New-Item -ItemType Directory -Force -Path $smokeHome | Out-Null }
 # 文件框等原生对话框的起始目录需要"桌面"存在（保持与本目录其它脚本一致的临时 HOME 形状）
-if (-not (Test-Path (Join-Path $smokeHome 'Desktop'))) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $smokeHome 'Desktop') | Out-Null
-}
-if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
-
+$trPaths = Initialize-TrSmokeHome -SmokeHome $SmokeHome -OutDir $OutDir
+$smokeHome = $trPaths.SmokeHome
+$OutDir = $trPaths.OutDir
 # 单实例插件按 identifier 判重：只要**本仓库里任何一个构建**在跑（`target\release\transactions.exe`
 # 或 `build\target\*.exe`），这次启动就会被顶掉，表现是"窗口 40 秒都没出现"。
 #
 # ⚠ 判重**必须按完整路径**，不能按进程名（本机别的目录下可能有同名 exe），
 # 按名字判会把人家的进程算进来——它跟我们的 identifier 毫无关系，误判会直接卡住本脚本。
-$repoPrefix = $repo.TrimEnd('\') + '\'
-$blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
-    $path = try { $_.Path } catch { $null }
-    $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-})
-if ($blockers.Count -gt 0) {
-    $paths = $blockers | ForEach-Object { try { $_.Path } catch { '(unknown)' } }
-    throw "本仓库已有 Transactions 实例在运行（PID $($blockers.Id -join ', ')）：$($paths -join ' / ')`n" +
-        "单实例插件会顶掉本次启动，请先退掉它们（注意：隐藏到托盘也算在运行）。"
-}
+Assert-NoRepoInstance -Repo $repo
 
 $ws = [System.IO.Path]::GetFullPath($Workspace)
-
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$UIA = [System.Windows.Automation.AutomationElement]
 
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public class TrDragMouse {
+  // 公共方法（Click / SetForegroundWindow / ShowWindow）已统一到 fixtures/lib/TrUia.ps1 的 TrUia。
+  // 这里保留拖拽独有的 Move / ButtonDown / ButtonUp —— 它们直接调 user32，所以仍需这两个 DllImport。
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  public static void Click(int x, int y) {
-    SetCursorPos(x, y);
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);   // LEFTDOWN
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);   // LEFTUP
-  }
   public static void Move(int x, int y) { SetCursorPos(x, y); }
   public static void ButtonDown() { mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero); }
   public static void ButtonUp() { mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero); }
@@ -91,34 +65,6 @@ public class TrDragMouse {
 '@ -Language CSharp -ErrorAction SilentlyContinue
 
 $failures = New-Object System.Collections.Generic.List[string]
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
-
-function Get-Elements { param($Root)
-    return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-}
-function Find-First { param($Root, [string]$Name)
-    $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)))
-    if ($all.Count -eq 0) { return $null }
-    return $all[0]
-}
-function Invoke-Element { param($Element)
-    if (-not $Element) { return $false }
-    $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        $pattern.Invoke(); return $true
-    }
-    $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -gt 0) {
-        [TrDragMouse]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-        return $true
-    }
-    return $false
-}
 
 # 列表项要**轮询等待**：UIA 树是惰性构建的，切页之后立刻查会"找不到分类"
 # （实测踩过：报「界面上找不到源项」但界面其实正常）。
@@ -233,8 +179,8 @@ try {
     Write-Host "[ui-drag] UIA 可读元素 $($elements.Count) 个" -ForegroundColor Cyan
 
     $hwnd = [IntPtr]$window.Current.NativeWindowHandle
-    [TrDragMouse]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE
-    [TrDragMouse]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 500
 
     Write-Host "`n[ui-drag] 1/2 打开「分类标签」并读取初始顺序"
@@ -262,7 +208,7 @@ try {
     Write-Host "`n[ui-drag] 2/2 把第 1 项拖到第 3 项"
     $source = $before[0].name
     $target = $before[2].name
-    [TrDragMouse]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 300
     Invoke-DragTo -Window $window -FromName $source -ToName $target
 
@@ -300,18 +246,6 @@ try {
             Where-Object { -not $_ }).Count -eq 0)
     Assert-True $reopenedMatches '重新进入页面后顺序仍与库里一致（真的落库了，不是只改了本地）'
 }
-finally {
-    if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
-    if ($process -and -not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $process.WaitForExit(5000) | Out-Null
-    }
-}
+finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Write-Host ''
-if ($failures.Count -gt 0) {
-    Write-Host "[ui-drag] 失败 $($failures.Count) 项：" -ForegroundColor Red
-    $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host '[ui-drag] 全部通过：真实鼠标拖拽 → 顺序变化 → sort_order 落库 → 界面同步' -ForegroundColor Green
+Show-TrSummary -Failures $failures -Tag 'ui-drag' -SuccessMessage "[ui-drag] 全部通过：真实鼠标拖拽 → 顺序变化 → sort_order 落库 → 界面同步"

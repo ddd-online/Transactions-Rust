@@ -53,7 +53,9 @@ function Get-StructFields {
             continue
         }
 
-        if ($trimmed -match '^(pub )?struct\s+(?<name>[A-Za-z0-9_]+)') {
+        # 可见性可能是 `pub`、`pub(super)`、`pub(crate)`、`pub(in …)` —— 都要认，
+        # 否则 `api/mod.rs` 里的共享请求体会被漏掉（见下面界面侧的两层结构体表）。
+        if ($trimmed -match '^(pub(\s*\([^)]*\))?\s+)?struct\s+(?<name>[A-Za-z0-9_]+)') {
             $current = $Matches['name']
             $structs[$current] = @{ Fields = (New-Object System.Collections.Generic.List[object]); RenameAll = $renameAll; Default = $structDefault }
             $renameAll = ''
@@ -118,6 +120,22 @@ foreach ($file in Get-ChildItem (Join-Path $RepoRoot 'src-tauri\src') -File -Fil
 }
 
 # ---------- 收集界面侧：命令 → 字段名集合（只处理结构体字面量参数）----------
+# 界面侧的结构体表要看**两层**：
+#   * 本文件里声明的（`chart.rs` 自己的 `IdRequest`、`stock.rs` 自己的 `LedgerIdRequest`）——优先；
+#   * 跨 `api/*.rs` 合并的（`mod.rs` 里的共享请求体 `IdRequest` / `LedgerIdRequest` 被
+#     ledger / chart / tr / template / key_event / category 各自 `use super::…` 引用）。
+# 只看单个文件的话，后一类会被误判成"界面直接传 tr_domain 共享类型，不可能漂移"——
+# 那是**假陈述**：它们仍是我们手抄 tr-ipc 的结构体，只是搬家到了 `api/mod.rs`，照样会漂移。
+# 合并时 `mod.rs` 必须排在前面（同名结构体优先取共享定义，例如 `IdRequest`：chart.rs 那份
+# 带 `rename = "chartId"`，只对 chart_delete 有效，不能拿来比 ledger/tr/template 的命令）。
+$uiStructs = @{}
+foreach ($file in @((Get-Item (Join-Path $uiDir 'mod.rs'))) +
+    @(Get-ChildItem $uiDir -File -Filter *.rs | Where-Object { $_.Name -ne 'mod.rs' })) {
+    foreach ($entry in (Get-StructFields $file.FullName).GetEnumerator()) {
+        if (-not $uiStructs.ContainsKey($entry.Key)) { $uiStructs[$entry.Key] = $entry.Value }
+    }
+}
+
 $uiCommands = @{}
 foreach ($file in Get-ChildItem $uiDir -File -Filter *.rs) {
     $structs = Get-StructFields $file.FullName
@@ -125,11 +143,14 @@ foreach ($file in Get-ChildItem $uiDir -File -Filter *.rs) {
     foreach ($m in [regex]::Matches($text, 'ipc::call[a-z_]*[^(]*\(\s*"(?<cmd>[a-z0-9_]+)"\s*,\s*(?<arg>[A-Za-z_][A-Za-z0-9_]*)\s*\{')) {
         $cmd = $m.Groups['cmd'].Value
         $ty = $m.Groups['arg'].Value
-        if ($structs.ContainsKey($ty)) {
-            $uiCommands[$cmd] = @($structs[$ty].Fields | ForEach-Object { $_.Accepted[0] })
+        $fields = $null
+        if ($structs.ContainsKey($ty)) { $fields = $structs[$ty].Fields }
+        elseif ($uiStructs.ContainsKey($ty)) { $fields = $uiStructs[$ty].Fields }
+        if ($null -ne $fields) {
+            $uiCommands[$cmd] = @($fields | ForEach-Object { $_.Accepted[0] })
         }
         else {
-            # 结构体不在本文件：基本都是从 tr_domain 引入的 DTO / 共享类型（两侧同一份定义）
+            # 两侧都没有这个结构体：确实是从 tr_domain 引入的 DTO / 共享类型（两侧同一份定义）
             $uiCommands[$cmd] = 'SHARED'
         }
     }

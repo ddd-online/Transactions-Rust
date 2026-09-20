@@ -17,6 +17,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 $explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
@@ -26,195 +28,16 @@ if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
-$smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
-$OutDir = [System.IO.Path]::GetFullPath($OutDir)
-if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
-    throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"
-}
-foreach ($dir in @($smokeHome, (Join-Path $smokeHome 'Desktop'), $OutDir)) {
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-}
-
-$repoPrefix = $repo.TrimEnd('\') + '\'
-$blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
-    $path = try { $_.Path } catch { $null }
-    $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-})
-if ($blockers.Count -gt 0) {
-    throw "本仓库已有 Transactions 实例在运行（PID $($blockers.Id -join ', ')），单实例插件会顶掉本次启动。"
-}
+$trPaths = Initialize-TrSmokeHome -SmokeHome $SmokeHome -OutDir $OutDir
+$smokeHome = $trPaths.SmokeHome
+$OutDir = $trPaths.OutDir
+Assert-NoRepoInstance -Repo $repo
 
 $ws = [System.IO.Path]::GetFullPath($Workspace)
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$UIA = [System.Windows.Automation.AutomationElement]
-
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public class TrSync {
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  public static void Click(int x, int y) {
-    SetCursorPos(x, y);
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-  }
-}
-'@ -Language CSharp -ErrorAction SilentlyContinue
+# 公共鼠标 P/Invoke 类（TrSync）已统一到 fixtures/lib/TrUia.ps1 的 TrUia（调用点是 [TrUia]::…）
 
 $failures = New-Object System.Collections.Generic.List[string]
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
-
-function Get-Elements { param($Root)
-    return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-}
-function Find-First { param($Root, [string]$Name)
-    $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)))
-    if ($all.Count -eq 0) { return $null }
-    return $all[0]
-}
-function Find-All { param($Root, [string]$Name)
-    return @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name))))
-}
-function Find-Like { param($Root, [string]$Pattern)
-    foreach ($element in @(Get-Elements $Root)) {
-        $name = $element.Current.Name
-        if ($name -and $name.Contains($Pattern)) { return $element }
-    }
-    return $null
-}
-function Wait-Element { param($Root, [string]$Name, [int]$TimeoutSec = 25)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    do {
-        $element = Find-First $Root $Name
-        if ($element) { return $element }
-        Start-Sleep -Milliseconds 400
-    } while ((Get-Date) -lt $deadline)
-    return $null
-}
-function Wait-Like { param($Root, [string]$Pattern, [int]$TimeoutSec = 25)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    do {
-        $element = Find-Like -Root $Root -Pattern $Pattern
-        if ($element) { return $element }
-        Start-Sleep -Milliseconds 400
-    } while ((Get-Date) -lt $deadline)
-    return $null
-}
-function Invoke-Element { param($Element)
-    if (-not $Element) { return $false }
-    $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        $pattern.Invoke(); return $true
-    }
-    $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -gt 0) {
-        [TrSync]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-        return $true
-    }
-    return $false
-}
-function Click-Element { param($Element)
-    if (-not $Element) { return $false }
-    $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -le 0) { return $false }
-    [TrSync]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-    return $true
-}
-function Set-Value { param($Element, [string]$Value)
-    if (-not $Element) { return $false }
-    $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
-        $pattern.SetValue($Value); return $true
-    }
-    return $false
-}
-function Save-Screenshot { param([string]$Path)
-    try {
-        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bounds.Size)
-        $graphics.Dispose()
-        $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
-        $bitmap.Dispose()
-        Write-Host "  截图: $Path" -ForegroundColor DarkYellow
-    }
-    catch { Write-Host "  截图失败: $_" -ForegroundColor DarkYellow }
-}
-
-function Get-ReadyWindow { param([int]$ProcessId, [int]$TimeoutSec = 60)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    $last = $null
-    while ((Get-Date) -lt $deadline) {
-        $candidate = $UIA::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
-            (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $ProcessId)))
-        if ($candidate) {
-            $last = $candidate
-            if (Find-First $candidate '消费记录') { return $candidate }
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    return $last
-}
-
-# 行内按钮：名字 + 与该行文案同一水平带（表格里每行都有同名按钮）
-function Find-RowButton { param($Window, [string]$RowText, [string]$ButtonName)
-    $row = Wait-Like -Root $Window -Pattern $RowText -TimeoutSec 15
-    if (-not $row) {
-        Write-Host "    找不到行元素「$RowText」" -ForegroundColor DarkYellow
-        return $null
-    }
-    $rowRect = $row.Current.BoundingRectangle
-    [TrSync]::SetCursorPos([int]($rowRect.X + $rowRect.Width / 2), [int]($rowRect.Y + $rowRect.Height / 2)) | Out-Null
-    Start-Sleep -Milliseconds 400
-    $rowCenter = $rowRect.Y + $rowRect.Height / 2
-    $best = $null; $bestDistance = [double]::MaxValue
-    foreach ($button in (Find-All $Window $ButtonName)) {
-        if ($button.Current.IsOffscreen) { continue }
-        $rect = $button.Current.BoundingRectangle
-        if ($rect.Width -le 0) { continue }
-        $distance = [Math]::Abs(($rect.Y + $rect.Height / 2) - $rowCenter)
-        if ($distance -lt $bestDistance) { $best = $button; $bestDistance = $distance }
-    }
-    if ($best -and $bestDistance -le 40) { return $best }
-    Write-Host "    行「$RowText」附近没有「$ButtonName」（最近距离 $([int]$bestDistance)）" -ForegroundColor DarkYellow
-    return $null
-}
-
-function Add-Record { param($Window, [string]$Description, [string]$Amount)
-    if (-not (Invoke-Element (Wait-Element -Root $Window -Name '记一笔'))) { return $false }
-    Start-Sleep -Seconds 2
-    $okDesc = Set-Value (Wait-Element -Root $Window -Name '描述消费内容') $Description
-    $okAmount = Set-Value (Wait-Element -Root $Window -Name '0.00') $Amount
-    Start-Sleep -Milliseconds 800
-    $confirm = Find-All $Window '确认'
-    if ($confirm.Count -gt 0) { Invoke-Element $confirm[$confirm.Count - 1] | Out-Null }
-    Start-Sleep -Seconds 3
-    return ($okDesc -and $okAmount)
-}
-
-function Read-Table { param([string]$Table)
-    $dump = Join-Path $OutDir "dump-$Table.json"
-    Push-Location $repo
-    & cargo -q xtask dump $ws --table $Table *> $dump
-    $exit = $LASTEXITCODE
-    Pop-Location
-    if ($exit -ne 0) { throw "导出 $Table 失败（exit=$exit）" }
-    return @((Get-Content $dump -Raw | ConvertFrom-Json).$Table)
-}
 
 # ---- 播种（默认每次重播；种子里有两个账本，同步才有目标）----
 if (-not $explicitWorkspace) {
@@ -254,14 +77,14 @@ try {
     Start-Sleep -Seconds 1
     Write-Host "[sync] UIA 可读元素 $((Get-Elements $window).Count) 个" -ForegroundColor Cyan
 
-    $ledgers = @(Read-Table 'tbl_billadm_ledger')
+    $ledgers = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_ledger' -OutDir $OutDir)
     Assert-True ($ledgers.Count -ge 2) "种子里至少有 2 个账本（实际 $($ledgers.Count)）"
 
     # ================= 1/3 在当前账本记一笔 =================
     Write-Host "`n[sync] 1/3 在当前账本记一笔 66.66（$description）"
     Assert-True (Add-Record -Window $window -Description $description -Amount '66.66') '记一笔'
 
-    $records = @(Read-Table 'tbl_billadm_transaction_record')
+    $records = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     $sourceRows = @($records | Where-Object { $_.description -eq $description })
     Assert-True ($sourceRows.Count -eq 1) "库里出现源记录（$description）"
     if ($sourceRows.Count -lt 1) { throw '没有源记录，无法继续' }
@@ -292,7 +115,7 @@ try {
 
     # ================= 3/3 断言：目标账本多了一份副本、源记录原样保留 =================
     Write-Host "`n[sync] 3/3 校验落库结果"
-    $after = @(Read-Table 'tbl_billadm_transaction_record')
+    $after = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     $synced = @($after | Where-Object { $_.description -eq $description -and $_.ledger_id -eq $target.id })
     Assert-True ($synced.Count -eq 1) "目标账本里出现副本（$($target.name)）"
     if ($synced.Count -eq 1) {
@@ -328,18 +151,6 @@ try {
         Assert-True $visible "切到目标账本后列表里能看到 $description"
     }
 }
-finally {
-    if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
-    if ($process -and -not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $process.WaitForExit(5000) | Out-Null
-    }
-}
+finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Write-Host ''
-if ($failures.Count -gt 0) {
-    Write-Host "[sync] 失败 $($failures.Count) 项：" -ForegroundColor Red
-    $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host '[sync] 全部通过：同步到其他账本 = 新 id 的副本 + 源记录保留 + 字段一致 + 界面可见' -ForegroundColor Green
+Show-TrSummary -Failures $failures -Tag 'sync' -SuccessMessage "[sync] 全部通过：同步到其他账本 = 新 id 的副本 + 源记录保留 + 字段一致 + 界面可见"

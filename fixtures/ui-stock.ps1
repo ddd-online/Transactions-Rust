@@ -48,6 +48,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 $explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
@@ -57,85 +59,18 @@ if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
-$smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
-$OutDir = [System.IO.Path]::GetFullPath($OutDir)
-if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
-    throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"
-}
-foreach ($dir in @($smokeHome, (Join-Path $smokeHome 'Desktop'), $OutDir)) {
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-}
-
+$trPaths = Initialize-TrSmokeHome -SmokeHome $SmokeHome -OutDir $OutDir
+$smokeHome = $trPaths.SmokeHome
+$OutDir = $trPaths.OutDir
 # 判重必须按**完整路径**，不能按进程名（本机别的目录下可能有同名 exe）
-$repoPrefix = $repo.TrimEnd('\') + '\'
-$blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
-    $path = try { $_.Path } catch { $null }
-    $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-})
-if ($blockers.Count -gt 0) {
-    throw "本仓库已有 Transactions 实例在运行（PID $($blockers.Id -join ', ')），单实例插件会顶掉本次启动。"
-}
+Assert-NoRepoInstance -Repo $repo
 
 $ws = [System.IO.Path]::GetFullPath($Workspace)
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$UIA = [System.Windows.Automation.AutomationElement]
-
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public class TrStock {
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  public static void Click(int x, int y) {
-    SetCursorPos(x, y);
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-  }
-}
-'@ -Language CSharp -ErrorAction SilentlyContinue
+# 公共鼠标 P/Invoke 类（TrStock）已统一到 fixtures/lib/TrUia.ps1 的 TrUia（调用点是 [TrUia]::…）
 
 $failures = New-Object System.Collections.Generic.List[string]
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
 
-function Get-Elements { param($Root)
-    return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-}
-function Find-First { param($Root, [string]$Name)
-    $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)))
-    if ($all.Count -eq 0) { return $null }
-    return $all[0]
-}
-function Find-All { param($Root, [string]$Name)
-    return @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name))))
-}
-function Find-ElementLike { param($Root, [string]$Pattern)
-    foreach ($element in @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition))) {
-        $name = $element.Current.Name
-        if ($name -and $name.Contains($Pattern)) { return $element }
-    }
-    return $null
-}
-function Wait-Element { param($Root, [string]$Name, [int]$TimeoutSec = 25)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    do {
-        $element = Find-First $Root $Name
-        if ($element) { return $element }
-        Start-Sleep -Milliseconds 400
-    } while ((Get-Date) -lt $deadline)
-    return $null
-}
 function Wait-ElementLike { param($Root, [string]$Pattern, [int]$TimeoutSec = 25)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     do {
@@ -165,63 +100,6 @@ function Wait-EditLike { param($Root, [string]$Pattern, [int]$TimeoutSec = 20)
         Start-Sleep -Milliseconds 400
     } while ((Get-Date) -lt $deadline)
     return $null
-}
-function Invoke-Element { param($Element)
-    if (-not $Element) { return $false }
-    $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        $pattern.Invoke(); return $true
-    }
-    $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -gt 0) {
-        [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-        return $true
-    }
-    return $false
-}
-function Set-Value { param($Element, [string]$Value)
-    if (-not $Element) { return $false }
-    $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
-        $pattern.SetValue($Value); return $true
-    }
-    return $false
-}
-function Click-Element { param($Element)
-    if (-not $Element) { return $false }
-    $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -le 0) { return $false }
-    [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-    return $true
-}
-function Save-Screenshot { param([string]$Path)
-    try {
-        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bounds.Size)
-        $graphics.Dispose()
-        $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
-        $bitmap.Dispose()
-        Write-Host "  截图: $Path" -ForegroundColor DarkYellow
-    }
-    catch { Write-Host "  截图失败: $_" -ForegroundColor DarkYellow }
-}
-
-# 主窗口：启动期先出现初始化窗口（无侧栏），轮询到含「消费记录」为止
-function Get-ReadyWindow { param([int]$ProcessId, [int]$TimeoutSec = 60)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    $last = $null
-    while ((Get-Date) -lt $deadline) {
-        $candidate = $UIA::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
-            (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $ProcessId)))
-        if ($candidate) {
-            $last = $candidate
-            if (Find-First $candidate '消费记录') { return $candidate }
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    return $last
 }
 
 # 下单弹窗里「股票名称 / 股票代码」两个输入框在 UIA 里**没有名字**（FormItem 的 label 不是 label 元素），
@@ -277,16 +155,6 @@ function Invoke-ModalButton { param($Window, [string]$Name)
     return (Invoke-Element $all[$all.Count - 1])
 }
 
-function Read-Table { param([string]$Table)
-    $dump = Join-Path $OutDir "dump-$Table.json"
-    Push-Location $repo
-    & cargo -q xtask dump $ws --table $Table *> $dump
-    $exit = $LASTEXITCODE
-    Pop-Location
-    if ($exit -ne 0) { throw "导出 $Table 失败（exit=$exit）" }
-    return @((Get-Content $dump -Raw | ConvertFrom-Json).$Table)
-}
-
 # 资金记录：只验**增量链**与本次金额，不去建模整个种子历史。
 # （种子里有追加本金/支取/多轮买卖，`cash_balance = 本金 + Σ变动` 这种整体口径不成立——
 #   追加本金会同时改 principal 与记一条 add_principal，两边都算就重复了。）
@@ -294,7 +162,7 @@ function Read-Table { param([string]$Table)
 #   1. 链式：新记录.cash_balance == 上一条.cash_balance + 新记录.amount_change
 #   2. 金额：买入 = -(成交额 + 手续费)，卖出 = +(成交额 - 手续费)
 function Get-FundRecords { param([string]$LedgerId)
-    return @(Read-Table 'tbl_billadm_stock_fund_record' | Where-Object { $_.ledger_id -eq $LedgerId } |
+    return @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_fund_record' -OutDir $OutDir | Where-Object { $_.ledger_id -eq $LedgerId } |
         Sort-Object created_at)
 }
 function Assert-FundChain { param([string]$LedgerId, [string]$Stage)
@@ -370,9 +238,9 @@ function Submit-Trade {
         $button = Wait-VisibleButton -Window $Window -Name $OpenButton -TimeoutSec 10
         if ($button) {
             $rect = $button.Current.BoundingRectangle
-            [TrStock]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
+            [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
             Start-Sleep -Milliseconds 200
-            [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+            [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
         }
         else {
             Write-Host "  可视区里找不到「$OpenButton」按钮（详情区可能没选中持仓）" -ForegroundColor DarkYellow
@@ -406,7 +274,7 @@ function Submit-Trade {
 # 数据库查询会把它们一起捞出来；而且种子的记录与我们的是同一秒，按 created_at 过滤并不可靠），
 # 所以用与 1/5 相同的口径：同类型（open/reduce/close）里 created_at 最新的那一笔。
 function Get-NewestTrade { param([string]$LedgerId, [string]$Code, [string]$TradeType)
-    $rows = @(Read-Table 'tbl_billadm_stock_trade' | Where-Object {
+    $rows = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade' -OutDir $OutDir | Where-Object {
             $_.ledger_id -eq $LedgerId -and $_.stock_code -eq $Code -and $_.trade_type -eq $TradeType
         } | Sort-Object created_at)
     if ($rows.Count -eq 0) { return $null }
@@ -506,8 +374,8 @@ try {
     Write-Host "[stock] UIA 可读元素 $((Get-Elements $window).Count) 个" -ForegroundColor Cyan
 
     $hwnd = [IntPtr]$window.Current.NativeWindowHandle
-    [TrStock]::ShowWindow($hwnd, 9) | Out-Null
-    [TrStock]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::ShowWindow($hwnd, 9) | Out-Null
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 500
 
     # 账本 id 不预设：种子里有两个账本，界面默认打开哪个不确定；
@@ -553,7 +421,7 @@ try {
     Start-Sleep -Seconds 5
 
     # 本次建仓 = 该股票 created_at 最新的一条 open
-    $trades = @(Read-Table 'tbl_billadm_stock_trade' | Where-Object { $_.stock_code -eq $code } |
+    $trades = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade' -OutDir $OutDir | Where-Object { $_.stock_code -eq $code } |
         Sort-Object created_at)
     $openTrade = @($trades | Where-Object { $_.trade_type -eq 'open' }) | Select-Object -Last 1
     Assert-True ([bool]$openTrade) "库里出现建仓成交（$code）"
@@ -567,7 +435,7 @@ try {
         Assert-True ($openTrade.fee -gt 0) "手续费已计算（$($openTrade.fee) 分）"
         Assert-True ([int64]$openTrade.created_at -ge $startedAt) "这笔成交确实是本次操作写进去的"
     }
-    $position = @(Read-Table 'tbl_billadm_stock_position' | Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
+    $position = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir | Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     Assert-True ([bool]$position) "库里出现持仓（$code）"
     if ($position -and $openTrade) {
         Assert-True ($position.quantity -eq 300) "持仓数量 300（实际 $($position.quantity)）"
@@ -626,9 +494,9 @@ try {
     Assert-True ([bool]$editButton) '找到成交行「编辑」按钮'
     if ($editButton) {
         $rect = $editButton.Current.BoundingRectangle
-        [TrStock]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
         Start-Sleep -Milliseconds 300
-        [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
     }
     $editOpened = [bool](Wait-Element -Root $window -Name '编辑成交' -TimeoutSec 10)
     Assert-True $editOpened '弹窗「编辑成交」已打开'
@@ -663,7 +531,7 @@ try {
             -eq ([int64]$editedTrade.fee)) `
             "手续费自洽（佣金 $($editedTrade.commission) + 印花税 $($editedTrade.stamp_duty) + 过户费 $($editedTrade.transfer_fee) = $($editedTrade.fee)）"
     }
-    $posAfterEdit = @(Read-Table 'tbl_billadm_stock_position' |
+    $posAfterEdit = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     if ($editedTrade -and $posAfterEdit) {
         Assert-True ($posAfterEdit.quantity -eq 300) "编辑不改数量（$($posAfterEdit.quantity) 股）"
@@ -690,9 +558,9 @@ try {
     Assert-True ([bool]$deleteButton) '找到成交行「删除」按钮'
     if ($deleteButton) {
         $rect = $deleteButton.Current.BoundingRectangle
-        [TrStock]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
         Start-Sleep -Milliseconds 300
-        [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
     }
     $deleteOpened = [bool](Wait-Element -Root $window -Name '删除整笔委托？' -TimeoutSec 10)
     Assert-True $deleteOpened '弹窗「删除整笔委托？」已打开'
@@ -709,7 +577,7 @@ try {
     $tradeAfterDelete = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
     Assert-True (-not $tradeAfterDelete -or ([int64]$tradeAfterDelete.price -ne 10100)) `
         "删除后那笔 101.00 元的建仓成交没了（最新一笔：$(if ($tradeAfterDelete) { "$($tradeAfterDelete.price) 分" } else { '无' })）"
-    $posAfterDelete = @(Read-Table 'tbl_billadm_stock_position' |
+    $posAfterDelete = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     if ($posAfterDelete) {
         Assert-True ($posAfterDelete.quantity -eq 0) "删除后持仓数量归零（实际 $($posAfterDelete.quantity)）"
@@ -722,7 +590,7 @@ try {
     # 重新建仓，供 5/5 的减仓/清仓使用
     Assert-True (Add-Position -Window $window -Code $code -Name $name -Price $buyPrice -Lots $buyLots) '重新建仓 3 手 @ 100'
     Start-Sleep -Seconds 2
-    $posRebuilt = @(Read-Table 'tbl_billadm_stock_position' |
+    $posRebuilt = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     Assert-True ([bool]$posRebuilt -and $posRebuilt.quantity -eq 300) "重建仓后持仓回到 300 股（实际 $(if ($posRebuilt) { $posRebuilt.quantity } else { 'n/a' })）"
 
@@ -730,12 +598,12 @@ try {
     # 详情区的「减仓/清仓」现在真的能点开了（见文件顶部那条缺陷说明）。
     Write-Host "`n[stock] 3/3 减仓 1 手 @ $reducePrice → 清仓 2 手 @ $closePrice"
 
-    $posBefore = @(Read-Table 'tbl_billadm_stock_position' |
+    $posBefore = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     Assert-True ([bool]$posBefore) '减仓前能读到持仓行'
     # 轮次是**清仓时**才归档出来的（`close_round`：建历史 + 建轮次 + 把未挂接的成交挂上去），
     # 所以此刻：没有新轮次，刚建的仓也还没挂 round_id。
-    $roundsBefore = @(Read-Table 'tbl_billadm_stock_trade_round' |
+    $roundsBefore = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade_round' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code })
     if ($openTrade) {
         Assert-True ([string]::IsNullOrEmpty($openTrade.round_id)) '建仓成交尚未挂接轮次（轮到清仓时才归档）'
@@ -747,7 +615,7 @@ try {
         '「减仓」弹窗走完（填价/手数 → 提交）'
     Start-Sleep -Seconds 2
 
-    $reduceTrade = @(Read-Table 'tbl_billadm_stock_trade' |
+    $reduceTrade = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code -and $_.trade_type -eq 'reduce' } |
         Sort-Object created_at) | Select-Object -Last 1
     Assert-True ([bool]$reduceTrade) '库里出现减仓成交（trade_type=reduce）'
@@ -762,7 +630,7 @@ try {
         Assert-True ($reduceTrade.realized_pnl -eq $expectedRealized) `
             "减仓已实现盈亏 = 成交额 - 手续费 - 结转成本（期望 $expectedRealized，实际 $($reduceTrade.realized_pnl)）"
 
-        $posAfterReduce = @(Read-Table 'tbl_billadm_stock_position' |
+        $posAfterReduce = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
             Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
         Assert-True ($posAfterReduce.quantity -eq ($posBefore.quantity - 100)) `
             "持仓数量 300 → 200（实际 $($posAfterReduce.quantity)）"
@@ -780,9 +648,9 @@ try {
     Assert-True ([bool]$closeButton) '详情区还有「清仓」按钮'
     if ($closeButton) {
         $rect = $closeButton.Current.BoundingRectangle
-        [TrStock]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
         Start-Sleep -Milliseconds 300
-        [TrStock]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
     }
     $closeOpened = [bool](Wait-Element -Root $window -Name '委托清仓' -TimeoutSec 10)
     Assert-True $closeOpened '弹窗「委托清仓」已打开'
@@ -801,11 +669,11 @@ try {
         Start-Sleep -Seconds 4
     }
 
-    $closeTrade = @(Read-Table 'tbl_billadm_stock_trade' |
+    $closeTrade = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code -and $_.trade_type -eq 'close' } |
         Sort-Object created_at) | Select-Object -Last 1
     Assert-True ([bool]$closeTrade) '库里出现清仓成交（trade_type=close）'
-    $posAfterClose = @(Read-Table 'tbl_billadm_stock_position' |
+    $posAfterClose = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     if ($closeTrade) {
         Assert-True ($closeTrade.lots -eq 2) "清仓手数 2（实际 $($closeTrade.lots)）"
@@ -818,7 +686,7 @@ try {
     Assert-FundChain -LedgerId $ledgerId -Stage '清仓后'
 
     # ---- 清仓归档：建一个新轮次 + 把本轮三笔成交挂上去 + 指向该股票的成交记录 ----
-    $roundsAfter = @(Read-Table 'tbl_billadm_stock_trade_round' |
+    $roundsAfter = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade_round' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code })
     Assert-True ($roundsAfter.Count -eq ($roundsBefore.Count + 1)) `
         "清仓归档出一个新轮次（$($roundsBefore.Count) → $($roundsAfter.Count)）"
@@ -838,12 +706,12 @@ try {
             # 建仓 / 减仓 / 清仓 三笔都挂到这一轮（归档是"回填"未挂接的成交）
             foreach ($tradeId in @($openTrade.id, $reduceTrade.id, $closeTrade.id)) {
                 if (-not $tradeId) { continue }
-                $row = @(Read-Table 'tbl_billadm_stock_trade' | Where-Object { $_.id -eq $tradeId }) | Select-Object -First 1
+                $row = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade' -OutDir $OutDir | Where-Object { $_.id -eq $tradeId }) | Select-Object -First 1
                 if ($row) {
                     Assert-True ($row.round_id -eq $newRound.id) "成交「$($row.trade_type)」归到清仓归档的轮次"
                 }
             }
-            $historyRow = @(Read-Table 'tbl_billadm_stock_trade_history' |
+            $historyRow = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade_history' -OutDir $OutDir |
                 Where-Object { $_.id -eq $newRound.history_id }) | Select-Object -First 1
             Assert-True ([bool]$historyRow) '轮次的 history_id 指向该股票的成交记录行'
             if ($historyRow) {
@@ -890,7 +758,7 @@ try {
         if ($saveFee) { Invoke-Element $saveFee | Out-Null }
         Start-Sleep -Seconds 3
     }
-    $feeRow = @(Read-Table 'tbl_billadm_stock_fee_setting' | Where-Object { $_.ledger_id -eq $ledgerId }) |
+    $feeRow = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_fee_setting' -OutDir $OutDir | Where-Object { $_.ledger_id -eq $ledgerId }) |
         Select-Object -First 1
     Assert-True ([bool]$feeRow) '库里能读到该账本的费用设置行'
     if ($feeRow) {
@@ -955,7 +823,7 @@ try {
     }
     # ================= 7/7 重置股票交易数据：清空股票侧、**不动记账数据** =================
     Write-Host "`n[stock] 7/7 重置股票交易数据（设置页 → 股票交易 → 重置）"
-    $recordsBeforeReset = @(Read-Table 'tbl_billadm_transaction_record')
+    $recordsBeforeReset = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     $stockTables = @(
         'tbl_billadm_stock_account', 'tbl_billadm_stock_position', 'tbl_billadm_stock_trade',
         'tbl_billadm_stock_trade_round', 'tbl_billadm_stock_trade_history', 'tbl_billadm_stock_fund_record',
@@ -963,7 +831,7 @@ try {
     )
     $stockRowsBefore = 0
     foreach ($table in $stockTables) {
-        $stockRowsBefore += @(Read-Table $table | Where-Object { $_.ledger_id -eq $ledgerId }).Count
+        $stockRowsBefore += @(Read-Table -Repo $repo -Workspace $ws -Table $table -OutDir $OutDir | Where-Object { $_.ledger_id -eq $ledgerId }).Count
     }
     Assert-True ($stockRowsBefore -gt 0) "重置前该账本有股票数据（$stockRowsBefore 行）"
 
@@ -1005,10 +873,10 @@ try {
     # 所以对这两张表断言的是"回到默认值"，而不是"没有行"。
     foreach ($table in @('tbl_billadm_stock_account', 'tbl_billadm_stock_position', 'tbl_billadm_stock_trade',
             'tbl_billadm_stock_trade_round', 'tbl_billadm_stock_trade_history', 'tbl_billadm_stock_fund_record')) {
-        $left = @(Read-Table $table | Where-Object { $_.ledger_id -eq $ledgerId }).Count
+        $left = @(Read-Table -Repo $repo -Workspace $ws -Table $table -OutDir $OutDir | Where-Object { $_.ledger_id -eq $ledgerId }).Count
         Assert-True ($left -eq 0) "重置后 $table 里该账本已无数据（实际 $left 行）"
     }
-    $feeAfterReset = @(Read-Table 'tbl_billadm_stock_fee_setting' | Where-Object { $_.ledger_id -eq $ledgerId }) |
+    $feeAfterReset = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_fee_setting' -OutDir $OutDir | Where-Object { $_.ledger_id -eq $ledgerId }) |
         Select-Object -First 1
     if ($feeAfterReset) {
         # 6/7 里我们把佣金改成 0.0001/最低 0/印花税 0.001/过户费 0.00002，重置后必须回到默认
@@ -1019,33 +887,19 @@ try {
         Assert-True ([Math]::Abs([double]$feeAfterReset.transfer_fee_rate - 0.00001) -lt 1e-9) `
             "重置后过户费回到默认 0.00001（实际 $($feeAfterReset.transfer_fee_rate)）"
     }
-    $tagAfterReset = @(Read-Table 'tbl_billadm_stock_trade_tag_setting' | Where-Object { $_.ledger_id -eq $ledgerId }) |
+    $tagAfterReset = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade_tag_setting' -OutDir $OutDir | Where-Object { $_.ledger_id -eq $ledgerId }) |
         Select-Object -First 1
     if ($tagAfterReset) {
         Assert-True ($tagAfterReset.tags -like '*分析*' -and $tagAfterReset.tags -like '*打板*') `
             "重置后交易标签回到默认集合（实际 $($tagAfterReset.tags)）"
     }
-    $recordsAfterReset = @(Read-Table 'tbl_billadm_transaction_record')
+    $recordsAfterReset = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     Assert-True ($recordsAfterReset.Count -eq $recordsBeforeReset.Count) `
         "记账数据**未被**重置触及（$($recordsBeforeReset.Count) → $($recordsAfterReset.Count) 条）"
     # 账本本身也还在（重置只清股票侧，不删账本）
-    $ledgerStill = @(Read-Table 'tbl_billadm_ledger' | Where-Object { $_.id -eq $ledgerId })
+    $ledgerStill = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_ledger' -OutDir $OutDir | Where-Object { $_.id -eq $ledgerId })
     Assert-True ($ledgerStill.Count -eq 1) '账本行仍在（重置不删账本）'
 }
 
-
-finally {
-    if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
-    if ($process -and -not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $process.WaitForExit(5000) | Out-Null
-    }
-}
-
-Write-Host ''
-if ($failures.Count -gt 0) {
-    Write-Host "[stock] 失败 $($failures.Count) 项：" -ForegroundColor Red
-    $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host '[stock] 全部通过：建仓 → 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 重置股票数据（不动记账数据）' -ForegroundColor Green
+finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
+Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓 → 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 重置股票数据（不动记账数据）"

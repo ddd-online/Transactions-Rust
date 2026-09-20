@@ -37,6 +37,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
@@ -44,15 +46,12 @@ if (-not $Exe) { $Exe = Join-Path $repo 'target\debug\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\smoke\home-hot' }
 if (-not $TrunkLog) { $TrunkLog = Join-Path $repo 'target\trunk-hot.log' }
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public class TrDevHot {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  // 公共 P/Invoke 已统一到 fixtures/lib/TrUia.ps1 的 TrUia（本脚本的调用点用 [TrUia]::…）
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
@@ -66,8 +65,6 @@ public class TrDevHot {
   }
 }
 '@ -ErrorAction SilentlyContinue
-
-$UIA = [System.Windows.Automation.AutomationElement]
 
 # 抓当前窗口到 PNG（`-ShotDir` 时每次刷新后调用一次，省得手动跑 dev-shot.ps1）
 function Save-CurrentShot {
@@ -85,7 +82,7 @@ function Save-CurrentShot {
         $ok = [TrDevHot]::PrintWindow($handle, $hdc, 2)
         $g.ReleaseHdc($hdc)
         if (-not $ok) {
-            [void][TrDevHot]::SetForegroundWindow($handle)
+            [void][TrUia]::SetForegroundWindow($handle)
             Start-Sleep -Milliseconds 300
             $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object System.Drawing.Size($w, $h)))
         }
@@ -210,7 +207,7 @@ while ($true) {
         $window = Get-RepoAppWindow
         if (-not $window) { continue }
         $handle = [IntPtr]$window.Current.NativeWindowHandle
-        [TrDevHot]::SetForegroundWindow($handle) | Out-Null
+        [TrUia]::SetForegroundWindow($handle) | Out-Null
         Start-Sleep -Milliseconds 150
         [TrDevHot]::CtrlR()
         $reloads++

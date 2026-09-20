@@ -21,6 +21,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\diary-smoke\home' }
@@ -29,90 +31,29 @@ if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
-$smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
 # **`-OutDir` 必须转成绝对路径**（踩过的坑）：脚本要把它**填进原生选目录框**，
 # 而那个框把相对路径按"它自己的当前目录"解析——传 `target\pkg-diary` 进去，
 # 导入/导出就会落到别的地方（甚至弹「找不到匹配的项目」）。参数可能是相对的，先归一化。
-$OutDir = [System.IO.Path]::GetFullPath($OutDir)
-if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
-    throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"
-}
-foreach ($dir in @($smokeHome, (Join-Path $smokeHome 'Desktop'), $OutDir)) {
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-}
-
-$repoPrefix = $repo.TrimEnd('\') + '\'
-$blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
-    $path = try { $_.Path } catch { $null }
-    $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-})
-if ($blockers.Count -gt 0) {
-    throw "本仓库已有 Transactions 实例在运行（PID $($blockers.Id -join ', ')），单实例插件会顶掉本次启动。"
-}
+$trPaths = Initialize-TrSmokeHome -SmokeHome $SmokeHome -OutDir $OutDir
+$smokeHome = $trPaths.SmokeHome
+$OutDir = $trPaths.OutDir
+Assert-NoRepoInstance -Repo $repo
 
 $ws = [System.IO.Path]::GetFullPath($Workspace)
-
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$UIA = [System.Windows.Automation.AutomationElement]
 
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public class TrDiaryMouse {
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  // 公共方法（SetCursorPos / mouse_event / Click / SetForegroundWindow / ShowWindow）已统一到
+  // fixtures/lib/TrUia.ps1 的 TrUia（本脚本里原来的调用点都改成了 [TrUia]::…）。
   // 直接给 Win32 编辑框写文本：不受输入法与 shell 自动补全影响（剪贴板粘贴只作退路）
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool SetWindowText(IntPtr hWnd, string text);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
-  public static void Click(int x, int y) {
-    SetCursorPos(x, y);
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-  }
 }
 '@ -Language CSharp -ErrorAction SilentlyContinue
 
 $failures = New-Object System.Collections.Generic.List[string]
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
-
-function Get-Elements { param($Root)
-    return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-}
-function Find-First { param($Root, [string]$Name)
-    $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)))
-    if ($all.Count -eq 0) { return $null }
-    return $all[0]
-}
-function Invoke-Element { param($Element)
-    if (-not $Element) { return $false }
-    $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        $pattern.Invoke(); return $true
-    }
-    $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -gt 0) {
-        [TrDiaryMouse]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-        return $true
-    }
-    return $false
-}
-function Click-Element { param($Element)
-    if (-not $Element) { return $false }
-    $rect = $Element.Current.BoundingRectangle
-    if ($rect.Width -le 0) { return $false }
-    [TrDiaryMouse]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-    return $true
-}
 
 # **必须轮询**，不能只查一次：Chromium 的 UIA 树是惰性构建的，刚启动时元素数会先到阈值
 # （骨架屏）再补齐；一次性查找会在"界面还在渲染"时误判成"找不到按钮"（实测踩过）。
@@ -124,19 +65,6 @@ function Wait-Element { param($Window, [string]$Name, [int]$TimeoutSec = 30)
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
     return $null
-}
-function Save-Screenshot { param([string]$Path)
-    try {
-        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bounds.Size)
-        $graphics.Dispose()
-        $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
-        $bitmap.Dispose()
-        Write-Host "  截图: $Path" -ForegroundColor DarkYellow
-    }
-    catch { Write-Host "  截图失败: $_" -ForegroundColor DarkYellow }
 }
 
 # 选目录框去哪儿找？**两种原生对话框的归属不一样**（都实测过）：
@@ -172,7 +100,7 @@ function Select-Directory {
         throw "内部错误：要填进选目录框的路径必须是绝对路径（收到 '$Directory'）"
     }
     $dialogHwnd = [IntPtr]$Dialog.Current.NativeWindowHandle
-    [TrDiaryMouse]::SetForegroundWindow($dialogHwnd) | Out-Null
+    [TrUia]::SetForegroundWindow($dialogHwnd) | Out-Null
     Start-Sleep -Milliseconds 400
 
     # 底部路径框：选目录框是 AutomationId=1152（`文件夹(F):`），选文件框是 1148。
@@ -319,8 +247,8 @@ try {
     Write-Host "[diary] UIA 可读元素 $($elements.Count) 个" -ForegroundColor Cyan
 
     $hwnd = [IntPtr]$window.Current.NativeWindowHandle
-    [TrDiaryMouse]::ShowWindow($hwnd, 9) | Out-Null
-    [TrDiaryMouse]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::ShowWindow($hwnd, 9) | Out-Null
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 500
 
     Write-Host "`n[diary] 1/2 打开「应用设置 → 日记配置」并点「选择目录导入」"
@@ -333,9 +261,9 @@ try {
     Assert-True ([bool]$importButton) '找到「选择目录导入」按钮'
     if (-not $importButton) { throw '找不到「选择目录导入」按钮' }
     $rect = $importButton.Current.BoundingRectangle
-    [TrDiaryMouse]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 300
-    [TrDiaryMouse]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
 
     $before = Read-DiaryRows
     Write-Host "  导入前日记行数: $($before.Count)"
@@ -373,9 +301,9 @@ try {
     Assert-True ([bool]$exportButton) '找到「选择目录导出」按钮'
     if (-not $exportButton) { throw '找不到「选择目录导出」按钮' }
     $rect = $exportButton.Current.BoundingRectangle
-    [TrDiaryMouse]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 300
-    [TrDiaryMouse]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
 
     $dialog2 = Find-FolderDialog -ProcessId $process.Id -TimeoutSec 20
     Assert-True ([bool]$dialog2) '导出时原生选目录框已弹出'
@@ -401,18 +329,6 @@ try {
         }
     }
 }
-finally {
-    if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
-    if ($process -and -not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $process.WaitForExit(5000) | Out-Null
-    }
-}
+finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Write-Host ''
-if ($failures.Count -gt 0) {
-    Write-Host "[diary] 失败 $($failures.Count) 项：" -ForegroundColor Red
-    $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host '[diary] 全部通过：选目录导入（UTF-8/GBK）→ 落库 → 导出 → 正文逐字节一致' -ForegroundColor Green
+Show-TrSummary -Failures $failures -Tag 'diary' -SuccessMessage "[diary] 全部通过：选目录导入（UTF-8/GBK）→ 落库 → 导出 → 正文逐字节一致"

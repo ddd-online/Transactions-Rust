@@ -19,6 +19,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
+
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\crud-smoke\home' }
@@ -27,76 +29,17 @@ if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
-$smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
-$OutDir = [System.IO.Path]::GetFullPath($OutDir)
-if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
-    throw "拒绝把临时 HOME 指到真实用户目录 —— 冒烟会改写你的配置"
-}
-foreach ($dir in @($smokeHome, (Join-Path $smokeHome 'Desktop'), $OutDir)) {
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-}
-
-$repoPrefix = $repo.TrimEnd('\') + '\'
-$blockers = @(Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {
-    $path = try { $_.Path } catch { $null }
-    $path -and $path.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-})
-if ($blockers.Count -gt 0) {
-    throw "本仓库已有 Transactions 实例在运行（PID $($blockers.Id -join ', ')），单实例插件会顶掉本次启动。"
-}
+$trPaths = Initialize-TrSmokeHome -SmokeHome $SmokeHome -OutDir $OutDir
+$smokeHome = $trPaths.SmokeHome
+$OutDir = $trPaths.OutDir
+Assert-NoRepoInstance -Repo $repo
 
 $ws = [System.IO.Path]::GetFullPath($Workspace)
 
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$UIA = [System.Windows.Automation.AutomationElement]
-
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public class TrCrud {
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  public static void Click(int x, int y) {
-    SetCursorPos(x, y);
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-  }
-}
-'@ -Language CSharp -ErrorAction SilentlyContinue
+# 公共鼠标 P/Invoke 类（TrCrud）已统一到 fixtures/lib/TrUia.ps1 的 TrUia（调用点是 [TrUia]::…）
 
 $failures = New-Object System.Collections.Generic.List[string]
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    if ($Condition) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-    else { Write-Host "  ✗ $Message" -ForegroundColor Red; $failures.Add($Message) }
-}
 
-function Get-Elements { param($Root)
-    return $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-}
-function Find-First { param($Root, [string]$Name)
-    $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)))
-    if ($all.Count -eq 0) { return $null }
-    return $all[0]
-}
-function Find-All { param($Root, [string]$Name)
-    return @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name))))
-}
-# 行文案常常不是"只有标题"（卡片上还有日期等），所以按**子串**找行
-function Find-ElementLike { param($Root, [string]$Pattern)
-    foreach ($element in @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition))) {
-        $name = $element.Current.Name
-        if ($name -and $name.Contains($Pattern)) { return $element }
-    }
-    return $null
-}
 function Wait-ElementLike { param($Root, [string]$Pattern, [int]$TimeoutSec = 15)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     do {
@@ -105,23 +48,6 @@ function Wait-ElementLike { param($Root, [string]$Pattern, [int]$TimeoutSec = 15
         Start-Sleep -Milliseconds 400
     } while ((Get-Date) -lt $deadline)
     return $null
-}
-function Wait-Element { param($Root, [string]$Name, [int]$TimeoutSec = 25)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    do {
-        $element = Find-First $Root $Name
-        if ($element) { return $element }
-        Start-Sleep -Milliseconds 400
-    } while ((Get-Date) -lt $deadline)
-    return $null
-}
-function Wait-Gone { param($Root, [string]$Name, [int]$TimeoutSec = 15)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        if (-not (Find-First $Root $Name)) { return $true }
-        Start-Sleep -Milliseconds 400
-    }
-    return $false
 }
 function Invoke-Element { param($Element)
     if (-not $Element) { return $false }
@@ -138,16 +64,8 @@ function Invoke-Element { param($Element)
     $rect = $Element.Current.BoundingRectangle
     if (-not [double]::IsFinite($rect.X) -or -not [double]::IsFinite($rect.Y)) { return $false }
     if ($rect.Width -gt 0 -and $rect.Height -gt 0) {
-        [TrCrud]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
         return $true
-    }
-    return $false
-}
-function Set-Value { param($Element, [string]$Value)
-    if (-not $Element) { return $false }
-    $pattern = $null
-    if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
-        $pattern.SetValue($Value); return $true
     }
     return $false
 }
@@ -160,14 +78,14 @@ function Click-Element { param($Element)
     $window = $Element | Get-ParentWindow
     if ($window) {
         $wr = $window.Current.BoundingRectangle
-        [TrCrud]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
         if ($rect.X -lt $wr.X -or ($rect.X + $rect.Width) -gt ($wr.X + $wr.Width) -or
             $rect.Y -lt $wr.Y -or ($rect.Y + $rect.Height) -gt ($wr.Y + $wr.Height)) {
             Write-Host "    目标元素不在窗口矩形内，跳过点击：$rect vs $wr" -ForegroundColor DarkYellow
             return $false
         }
     }
-    [TrCrud]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
     return $true
 }
 # 从任意元素往上找顶层窗口（`ControlViewWalker` 到根）
@@ -196,39 +114,6 @@ function Wait-EditLike { param($Window, [string]$Name, [int]$TimeoutSec = 15)
     } while ((Get-Date) -lt $deadline)
     return $null
 }
-# 拿到**主窗口**而不是"属于该进程的第一个窗口"：启动期会先出现初始化窗口（600×560，
-# 没有侧栏），随后才切成主窗口。抓到前者的话，后面所有按名字的查找都会落空
-# （实测整轮 26 项全红，而截图里主窗口明明好好的）。这里每轮重新查询窗口元素，
-# 天然规避"句柄已失效"。
-function Get-ReadyWindow { param([int]$ProcessId, [int]$TimeoutSec = 60)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    $last = $null
-    while ((Get-Date) -lt $deadline) {
-        $candidate = $UIA::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
-            (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $ProcessId)))
-        if ($candidate) {
-            $last = $candidate
-            # 侧栏条目出现即说明是主窗口且界面已挂载（'消费记录' 是默认页）
-            if (Find-First $candidate '消费记录') { return $candidate }
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    return $last
-}
-
-function Save-Screenshot { param([string]$Path)
-    try {
-        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bounds.Size)
-        $graphics.Dispose()
-        $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
-        $bitmap.Dispose()
-        Write-Host "  截图: $Path" -ForegroundColor DarkYellow
-    }
-    catch { Write-Host "  截图失败: $_" -ForegroundColor DarkYellow }
-}
 
 # 同一行里的按钮：先按名字找到"行"元素，再取**中心 Y 最近**、且在该行右侧的那个按钮。
 # 用"距离最近"而不是"包围盒相交"：行文字与右侧图标按钮的盒子未必严格重叠（实测踩过）。
@@ -245,7 +130,7 @@ function Find-RowButton { param($Window, [string]$RowName, [string]$ButtonName)
         return $null
     }
     $rowRect = $row.Current.BoundingRectangle
-    [TrCrud]::SetCursorPos([int]($rowRect.X + $rowRect.Width / 2), [int]($rowRect.Y + $rowRect.Height / 2)) | Out-Null
+    [TrUia]::SetCursorPos([int]($rowRect.X + $rowRect.Width / 2), [int]($rowRect.Y + $rowRect.Height / 2)) | Out-Null
     Start-Sleep -Milliseconds 500
 
     $rowCenter = $rowRect.Y + $rowRect.Height / 2
@@ -324,16 +209,6 @@ function Invoke-ModalPrimaryButton { param($Window)
     return (Invoke-Element $pick.Element)
 }
 
-function Read-Table { param([string]$Table)
-    $dump = Join-Path $OutDir "dump-$Table.json"
-    Push-Location $repo
-    & cargo -q xtask dump $ws --table $Table *> $dump
-    $exit = $LASTEXITCODE
-    Pop-Location
-    if ($exit -ne 0) { throw "导出 $Table 失败（exit=$exit）" }
-    return @((Get-Content $dump -Raw | ConvertFrom-Json).$Table)
-}
-
 # ---- 播种（每次重新播种，保证"新增/删除"是干净的基线）----
 if (-not $Workspace -or -not (Test-Path (Join-Path $ws 'transactions.db'))) {
     if (Test-Path $ws) { Remove-Item $ws -Recurse -Force }
@@ -378,8 +253,8 @@ try {
     Write-Host "[crud] UIA 可读元素 $($elements.Count) 个" -ForegroundColor Cyan
 
     $hwnd = [IntPtr]$window.Current.NativeWindowHandle
-    [TrCrud]::ShowWindow($hwnd, 9) | Out-Null
-    [TrCrud]::SetForegroundWindow($hwnd) | Out-Null
+    [TrUia]::ShowWindow($hwnd, 9) | Out-Null
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 500
 
     # ================= 1/4 分类与标签：新增 → 删除 =================
@@ -387,7 +262,7 @@ try {
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '分类标签')) '打开「分类标签」页'
     Start-Sleep -Seconds 2
 
-    $before = @(Read-Table 'tbl_billadm_category' | Where-Object { $_.name -eq $categoryName })
+    $before = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_category' -OutDir $OutDir | Where-Object { $_.name -eq $categoryName })
     Assert-True ($before.Count -eq 0) "初始没有同名分类（$categoryName）"
 
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增分类')) '点「新增分类」'
@@ -396,7 +271,7 @@ try {
     Invoke-ModalPrimaryButton -Window $window | Out-Null
     Start-Sleep -Seconds 3
 
-    $after = @(Read-Table 'tbl_billadm_category' | Where-Object { $_.name -eq $categoryName })
+    $after = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_category' -OutDir $OutDir | Where-Object { $_.name -eq $categoryName })
     Assert-True ($after.Count -eq 1) "库里出现新分类（$categoryName）"
 
     $deleteButton = Find-RowButton -Window $window -RowName $categoryName -ButtonName '删除'
@@ -409,12 +284,12 @@ try {
         if ($modalDelete.Count -gt 0) { Invoke-Element $modalDelete[$modalDelete.Count - 1] | Out-Null }
         Start-Sleep -Seconds 3
     }
-    $gone = @(Read-Table 'tbl_billadm_category' | Where-Object { $_.name -eq $categoryName })
+    $gone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_category' -OutDir $OutDir | Where-Object { $_.name -eq $categoryName })
     Assert-True ($gone.Count -eq 0) "删除后库里不再有该分类（$categoryName）"
 
     # ---- 标签：先选中一个分类，再新增/删除标签 ----
     Write-Host "`n[crud] 2/4 标签：新增 → 删除"
-    $someCategory = (Read-Table 'tbl_billadm_category' | Where-Object { $_.transaction_type -eq 'expense' } |
+    $someCategory = (Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_category' -OutDir $OutDir | Where-Object { $_.transaction_type -eq 'expense' } |
         Sort-Object sort_order | Select-Object -First 1).name
     $categoryRow = Wait-Element -Root $window -Name $someCategory
     Assert-True ([bool]$categoryRow) "选中分类「$someCategory」（标签挂在分类下）"
@@ -427,7 +302,7 @@ try {
     Assert-True (Set-Value (Wait-Element -Root $window -Name '输入标签名称') $tagName) '填入标签名称'
     Invoke-ModalPrimaryButton -Window $window | Out-Null
     Start-Sleep -Seconds 3
-    $tagAfter = @(Read-Table 'tbl_billadm_tag' | Where-Object { $_.name -eq $tagName })
+    $tagAfter = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_tag' -OutDir $OutDir | Where-Object { $_.name -eq $tagName })
     Assert-True ($tagAfter.Count -eq 1) "库里出现新标签（$tagName）"
 
     $tagDeleteButton = Find-RowButton -Window $window -RowName $tagName -ButtonName '删除'
@@ -439,7 +314,7 @@ try {
         if ($modalButtons.Count -gt 0) { Invoke-Element $modalButtons[$modalButtons.Count - 1] | Out-Null }
         Start-Sleep -Seconds 3
     }
-    $tagGone = @(Read-Table 'tbl_billadm_tag' | Where-Object { $_.name -eq $tagName })
+    $tagGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_tag' -OutDir $OutDir | Where-Object { $_.name -eq $tagName })
     Assert-True ($tagGone.Count -eq 0) "删除后库里不再有该标签（$tagName）"
 
     # ================= 3/4 图表：新增 → 删除（气泡确认）=================
@@ -454,7 +329,7 @@ try {
     Invoke-ModalPrimaryButton -Window $window | Out-Null
     Start-Sleep -Seconds 3
 
-    $chartAfter = @(Read-Table 'tbl_billadm_chart' | Where-Object { $_.title -eq $chartTitle })
+    $chartAfter = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_chart' -OutDir $OutDir | Where-Object { $_.title -eq $chartTitle })
     Assert-True ($chartAfter.Count -eq 1) "库里出现新图表（$chartTitle）"
 
     $chartDeleteButton = Find-RowButton -Window $window -RowName $chartTitle -ButtonName '删除图表'
@@ -473,7 +348,7 @@ try {
         if ($popButtons.Count -gt 0) { Invoke-Element $popButtons[$popButtons.Count - 1] | Out-Null }
         Start-Sleep -Seconds 3
     }
-    $chartGone = @(Read-Table 'tbl_billadm_chart' | Where-Object { $_.title -eq $chartTitle })
+    $chartGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_chart' -OutDir $OutDir | Where-Object { $_.title -eq $chartTitle })
     Assert-True ($chartGone.Count -eq 0) "删除后库里不再有该图表（$chartTitle）"
 
     # ================= 4/4 关键事件：配色 / 描述 / 删除 =================
@@ -486,14 +361,14 @@ try {
     Invoke-ModalPrimaryButton -Window $window | Out-Null
     Start-Sleep -Seconds 3
 
-    $events = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.title -eq $eventTitle })
+    $events = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir | Where-Object { $_.title -eq $eventTitle })
     Assert-True ($events.Count -eq 1) "库里出现新事件（$eventTitle）"
     $eventDate = if ($events.Count -ge 1) { $events[0].date } else { '' }
 
     # ---- 改颜色：点色板（aria-label 就是色值），点击即保存 ----
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name $eventColor)) "点色板 $eventColor"
     Start-Sleep -Seconds 3
-    $colored = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.date -eq $eventDate } | Select-Object -First 1)
+    $colored = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir | Where-Object { $_.date -eq $eventDate } | Select-Object -First 1)
     Assert-True (($colored.Count -eq 1) -and ($colored[0].color -eq $eventColor)) "库里颜色已写入（$($colored[0].color)）"
 
     # ---- 编辑描述：写 Markdown → 保存 ----
@@ -512,7 +387,7 @@ try {
     Assert-True (Set-Value $textarea $markdown) '填入 Markdown 描述'
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '保存')) '点「保存」'
     Start-Sleep -Seconds 3
-    $described = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.date -eq $eventDate } | Select-Object -First 1)
+    $described = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir | Where-Object { $_.date -eq $eventDate } | Select-Object -First 1)
     Assert-True (($described.Count -eq 1) -and ($described[0].content -eq $markdown)) "库里描述已写入（$($described[0].content -replace "`n", '\n')）"
 
     # ---- Markdown **渲染**：正文里的 `# 标题` / `- 第一项` 应被渲染成标题/列表文本，
@@ -551,7 +426,7 @@ try {
         if ($confirmButtons.Count -gt 0) { Invoke-Element $confirmButtons[$confirmButtons.Count - 1] | Out-Null }
         Start-Sleep -Seconds 3
     }
-    $eventGone = @(Read-Table 'tbl_billadm_key_event' | Where-Object { $_.date -eq $eventDate })
+    $eventGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir | Where-Object { $_.date -eq $eventDate })
     Assert-True ($eventGone.Count -eq 0) "删除后库里不再有该事件（$eventDate）"
     # ================= 5/5 消费模板：新建 → 删除（设置页）=================
     Write-Host "`n[crud] 5/5 消费模板：新建 → 删除"
@@ -569,7 +444,7 @@ try {
     if ($categoryPicker) {
         Invoke-Element $categoryPicker | Out-Null
         Start-Sleep -Milliseconds 800
-        $optionName = (Read-Table 'tbl_billadm_category' | Where-Object { $_.transaction_type -eq 'expense' } |
+        $optionName = (Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_category' -OutDir $OutDir | Where-Object { $_.transaction_type -eq 'expense' } |
             Sort-Object sort_order | Select-Object -First 1).name
         $option = Wait-Element -Root $window -Name $optionName
         Assert-True ([bool]$option) "下拉里选中分类「$optionName」"
@@ -578,7 +453,7 @@ try {
     }
     Invoke-ModalButton -Window $window -Name '保存' | Out-Null
     Start-Sleep -Seconds 3
-    $templateRows = @(Read-Table 'tbl_billadm_transaction_tpl' | Where-Object { $_.template_name -eq $templateName })
+    $templateRows = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_tpl' -OutDir $OutDir | Where-Object { $_.template_name -eq $templateName })
     Assert-True ($templateRows.Count -eq 1) "库里出现新模板（$templateName）"
 
     if ($templateRows.Count -eq 1) {
@@ -591,22 +466,10 @@ try {
             if ($templateConfirm.Count -gt 0) { Invoke-Element $templateConfirm[$templateConfirm.Count - 1] | Out-Null }
             Start-Sleep -Seconds 3
         }
-        $templateGone = @(Read-Table 'tbl_billadm_transaction_tpl' | Where-Object { $_.template_name -eq $templateName })
+        $templateGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_tpl' -OutDir $OutDir | Where-Object { $_.template_name -eq $templateName })
         Assert-True ($templateGone.Count -eq 0) "删除后库里不再有该模板（$templateName）"
     }
 }
-finally {
-    if ($failures.Count -gt 0) { Save-Screenshot (Join-Path $OutDir 'failure.png') }
-    if ($process -and -not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $process.WaitForExit(5000) | Out-Null
-    }
-}
+finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Write-Host ''
-if ($failures.Count -gt 0) {
-    Write-Host "[crud] 失败 $($failures.Count) 项：" -ForegroundColor Red
-    $failures | ForEach-Object { Write-Host "   - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host '[crud] 全部通过：分类/标签/图表的增删、事件配色与描述、事件删除都落到库里' -ForegroundColor Green
+Show-TrSummary -Failures $failures -Tag 'crud' -SuccessMessage "[crud] 全部通过：分类/标签/图表的增删、事件配色与描述、事件删除都落到库里"
