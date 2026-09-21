@@ -23,6 +23,69 @@ pub const CLOSE_BEHAVIOR_TRAY: &str = "tray";
 /// 外观取值。
 pub const APPEARANCE_SYSTEM: &str = "system";
 
+/// 功能开关：**哪些顶级功能在侧边栏出现**（「应用设置 → 功能开关」）。
+///
+/// 四个开关对应侧边栏里除「设置」之外的四个顶级功能（见 `tr-ui` 的 `shell::Page`）。
+/// 「设置」本身**不可关闭**：关了就没有界面能再打开它，用户会被锁死。
+///
+/// **默认全开**：`#[serde(default)]` + 字段级默认值都是 `true`，所以
+/// 老配置文件里没有 `features` 这个键时，四个功能照常显示（缺少个别字段同理）。
+/// 配置里存的是 `features: { accounting, stock, keyEvent, diary }`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FeatureFlags {
+    /// 记账（记录 / 分析 / 标签 / 模板）
+    pub accounting: bool,
+    /// 股票
+    pub stock: bool,
+    /// 事件
+    #[serde(rename = "keyEvent")]
+    pub key_event: bool,
+    /// 日记
+    pub diary: bool,
+}
+
+impl Default for FeatureFlags {
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
+impl FeatureFlags {
+    /// 默认全开（新增功能时也按"开"处理）。
+    pub const fn defaults() -> Self {
+        Self {
+            accounting: true,
+            stock: true,
+            key_event: true,
+            diary: true,
+        }
+    }
+
+    /// 按开关名读取；未知名返回 `None`（调用方据此拒绝请求，不做猜测）。
+    pub fn get(&self, feature: &str) -> Option<bool> {
+        Some(match feature {
+            "accounting" => self.accounting,
+            "stock" => self.stock,
+            "keyEvent" => self.key_event,
+            "diary" => self.diary,
+            _ => return None,
+        })
+    }
+
+    /// 按开关名写入；未知名**不写入**并返回 `false`。
+    pub fn set(&mut self, feature: &str, enabled: bool) -> bool {
+        match feature {
+            "accounting" => self.accounting = enabled,
+            "stock" => self.stock = enabled,
+            "keyEvent" => self.key_event = enabled,
+            "diary" => self.diary = enabled,
+            _ => return false,
+        }
+        true
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -47,6 +110,9 @@ pub struct AppConfig {
     /// 缺省 = `auto`（自动探测本机代理）；老配置里没有这个键也按 `auto` 处理。
     #[serde(rename = "proxy")]
     pub proxy: ProxySetting,
+    /// 功能开关：哪些顶级功能在侧边栏出现（缺省 = 全开）。
+    #[serde(rename = "features")]
+    pub features: FeatureFlags,
     /// 未识别字段（其它版本写入的配置项）原样保留
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -64,6 +130,7 @@ impl Default for AppConfig {
             close_behavior: String::new(),
             appearance: APPEARANCE_SYSTEM.to_string(),
             proxy: ProxySetting::default(),
+            features: FeatureFlags::defaults(),
             extra: serde_json::Map::new(),
         }
     }
@@ -171,6 +238,64 @@ mod tests {
         // 代理缺省 = 自动探测（不是 off）：本机有代理就跟着走
         assert_eq!(config.proxy.mode, tr_domain::proxy::PROXY_MODE_AUTO);
         assert!(config.proxy.url.is_empty());
+        // 功能开关缺省 = 全开（用户没关过任何功能）
+        assert_eq!(
+            config.features,
+            // 四个字段逐一断言，避免 `PartialEq` 之外的口径漂移
+            FeatureFlags {
+                accounting: true,
+                stock: true,
+                key_event: true,
+                diary: true,
+            }
+        );
+    }
+
+    #[test]
+    fn feature_flags_default_to_on_and_roundtrip() {
+        let path = temp_path("features");
+        // 老配置（没有 features 键）→ 全开，界面与升级前一致
+        std::fs::write(&path, r#"{"width": 800, "workspaceDir": "D:\\ws"}"#).unwrap();
+        let mut config = AppConfig::load(&path);
+        assert_eq!(config.features, FeatureFlags::defaults());
+
+        // 缺个别字段（其它版本写过的配置）也按"开"处理，而不是 false
+        config.features = serde_json::from_str(r#"{"stock": false}"#).unwrap();
+        assert!(!config.features.stock);
+        assert!(config.features.accounting);
+        assert!(config.features.key_event);
+        assert!(config.features.diary);
+
+        // 写回磁盘再看一遍：键名是 camelCase 的 `keyEvent`，四个字段都落盘
+        config.features = FeatureFlags::defaults();
+        assert!(config.features.set("diary", false));
+        assert!(config.features.set("keyEvent", false));
+        config.save(&path).unwrap();
+
+        let reloaded: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded["features"]["accounting"], true);
+        assert_eq!(reloaded["features"]["stock"], true);
+        assert_eq!(reloaded["features"]["keyEvent"], false);
+        assert_eq!(reloaded["features"]["diary"], false);
+
+        let back = AppConfig::load(&path);
+        assert_eq!(back.features, config.features);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn feature_flags_reject_unknown_names() {
+        let mut flags = FeatureFlags::defaults();
+        // 未知名不读、不写：调用方据此返回"无效的功能开关"（不要静默当成 true/false）
+        assert_eq!(flags.get("nope"), None);
+        assert!(!flags.set("nope", false));
+        assert_eq!(flags, FeatureFlags::defaults());
+        // 已知名两边都能走通
+        assert_eq!(flags.get("stock"), Some(true));
+        assert!(flags.set("stock", false));
+        assert_eq!(flags.get("stock"), Some(false));
     }
 
     #[test]

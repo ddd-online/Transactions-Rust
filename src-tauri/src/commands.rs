@@ -25,7 +25,8 @@ use tr_ipc::{ApiError, ApiResult, AppState};
 
 use crate::assets;
 use crate::config::{
-    home_dir, ConfigStore, APPEARANCE_SYSTEM, CLOSE_BEHAVIOR_QUIT, CLOSE_BEHAVIOR_TRAY,
+    home_dir, ConfigStore, FeatureFlags, APPEARANCE_SYSTEM, CLOSE_BEHAVIOR_QUIT,
+    CLOSE_BEHAVIOR_TRAY,
 };
 use crate::logging::LogSinks;
 use crate::shell;
@@ -173,6 +174,9 @@ pub struct ConfigSnapshot {
     /// 代理设置（`mode` / `url`）；界面「通用设置 → 代理」直接编辑它
     #[serde(rename = "proxy")]
     pub proxy: ProxySetting,
+    /// 功能开关；界面「功能开关」分栏直接编辑它（缺省 = 全开）
+    #[serde(rename = "features")]
+    pub features: FeatureFlags,
 }
 
 #[tauri::command]
@@ -196,6 +200,7 @@ pub fn config_get(state: State<'_, DesktopState>) -> ApiResult<ConfigSnapshot> {
         config_path: state.config.path().to_string_lossy().to_string(),
         is_dev: state.is_dev,
         proxy: config.proxy,
+        features: config.features,
     })
 }
 
@@ -247,6 +252,50 @@ pub fn config_set_appearance(
         let _ = window.set_theme(theme);
     }
     Ok(())
+}
+
+// ------------------------------------------------------------ 功能开关
+
+#[derive(Debug, Deserialize)]
+pub struct SetFeatureRequest {
+    /// 功能名：`accounting` / `stock` / `keyEvent` / `diary`。
+    ///
+    /// 是**硬契约**（界面 `api::desktop::FeatureFlags` 与 `shell::Page::feature_key` 两边都按它写），
+    /// 未知名一律拒绝而不是静默忽略 —— 静默忽略会表现成"开关点了没反应"。
+    pub feature: String,
+    pub enabled: bool,
+}
+
+/// 功能开关：某个顶级功能是否在侧边栏出现。
+///
+/// 只写配置，**不改界面**：侧边栏读的是界面侧的共享状态（`store::AppStores::enabled_features`），
+/// 由界面在调用成功后自己更新，所以这里返回落盘后的完整开关集合，界面拿它回显。
+/// 「设置」不在可关闭之列（`FeatureFlags` 里根本没有它），关掉它就没有界面能再打开它了。
+#[tauri::command]
+pub fn config_set_feature(
+    state: State<'_, DesktopState>,
+    req: SetFeatureRequest,
+) -> ApiResult<FeatureFlags> {
+    let snapshot = state.config.snapshot();
+    // `get` 先拦一次未知名：`set` 对未知名返回 false 也能挡住，但先查一次能让
+    // "这个功能名到底认不认"只有一个判据（`FeatureFlags::get`）。
+    if snapshot.features.get(&req.feature).is_none() {
+        return Err(ApiError::from(AppError::bad_request("无效的功能开关")));
+    }
+    let features = state.config.update(|config| {
+        config.features.set(&req.feature, req.enabled);
+        config.features.clone()
+    });
+    tracing::info!(
+        "IPC config_set_feature: {}={} → accounting={} stock={} keyEvent={} diary={}",
+        req.feature,
+        req.enabled,
+        features.accounting,
+        features.stock,
+        features.key_event,
+        features.diary
+    );
+    Ok(features)
 }
 
 // ------------------------------------------------------------ 代理设置
@@ -700,6 +749,7 @@ mod tests {
             config_path: r"C:\Users\x\.transactions.json".to_string(),
             is_dev: false,
             proxy: ProxySetting::manual("http://127.0.0.1:7890"),
+            features: FeatureFlags::defaults(),
         };
         let value = serde_json::to_value(&snapshot).unwrap();
         let mut keys: Vec<&str> = value
@@ -715,6 +765,7 @@ mod tests {
                 "appearance",
                 "closeBehavior",
                 "configPath",
+                "features",
                 "isDev",
                 "proxy",
                 "workspaceDir"
@@ -722,6 +773,11 @@ mod tests {
         );
         assert_eq!(value["proxy"]["mode"], "manual");
         assert_eq!(value["proxy"]["url"], "http://127.0.0.1:7890");
+        // 功能开关的键名也是契约（界面 `api::desktop::FeatureFlags` 手抄了它）
+        assert_eq!(value["features"]["accounting"], true);
+        assert_eq!(value["features"]["stock"], true);
+        assert_eq!(value["features"]["keyEvent"], true);
+        assert_eq!(value["features"]["diary"], true);
     }
 
     #[test]

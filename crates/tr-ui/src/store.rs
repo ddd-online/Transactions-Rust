@@ -1,9 +1,10 @@
 //! 界面级共享状态。
 //!
-//! 三块界面级共享状态：
+//! 四块界面级共享状态：
 //! * 账本列表 + 当前账本
 //! * 底部状态栏显示的收支统计
 //! * 外观（浅色 / 深色）
+//! * 功能开关（哪些顶级功能在侧边栏出现）
 //!
 //! 实现方式与 [`crate::notify`] 一致：`RwSignal` + 模块级 thread_local 全局槽位。
 //! 原因相同——这些状态会在 `spawn_local` 的异步块与 window 事件回调里被读写，
@@ -14,6 +15,8 @@ use std::collections::BTreeMap;
 
 use leptos::prelude::*;
 use tr_domain::dto::LedgerDto;
+
+use crate::api::desktop::FeatureFlags;
 
 /// 账本切换请求里"全部"的语义值（`tr_domain::consts::ALL`）。
 pub use tr_domain::consts::ALL;
@@ -38,6 +41,10 @@ pub struct AppStores {
     pub statistics: RwSignal<BTreeMap<String, i64>>,
     /// 外观：light / dark / system。
     pub appearance: RwSignal<String>,
+    /// 功能开关：哪些顶级功能在侧边栏出现（`config_get` 读入，设置页写入）。
+    ///
+    /// **默认全开**：首屏读到配置之前的短暂窗口里，侧边栏按"全开"渲染，与老配置一致。
+    pub enabled_features: RwSignal<FeatureFlags>,
 }
 
 thread_local! {
@@ -54,6 +61,7 @@ impl AppStores {
             workspace_dir: RwSignal::new(String::new()),
             statistics: RwSignal::new(BTreeMap::new()),
             appearance: RwSignal::new(APPEARANCE_SYSTEM.to_string()),
+            enabled_features: RwSignal::new(FeatureFlags::all_enabled()),
         }
     }
 
@@ -130,6 +138,18 @@ impl AppStores {
                 let _ = element.remove_attribute("data-theme");
             }
         }
+    }
+
+    /// 某个顶级功能是否启用（未知名 = 启用：宁可想多了显示出来，也别让功能"凭空消失"）。
+    ///
+    /// ⚠ 这是**响应式读取**：在 `view!` 的闭包里调它，开关一变侧边栏就会重渲染。
+    pub fn feature_enabled(&self, feature: &str) -> bool {
+        self.enabled_features.get().get(feature).unwrap_or(true)
+    }
+
+    /// 用后端返回的开关集合覆盖本地状态（`config_set_feature` 的返回值）。
+    pub fn set_enabled_features(&self, features: FeatureFlags) {
+        self.enabled_features.set(features);
     }
 }
 

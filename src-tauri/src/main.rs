@@ -65,6 +65,7 @@ fn main() {
             commands::config_set_close_behavior,
             commands::config_set_appearance,
             commands::config_set_proxy,
+            commands::config_set_feature,
             commands::proxy_detect,
             commands::config_file_path,
             commands::workspace_get,

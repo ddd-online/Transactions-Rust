@@ -99,6 +99,39 @@ impl Page {
             Page::Settings => Icon::Setting,
         }
     }
+
+    /// 功能开关名（`config_set_feature` 的 `feature` 字段）。
+    ///
+    /// **这是与外壳的硬契约**：要跟 `src-tauri/src/config.rs` 的 `FeatureFlags`
+    /// 字段名逐字对上（`keyEvent` 是 camelCase，其余三个是小写单词），
+    /// 写错不会编译报错 —— 后端只会回一句"无效的功能开关"。
+    /// 「设置」返回空串：它**不可关闭**（关掉就没有界面能再打开它了）。
+    pub fn feature_key(self) -> &'static str {
+        match self {
+            Page::Accounting => "accounting",
+            Page::Stock => "stock",
+            Page::KeyEvent => "keyEvent",
+            Page::Diary => "diary",
+            Page::Settings => "",
+        }
+    }
+
+    /// 是否能被「功能开关」关掉（只有「设置」不能）。
+    pub fn toggleable(self) -> bool {
+        !self.feature_key().is_empty()
+    }
+
+    /// 这个功能此刻是否启用（读界面级共享状态）。
+    ///
+    /// 侧边栏渲染与"当前页被关掉后往哪挪"**都走这一个判据**，
+    /// 免得两处各写一遍过滤条件、改了其中一处就对不上。
+    pub fn is_enabled(self) -> bool {
+        if !self.toggleable() {
+            // 「设置」永远可达：关掉它就没有界面能再打开它了
+            return true;
+        }
+        crate::store::AppStores::global().feature_enabled(self.feature_key())
+    }
 }
 
 /// 应用根组件。
@@ -148,6 +181,8 @@ pub fn App() -> impl IntoView {
                 stores.appearance.set(appearance);
                 stores.apply_appearance();
                 stores.workspace_dir.set(config.workspace_dir.clone());
+                // 功能开关：决定侧边栏显示哪几项（老配置里没有这个键 = 全开）
+                stores.set_enabled_features(config.features.clone());
 
                 if config.workspace_dir.is_empty() {
                     // 从未配置过：直接进强制选择屏（不再先渲染界面再弹窗）
@@ -163,6 +198,26 @@ pub fn App() -> impl IntoView {
         };
         workspace_required.set(!opened);
         config_loaded.set(true);
+    });
+
+    // 功能开关把**当前页**关掉时，页面得自己挪走 —— 否则侧边栏里已经没有那一项，
+    // 内容区却还停在那个功能上，"它明明被关了却还在用"。
+    // 挪到侧边栏的第一项（记账 → 股票 → 事件 → 日记里第一个还开着的）；
+    // 全关了就落到「设置」——功能开关就在那里，用户能立刻改回来。
+    //
+    // 这里只读信号、只写信号，**不在 Effect 体内建信号**（那会 dispose 掉界面正在读的值，
+    // 表现为整块视图空白，本仓库已经踩过两次）。
+    Effect::new(move |_| {
+        let page = current_page.get();
+        if page.is_enabled() {
+            return;
+        }
+        let fallback = Page::NAV_ITEMS
+            .iter()
+            .copied()
+            .find(|candidate| candidate.is_enabled())
+            .unwrap_or(Page::Settings);
+        current_page.set(fallback);
     });
 
     view! {
@@ -480,10 +535,15 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
             </div>
 
             <nav class="sidebar-nav" aria-label="主导航">
-                {Page::NAV_ITEMS
-                    .iter()
-                    .map(|page| nav_button(*page, current_page))
-                    .collect_view()}
+                {move || {
+                    // 只渲染**已启用**的功能（「设置」不在 NAV_ITEMS 里，它固定在底部）。
+                    // 关掉当前所在的功能时由下面的 `Effect` 把页面挪走，这里不必兜底。
+                    Page::NAV_ITEMS
+                        .iter()
+                        .filter(|page| page.is_enabled())
+                        .map(|page| nav_button(*page, current_page))
+                        .collect_view()
+                }}
             </nav>
 
             <div class="sidebar-spacer"></div>

@@ -11,6 +11,7 @@
 //! | [`config_set_appearance`] | `{ appearance: light\|dark\|system }` |
 //! | [`config_set_close_behavior`] | `{ behavior: quit\|tray\|"" }` |
 //! | [`config_set_proxy`] | `{ mode: off\|auto\|manual, url }`（返回归一化后的设置） |
+//! | [`config_set_feature`] | `{ feature: accounting\|stock\|keyEvent\|diary, enabled }`（返回落盘后的全部开关） |
 //! | [`proxy_detect`] | 无参数（报告当前设置最终会用哪个代理） |
 //! | [`workspace_get`] | 无参数 |
 //! | [`workspace_set`] | `{ workspaceDir }` |
@@ -66,6 +67,12 @@ struct CloseBehaviorRequest {
 }
 
 #[derive(Debug, Serialize)]
+struct SetFeatureRequest {
+    feature: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct WorkspaceDirRequest {
     #[serde(rename = "workspaceDir")]
     workspace_dir: String,
@@ -89,6 +96,53 @@ struct DevToolsToggleRequest {
     enabled: bool,
 }
 
+/// 功能开关（逐字段照抄 `src-tauri/src/config.rs` 的 `FeatureFlags`）。
+///
+/// **硬契约**：键名要与外壳一致（`keyEvent` 是 camelCase，其余三个是小写单词）。
+/// `Default` = **全开**：外壳漏发这个字段、或老配置里根本没有它时，界面按"没关过任何功能"处理。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct FeatureFlags {
+    /// 记账（记录 / 分析 / 标签 / 模板）
+    pub accounting: bool,
+    /// 股票
+    pub stock: bool,
+    /// 事件
+    #[serde(rename = "keyEvent")]
+    pub key_event: bool,
+    /// 日记
+    pub diary: bool,
+}
+
+impl Default for FeatureFlags {
+    fn default() -> Self {
+        Self::all_enabled()
+    }
+}
+
+impl FeatureFlags {
+    /// 全开（新增功能时的默认值）。
+    pub const fn all_enabled() -> Self {
+        Self {
+            accounting: true,
+            stock: true,
+            key_event: true,
+            diary: true,
+        }
+    }
+
+    /// 按功能名读取（`shell::Page::feature_key` 用的就是这几个名字）。
+    pub fn get(&self, feature: &str) -> Option<bool> {
+        Some(match feature {
+            "accounting" => self.accounting,
+            "stock" => self.stock,
+            "keyEvent" => self.key_event,
+            "diary" => self.diary,
+            _ => return None,
+        })
+    }
+}
+
 /// `config_get` 的返回（逐字段照抄 `commands.rs` 的 `ConfigSnapshot`）。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -108,6 +162,8 @@ pub struct ConfigSnapshot {
     /// 这里**直接复用 `tr_domain::proxy::ProxySetting`**（两侧同一份类型，不是手抄，
     /// 所以不存在字段漂移）；缺省值是 `auto`，后端漏发该字段时也按自动探测处理。
     pub proxy: ProxySetting,
+    /// 功能开关（缺省 = 全开，见 [`FeatureFlags`]）。
+    pub features: FeatureFlags,
 }
 
 /// `proxy_detect` 的返回（逐字段照抄 `commands.rs` 的 `ProxyDetectResponse`）。
@@ -210,6 +266,21 @@ pub async fn config_set_close_behavior(behavior: &str) -> Result<(), IpcError> {
 /// 后端会校验并归一化地址，成功时返回可落盘的那份（界面用它回显）。
 pub async fn config_set_proxy(setting: ProxySetting) -> Result<ProxySetting, IpcError> {
     ipc::call("config_set_proxy", setting).await
+}
+
+/// 设置某个顶级功能是否启用（决定它是否出现在侧边栏）。
+///
+/// `feature` 只认 `accounting` / `stock` / `keyEvent` / `diary`（与
+/// [`crate::shell::Page::feature_key`] 同名字）；返回落盘后的**全部**开关，界面用它回显。
+pub async fn config_set_feature(feature: &str, enabled: bool) -> Result<FeatureFlags, IpcError> {
+    ipc::call(
+        "config_set_feature",
+        SetFeatureRequest {
+            feature: feature.to_string(),
+            enabled,
+        },
+    )
+    .await
 }
 
 /// 检测：按当前设置报告最终会用哪个代理（只读，不写配置、不改系统设置）。

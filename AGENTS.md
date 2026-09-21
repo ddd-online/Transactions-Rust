@@ -64,6 +64,8 @@ pwsh -File fixtures/ui-stock.ps1           [-Exe <exe>] [-Workspace <ws>] [-OutD
 pwsh -File fixtures/ui-key-event.ps1       [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 pwsh -File fixtures/ui-link-event.ps1      [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 pwsh -File fixtures/ui-proxy.ps1           [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+pwsh -File fixtures/ui-about.ps1           [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+pwsh -File fixtures/ui-features.ps1        [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 pwsh -File fixtures/migrate-workspace.ps1  [-Exe <exe>] [-OutDir <dir>]
 
 # 代码规范
@@ -124,6 +126,11 @@ cargo clippy --all-targets -- -D warnings
 - `ui-proxy`：起一个本机假 HTTP 代理当判据 → 界面「通用设置 → 代理」手动指向它 → 断言行情
   （`qt.gtimg.cn`）与更新检查（`api.github.com`）都出现在假代理日志里、行情名称显示的是假代理返回的
   名字 → 切「不使用」→ 断言假代理一条都收不到。只断言配置文件写了什么等于什么都没验。
+- `ui-features`：「应用设置 → 功能开关」端到端。默认（配置里没有 `features` 键）四项都出现在侧栏 →
+  关掉「日记」→ 断言**侧栏当场少一项** + 配置文件 `features.diary=false`（其余开关不受影响）→
+  开回来 → 侧栏恢复 + `features.diary=true` → 关掉再**重启**，断言侧栏仍然没有它（证明真的读了配置，
+  不是只在内存里）。开关按钮是 `<button role="switch">`（UIA 带 `TogglePattern`），侧栏条目是带图标文字的
+  普通按钮 —— 两边可访问名都可能叫「日记」，所以定位不能只看名字。
 
 工具链要求：rust stable 1.96.0 加 `wasm32-unknown-unknown` target。仓库故意不放 `rust-toolchain.toml`，
 因为指定具体版本会让 rustup 每次调用都校验并重装组件（实测会触发数百 MB 的重复下载），
@@ -523,6 +530,12 @@ cargo clippy --all-targets -- -D warnings
   渲染整个应用，主窗口一直不出现（托盘"显示主窗口"才会补出来，于是变成两个窗口）。
 - **配置文件是用户数据**：`~/.transactions.json`（dev 为 `~/.transactions-dev.json`）
   的键名与位置都不变，并且读写时必须保留未知键（`AppConfig.extra`）。
+  其中 `features: { accounting, stock, keyEvent, diary }` 是「应用设置 → 功能开关」，
+  **缺省全开**（`#[serde(default)]` + 字段默认 `true`，老配置没有这个键也照常显示全部功能）。
+  它是**跨层面**的：外壳只负责落盘（`config_set_feature`），侧栏读的是界面侧
+  `store::AppStores::enabled_features`（`shell::Page::is_enabled` 是唯一判据），
+  两边靠 `feature_key` 的字符串对齐 —— 名字写错不会编译报错，只会得到一句"无效的功能开关"。
+  `cargo test -p transactions config` 会锁住键名与"缺省全开"；端到端见 `fixtures/ui-features.ps1`。
 - **界面无 Node**：仓库里没有 npm/package.json，没有 vendor 的 JS 库。
   图表、Markdown、拖拽排序、日期选择等全部是 Rust 实现（见 `tr-ui`）。
 - **设计令牌**：`--transactions-*` CSS 变量是颜色/尺寸的唯一来源（对应 `DESIGN.md` 的调色板；

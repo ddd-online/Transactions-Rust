@@ -1,6 +1,6 @@
-//! 应用设置页（P6-a）：3 个分栏。
+//! 应用设置页（P6-a）：4 个分栏。
 //!
-//! 分栏与顺序（固定文案，改动即影响界面）：通用设置 / 日记配置 / 关于软件。
+//! 分栏与顺序（固定文案，改动即影响界面）：通用设置 / 功能开关 / 日记配置 / 关于软件。
 //!
 //! 两个分栏已经迁走，别再往这里加回：
 //! * 「消费模板」原是本页第 2 个分栏，现属记账事务 → 记账页的**模板**子功能
@@ -49,7 +49,7 @@ use tr_domain::proxy::{ProxySetting, PROXY_MODE_AUTO, PROXY_MODE_MANUAL, PROXY_M
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, FeaturePage, Input, Progress, Segmented, SegmentedOption,
-    Spin, SpinSize, TabItem, TabPane, Tabs, Tooltip,
+    Spin, SpinSize, Switch, TabItem, TabPane, Tabs, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
@@ -61,6 +61,7 @@ use crate::store::{AppStores, APPEARANCE_DARK, APPEARANCE_LIGHT, APPEARANCE_SYST
 pub const PAGE_TITLE: &str = "应用设置";
 
 const TAB_GENERAL: &str = "general";
+const TAB_FEATURES: &str = "features";
 const TAB_DIARY: &str = "diary";
 const TAB_ABOUT: &str = "about";
 
@@ -72,6 +73,7 @@ pub fn SettingsPage() -> impl IntoView {
     let active = RwSignal::new(TAB_GENERAL.to_string());
     let items = vec![
         TabItem::new(TAB_GENERAL, "通用设置"),
+        TabItem::new(TAB_FEATURES, "功能开关"),
         TabItem::new(TAB_DIARY, "日记配置"),
         TabItem::new(TAB_ABOUT, "关于软件"),
     ];
@@ -86,6 +88,9 @@ pub fn SettingsPage() -> impl IntoView {
         <div class="st-panes">
             <TabPane active=active key=TAB_GENERAL>
                 <GeneralSetting />
+            </TabPane>
+            <TabPane active=active key=TAB_FEATURES>
+                <FeatureSetting />
             </TabPane>
             <TabPane active=active key=TAB_DIARY>
                 <DiarySetting />
@@ -457,6 +462,147 @@ impl DiaryImportRow {
             "error" => "error",
             _ => "pending",
         }
+    }
+}
+
+/// 功能开关：四个顶级功能各自一行的开关（关掉就不再出现在侧边栏）。
+///
+/// 设计约定（改前先读）：
+/// * **一行一个功能，右侧是开关**，默认全开；改动立即落盘，不需要「保存」按钮
+///   （与「外观」「关闭行为」同一口径）。
+/// * 只有**顶级功能**可关，页内的子功能不在这里（它们是同一件事的几种看法，不是独立功能）。
+/// * **「设置」不在列表里**：它必须永远可达 —— 关掉它就没有任何界面能再把它打开。
+/// * 开关的读写在 `config_set_feature`，权威状态在 `store::AppStores::enabled_features`；
+///   侧边栏读同一个信号，所以拨动开关时侧边栏**当场**就少一项/多一项。
+#[component]
+fn FeatureSetting() -> impl IntoView {
+    let stores = AppStores::global();
+
+    /// 一行：功能名 + 一句话说明。
+    struct FeatureRow {
+        key: &'static str,
+        title: &'static str,
+        description: &'static str,
+        /// 界面上的开关值。
+        ///
+        /// `Switch` 要的是 `RwSignal<bool>`（它是"受控组件：自己改值 + 回调通知"的形态，
+        /// 见 `components/ui/switch.rs`），所以这里给每行建一个本地信号，
+        /// 再由下面的 `Effect` 与全局开关集合**单向同步**。
+        checked: RwSignal<bool>,
+    }
+
+    let features: Vec<FeatureRow> = [
+        ("accounting", "记账", "记录 / 分析 / 标签 / 模板，默认功能"),
+        ("stock", "股票", "建仓、持仓、成交与资金记录、行情统计"),
+        ("keyEvent", "事件", "关键事件与日记、交易的关联"),
+        ("diary", "日记", "按账本隔离的 Markdown 日记"),
+    ]
+    .into_iter()
+    .map(|(key, title, description)| FeatureRow {
+        key,
+        title,
+        description,
+        // 初值取自全局开关集合（首屏已由 `shell::App` 读进配置）
+        checked: RwSignal::new(
+            stores
+                .enabled_features
+                .get_untracked()
+                .get(key)
+                .unwrap_or(true),
+        ),
+    })
+    .collect();
+
+    // 正在保存的开关（同一时刻一般只有一个）。保存期间该行开关置灰，防连点。
+    let saving = RwSignal::new(Vec::<&'static str>::new());
+
+    // 每行的本地信号**按功能名建一次就固定下来**：开关要拿它显示，保存失败时又要拿它回滚。
+    // 用 `Rc` 是为了这份表能被反复取用（回调可能触发多次，裸 `Vec` 会被 move 走）。
+    let checked_signals: std::rc::Rc<Vec<(&'static str, RwSignal<bool>)>> =
+        std::rc::Rc::new(features.iter().map(|row| (row.key, row.checked)).collect());
+
+    // 用 `Rc<dyn Fn>` 而不是裸闭包：它要被 move 进**每一个**开关的回调里，
+    // 而裸闭包移进第二个就会报"移出捕获变量"（四个开关共用一个回调）。
+    let set_feature: std::rc::Rc<dyn Fn(&'static str, bool)> =
+        std::rc::Rc::new(move |key: &'static str, enabled: bool| {
+            if saving.get_untracked().contains(&key) {
+                return;
+            }
+            saving.update(|list| list.push(key));
+            let checked_signals = std::rc::Rc::clone(&checked_signals);
+            leptos::task::spawn_local(async move {
+                match api::desktop::config_set_feature(key, enabled).await {
+                    // 后端返回**落盘后的全部开关**，用它覆盖本地状态最权威
+                    // （不用自己记"点之前是什么"，也就没有回滚写错值的可能）。
+                    Ok(features) => stores.set_enabled_features(features),
+                    Err(error) => {
+                        notify_error("设置功能开关", &error);
+                        // 失败时把这一行的开关**拨回磁盘上的真实值**。全局集合没变，所以下面那个
+                        // Effect 不会重跑（它只订阅全局集合），得在这里主动同步一次；
+                        // 否则开关会停在用户点的那一侧 —— 看着像已经生效了。
+                        if let Some((_, checked)) =
+                            checked_signals.iter().find(|(name, _)| *name == key)
+                        {
+                            checked.set(
+                                stores
+                                    .enabled_features
+                                    .get_untracked()
+                                    .get(key)
+                                    .unwrap_or(true),
+                            );
+                        }
+                    }
+                }
+                saving.update(|list| list.retain(|item| *item != key));
+            });
+        });
+
+    // 全局开关集合 → 每行本地信号（单向同步）。两处会改变全局集合：
+    // 写入成功后（后端返回值）、以及别处重新读了配置。
+    // 写入**失败**时全局集合没变，所以这里不会重跑 —— 那种情况由 `set_feature` 的错误分支
+    // 主动把那一行拨回去（见上面的注释）。
+    //
+    // ⚠ 只读信号、只写信号，**不在 Effect 体内建信号**（那会 dispose 掉界面正在读的值，
+    // 表现为整块视图空白，本仓库已经踩过两次）。
+    for row in &features {
+        let key = row.key;
+        let checked = row.checked;
+        Effect::new(move |_| {
+            let enabled = stores.enabled_features.get().get(key).unwrap_or(true);
+            if checked.get_untracked() != enabled {
+                checked.set(enabled);
+            }
+        });
+    }
+
+    view! {
+        <div class="st-list">
+            {features
+                .into_iter()
+                .map(|row| {
+                    let key = row.key;
+                    let checked = row.checked;
+                    let busy = Signal::derive(move || saving.get().contains(&key));
+                    // 每个开关的回调各持一份：同一个 `Fn` 闭包被 move 进多个闭包会变成"移出捕获变量"
+                    let set_feature = std::rc::Rc::clone(&set_feature);
+                    view! {
+                        <div class="st-card">
+                            <div class="st-card-info">
+                                <span class="st-card-title">{row.title}</span>
+                                <span class="st-card-desc">{row.description}</span>
+                            </div>
+                            <div class="st-card-action">
+                                <Switch
+                                    checked=checked
+                                    disabled=busy
+                                    on_change=move |next: bool| set_feature(key, next)
+                                />
+                            </div>
+                        </div>
+                    }
+                })
+                .collect_view()}
+        </div>
     }
 }
 
