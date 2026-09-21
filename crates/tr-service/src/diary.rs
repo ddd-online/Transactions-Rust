@@ -1,4 +1,7 @@
-//! 日记服务：日期树（列表/查询）、导入（扫描目录 + 逐文件导入）、导出（按月/年筛选后写 `<date>.md`）。
+//! 日记服务：日期树（列表/查询）、导入（扫描目录 + 逐文件导入）、导出（按月/年筛选后写 `<date>.txt`）。
+//!
+//! 导入与导出**都只支持 `.txt`**：正文是纯文本（界面不做 Markdown 渲染），
+//! 扫描时只认 `YYYY-MM-DD.txt`，导出也一律写 `.txt`，两个方向对称、导出即可再导入。
 //!
 //! **日记按账本隔离**：所有读写都必须带 `ledger_id`（唯一键是 `(ledger_id, date)`），
 //! 导入落到指定账本，导出只导指定账本。
@@ -66,7 +69,7 @@ pub fn delete_by_date(workspace: &Workspace, ledger_id: &str, date: &str) -> Ser
     Ok(())
 }
 
-/// 递归扫描目录，找出 `YYYY-MM-DD.txt` / `YYYY-MM-DD.md` 并按日期升序返回。
+/// 递归扫描目录，找出 `YYYY-MM-DD.txt` 并按日期升序返回（**其它扩展名一律跳过**）。
 ///
 /// 只读文件系统、不碰数据库，因此**不需要账本**。
 pub fn scan_directory(directory: &str) -> ServiceResult<DiaryScanResponse> {
@@ -78,12 +81,25 @@ pub fn scan_directory(directory: &str) -> ServiceResult<DiaryScanResponse> {
 }
 
 /// 导入单个文件（编码自动识别）到指定账本，导入后返回条目。
+///
+/// 与扫描同一口径：**只接受 `.txt`**。界面走的顺序是"扫描 → 逐个导入"，
+/// 文件是扫描挑出来的，所以这里再挡一次是防"调用方自己传了别的文件"，
+/// 免得出现"扫描只看 `.txt`、导入却能塞进任何文件"的两套口径。
 pub fn import_file(
     workspace: &Workspace,
     ledger_id: &str,
     path: &str,
     date: &str,
 ) -> ServiceResult<DiaryEntry> {
+    let name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if parse_diary_file_name(name).is_none() {
+        return Err(ServiceError::Internal(format!(
+            "只支持 YYYY-MM-DD.txt 格式的日记文件: {path}"
+        )));
+    }
     let raw = std::fs::read(path)
         .map_err(|error| ServiceError::Internal(format!("读取文件失败 {path}: {error}")))?;
     let content = decode_text(&raw);
@@ -125,7 +141,7 @@ pub fn export_to_directory(
     };
 
     for entry in &entries {
-        let file_path = Path::new(directory).join(format!("{}.md", entry.date));
+        let file_path = Path::new(directory).join(format!("{}.txt", entry.date));
         match std::fs::write(&file_path, entry.content.as_bytes()) {
             Ok(()) => result.success += 1,
             Err(error) => result.failed.push(DiaryExportFileError {
@@ -160,10 +176,13 @@ fn collect_diary_files(directory: &Path, out: &mut Vec<DiaryFileItem>) -> std::i
     Ok(())
 }
 
-/// 匹配 `^(\d{4}-\d{2}-\d{2})\.(txt|md)$`，并校验日期真实存在。
+/// 匹配 `^(\d{4}-\d{2}-\d{2})\.txt$`，并校验日期真实存在。
+///
+/// **只认 `.txt`**：日记正文是纯文本（不做 Markdown 渲染），导入导出都用 `.txt`。
+/// 别的扩展名（`.md` / `.markdown` / 无扩展名…）一律跳过，不猜内容格式。
 fn parse_diary_file_name(name: &str) -> Option<&str> {
     let (stem, extension) = name.rsplit_once('.')?;
-    if extension != "txt" && extension != "md" {
+    if extension != "txt" {
         return None;
     }
     if !is_valid_date(stem) {
@@ -302,16 +321,19 @@ mod tests {
     }
 
     #[test]
-    fn scan_finds_only_valid_names_recursively_and_sorts() {
+    fn scan_finds_only_txt_files_recursively_and_sorts() {
         let dir = temp_dir("scan");
         let nested = dir.join("sub");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(dir.join("2026-01-02.md"), "b").unwrap();
         std::fs::write(nested.join("2026-01-01.txt"), "a").unwrap();
-        std::fs::write(dir.join("2026-01-03.markdown"), "c").unwrap(); // 扩展名不支持
-        std::fs::write(dir.join("2026-02-30.md"), "d").unwrap(); // 不存在的日期
-        std::fs::write(dir.join("note.md"), "e").unwrap(); // 无日期
-        std::fs::write(dir.join("x2026-01-04.md"), "f").unwrap(); // 前缀多余
+        std::fs::write(dir.join("2026-01-02.txt"), "b").unwrap();
+        // 下面这些都不该被收进来
+        std::fs::write(dir.join("2026-01-03.md"), "c").unwrap(); // 只支持 .txt
+        std::fs::write(dir.join("2026-01-04.markdown"), "d").unwrap(); // 扩展名不支持
+        std::fs::write(dir.join("2026-02-30.txt"), "e").unwrap(); // 不存在的日期
+        std::fs::write(dir.join("note.txt"), "f").unwrap(); // 无日期
+        std::fs::write(dir.join("x2026-01-05.txt"), "g").unwrap(); // 前缀多余
+        std::fs::write(dir.join("2026-01-06"), "h").unwrap(); // 没有扩展名
 
         let response = scan_directory(dir.to_str().unwrap()).unwrap();
         let dates: Vec<&str> = response
@@ -320,7 +342,7 @@ mod tests {
             .map(|file| file.date.as_str())
             .collect();
         assert_eq!(dates, vec!["2026-01-01", "2026-01-02"]);
-        assert!(response.files[1].path.ends_with("2026-01-02.md"));
+        assert!(response.files[1].path.ends_with("2026-01-02.txt"));
 
         // 目录不存在时报错
         assert!(scan_directory(dir.join("nope").to_str().unwrap()).is_err());
@@ -332,10 +354,10 @@ mod tests {
     fn import_decodes_utf8_utf16_and_gbk() {
         let (workspace, dir) = workspace("import");
         let files = temp_dir("import");
-        let utf8_path = files.join("utf8.txt");
-        let utf16_path = files.join("utf16.txt");
-        let gbk_path = files.join("gbk.txt");
-        let broken_path = files.join("broken.txt");
+        let utf8_path = files.join("2026-01-01.txt");
+        let utf16_path = files.join("2026-01-02.txt");
+        let gbk_path = files.join("2026-01-03.txt");
+        let broken_path = files.join("2026-01-04.txt");
 
         std::fs::write(&utf8_path, "中文内容".as_bytes()).unwrap();
         // UTF-16LE + BOM
@@ -378,6 +400,30 @@ mod tests {
         std::fs::remove_dir_all(&files).ok();
     }
 
+    /// 导入侧也要挡非 `.txt`：扫描只看 `.txt`，导入却是"给什么读什么"就会变成两套口径。
+    #[test]
+    fn import_rejects_non_txt_files() {
+        let (workspace, dir) = workspace("import-reject");
+        let files = temp_dir("import-reject");
+        let md_path = files.join("2026-01-01.md");
+        std::fs::write(&md_path, "正文").unwrap();
+
+        let error =
+            import_file(&workspace, LEDGER, md_path.to_str().unwrap(), "2026-01-01").unwrap_err();
+        assert!(
+            error.to_string().contains("YYYY-MM-DD.txt"),
+            "错误文案应说清只支持 .txt: {error}"
+        );
+
+        // 文件名里的日期非法也拦（例如 2026-02-30）
+        let bad_date = files.join("2026-02-30.txt");
+        std::fs::write(&bad_date, "正文").unwrap();
+        assert!(import_file(&workspace, LEDGER, bad_date.to_str().unwrap(), "2026-02-30").is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&files).ok();
+    }
+
     #[test]
     fn export_filters_by_year_and_month() {
         let (workspace, dir) = workspace("export");
@@ -391,9 +437,9 @@ mod tests {
         assert_eq!(result.total, 3);
         assert_eq!(result.success, 3);
         assert!(result.failed.is_empty());
-        assert!(out.join("2026-01-01.md").exists());
+        assert!(out.join("2026-01-01.txt").exists());
         assert_eq!(
-            std::fs::read_to_string(out.join("2026-02-01.md")).unwrap(),
+            std::fs::read_to_string(out.join("2026-02-01.txt")).unwrap(),
             "二月"
         );
 
@@ -402,15 +448,15 @@ mod tests {
         let result =
             export_to_directory(&workspace, LEDGER, year_out.to_str().unwrap(), 2026, 0).unwrap();
         assert_eq!(result.total, 2);
-        assert!(!year_out.join("2025-12-31.md").exists());
+        assert!(!year_out.join("2025-12-31.txt").exists());
 
         // 按年月
         let month_out = temp_dir("export-month");
         let result =
             export_to_directory(&workspace, LEDGER, month_out.to_str().unwrap(), 2026, 2).unwrap();
         assert_eq!(result.total, 1);
-        assert!(month_out.join("2026-02-01.md").exists());
-        assert!(!month_out.join("2026-01-01.md").exists());
+        assert!(month_out.join("2026-02-01.txt").exists());
+        assert!(!month_out.join("2026-01-01.txt").exists());
 
         // 目录不存在时自动创建
         let nested = out.join("a").join("b");
@@ -465,7 +511,7 @@ mod tests {
         for file in &scan.files {
             let entry = import_file(&target, LEDGER, &file.path, &file.date).unwrap();
             assert_eq!(entry.date, file.date);
-            // 导出格式是纯 Markdown，只有正文；mood 不随文件走
+            // 导出格式是纯文本（`.txt`），只有正文；mood 不随文件走
             assert_eq!(entry.mood, "");
         }
 
@@ -537,9 +583,9 @@ mod tests {
         let out = temp_dir("export-ledger-out");
         let result = export_to_directory(&workspace, LEDGER, out.to_str().unwrap(), 0, 0).unwrap();
         assert_eq!((result.total, result.success), (1, 1));
-        assert!(out.join("2026-01-01.md").exists());
+        assert!(out.join("2026-01-01.txt").exists());
         assert!(
-            !out.join("2026-01-02.md").exists(),
+            !out.join("2026-01-02.txt").exists(),
             "别的账本的日记不得被导出"
         );
 

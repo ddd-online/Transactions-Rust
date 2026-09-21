@@ -495,7 +495,7 @@ fn FeatureSetting() -> impl IntoView {
         ("accounting", "记账", "记录 / 分析 / 标签 / 模板，默认功能"),
         ("stock", "股票", "建仓、持仓、成交与资金记录、行情统计"),
         ("keyEvent", "事件", "关键事件与日记、交易的关联"),
-        ("diary", "日记", "按账本隔离的 Markdown 日记"),
+        ("diary", "日记", "按账本隔离的纯文本日记，可导入导出 txt"),
     ]
     .into_iter()
     .map(|(key, title, description)| FeatureRow {
@@ -659,7 +659,7 @@ fn DiarySetting() -> impl IntoView {
             };
 
             if scan.files.is_empty() {
-                Notifier::global().info("未找到符合格式的日记文件（YYYY-MM-DD.txt / .md）", None);
+                Notifier::global().info("未找到符合格式的日记文件（YYYY-MM-DD.txt）", None);
                 import_status.set("idle".to_string());
                 return;
             }
@@ -837,13 +837,13 @@ fn DiarySetting() -> impl IntoView {
                     <div class="st-card-info">
                         <span class="st-card-title">"导入日记"</span>
                         <span class="st-card-desc">
-                            "从本地目录批量导入当前账本，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md"
+                            "从本地目录批量导入当前账本，文件名需为 YYYY-MM-DD.txt"
                         </span>
                     </div>
                     <div class="st-card-action">
                         // 触发器在卡片右列（≈版心右缘）：气泡改为右对齐，否则居中的长文案会顶出窗口被裁
                         <Tooltip
-                            title="从本地目录批量导入当前账本，文件名需为 YYYY-MM-DD.txt 或 YYYY-MM-DD.md"
+                            title="从本地目录批量导入当前账本，文件名需为 YYYY-MM-DD.txt（只支持 txt）"
                             class="ui-tooltip--end"
                         >
                             <Button
@@ -864,7 +864,7 @@ fn DiarySetting() -> impl IntoView {
                     <div class="st-card-info">
                         <span class="st-card-title">"导出日记"</span>
                         <span class="st-card-desc">
-                            "把当前账本的日记导出为 Markdown 文件（YYYY-MM-DD.md），可重新导入"
+                            "把当前账本的日记导出为纯文本文件（YYYY-MM-DD.txt），可重新导入"
                         </span>
                         <div class="st-scope-row">
                             <Segmented
@@ -890,7 +890,7 @@ fn DiarySetting() -> impl IntoView {
                     <div class="st-card-action">
                         // 同上：右对齐展开，长文案不越出窗口
                         <Tooltip
-                            title="把当前账本的日记导出为 Markdown 文件（YYYY-MM-DD.md），可在别的账本重新导入"
+                            title="把当前账本的日记导出为纯文本文件（YYYY-MM-DD.txt），可在别的账本重新导入"
                             class="ui-tooltip--end"
                         >
                             <Button

@@ -95,8 +95,11 @@ cargo clippy --all-targets -- -D warnings
   选「是」后退出（原生询问框的按钮在 UIA 里是 `是(Y)`/`否(N)`，Pane 类型）。
 - `ui-upload`：点「添加图片」拉起原生文件框，选一张自己生成的 600×400 PNG，断言原图按原字节落盘 +
   缩略图缩到 300×200 且同目录同名前缀 + 库里 `file_path`/`thumb_path`/`event_date` + 界面出现「下载图片」。
-- `ui-diary-io`：驱动原生选目录框导入一个临时目录（UTF-8 + GBK + 一个非法文件名），断言正文逐字节落库、
-  `word_count` 按标量值、非法文件名被跳过；再导出到空目录断言文件数/命名/正文与库一致。
+- `ui-diary-io`：驱动原生选目录框导入一个临时目录（UTF-8 + GBK + 一个非法文件名 + 一个 `.md`），
+  断言正文逐字节落库、`word_count` 按标量值、非法文件名与**非 `.txt`** 都被跳过；
+  再导出到空目录断言文件数/命名（`<日期>.txt`）/正文与库一致、且目录里没有 `.md`。
+  日记**导入导出都只支持 `.txt`**（正文是纯文本），`crates/tr-service/src/diary.rs` 的
+  `parse_diary_file_name` 是唯一判据，扫描与 `import_file` 两侧共用它。
 - `ui-diary-edit`：进日记页（首屏是预览态，要先点页脚的「编辑」）→ 写内容 → `Ctrl+S`（没有保存按钮，
   靠 `input` 后 1500ms 防抖自动保存）→ 断言正文/字数/心情落库 → 点心情「开心」→ 断言 `mood=😊`
   且 id 不变（同一天 upsert）→「预览」里 Markdown 渲染出标题 → 删除。

@@ -200,16 +200,20 @@ if (-not $Workspace -or -not (Test-Path (Join-Path $ws 'transactions.db'))) {
 }
 
 # ---- 准备待导入的目录：三种编码 + 多行正文，覆盖面尽量宽 ----
+# ⚠ 只支持 `.txt`（导入导出都是）：下面那个 `.md` 文件是**故意**放的，
+#    用来断言"非 txt 一律跳过"，别把它改成 .txt —— 那样就没人看着这条规矩了。
 $importDir = Join-Path $OutDir 'import-src'
 if (Test-Path $importDir) { Remove-Item $importDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $importDir | Out-Null
 $utf8Content = "导入的第一行`n导入的第二行 🙂"
-$utf8Path = Join-Path $importDir '2027-03-01.md'
+$utf8Path = Join-Path $importDir '2027-03-01.txt'
 [System.IO.File]::WriteAllText($utf8Path, $utf8Content, (New-Object System.Text.UTF8Encoding($false)))
 $gbkPath = Join-Path $importDir '2027-03-02.txt'
 [System.IO.File]::WriteAllBytes($gbkPath, [System.Text.Encoding]::GetEncoding('GB18030').GetBytes('GBK 编码的日记'))
 # 文件名不合法 → 必须被扫描跳过（不报错、不入库）
-[System.IO.File]::WriteAllText((Join-Path $importDir 'not-a-date.md'), 'should be skipped', (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText((Join-Path $importDir 'not-a-date.txt'), 'should be skipped', (New-Object System.Text.UTF8Encoding($false)))
+# 格式不支持（只认 .txt）→ 同样必须被跳过
+[System.IO.File]::WriteAllText((Join-Path $importDir '2027-03-03.md'), 'md should be skipped', (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "[diary] 导入源目录: $importDir" -ForegroundColor Cyan
 
 $exportDir = Join-Path $OutDir 'export-out'
@@ -288,17 +292,20 @@ try {
     Assert-True ($imported.Count -eq 2) "库里新增 2 篇日记（实际 $($imported.Count)）"
     $currentLedger = ''
     if ($imported.Count -eq 2) {
-        $md = $imported | Where-Object { $_.date -eq '2027-03-01' }
+        $utf8Row = $imported | Where-Object { $_.date -eq '2027-03-01' }
         $txt = $imported | Where-Object { $_.date -eq '2027-03-02' }
-        Assert-True ($md.content -eq $utf8Content) 'UTF-8 文件正文逐字节导入（含 emoji 与换行）'
+        Assert-True ($utf8Row.content -eq $utf8Content) 'UTF-8 文件正文逐字节导入（含 emoji 与换行）'
         Assert-True ($txt.content -eq 'GBK 编码的日记') 'GBK 文件按编码回退链正确解码'
-        Assert-True ($md.word_count -eq (Get-CharCount $utf8Content)) "word_count 按 Unicode 标量值计数（期望 $(Get-CharCount $utf8Content)，实际 $($md.word_count)）"
+        Assert-True ($utf8Row.word_count -eq (Get-CharCount $utf8Content)) "word_count 按 Unicode 标量值计数（期望 $(Get-CharCount $utf8Content)，实际 $($utf8Row.word_count)）"
         # 日记按账本隔离：两篇都落在**同一个当前账本**里
-        Assert-True (-not [string]::IsNullOrEmpty($md.ledger_id)) "导入的日记带账本 id（实际 '$($md.ledger_id)'）"
-        Assert-True ($md.ledger_id -eq $txt.ledger_id) '同一次导入的两篇落在同一个账本'
-        $currentLedger = $md.ledger_id
+        Assert-True (-not [string]::IsNullOrEmpty($utf8Row.ledger_id)) "导入的日记带账本 id（实际 '$($utf8Row.ledger_id)'）"
+        Assert-True ($utf8Row.ledger_id -eq $txt.ledger_id) '同一次导入的两篇落在同一个账本'
+        $currentLedger = $utf8Row.ledger_id
     }
     Assert-True (@($after | Where-Object { $_.content -eq 'should be skipped' }).Count -eq 0) '文件名不合法的文件被跳过（不入库、不报错）'
+    # 只支持 .txt：那个 2027-03-03.md 必须没进来（上面断言"只新增 2 篇"已经覆盖，
+    # 这里再点名一次，坏了能一眼看出是哪条规矩）
+    Assert-True (@($after | Where-Object { $_.date -eq '2027-03-03' }).Count -eq 0) '非 .txt 的文件被跳过（不支持 .md）'
 
     Write-Host "`n[diary] 2/2 点「批量导出」导出到空目录（只导当前账本）"
     # 导出只覆盖**当前账本**：先只取该账本的行来比对（种子的两篇在默认账本，
@@ -318,18 +325,20 @@ try {
         Assert-True (Select-Directory -Dialog $dialog2 -Directory $exportDir -ProcessId $process.Id -Step 'export') '导出目录已选定'
     }
 
-    # 导出是异步的：轮询目录里出现的 .md 文件数
+    # 导出是异步的：轮询目录里出现的 .txt 文件数
     $deadline = (Get-Date).AddSeconds(30)
     do {
         Start-Sleep -Seconds 1
-        $exported = @(Get-ChildItem $exportDir -File -Filter '*.md' -ErrorAction SilentlyContinue)
+        $exported = @(Get-ChildItem $exportDir -File -Filter '*.txt' -ErrorAction SilentlyContinue)
     } while ($exported.Count -lt $beforeExport.Count -and (Get-Date) -lt $deadline)
 
     Assert-True ($exported.Count -eq $beforeExport.Count) "导出文件数 = 库里日记数（期望 $($beforeExport.Count)，实际 $($exported.Count)）"
     $roundTrip = $beforeExport | Where-Object { $_.date -eq '2027-03-01' }
     if ($roundTrip) {
-        $exportedFile = Join-Path $exportDir '2027-03-01.md'
-        Assert-True (Test-Path $exportedFile) '导出的文件名是 <日期>.md'
+        $exportedFile = Join-Path $exportDir '2027-03-01.txt'
+        Assert-True (Test-Path $exportedFile) '导出的文件名是 <日期>.txt（只支持 txt）'
+        # 反向：目录里不该冒出 .md（导出格式就一种）
+        Assert-True (@(Get-ChildItem $exportDir -File -Filter '*.md' -ErrorAction SilentlyContinue).Count -eq 0) '导出目录里没有 .md 文件'
         if (Test-Path $exportedFile) {
             $content = [System.IO.File]::ReadAllText($exportedFile)
             Assert-True ($content -eq $roundTrip.content) '导出正文与库内容逐字节一致（可原样再导入）'
