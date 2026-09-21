@@ -58,8 +58,8 @@ use tr_domain::money::{cents_to_yuan, yuan_to_cents};
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, DatePicker, Empty,
-    FeaturePage, Form, FormItem, FormLayout, Input, LineChart, Modal, Pagination, Segmented,
-    SegmentedOption, Select, SelectOption, Textarea, Tooltip,
+    FeaturePage, Form, FormItem, FormLayout, Input, LineChart, Modal, ModalSize, Pagination,
+    Segmented, SegmentedOption, Select, SelectOption, Textarea, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::format::{self, lots_of};
@@ -710,7 +710,7 @@ fn amount_modal(
         <Modal
             open=Signal::derive(move || open.get())
             title=title
-            width=400
+            size=ModalSize::Small
             ok_text=ok_text
             cancel_text="取消"
             ok_loading=Signal::derive(move || mutating.get())
@@ -1831,7 +1831,7 @@ fn impact_modal(
                     .map(|prompt| prompt.title.clone())
                     .unwrap_or_default()
             }
-            width=460
+            size=ModalSize::Small
             ok_text="确认"
             cancel_text="取消"
             ok_danger=true
@@ -1863,7 +1863,7 @@ fn edit_modal(
         <Modal
             open=Signal::derive(move || target.get().is_some())
             title="编辑成交"
-            width=520
+            size=ModalSize::Medium
             ok_text=move || if saving.get() { "保存中".to_string() } else { "保存".to_string() }
             cancel_text="取消"
             ok_loading=Signal::derive(move || saving.get())
@@ -2061,7 +2061,7 @@ fn trade_modal(
         <Modal
             open=Signal::derive(move || open.get())
             title=move || { let label = format::trade_type_label(&trade_type.get()); format!("委托{label}") }
-            width=560
+            size=ModalSize::Medium
             ok_text=move || format::trade_type_label(&trade_type.get())
             cancel_text="取消"
             ok_loading=Signal::derive(move || mutating.get())
@@ -4327,7 +4327,7 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
             <Modal
                 open=confirm_open
                 title="重置股票数据"
-                width=440
+                size=ModalSize::Small
                 ok_text="确认重置"
                 cancel_text="取消"
                 ok_danger=true

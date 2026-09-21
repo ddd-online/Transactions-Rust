@@ -38,7 +38,7 @@ use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, CheckboxGroup,
     CheckboxOption, Divider, Empty, FeaturePage, IconButton, IconButtonVariant, Input, LineChart,
-    Modal, Popconfirm, Select, SelectOption, Spin, Tag, TagKind, TimeRangePicker,
+    Modal, ModalSize, Popconfirm, Select, SelectOption, Spin, Tag, TagKind, TimeRangePicker,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -528,7 +528,7 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
         <Modal
             open=Signal::derive(move || create_open.get())
             title="新增图表"
-            width=420
+            size=ModalSize::Small
             ok_text="新增"
             cancel_text="取消"
             ok_loading=Signal::derive(move || creating.get())
@@ -555,7 +555,7 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
         <Modal
             open=Signal::derive(move || rename_open.get())
             title="重命名图表"
-            width=420
+            size=ModalSize::Small
             ok_text="重命名"
             cancel_text="取消"
             ok_loading=Signal::derive(move || renaming.get())
@@ -1101,7 +1101,7 @@ fn add_line_modal(
         <Modal
             open=Signal::derive(move || open.get())
             title="添加曲线"
-            width=500
+            size=ModalSize::Medium
             ok_text="添加"
             cancel_text="取消"
             ok_loading=Signal::derive(move || busy.get())

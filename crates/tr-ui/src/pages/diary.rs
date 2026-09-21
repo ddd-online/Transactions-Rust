@@ -33,7 +33,9 @@ use leptos::prelude::*;
 use tr_domain::models::{DiaryDateItem, DiaryEntry};
 
 use crate::api;
-use crate::components::ui::{Button, ButtonVariant, DatePicker, FeaturePage, Modal, Textarea};
+use crate::components::ui::{
+    Button, ButtonVariant, DatePicker, FeaturePage, Modal, ModalSize, Textarea,
+};
 use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
@@ -453,7 +455,7 @@ pub fn DiaryPage() -> impl IntoView {
         <Modal
             open=Signal::derive(move || delete_open.get())
             title="确认删除"
-            width=400
+            size=ModalSize::Small
             ok_text="删除"
             cancel_text="取消"
             ok_danger=true

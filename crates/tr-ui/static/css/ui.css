@@ -549,6 +549,8 @@
 }
 
 .ui-modal__content {
+  /* 兜底宽度 = `ModalSize::Medium`：调用方不给 `size`/`width` 时就用它。
+   * 三档见 components/ui/modal.rs 的 `ModalSize`，下面的 `--sm/md/lg` 与之对应。 */
   width: 520px;
   max-width: 100%;
   /* 居中用 `margin: auto`（配合 mask 的 `align-items: center`）；弹窗比可视区还高时
@@ -566,6 +568,21 @@
    * body 有内边距，没有任何子元素会画到圆角外。 */
   overflow: visible;
   box-shadow: var(--transactions-shadow-xl);
+}
+
+/* 弹窗宽度三档（对应 `ModalSize`）。**新弹窗只用这三档**，别写裸像素：
+ * 历史上出现过 11 个不同宽度（360…800），同类弹窗宽窄不一、"新增记录"甚至宽到 800。
+ * 都带 `max-width: 100%`（继承自基类），窄窗口下不会被顶出屏。 */
+.ui-modal__content--sm {
+  width: 400px;
+}
+
+.ui-modal__content--md {
+  width: 520px;
+}
+
+.ui-modal__content--lg {
+  width: 640px;
 }
 
 .ui-modal__header {

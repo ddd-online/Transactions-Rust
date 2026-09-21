@@ -271,6 +271,7 @@ Gently curved, consistent radii: 6px for tags and dropdown items, 8px for button
 ### Modals / Drawers
 
 - **Style:** 16px radius, shadow-xl, header/footer hairline-divided, title 18px 600.
+- **Width — three tiers only:** Small 400, Medium 520, Large 640 (`ModalSize` in `components/ui/modal.rs`, mirrored by `.ui-modal__content--sm|md|lg`). Pick the tier from the content, never a one-off pixel width: Small for confirmations and single-field forms, Medium for short forms and pickers, Large for multi-field forms and filter builders. Omitting the prop means Medium. Every modal keeps `max-width: 100%` so a narrow window shrinks it instead of pushing it off-screen.
 
 ### Segmented / Switch
 

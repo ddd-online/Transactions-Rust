@@ -60,7 +60,7 @@ use crate::api;
 use crate::components::ui::time_range_picker::{normalize_range, shift_period, split_ymd};
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, CheckboxGroup, DatePicker, Empty, FeaturePage, Form,
-    FormItem, FormLayout, Input, Modal, Pagination, Segmented, SegmentedOption, Select,
+    FormItem, FormLayout, Input, Modal, ModalSize, Pagination, Segmented, SegmentedOption, Select,
     SelectOption, Spin, Tag, TagKind, TimeRangePicker,
 };
 use crate::error_handler::notify_error;
@@ -581,7 +581,7 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
         <Modal
             open=Signal::derive(move || init_confirm_open.get())
             title="暂无分类"
-            width=420
+            size=ModalSize::Small
             ok_text="初始化分类"
             cancel_text="暂不记录"
             ok_loading=Signal::derive(move || init_loading.get())
@@ -1505,7 +1505,7 @@ fn record_modal(
         <Modal
             open=Signal::derive(move || open.get())
             title=modal_title
-            width=800
+            size=ModalSize::Large
             footer=false
             on_close=move || open.set(false)
         >
@@ -1638,7 +1638,7 @@ fn record_modal(
         <Modal
             open=Signal::derive(move || save_template_open.get())
             title="保存为模板"
-            width=420
+            size=ModalSize::Small
             ok_text="保存"
             cancel_text="取消"
             on_close=move || save_template_open.set(false)
@@ -1989,7 +1989,7 @@ fn filter_modal(
         <Modal
             open=Signal::derive(move || open.get())
             title="筛选条件"
-            width=600
+            size=ModalSize::Large
             footer=false
             on_close=move || open.set(false)
         >
@@ -2300,7 +2300,7 @@ fn sort_modal(
         <Modal
             open=Signal::derive(move || open.get())
             title="排序"
-            width=500
+            size=ModalSize::Medium
             footer=false
             on_close=move || open.set(false)
         >
@@ -2451,7 +2451,7 @@ fn link_modal(
         <Modal
             open=Signal::derive(move || open.get())
             title="关联事件"
-            width=480
+            size=ModalSize::Medium
             ok_text="确认关联"
             cancel_text="取消"
             on_close=move || {

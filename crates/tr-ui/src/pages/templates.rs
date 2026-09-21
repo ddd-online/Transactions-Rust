@@ -18,8 +18,8 @@ use tr_domain::dto::TransactionTemplateDto;
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, Checkbox, CheckboxGroup, CheckboxOption, DragSortItem,
-    DragSortState, Empty, FeaturePage, Form, FormItem, FormLayout, Input, Modal, Popconfirm,
-    Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, Tag, TagKind,
+    DragSortState, Empty, FeaturePage, Form, FormItem, FormLayout, Input, Modal, ModalSize,
+    Popconfirm, Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, Tag, TagKind,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -301,7 +301,7 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
             <Modal
                 open=create_open
                 title="新建模板"
-                width=520
+                size=ModalSize::Medium
                 ok_text="保存"
                 cancel_text="取消"
                 ok_loading=creating

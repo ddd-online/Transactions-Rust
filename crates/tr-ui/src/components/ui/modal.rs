@@ -3,6 +3,19 @@
 //! 标题栏 / 内容区 / 底栏三段式；遮罩从顶部 96px 开始，
 //! 让浮层与顶部窗口控制按钮保持距离，不遮挡它们。
 //!
+//! ## 宽度只有三档（[`ModalSize`]）
+//!
+//! | 档 | 宽度 | 放什么 |
+//! |---|---|---|
+//! | `Small` | 400px | 一句话确认 / 一两个字段（确认删除、追加本金、新增分类…） |
+//! | `Medium` | 520px | 小表单，2~4 个字段（创建账本、新建模板、新建图表…） |
+//! | `Large` | 640px | 多列表单 / 长条件组（新增·编辑记录、筛选条件、添加曲线） |
+//!
+//! **新弹窗只在这三档里选**，别再写裸像素宽度：历史上 24 处弹窗出现过 11 个不同取值
+//! （360/400/420/440/460/480/500/520/560/600/800），"新增记录"甚至宽到 800 —— 单列表单
+//! 用不了那么宽，看着就是"弹窗太宽"。三档同时保证：同类弹窗宽度一致、窄窗口下（`max-width: 100%`）
+//! 不会被顶出屏。确需精确宽度时仍可用 `width`（px），但它优先级低于 `size`。
+//!
 //! `children` 用 [`ChildrenFn`]（可重复调用的 children）：模态内容包在 `Show` 里，
 //! 开关时会重建视图树，因此 children 必须能多次求值。
 //!
@@ -11,7 +24,7 @@
 //!
 //! 用法：
 //! ```ignore
-//! <Modal open=show title="创建账本" on_ok=move || { /* ... */ }>
+//! <Modal open=show title="创建账本" size=ModalSize::Small on_ok=move || { /* ... */ }>
 //!     <Input value=name placeholder="请输入账本名称" />
 //! </Modal>
 //! ```
@@ -20,6 +33,37 @@ use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
 
 use crate::icons::{self, Icon};
+
+/// 弹窗宽度档位（见模块头的表）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModalSize {
+    /// 400px：一句话确认 / 一两个字段
+    Small,
+    /// 520px：小表单（2~4 个字段）
+    Medium,
+    /// 640px：多列表单 / 长条件组
+    Large,
+}
+
+impl ModalSize {
+    /// 内容宽度（px）。
+    pub fn width(self) -> u32 {
+        match self {
+            Self::Small => 400,
+            Self::Medium => 520,
+            Self::Large => 640,
+        }
+    }
+
+    /// 内容区类名（CSS 钩子；也给 fixtures 一个稳定的识别点）。
+    pub fn class(self) -> &'static str {
+        match self {
+            Self::Small => "ui-modal__content--sm",
+            Self::Medium => "ui-modal__content--md",
+            Self::Large => "ui-modal__content--lg",
+        }
+    }
+}
 
 /// 「关闭」按钮（弹窗 / 抽屉 / 通知右上角的 ×）。
 ///
@@ -54,7 +98,10 @@ pub fn Modal(
     /// 标题（`&str` / `String` / 信号 / 闭包均可：下单弹窗的标题随交易类型变化）
     #[prop(into)]
     title: Signal<String>,
-    /// 内容宽度（px），默认由 CSS 决定（520）
+    /// 内容宽度**档位**（首选；三档见 [`ModalSize`]）。不给 = `Medium`。
+    #[prop(optional)]
+    size: Option<ModalSize>,
+    /// 精确内容宽度（px）—— **兜底用**，优先用 `size`；两者都不给也按 `Medium`。
     #[prop(optional)]
     width: Option<u32>,
     /// 是否显示底部按钮栏，默认 `true`
@@ -88,10 +135,17 @@ pub fn Modal(
     let show_footer = footer.unwrap_or(true);
     let ok_text = ok_text.unwrap_or_else(|| Signal::derive(|| "确认".to_string()));
     let cancel_text = cancel_text.unwrap_or_else(|| Signal::derive(|| "取消".to_string()));
-    // 宽度是静态 prop，样式串一次算好即可（避免依赖动态 style 的 trait 推断）
-    let content_style = width
-        .map(|width| format!("width: {width}px;"))
-        .unwrap_or_default();
+    // 宽度是静态 prop，样式串与类名一次算好即可（避免依赖动态 style 的 trait 推断）。
+    // `size` 优先；`width` 是历史兜底；都不给时用 `Medium`（= CSS 里 `.ui-modal__content` 的 520，
+    // 所以"不给任何宽度"的调用方行为不变）。
+    let (content_style, content_size_class) = match (size, width) {
+        (Some(size), _) => (Some(format!("width: {}px;", size.width())), size.class()),
+        (None, Some(width)) => (
+            Some(format!("width: {width}px;")),
+            ModalSize::Medium.class(),
+        ),
+        (None, None) => (None, ModalSize::Medium.class()),
+    };
 
     view! {
         <Show when=move || open.get()>
@@ -111,7 +165,7 @@ pub fn Modal(
                     }
                 }
             >
-                <div class="ui-modal__content" style=content_style.clone()>
+                <div class=format!("ui-modal__content {content_size_class}") style=content_style.clone()>
                     <div class="ui-modal__header">
                         <h3 class="ui-modal__title">{move || title.get()}</h3>
                         <Show when=move || !locked>

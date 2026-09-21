@@ -19,7 +19,9 @@ use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
 
 use crate::api;
-use crate::components::ui::{backdrop, close_button, IconButton, IconButtonVariant, Input, Modal};
+use crate::components::ui::{
+    backdrop, close_button, IconButton, IconButtonVariant, Input, Modal, ModalSize,
+};
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
 use crate::notify::{Notice, NoticeKind, Notifier};
@@ -493,7 +495,7 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
             <Modal
                 open=create_open
                 title="创建账本"
-                width=400
+                size=ModalSize::Small
                 ok_text="创建"
                 ok_loading=creating
                 on_close=move || create_open.set(false)
@@ -512,7 +514,7 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
             <Modal
                 open=Signal::derive(move || delete_target.get().is_some())
                 title="确认删除"
-                width=400
+                size=ModalSize::Small
                 ok_text="删除"
                 ok_loading=deleting
                 on_close=move || delete_target.set(None)

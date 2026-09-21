@@ -121,7 +121,7 @@ pub use image_picker::{
 };
 pub use input::Input;
 pub use markdown::{render_markdown, Markdown};
-pub use modal::Modal;
+pub use modal::{Modal, ModalSize};
 // 关闭按钮（×）：弹窗 / 抽屉 / 通知共用，见 `modal::close_button`
 pub(crate) use modal::close_button;
 pub use page_header::PageHeader;

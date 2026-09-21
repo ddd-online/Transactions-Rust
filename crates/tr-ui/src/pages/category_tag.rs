@@ -30,7 +30,7 @@ use tr_domain::dto::{CategoryDto, TagDto};
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, DragSortItem, DragSortState, FeaturePage, IconButton,
-    IconButtonVariant, Input, Modal,
+    IconButtonVariant, Input, Modal, ModalSize,
 };
 use crate::error_handler::{get_error_message, notify_error};
 use crate::format;
@@ -815,7 +815,7 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         <Modal
             open=Signal::derive(move || open_category_modal.get())
             title=TEXT_MODAL_ADD_CATEGORY
-            width=360
+            size=ModalSize::Small
             ok_text="确认"
             cancel_text="取消"
             on_close=move || open_category_modal.set(false)
@@ -835,7 +835,7 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         <Modal
             open=Signal::derive(move || open_tag_modal.get())
             title=TEXT_MODAL_ADD_TAG
-            width=360
+            size=ModalSize::Small
             ok_text="确认"
             cancel_text="取消"
             on_close=move || open_tag_modal.set(false)
@@ -855,7 +855,7 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         <Modal
             open=Signal::derive(move || open_delete_modal.get())
             title=delete_modal_title(delete_kind.get())
-            width=360
+            size=ModalSize::Small
             ok_text="删除"
             ok_danger=true
             cancel_text="取消"

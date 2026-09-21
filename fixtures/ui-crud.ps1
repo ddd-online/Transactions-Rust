@@ -258,7 +258,7 @@ try {
     Start-Sleep -Milliseconds 500
 
     # ================= 1/4 分类与标签：新增 → 删除 =================
-    Write-Host "`n[crud] 1/4 记账 · 标签子功能：新增分类 → 删除"
+    Write-Host "`n[crud] 1/5 记账 · 标签子功能：新增分类 → 删除"
     Assert-True (Invoke-SubFunction -Window $window -Name '标签') '切到记账页的「标签」子功能'
     Start-Sleep -Seconds 2
 
@@ -288,7 +288,7 @@ try {
     Assert-True ($gone.Count -eq 0) "删除后库里不再有该分类（$categoryName）"
 
     # ---- 标签：先选中一个分类，再新增/删除标签 ----
-    Write-Host "`n[crud] 2/4 标签：新增 → 删除"
+    Write-Host "`n[crud] 2/5 标签：新增 → 删除"
     $someCategory = (Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_category' -OutDir $OutDir | Where-Object { $_.transaction_type -eq 'expense' } |
         Sort-Object sort_order | Select-Object -First 1).name
     $categoryRow = Wait-Element -Root $window -Name $someCategory
@@ -318,7 +318,7 @@ try {
     Assert-True ($tagGone.Count -eq 0) "删除后库里不再有该标签（$tagName）"
 
     # ================= 3/4 图表：新增 → 删除（气泡确认）=================
-    Write-Host "`n[crud] 3/4 记账 · 分析子功能：新增图表 → 删除"
+    Write-Host "`n[crud] 3/5 记账 · 分析子功能：新增图表 → 删除"
     # 图表原来在顶级页「数据分析」里，现已并入记账页、更名「分析」：走左侧图标条切换
     Assert-True (Invoke-SubFunction -Window $window -Name '分析') '切到记账页的「分析」子功能'
     Start-Sleep -Seconds 2
@@ -356,7 +356,7 @@ try {
     Assert-True ($chartGone.Count -eq 0) "删除后库里不再有该图表（$chartTitle）"
 
     # ================= 4/4 事件：配色 / 描述 / 删除 =================
-    Write-Host "`n[crud] 4/4 事件：建事件 → 改颜色 → 写描述 → 删除"
+    Write-Host "`n[crud] 4/5 事件：建事件 → 改颜色 → 写描述 → 删除"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '事件')) '打开「事件」页'
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '新增事件')) '点「新增事件」'

@@ -32,8 +32,8 @@ use tr_domain::models::{KeyEvent, KeyEventImage};
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, DatePicker, FeaturePage, FileStatus, IconButton,
-    IconButtonVariant, ImagePicker, Input, Modal, Popconfirm, Textarea, UploadFileProgress,
-    UploadProgress, UploadProgressBar, UploadStatus,
+    IconButtonVariant, ImagePicker, Input, Modal, ModalSize, Popconfirm, Textarea,
+    UploadFileProgress, UploadProgress, UploadProgressBar, UploadStatus,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -1707,7 +1707,7 @@ fn add_modal(
         <Modal
             open=Signal::derive(move || open.get())
             title="新增事件"
-            width=360
+            size=ModalSize::Small
             ok_text="新增"
             cancel_text="取消"
             ok_loading=Signal::derive(move || loading.get())
