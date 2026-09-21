@@ -199,8 +199,40 @@ struct ImpactPrompt {
 
 // ==================================================================== 页面外壳
 
-/// 股票页：只负责"当前是哪个子功能"，版心与图标条交给子功能自己渲染。
+// 统计请求去重：`(已请求过的键, 正在飞行中的键)`。
+//
+// **必须放在模块级**（thread_local）而不是组件信号里：统计视图是普通函数，
+// 父级每次重渲染都会重新调用它、把函数体里的信号重建一遍 ——
+// 用信号做去重等于每轮都从空开始，挡不住任何东西（实测同一份筛选仍发了上千次请求）。
+thread_local! {
+    static STATS_DEDUPE: std::cell::RefCell<(String, Option<String>)> =
+        const { std::cell::RefCell::new((String::new(), None)) };
+}
+
+/// 切账本时清掉统计去重状态（否则新账本会被上一个账本的键挡住、永远不刷新）。
+fn reset_stats_dedupe() {
+    STATS_DEDUPE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.0.clear();
+        state.1 = None;
+    });
+}
+
+/// 这次统计请求要不要真的发出去（纯函数，便于单测）。
 ///
+/// 返回 `true` 表示"发"，并把 `in_flight` 置为当前键；同一份键**已经请求过**、
+/// 或**正在飞行中**时返回 `false`。飞行中也要挡：统计视图会被反复重建，
+/// 每次重建都会触发一次请求 —— 挡住之后才不会把后端刷爆（实测几秒内上千次），
+/// 页面也就不会卡在「正在加载」。
+fn stats_request_needed(state: &mut (String, Option<String>), key: &str, force: bool) -> bool {
+    if force || (state.0 != key && state.1.as_deref() != Some(key)) {
+        state.0 = key.to_string();
+        state.1 = Some(key.to_string());
+        return true;
+    }
+    false
+}
+
 /// 与记账页的 `AccountingPage` 同一套写法：五个子功能各自渲染一份 [`FeaturePage`]
 /// （含左侧图标条），切子功能即重建该子功能的视图（信号随组件 owner 一起释放），
 /// 因此来回切会重新拉数据 —— 与"切一个页面"的行为一致，不会留下一份隐形的旧状态。
@@ -208,12 +240,14 @@ struct ImpactPrompt {
 pub fn StockPage() -> impl IntoView {
     let sub = RwSignal::new(StockSub::Account);
     view! {
-        {move || match sub.get() {
-            StockSub::Account => account_view(sub),
-            StockSub::Position => position_view(sub),
-            StockSub::Trade => history_view(sub),
-            StockSub::Statistics => statistics_view(sub),
-            StockSub::Setting => settings_view(sub),
+        {move || {
+            match sub.get() {
+                StockSub::Account => account_view(sub),
+                StockSub::Position => position_view(sub),
+                StockSub::Trade => history_view(sub),
+                StockSub::Statistics => statistics_view(sub),
+                StockSub::Setting => settings_view(sub),
+            }
         }}
     }
 }
@@ -3309,7 +3343,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     let tag_filter = RwSignal::new(String::new());
     let tags = RwSignal::new(Vec::<String>::new());
 
-    let apply_filter = move || {
+    let apply_filter = move |force: bool| {
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() {
             stats.set(None);
@@ -3327,6 +3361,15 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             None
         };
         let tag = tag_filter.get_untracked();
+        let key = format!("{ledger_id}|{start_month}|{end_month}|{recent_value:?}|{tag}");
+        // 去重状态在模块级（`STATS_DEDUPE`），因此**跨视图重建**也有效
+        let needed =
+            STATS_DEDUPE.with(|state| stats_request_needed(&mut state.borrow_mut(), &key, force));
+        if !needed {
+            // 同一份筛选已经请求过 / 正在飞行中 → 既不发请求，也**不要动 loading**
+            // （这正是原来"卡在正在加载"的来源：视图被反复重建，每次都在飞行中又置 true）
+            return;
+        }
         loading.set(true);
         leptos::task::spawn_local(async move {
             match api::stock::statistics(&ledger_id, &start_month, &end_month, recent_value, &tag)
@@ -3335,6 +3378,8 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                 Ok(data) => stats.set(Some(data)),
                 Err(error) => notify_error("查询交易统计失败", &error),
             }
+            // 飞行结束：把 in_flight 清掉（键保留，重复触发仍然不会再发）
+            STATS_DEDUPE.with(|state| state.borrow_mut().1 = None);
             loading.set(false);
         });
     };
@@ -3356,6 +3401,8 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
         if prev.as_deref() == Some(ledger_id.as_str()) {
             return ledger_id;
         }
+        // 账本切换：清掉统计去重状态，否则新账本会被上一个账本的请求键挡住
+        reset_stats_dedupe();
         // 账本切换时重置筛选
         filter_mode.set("all".to_string());
         range_start.set(String::new());
@@ -3367,7 +3414,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             return ledger_id;
         }
         load_tags();
-        apply_filter();
+        apply_filter(false);
         ledger_id
     });
 
@@ -3399,7 +3446,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                         if next == "recent" && recent.get_untracked() == 0 {
                             recent.set(10);
                         }
-                        apply_filter();
+                        apply_filter(false);
                     })
                 />
                 <Show when=move || filter_mode.get() == "range">
@@ -3420,7 +3467,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                             ]
                             on_change=UnsyncCallback::new(move |value: String| {
                                 recent.set(value.parse().unwrap_or(10));
-                                apply_filter();
+                                apply_filter(false);
                             })
                         />
                     </div>
@@ -3435,7 +3482,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                         })
                         .get()
                         on_change=UnsyncCallback::new(move |_value: String| {
-                            apply_filter();
+                            apply_filter(false);
                         })
                     />
                 </div>
@@ -3445,7 +3492,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                 <Button
                     variant=ButtonVariant::Primary
                     loading=Signal::derive(move || loading.get())
-                    on_click=move |_| apply_filter()
+                    on_click=move |_| apply_filter(true)
                 >
                     "刷新"
                 </Button>
