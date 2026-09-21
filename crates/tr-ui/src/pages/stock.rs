@@ -165,15 +165,19 @@ impl FeeEstimate {
     }
 }
 
-/// 预估本次委托的费用（整笔委托一次计收，与后端 `tr_domain::fee` 同一份算法）。
+/// 预估本次委托的费用（与后端 `tr_domain::fee` 是**同一份算法**）。
 ///
-/// 保留 `amount_cents <= 0` 的守卫：域函数在金额为 0 时会取最低佣金，
+/// 传的是**各笔成交额**而不是总额：印花税与过户费要逐笔取整再相加，
+/// 只看总额会少算一分（见 `tr_domain::fee` 模块头的对照表）。
+///
+/// 保留"没有有效成交"的守卫：域函数在金额为 0 时会取最低佣金，
 /// 而"还没填价格/手数"时预估应当是 0。
-fn estimate_fee(amount_cents: i64, is_buy: bool, code: &str, fee: &StockFeeSetting) -> FeeEstimate {
-    if amount_cents <= 0 {
+fn estimate_fee(fills: &[i64], is_buy: bool, code: &str, fee: &StockFeeSetting) -> FeeEstimate {
+    let total: i64 = fills.iter().sum();
+    if fills.is_empty() || total <= 0 {
         return FeeEstimate::default();
     }
-    let breakdown = compute_order_fee(amount_cents, is_shanghai_code(code), fee, is_buy);
+    let breakdown = compute_order_fee(fills, is_shanghai_code(code), fee, is_buy);
     FeeEstimate {
         commission: breakdown.commission,
         stamp_duty: breakdown.stamp_duty,
@@ -2201,11 +2205,13 @@ fn trade_modal(
                     }
                     let valid = rows.parsed();
                     let total_lots: i64 = valid.iter().map(|fill| fill.lots).sum();
-                    let total_amount: i64 = valid.iter().map(|fill| fill.amount_cents()).sum();
+                    let fill_amounts: Vec<i64> =
+                        valid.iter().map(|fill| fill.amount_cents()).collect();
+                    let total_amount: i64 = fill_amounts.iter().sum();
                     let is_buy = format::is_buy(&trade_type.get());
                     let estimate = match fee_settings.get() {
                         Some(fee) if total_amount > 0 => {
-                            estimate_fee(total_amount, is_buy, &code.get(), &fee)
+                            estimate_fee(&fill_amounts, is_buy, &code.get(), &fee)
                         }
                         _ => FeeEstimate::default(),
                     };
@@ -2256,7 +2262,7 @@ fn trade_modal(
                         <Show when=move || rows.rows_text.get().len().gt(&1)>
                             <div class="stock-summary-hint">
                                 {format!(
-                                    "佣金按委托收取一次，不足 ¥{} 按 ¥{} 计",
+                                    "佣金按委托收取一次，不足 ¥{} 按 ¥{} 计；印花税与过户费按每笔成交各收一次",
                                     format::amount(min_commission),
                                     format::amount(min_commission),
                                 )}

@@ -8,6 +8,24 @@
 //!
 //! 取整口径：`f64::round` 是"四舍五入、远离零"；费用金额恒为正，
 //! 因此正数上的取整结果不存在歧义。
+//!
+//! ## 一次委托多笔成交时的计费口径（**按笔取整再相加**）
+//!
+//! 券商是按**成交笔**收费的，所以每笔成交的费用各自四舍五入到分，再相加：
+//!
+//! * **佣金**：整笔委托只收一次，按委托总额算，并只在这里用一次最低佣金。
+//! * **印花税 / 过户费**：逐笔按成交额算、**逐笔**四舍五入，再求和。
+//!
+//! 第二条例外于"先求和再取整"，是有意的：那两种费在每笔成交上都会真的收一次，
+//! 每笔各自进整到分。用 `¥36.61×100` + `¥36.67×100` 两笔举反例（卖出、沪市）：
+//!
+//! | 费目 | 逐笔取整再相加（本实现） | 先求和再取整（错的） |
+//! |---|---|---|
+//! | 印花税 0.05% | `1.83 + 1.83 = 3.66` | `3.664 → 3.66` |
+//! | 过户费 0.001% | `0.04 + 0.04 = 0.08` | `0.07328 → 0.07` |
+//!
+//! 过户费那行两种口径差一分（0.08 vs 0.07），界面上的"预计到手"也就差一分。
+//! 回归见 `per_fill_rounding_matches_the_documented_example`。
 
 use crate::models::StockFeeSetting;
 
@@ -44,22 +62,22 @@ fn transfer_fee(amount: i64, is_shanghai: bool, setting: &StockFeeSetting) -> i6
     }
 }
 
-/// 买入费用 = 佣金 + 过户费（仅沪市）。
-pub fn compute_buy_fee(amount: i64, is_shanghai: bool, setting: &StockFeeSetting) -> FeeBreakdown {
-    let commission = compute_commission(amount, setting);
-    let transfer_fee = transfer_fee(amount, is_shanghai, setting);
-    FeeBreakdown {
-        commission,
-        stamp_duty: 0,
-        transfer_fee,
-        total: commission + transfer_fee,
-    }
-}
-
-/// 卖出费用 = 佣金 + 印花税 + 过户费（仅沪市）。印花税仅卖出时收取。
-pub fn compute_sell_fee(amount: i64, is_shanghai: bool, setting: &StockFeeSetting) -> FeeBreakdown {
-    let commission = compute_commission(amount, setting);
-    let stamp_duty = round_to_cents(amount, setting.stamp_duty_rate);
+/// 一笔成交的费用（**逐笔取整**）：佣金只按费率算，**不套最低佣金**。
+///
+/// 最低佣金是**委托级**的门槛（一次委托只收一次），套在单笔成交上会让多笔委托
+/// 被收成 N 份最低佣金。委托级佣金见 [`compute_order_fee`]。
+fn compute_fill_fee(
+    amount: i64,
+    is_shanghai: bool,
+    setting: &StockFeeSetting,
+    is_buy: bool,
+) -> FeeBreakdown {
+    let commission = round_to_cents(amount, setting.commission_rate);
+    let stamp_duty = if is_buy {
+        0
+    } else {
+        round_to_cents(amount, setting.stamp_duty_rate)
+    };
     let transfer_fee = transfer_fee(amount, is_shanghai, setting);
     FeeBreakdown {
         commission,
@@ -69,34 +87,78 @@ pub fn compute_sell_fee(amount: i64, is_shanghai: bool, setting: &StockFeeSettin
     }
 }
 
-/// 按委托成交总额计算一次费用：最低佣金按「委托」收取，而不是按每笔成交。
+/// 委托级费用：佣金按**委托总额**收一次（含最低佣金），印花税与过户费**逐笔**算好再相加。
+///
+/// `fills` 是各笔成交的成交额（`价格 × 股数`，单位分）；`total_amount` 应当等于它们之和
+/// （单独传是为了让调用方不必重复求和，两者不一致时以 `fills` 为准）。
 pub fn compute_order_fee(
-    total_amount: i64,
+    fills: &[i64],
     is_shanghai: bool,
     setting: &StockFeeSetting,
     is_buy: bool,
 ) -> FeeBreakdown {
-    if is_buy {
-        compute_buy_fee(total_amount, is_shanghai, setting)
-    } else {
-        compute_sell_fee(total_amount, is_shanghai, setting)
+    let per_fill = compute_fill_fees(fills, is_shanghai, setting, is_buy);
+    let total_amount: i64 = fills.iter().sum();
+
+    FeeBreakdown {
+        // 佣金：按委托总额、只收一次；最低佣金也只在这里生效
+        commission: compute_commission(total_amount, setting),
+        // 这两项是"逐笔取整后求和"，不是"求和后取整"（见模块头的对照表）
+        stamp_duty: per_fill.iter().map(|fee| fee.stamp_duty).sum(),
+        transfer_fee: per_fill.iter().map(|fee| fee.transfer_fee).sum(),
+        total: 0, // 下面统一按三项之和重算
+    }
+    .with_total()
+}
+
+impl FeeBreakdown {
+    /// 把 `total` 重算成三项之和（构造时用它兜住"合计与明细不一致"）。
+    fn with_total(mut self) -> Self {
+        self.total = self.commission + self.stamp_duty + self.transfer_fee;
+        self
     }
 }
 
-/// 把委托级费用按各笔成交金额比例分摊到明细。
-/// 每个费用项单独分摊、四舍五入到分，最后一笔吸收余数，保证 Σ分摊 = 委托费用。
-pub fn allocate_order_fee(fee: FeeBreakdown, amounts: &[i64]) -> Vec<FeeBreakdown> {
+/// 把委托费用拆到各笔成交（**就是逐笔各算各的**，与 [`compute_order_fee`] 同一口径）。
+///
+/// 这样落在每笔成交上的费用，求和后与委托级合计**一模一样**：
+/// `compute_order_fee` 的印花税/过户费本来就是各笔之和，佣金则按成交额比例分摊
+/// （末笔吸收取整余数，保证 Σ分摊 = 委托佣金）。
+///
+/// ⚠ 调用方要传**用同一份 `fills` 算出来的** `fee`，否则两份口径会对不上 ——
+/// 资金记录用 `fee.total`、每笔成交用分摊值，两者不一致就是"钱对不上账"。
+pub fn allocate_order_fee(
+    fee: FeeBreakdown,
+    amounts: &[i64],
+    is_shanghai: bool,
+    setting: &StockFeeSetting,
+    is_buy: bool,
+) -> Vec<FeeBreakdown> {
+    if amounts.is_empty() {
+        return Vec::new();
+    }
+    let mut per_fill = compute_fill_fees(amounts, is_shanghai, setting, is_buy);
+    // 佣金改为按成交额比例分摊委托级那一笔（最低佣金只在委托级生效过）
     let commissions = allocate_by_amount(fee.commission, amounts);
-    let stamp_duties = allocate_by_amount(fee.stamp_duty, amounts);
-    let transfer_fees = allocate_by_amount(fee.transfer_fee, amounts);
+    for (index, fill) in per_fill.iter_mut().enumerate() {
+        fill.commission = commissions[index];
+        fill.total = fill.commission + fill.stamp_duty + fill.transfer_fee;
+    }
+    per_fill
+}
 
-    (0..amounts.len())
-        .map(|i| FeeBreakdown {
-            commission: commissions[i],
-            stamp_duty: stamp_duties[i],
-            transfer_fee: transfer_fees[i],
-            total: commissions[i] + stamp_duties[i] + transfer_fees[i],
-        })
+/// 多笔成交的**逐笔**费用（各笔自己四舍五入，不套最低佣金）。
+///
+/// 给"按笔展示费用明细"这类用途；委托级合计用 [`compute_order_fee`]。
+pub fn compute_fill_fees(
+    fills: &[i64],
+    is_shanghai: bool,
+    setting: &StockFeeSetting,
+    is_buy: bool,
+) -> Vec<FeeBreakdown> {
+    fills
+        .iter()
+        .map(|amount| compute_fill_fee(*amount, is_shanghai, setting, is_buy))
         .collect()
 }
 
@@ -175,13 +237,14 @@ mod tests {
     #[test]
     fn buy_fee_charges_transfer_only_in_shanghai() {
         let s = setting();
-        let sh = compute_buy_fee(100_000_000, true, &s);
+        // 单笔委托（一笔成交）
+        let sh = compute_order_fee(&[100_000_000], true, &s, true);
         assert_eq!(sh.commission, 23_540);
         assert_eq!(sh.stamp_duty, 0);
         assert_eq!(sh.transfer_fee, 1_000);
         assert_eq!(sh.total, 24_540);
 
-        let sz = compute_buy_fee(100_000_000, false, &s);
+        let sz = compute_order_fee(&[100_000_000], false, &s, true);
         assert_eq!(sz.transfer_fee, 0);
         assert_eq!(sz.total, 23_540);
     }
@@ -189,11 +252,57 @@ mod tests {
     #[test]
     fn sell_fee_charges_stamp_duty() {
         let s = setting();
-        let sh = compute_sell_fee(100_000_000, true, &s);
+        let sh = compute_order_fee(&[100_000_000], true, &s, false);
         assert_eq!(sh.commission, 23_540);
         assert_eq!(sh.stamp_duty, 50_000);
         assert_eq!(sh.transfer_fee, 1_000);
         assert_eq!(sh.total, 74_540);
+    }
+
+    /// 用户报的例子：一次委托两笔成交（各 1 手），印花税与过户费**逐笔**取整再相加。
+    ///
+    /// 36.61×100 = 3661.00 元、36.67×100 = 3667.00 元（共 7328.00），卖出、沪市。
+    #[test]
+    fn per_fill_rounding_matches_the_documented_example() {
+        let s = setting();
+        let fills = [366_100_i64, 366_700];
+        let fee = compute_order_fee(&fills, true, &s, false);
+
+        // 佣金：7328.00 × 0.02354% = 1.725 元 → 低于最低佣金 → 5.00（一次委托只收一次）
+        assert_eq!(fee.commission, 500);
+        // 印花税：1.8305 → 1.83；1.8335 → 1.83 ⇒ 3.66
+        //（若先求和再取整：7328 × 0.05% = 3.664 → 3.66，这次恰好一样）
+        assert_eq!(fee.stamp_duty, 366);
+        // 过户费：0.03661 → 0.04；0.03667 → 0.04 ⇒ **0.08**
+        //（先求和再取整只有 0.07328 → 0.07 —— 这正是本次修掉的一分钱）
+        assert_eq!(fee.transfer_fee, 8);
+        assert_eq!(fee.total, 874, "5.00 + 3.66 + 0.08");
+
+        // 逐笔分摊之和必须与委托级合计一致（否则资金记录与各笔成交会对不上账）
+        let allocated = allocate_order_fee(fee, &fills, true, &s, false);
+        assert_eq!(allocated.len(), 2);
+        assert_eq!(allocated.iter().map(|f| f.commission).sum::<i64>(), 500);
+        assert_eq!(allocated.iter().map(|f| f.stamp_duty).sum::<i64>(), 366);
+        assert_eq!(allocated.iter().map(|f| f.transfer_fee).sum::<i64>(), 8);
+        assert_eq!(allocated.iter().map(|f| f.total).sum::<i64>(), fee.total);
+        // 两笔成交额几乎相同 → 过户费各 0.04
+        assert_eq!(allocated[0].transfer_fee, 4);
+        assert_eq!(allocated[1].transfer_fee, 4);
+
+        // 预计到手 = 7328.00 - 8.74 = 7319.26
+        let net = fills.iter().sum::<i64>() - fee.total;
+        assert_eq!(net, 731_926);
+    }
+
+    /// 对比"先求和再取整"：证明两条口径确实会差（否则上面那条单测就白写了）。
+    #[test]
+    fn whole_order_rounding_would_lose_a_cent_on_transfer_fee() {
+        let s = setting();
+        let fills = [366_100_i64, 366_700];
+        let per_fill = compute_order_fee(&fills, true, &s, false).transfer_fee;
+        let whole_order = round_to_cents(fills.iter().sum::<i64>(), s.transfer_fee_rate);
+        assert_eq!(per_fill, 8);
+        assert_eq!(whole_order, 7);
     }
 
     #[test]
@@ -201,8 +310,8 @@ mod tests {
         let s = setting();
         // 三笔小额成交：每笔单独计费都会触发 5 元最低佣金
         let amounts = [1_000_000_i64, 1_000_000, 1_000_000];
-        let order_fee = compute_order_fee(3_000_000, true, &s, true);
-        let allocated = allocate_order_fee(order_fee, &amounts);
+        let order_fee = compute_order_fee(&amounts, true, &s, true);
+        let allocated = allocate_order_fee(order_fee, &amounts, true, &s, true);
 
         assert_eq!(allocated.len(), 3);
         // 委托级佣金 = 300 万 × 万2.354 = 706 分，高于最低佣金 500 分
@@ -229,8 +338,8 @@ mod tests {
     fn order_fee_allocation_puts_rounding_remainder_on_last_fill() {
         let s = setting();
         let amounts = [30_000_000_i64, 30_000_000, 40_000_000];
-        let order_fee = compute_order_fee(100_000_000, true, &s, true);
-        let allocated = allocate_order_fee(order_fee, &amounts);
+        let order_fee = compute_order_fee(&amounts, true, &s, true);
+        let allocated = allocate_order_fee(order_fee, &amounts, true, &s, true);
 
         // 100 万 × 万2.354 = 235.4 元 = 23540 分，前两笔各 7062 分，末笔吃余数
         assert_eq!(order_fee.commission, 23_540);

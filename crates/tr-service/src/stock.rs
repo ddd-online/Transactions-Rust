@@ -954,9 +954,10 @@ pub fn create_trade_order(
 
     if let Err(error) = workspace.transaction(|conn| {
         let fee_setting = get_or_create_fee_setting_in(conn, ledger_id)?;
-        // 委托级一次计收（最低佣金按委托，不按笔），再按各笔成交额比例分摊
-        let order_fee = fee::compute_order_fee(total_amount, is_sh, &fee_setting, buy);
-        let allocated = fee::allocate_order_fee(order_fee, &amounts);
+        // 委托级一次计收（最低佣金按委托，不按笔）；印花税与过户费**逐笔**取整再相加，
+        // 再按成交额把委托级费用分摊到各笔明细（两份口径一致，见 `tr_domain::fee`）
+        let order_fee = fee::compute_order_fee(&amounts, is_sh, &fee_setting, buy);
+        let allocated = fee::allocate_order_fee(order_fee, &amounts, is_sh, &fee_setting, buy);
 
         let mut position = match StockDao::get_position(conn, ledger_id, stock_code) {
             Ok(position) => position,
@@ -1860,7 +1861,6 @@ fn update_trade_fill_tx(
     let buy = is_buy(&trade.trade_type);
 
     let mut amounts: Vec<i64> = Vec::with_capacity(order_trades.len());
-    let mut total_amount = 0_i64;
     for item in order_trades.iter_mut() {
         if item.id == trade_id {
             item.price = price_cents;
@@ -1871,13 +1871,15 @@ fn update_trade_fill_tx(
             item.trade_time = trade_time;
         }
         item.amount = item.price * item.shares;
-        total_amount += item.amount;
         amounts.push(item.amount);
     }
 
     let allocated = fee::allocate_order_fee(
-        fee::compute_order_fee(total_amount, is_sh, &fee_setting, buy),
+        fee::compute_order_fee(&amounts, is_sh, &fee_setting, buy),
         &amounts,
+        is_sh,
+        &fee_setting,
+        buy,
     );
     for (index, item) in order_trades.iter_mut().enumerate() {
         item.fee = allocated[index].total;
@@ -4019,13 +4021,14 @@ mod tests {
                 realized += pnl;
             }
         }
-        // 卖出委托按委托总额收取：7328 元 → 佣金 5.00、印花税 3.66、沪市过户费 0.07
-        assert_eq!((commission, stamp_duty, transfer_fee), (500, 366, 7));
-        assert_eq!(fee, 873, "卖出委托费用应为 873 分");
-        assert_eq!(realized, -29_781);
+        // 卖出委托：佣金按委托总额 7328 元收一次 = 5.00；
+        // 印花税与过户费**逐笔成交**各收一次（0.04 + 0.04 = 0.08），不是按总额取整（那会得 0.07）
+        assert_eq!((commission, stamp_duty, transfer_fee), (500, 366, 8));
+        assert_eq!(fee, 874, "卖出委托费用应为 874 分（5.00 + 3.66 + 0.08）");
+        assert_eq!(realized, -29_782);
 
         let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_ORDER_CODE).unwrap();
-        assert_eq!(detail.total_pnl, -29_781);
+        assert_eq!(detail.total_pnl, -29_782);
 
         // 一笔委托只产生一条资金记录
         let page = list_fund_records(&workspace, TEST_LEDGER_ID, 1, 20).unwrap();
@@ -4096,8 +4099,9 @@ mod tests {
             }
         }
         assert_eq!(amount, 732_800 + 3_000);
-        // 盈亏 = 原 -297.81 + 多卖 30 元 − 印花税多收 0.02
-        assert_eq!(realized, -29_781 + 3_000 - 2);
+        // 盈亏 = 原 -297.82（改价前，含逐笔取整的过户费 0.08）+ 多卖 30 元 − 印花税多收 0.02
+        //（36.91×100 = 3691 元的印花税 1.85 vs 原 1.83；过户费两笔仍各 0.04，不变）
+        assert_eq!(realized, -29_782 + 3_000 - 2);
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -4219,8 +4223,8 @@ mod tests {
             "重放应复用同一轮次 ID"
         );
         assert_eq!(
-            first_detail.total_pnl, -29_781,
-            "重放后盈亏应保持 -29781 分"
+            first_detail.total_pnl, -29_782,
+            "重放后盈亏应保持 -29782 分（含逐笔取整的过户费 0.08）"
         );
 
         std::fs::remove_dir_all(&dir).ok();

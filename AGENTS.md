@@ -523,6 +523,16 @@ cargo clippy --all-targets -- -D warnings
 
 ## 关键约定与陷阱
 
+- **股票费用：一次委托多笔成交时，印花税/过户费"逐笔取整再相加"**（`tr-domain/src/fee.rs`，
+  两侧共用同一份算法，界面侧只有 `estimate_fee` 一个调用点）：
+  * **佣金**按**委托总额**收一次，最低佣金也只在这里生效（按笔收会变成 N 份最低佣金）；
+  * **印花税 / 过户费**逐笔按成交额算、**逐笔**四舍五入到分，再求和 —— 不是"先求和再取整"。
+    两者会差一分：`36.61×100` + `36.67×100` 两笔卖出、沪市，过户费逐笔是 `0.04+0.04=0.08`，
+    先求和只有 `0.07328→0.07`（用户报的就是这一分钱；印花税那次恰好都是 3.66）。
+  * 因此 `compute_order_fee` 收的是**各笔成交额**（`&[i64]`）而不是总额；
+    `allocate_order_fee` 与它同口径，保证"每笔分摊之和 = 委托级合计"（资金记录与各笔成交对得上账）。
+    回归：`cargo test -p tr-domain fee`（含用户那个例子的逐项断言），
+    `cargo test -p tr-service create_trade_order_charges_fee_once_per_order`。
 - **SQL 只允许拼接常量**：列名/表名用 `const …_COLUMNS` 或常量数组（如 `STOCK_TABLES`），
   值一律走 `?` 占位符（`instr(description, ?)` 也是占位符）；`ORDER BY` 的字段必须过白名单，
   也就是 `build_sort_clause` 只认 `transactionAt` / `transactionType` / `price` / `category` 这 4 项，
