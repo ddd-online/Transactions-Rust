@@ -1,16 +1,27 @@
-//! 股票页（`/stock_view`）—— P6-b 完整实现：账户 / 持仓 / 交易历史 / 交易统计 四个分栏。
+//! 股票页（`/stock_view`）—— 五个子功能共用一个版心与左侧图标条。
+//!
+//! 与记账页同构：版心骨架见 `components/ui/feature_page.rs`，左侧 `.page-rail` 是**子功能图标条**
+//! （不是内容里的栏目），点图标切换子功能；五个子功能共用标题栏，标题固定为「股票」。
+//! 各子功能都只负责"工具栏 + 内容区（+ 可选底栏）"。
 //!
 //! ## 页面组成
 //!
 //! | 组成 | 职责 |
 //! |---|---|
-//! | [`StockPage`] | 四个分栏的外壳（分栏定义见 [`TABS`]） |
-//! | [`account_view`] | 总览卡片 + 追加/支取弹窗 + 费用设置 + 资金记录分页 |
-//! | [`position_view`] | 持仓卡片 + 行情面板 + 本轮复盘 + 下单弹窗 + 成交表 + 影响预演 |
-//! | [`TradeEditModal`] / [`TradeDeleteModal`] | 编辑成交 / 删除委托 + 影响预演确认 |
-//! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签 |
-//! | [`statistics_view`] | 结算统计卡片 + 自绘 SVG 曲线 + 逐笔结算明细 + 区间/笔数/标签筛选 |
+//! | [`StockPage`] | 只决定"当前是哪个子功能"（定义见 [`StockSub`]） |
+//! | [`StockSubRail`] | 子功能图标条（`FeaturePage` 的 `rail` 插槽内容） |
+//! | [`account_view`] | 总资产卡 + 资金记录分页；工具栏 = 支取 / 追加本金 |
+//! | [`position_view`] | 持仓卡片 + 行情面板 + 本轮复盘 + 下单弹窗 + 成交表 + 影响预演；工具栏 = 建仓 |
+//! | [`edit_modal`] / [`impact_modal`] | 编辑成交 / 删除委托 + 影响预演确认 |
+//! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签（无工具栏） |
+//! | [`statistics_view`] | 结算统计 + 自绘 SVG 曲线 + 逐笔结算明细；工具栏 = 区间/笔数/标签筛选 + 刷新 |
+//! | [`settings_view`] | 交易标签 + 交易费用设置 + 重置股票数据；工具栏 = 保存 |
 //! | 状态组织 | 本文件直接持有信号（不引入 store；与其余页面一致） |
+//!
+//! 切子功能会**重建**该子功能的视图（信号随组件 owner 一起释放），因此来回切会重新拉数据 ——
+//! 与"切一个页面"的行为一致，不会留下一份隐形的旧状态。各子功能里那个
+//! `sub.get() == StockSub::Xxx` 的 `Effect` 仍要保留：同一子功能**重渲染**时（行情回来了、
+//! 选中股变了）不该重发请求，只有"从别的子功能切回来"才刷。
 //!
 //! ## 单位与命名纪律
 //!
@@ -20,6 +31,8 @@
 //! * 请求字段 snake_case、响应字段 camelCase —— 逐字照抄命令面，不做归一化。
 //! * **A 股红涨绿跌**：本页作用域内的 `.amount-income` / `.amount-expense` 被 CSS 反向映射
 //!   （盈 → 红、亏 → 绿），与记账域语义相反（本页作用域的覆盖写在 `stock.css`）。
+//! * 「设置」子功能的费用设置与交易标签是**按账本**存的（不是应用级配置），
+//!   金额换算一律过 `tr_domain::money`（`cents_to_yuan` / `yuan_to_cents`），不自行 `/100`。
 //!
 //! ## 行情降级的硬要求
 //!
@@ -40,12 +53,13 @@ use tr_domain::dto::{
 };
 use tr_domain::fee::{compute_order_fee, is_shanghai_code, is_valid_stock_code};
 use tr_domain::models::StockFeeSetting;
+use tr_domain::money::{cents_to_yuan, yuan_to_cents};
 
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, DatePicker, Empty,
-    FeaturePage, Input, LineChart, Modal, Pagination, Segmented, SegmentedOption, Select,
-    SelectOption, TabItem, TabPane, Tabs, Textarea,
+    FeaturePage, Form, FormItem, FormLayout, Input, LineChart, Modal, Pagination, Segmented,
+    SegmentedOption, Select, SelectOption, Textarea, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::format::{self, lots_of};
@@ -54,16 +68,59 @@ use crate::notify::Notifier;
 use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd};
 
-/// 页面标题（固定文案，改动即影响界面）。
+/// 页面标题（固定文案，改动即影响界面）。侧栏条目名也用这一个来源。
 pub const PAGE_TITLE: &str = "股票";
 
-/// 四个分栏（默认 `account`）。
-const TABS: [(&str, &str); 4] = [
-    ("account", "账户"),
-    ("position", "持仓"),
-    ("trade", "成交记录"),
-    ("statistics", "交易统计"),
-];
+/// 股票页的五个子功能（左侧图标条切换，顺序即渲染顺序）。
+///
+/// 与记账页同构：子功能走**图标条**，不进侧栏，也不再用顶部页签。
+/// 「设置」是原「应用设置 → 股票」整块（费用设置 / 交易标签 / 重置股票数据）的迁入地。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StockSub {
+    /// 账户：总资产 + 追加本金/支取 + 资金变化记录
+    Account,
+    /// 持仓：持仓卡片 + 行情 + 本轮复盘 + 下单 + 成交表
+    Position,
+    /// 记录：已清仓股票的轮次历史（原「成交记录」分栏）
+    Trade,
+    /// 统计：结算统计 + 曲线 + 逐笔结算明细（原「交易统计」分栏）
+    Statistics,
+    /// 设置：交易费用 / 交易标签 / 重置股票数据
+    Setting,
+}
+
+impl StockSub {
+    /// 图标条顺序（顺序即渲染顺序）。
+    pub const ALL: [StockSub; 5] = [
+        Self::Account,
+        Self::Position,
+        Self::Trade,
+        Self::Statistics,
+        Self::Setting,
+    ];
+
+    /// 子功能名 —— 同时用作悬停提示与 `aria-label`（也是 fixtures 点它的可访问名）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Account => "账户",
+            Self::Position => "持仓",
+            Self::Trade => "记录",
+            Self::Statistics => "统计",
+            Self::Setting => "设置",
+        }
+    }
+
+    /// 图标条上的图标（复用已有图标，不为本页新增图形）。
+    pub fn icon(self) -> Icon {
+        match self {
+            Self::Account => Icon::Stock,
+            Self::Position => Icon::LineChart,
+            Self::Trade => Icon::Sync,
+            Self::Statistics => Icon::BarChart,
+            Self::Setting => Icon::Setting,
+        }
+    }
+}
 
 /// 资金记录每页条数（默认 10 条）。
 const FUND_PAGE_SIZE: i64 = 10;
@@ -134,49 +191,61 @@ struct ImpactPrompt {
 
 // ==================================================================== 页面外壳
 
-/// 页面根组件：四个分栏。
+/// 股票页：只负责"当前是哪个子功能"，版心与图标条交给子功能自己渲染。
+///
+/// 与记账页的 `AccountingPage` 同一套写法：五个子功能各自渲染一份 [`FeaturePage`]
+/// （含左侧图标条），切子功能即重建该子功能的视图（信号随组件 owner 一起释放），
+/// 因此来回切会重新拉数据 —— 与"切一个页面"的行为一致，不会留下一份隐形的旧状态。
 #[component]
 pub fn StockPage() -> impl IntoView {
-    let active = RwSignal::new(TABS[0].0.to_string());
-
-    let items = TABS
-        .iter()
-        .map(|(key, label)| TabItem::new(*key, *label))
-        .collect::<Vec<_>>();
-
-    // 版心两块：工具栏 / 内容区各自建好视图再交给 `FeaturePage`（骨架见 components/ui/feature_page.rs）
-    let toolbar = view! {
-        <Tabs active=active items=items />
-    }
-    .into_any();
-
-    let content = view! {
-        <div class="stock-tab-body">
-            <TabPane active=active key="account">
-                {account_view(active)}
-            </TabPane>
-            <TabPane active=active key="position">
-                {position_view(active)}
-            </TabPane>
-            <TabPane active=active key="trade">
-                {history_view()}
-            </TabPane>
-            <TabPane active=active key="statistics">
-                {statistics_view()}
-            </TabPane>
-        </div>
-    }
-    .into_any();
-
+    let sub = RwSignal::new(StockSub::Account);
     view! {
-        <FeaturePage title=PAGE_TITLE class="stock-page" toolbar=toolbar content=content />
+        {move || match sub.get() {
+            StockSub::Account => account_view(sub),
+            StockSub::Position => position_view(sub),
+            StockSub::Trade => history_view(sub),
+            StockSub::Statistics => statistics_view(sub),
+            StockSub::Setting => settings_view(sub),
+        }}
     }
 }
 
-// ==================================================================== 分栏一：账户
+/// 子功能图标条 —— `FeaturePage` 的 `rail` 插槽内容（外层 `.page-rail` 由它渲染）。
+///
+/// 每个子功能各渲染一份（与记账页的 `SubFunctionRail` 一致）：同一时刻只挂载一个。
+#[component]
+pub fn StockSubRail(sub: RwSignal<StockSub>) -> impl IntoView {
+    view! {
+        <nav class="page-rail-nav" aria-label="股票子功能">
+            {StockSub::ALL
+                .iter()
+                .map(|item| {
+                    let value = *item;
+                    view! {
+                        <button
+                            type="button"
+                            class="page-rail-btn"
+                            class:is-active=move || sub.get() == value
+                            title=item.label()
+                            aria-label=item.label()
+                            on:click=move |_| sub.set(value)
+                        >
+                            <span class="page-rail-btn-icon">{icons::icon(item.icon())}</span>
+                        </button>
+                    }
+                })
+                .collect_view()}
+        </nav>
+    }
+}
 
-/// 账户分栏：总览 + 追加/支取 + 费用设置 + 资金记录。
-fn account_view(active: RwSignal<String>) -> AnyView {
+// ==================================================================== 子功能一：账户
+
+/// 账户子功能：总览卡 + **工具栏**（支取 / 追加本金）+ 资金变化记录。
+///
+/// 「追加本金 / 支取」是本子功能的主操作，放在工具栏里（与其余子功能一致）；
+/// 总资产卡里只留指标，不再重复放这两个入口。
+fn account_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
     let overview = RwSignal::new(StockOverviewDto::default());
     let overview_loading = RwSignal::new(false);
@@ -231,8 +300,8 @@ fn account_view(active: RwSignal<String>) -> AnyView {
         });
     };
 
-    // 费用设置只**读取**：编辑入口在「应用设置 → 股票」，
-    // 这里读回来是给下单弹窗估算费用用的（不再在本页渲染表单）。
+    // 费用设置只**读取**：编辑入口在本页的「设置」子功能，
+    // 这里读回来是给下单弹窗估算费用用的（不在本子功能渲染表单）。
     let load_fee_settings = move || {
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() {
@@ -269,7 +338,7 @@ fn account_view(active: RwSignal<String>) -> AnyView {
     });
 
     Effect::new(move |prev: Option<bool>| {
-        let is_active = active.get() == "account";
+        let is_active = sub.get() == StockSub::Account;
         if is_active && prev == Some(false) {
             load_overview();
         }
@@ -339,37 +408,41 @@ fn account_view(active: RwSignal<String>) -> AnyView {
         ((snapshot.total + size - 1) / size).max(1) as i32
     });
 
-    view! {
+    // 版心两块：工具栏（本子功能的两个资金操作）/ 内容区，各自建好再交给 `FeaturePage`
+    let toolbar = view! {
+        <div class="stock-toolbar">
+            <Button
+                variant=ButtonVariant::Secondary
+                loading=Signal::derive(move || mutating.get())
+                on_click=move |_| {
+                    amount_text.set(String::new());
+                    amount_date.set(today_ymd());
+                    withdraw_open.set(true);
+                }
+            >
+                "支取"
+            </Button>
+            <Button
+                variant=ButtonVariant::Primary
+                loading=Signal::derive(move || mutating.get())
+                on_click=move |_| {
+                    amount_text.set(String::new());
+                    amount_date.set(today_ymd());
+                    principal_open.set(true);
+                }
+            >
+                "追加本金"
+            </Button>
+        </div>
+    }
+    .into_any();
+
+    let content = view! {
+        <div class="stock-body">
         <div class="stock-account">
             <div class="stock-overview">
                 <div class="stock-overview__head">
                     <h3 class="stock-overview__title">"总资产"</h3>
-                    <div class="stock-overview__actions">
-                        <Button
-                            variant=ButtonVariant::Secondary
-                            size=ButtonSize::Small
-                            loading=Signal::derive(move || mutating.get())
-                            on_click=move |_| {
-                                amount_text.set(String::new());
-                                amount_date.set(today_ymd());
-                                withdraw_open.set(true);
-                            }
-                        >
-                            "支取"
-                        </Button>
-                        <Button
-                            variant=ButtonVariant::Primary
-                            size=ButtonSize::Small
-                            loading=Signal::derive(move || mutating.get())
-                            on_click=move |_| {
-                                amount_text.set(String::new());
-                                amount_date.set(today_ymd());
-                                principal_open.set(true);
-                            }
-                        >
-                            "追加本金"
-                        </Button>
-                    </div>
                 </div>
 
                 <div class="stock-overview__lead">
@@ -560,6 +633,18 @@ fn account_view(active: RwSignal<String>) -> AnyView {
                 UnsyncCallback::new(move |()| submit_amount(true)),
             )}
         </div>
+        </div>
+    }
+    .into_any();
+
+    view! {
+        <FeaturePage
+            title=PAGE_TITLE
+            class="stock-page"
+            rail=view! { <StockSubRail sub=sub /> }.into_any()
+            toolbar=toolbar
+            content=content
+        />
     }
     .into_any()
 }
@@ -641,10 +726,12 @@ fn amount_modal(
     .into_any()
 }
 
-// ==================================================================== 分栏二：持仓
+// ==================================================================== 子功能二：持仓
 
-/// 持仓分栏：持仓卡片 + 行情面板 + 本轮复盘 + 记录委托 + 成交表 + 编辑/删除。
-fn position_view(active: RwSignal<String>) -> AnyView {
+/// 持仓子功能：持仓卡片 + 行情面板 + 本轮复盘 + 成交表 + 编辑/删除。
+///
+/// 「建仓」是本子功能的主操作，放在工具栏里（空态文案里的"先点下方「建仓」"已随之改为工具栏口径）。
+fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
     let positions = RwSignal::new(Vec::<StockPositionDto>::new());
     let positions_loading = RwSignal::new(false);
@@ -791,9 +878,9 @@ fn position_view(active: RwSignal<String>) -> AnyView {
         ledger_id
     });
 
-    // 切回本分栏 → 刷新行情（重取持仓 + 账户总览）
+    // 切回本子功能 → 刷新行情（重取持仓 + 账户总览）
     Effect::new(move |prev: Option<bool>| {
-        let is_active = active.get() == "position";
+        let is_active = sub.get() == StockSub::Position;
         if is_active && prev == Some(false) && !stores.current_ledger_id.get_untracked().is_empty()
         {
             load_positions(Some(selected_code.get_untracked()));
@@ -1141,7 +1228,18 @@ fn position_view(active: RwSignal<String>) -> AnyView {
         }
     };
 
-    view! {
+    // 版心两块：工具栏（本子功能的主操作「建仓」）/ 内容区
+    let toolbar = view! {
+        <div class="stock-toolbar">
+            <Button variant=ButtonVariant::Primary on_click=move |_| open_trade("open")>
+                "建仓"
+            </Button>
+        </div>
+    }
+    .into_any();
+
+    let content = view! {
+        <div class="stock-body">
         <div class="stock-position">
             <div class="stock-position__grid">
                 <div class="stock-panel stock-panel--list">
@@ -1154,7 +1252,7 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                                         if positions_loading.get() {
                                             "正在加载持仓…"
                                         } else {
-                                            "暂无持仓，先点下方「建仓」"
+                                            "暂无持仓，先点上方「建仓」"
                                         }
                                     }}
                                 </div>
@@ -1264,18 +1362,6 @@ fn position_view(active: RwSignal<String>) -> AnyView {
                             }}
                         </div>
                     </Show>
-                    // 主操作「建仓」：`d2d89b5` 那次重构把这块删掉了，而空态文案还写着
-                    // "先点下方「建仓」" —— 按钮补回左栏底栏（`.stock-panel__footer` 自带顶部分隔线，
-                    // 与「资金变化记录」的底栏同一套）。
-                    <div class="stock-panel__footer">
-                        <Button
-                            variant=ButtonVariant::Primary
-                            block=true
-                            on_click=move |_| open_trade("open")
-                        >
-                            "建仓"
-                        </Button>
-                    </div>
                 </div>
 
                 <div class="stock-panel stock-panel--detail">
@@ -1580,6 +1666,17 @@ fn position_view(active: RwSignal<String>) -> AnyView {
 
             {impact_modal(impact, impact_running, UnsyncCallback::new(move |()| confirm_impact()))}
         </div>
+        </div>
+    }
+    .into_any();
+    view! {
+        <FeaturePage
+            title=PAGE_TITLE
+            class="stock-page"
+            rail=view! { <StockSubRail sub=sub /> }.into_any()
+            toolbar=toolbar
+            content=content
+        />
     }
     .into_any()
 }
@@ -2518,10 +2615,13 @@ fn trade_row_view(
     .into_any()
 }
 
-// ==================================================================== 分栏三：交易历史
+// ==================================================================== 子功能三：记录（已清仓的轮次历史）
 
-/// 交易历史分栏：全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签。
-fn history_view() -> AnyView {
+/// 记录子功能：全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签。
+///
+/// 本子功能没有页面级操作，所以**不给工具栏**（`FeaturePage` 不传 `toolbar`，
+/// 免得多出一条空发丝线）。行内「编辑/删除」在持仓子功能的详情区，不在这里。
+fn history_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
     let histories = RwSignal::new(Vec::<StockTradeHistoryDto>::new());
     let summary = RwSignal::new(StockTradeHistorySummaryDto::default());
@@ -2666,7 +2766,8 @@ fn history_view() -> AnyView {
         });
     };
 
-    view! {
+    let content = view! {
+        <div class="stock-body">
         <div class="stock-history">
             <Show when=move || !histories.get().is_empty() || summary.get().stock_count.is_positive()>
                 <div class="stock-summary-bar">
@@ -2866,6 +2967,17 @@ fn history_view() -> AnyView {
                 </div>
             </div>
         </div>
+        </div>
+    }
+    .into_any();
+
+    view! {
+        <FeaturePage
+            title=PAGE_TITLE
+            class="stock-page"
+            rail=view! { <StockSubRail sub=sub /> }.into_any()
+            content=content
+        />
     }
     .into_any()
 }
@@ -3168,8 +3280,12 @@ impl Metric {
     }
 }
 
-/// 统计分栏。
-fn statistics_view() -> AnyView {
+/// 统计子功能：结算统计面板 + 曲线 + 逐笔结算明细。
+///
+/// 筛选组（区间 / 最近 N 笔 / 标签）与「刷新」是**页面级操作**，放在工具栏里；
+/// 内容区只留结果（指标、曲线、明细表）。工具栏在三种内容态（加载中 / 空态 / 有数据）下
+/// 都渲染 —— 否则空态会把筛选入口一起藏掉。
+fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
     let stats = RwSignal::new(Option::<StockStatisticsDto>::None);
     let loading = RwSignal::new(false);
@@ -3251,7 +3367,76 @@ fn statistics_view() -> AnyView {
 
     let latest_point = move || stats.get().and_then(|data| data.points.last().cloned());
 
-    view! {
+    // 版心两块：工具栏（筛选组 + 刷新）/ 内容区（结算统计结果）
+    let toolbar = view! {
+        <div class="stock-toolbar stock-toolbar--between">
+            <div class="stock-statistics__filters">
+                <Segmented
+                    value=filter_mode
+                    options=vec![
+                        SegmentedOption::new("all", "全部"),
+                        SegmentedOption::new("range", "按时间"),
+                        SegmentedOption::new("recent", "最近 N 笔"),
+                    ]
+                    on_change=UnsyncCallback::new(move |next: String| {
+                        filter_mode.set(next.clone());
+                        if next == "recent" && recent.get_untracked() == 0 {
+                            recent.set(10);
+                        }
+                        apply_filter();
+                    })
+                />
+                <Show when=move || filter_mode.get() == "range">
+                    <div class="stock-statistics__range">
+                        <Input value=range_start placeholder="开始月份 YYYY-MM" />
+                        <span class="stock-statistics__range-sep">"~"</span>
+                        <Input value=range_end placeholder="结束月份 YYYY-MM" />
+                    </div>
+                </Show>
+                <Show when=move || filter_mode.get() == "recent">
+                    <div class="stock-statistics__recent">
+                        <Select
+                            value=RwSignal::new(recent.get().to_string())
+                            options=vec![
+                                SelectOption::new("10", "最近 10 笔"),
+                                SelectOption::new("50", "最近 50 笔"),
+                                SelectOption::new("100", "最近 100 笔"),
+                            ]
+                            on_change=UnsyncCallback::new(move |value: String| {
+                                recent.set(value.parse().unwrap_or(10));
+                                apply_filter();
+                            })
+                        />
+                    </div>
+                </Show>
+                <div class="stock-statistics__tag">
+                    <Select
+                        value=tag_filter
+                        options=Signal::derive(move || {
+                            let mut options = vec![SelectOption::new("", "全部标签")];
+                            options.extend(tags.get().into_iter().map(SelectOption::same));
+                            options
+                        })
+                        .get()
+                        on_change=UnsyncCallback::new(move |_value: String| {
+                            apply_filter();
+                        })
+                    />
+                </div>
+            </div>
+            <Button
+                variant=ButtonVariant::Primary
+                loading=Signal::derive(move || loading.get())
+                on_click=move |_| apply_filter()
+            >
+                "刷新"
+            </Button>
+        </div>
+    }
+    .into_any();
+
+    let content = view! {
+        <div class="stock-body">
         <div class="stock-statistics">
             {move || {
                 let Some(data) = stats.get() else {
@@ -3281,73 +3466,6 @@ fn statistics_view() -> AnyView {
                     <div class="stock-panel">
                         <div class="stock-panel__head">
                             <h4 class="stock-panel__title">"结算统计"</h4>
-                            <div class="stock-statistics__filters">
-                                <Segmented
-                                    value=filter_mode
-                                    options=vec![
-                                        SegmentedOption::new("all", "全部"),
-                                        SegmentedOption::new("range", "按时间"),
-                                        SegmentedOption::new("recent", "最近 N 笔"),
-                                    ]
-                                    on_change=UnsyncCallback::new(move |next: String| {
-                                        filter_mode.set(next.clone());
-                                        if next == "recent" && recent.get_untracked() == 0 {
-                                            recent.set(10);
-                                        }
-                                        apply_filter();
-                                    })
-                                />
-                                <Show when=move || filter_mode.get() == "range">
-                                    <div class="stock-statistics__range">
-                                        <Input
-                                            value=range_start
-                                            placeholder="开始月份 YYYY-MM"
-                                        />
-                                        <span class="stock-statistics__range-sep">"~"</span>
-                                        <Input value=range_end placeholder="结束月份 YYYY-MM" />
-                                    </div>
-                                </Show>
-                                <Show when=move || filter_mode.get() == "recent">
-                                    <div class="stock-statistics__recent">
-                                        <Select
-                                            value=RwSignal::new(recent.get().to_string())
-                                            options=vec![
-                                                SelectOption::new("10", "最近 10 笔"),
-                                                SelectOption::new("50", "最近 50 笔"),
-                                                SelectOption::new("100", "最近 100 笔"),
-                                            ]
-                                            on_change=UnsyncCallback::new(move |value: String| {
-                                                recent.set(value.parse().unwrap_or(10));
-                                                apply_filter();
-                                            })
-                                        />
-                                    </div>
-                                </Show>
-                                <div class="stock-statistics__tag">
-                                    <Select
-                                        value=tag_filter
-                                        options=Signal::derive(move || {
-                                            let mut options = vec![SelectOption::new("", "全部标签")];
-                                            options.extend(
-                                                tags.get().into_iter().map(SelectOption::same),
-                                            );
-                                            options
-                                        })
-                                        .get()
-                                        on_change=UnsyncCallback::new(move |_value: String| {
-                                            apply_filter();
-                                        })
-                                    />
-                                </div>
-                                <Button
-                                    variant=ButtonVariant::Primary
-                                    size=ButtonSize::Small
-                                    loading=Signal::derive(move || loading.get())
-                                    on_click=move |_| apply_filter()
-                                >
-                                    "刷新"
-                                </Button>
-                            </div>
                         </div>
 
                         {move || {
@@ -3695,6 +3813,18 @@ fn statistics_view() -> AnyView {
                     .into_any()
             }}
         </div>
+        </div>
+    }
+    .into_any();
+
+    view! {
+        <FeaturePage
+            title=PAGE_TITLE
+            class="stock-page"
+            rail=view! { <StockSubRail sub=sub /> }.into_any()
+            toolbar=toolbar
+            content=content
+        />
     }
     .into_any()
 }
@@ -3715,5 +3845,526 @@ fn StatKpi(
             </span>
             <span class="stock-kpi__sub">{move || sub.get()}</span>
         </div>
+    }
+}
+
+// ==================================================================== 子功能五：设置
+
+/// 交易费用说明（「交易费用设置」标题旁的说明浮层；与下单弹窗的预估同口径）。
+const FEE_TOOLTIP: &str = "佣金：委托成交总额 × 费率，不足最低佣金时按最低佣金收取（买卖双向）\n一笔委托分多笔成交时，费用按委托成交总额计算一次，再按各笔成交金额比例分摊\n买入实际成本 = 成交金额 + 佣金 + 过户费";
+/// 印花税说明（固定文案）。
+const STAMP_TOOLTIP: &str = "卖出时按成交金额 × 费率收取";
+/// 过户费说明（固定文案）。
+const TRANSFER_TOOLTIP: &str = "买卖双向收取，仅沪市（60/68 开头）适用";
+/// 交易标签最多保存数量（上限 20）。
+const MAX_STOCK_TAGS: usize = 20;
+
+/// 设置子功能：交易标签 + 交易费用设置 + 重置股票数据。
+///
+/// 这是原「应用设置 → 股票」整块迁进来的（它属于股票事务，不属于应用配置）：
+/// 费用设置与标签都是**按账本**存的，放在这里与下单、复盘、统计同屏更顺手。
+/// 「保存」是费用表单的提交键，放工具栏；标签的增删是即存即生效，不在工具栏里。
+fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
+    let stores = AppStores::global();
+
+    // ---- 费用设置 ----
+    let fee_commission = RwSignal::new(String::new());
+    let fee_min = RwSignal::new(String::new());
+    let fee_stamp = RwSignal::new(String::new());
+    let fee_transfer = RwSignal::new(String::new());
+    let fee_saving = RwSignal::new(false);
+
+    // ---- 交易标签 ----
+    let tags = RwSignal::new(Vec::<String>::new());
+    let default_tag = RwSignal::new(String::new());
+    let tags_loading = RwSignal::new(false);
+    let tags_saving = RwSignal::new(false);
+    let new_tag = RwSignal::new(String::new());
+
+    // ---- 重置 ----
+    let confirm_open = RwSignal::new(false);
+    let resetting = RwSignal::new(false);
+
+    let no_ledger = move || stores.current_ledger_id.get().is_empty();
+
+    // 回填：佣金 ×10000、最低佣金（分→元）、印花税/过户费 ×100
+    let fill_fee_form = move |setting: &StockFeeSetting| {
+        fee_commission.set(format_scaled(setting.commission_rate, 10_000.0, 4));
+        fee_min.set(cents_to_yuan(setting.min_commission));
+        fee_stamp.set(format_scaled(setting.stamp_duty_rate, 100.0, 3));
+        fee_transfer.set(format_scaled(setting.transfer_fee_rate, 100.0, 3));
+    };
+
+    let load_fee = move |ledger_id: String| {
+        if ledger_id.is_empty() {
+            fee_commission.set(String::new());
+            fee_min.set(String::new());
+            fee_stamp.set(String::new());
+            fee_transfer.set(String::new());
+            return;
+        }
+        leptos::task::spawn_local(async move {
+            match api::stock::fee_settings_get(&ledger_id).await {
+                Ok(setting) => fill_fee_form(&setting),
+                Err(error) => notify_error("读取费用设置失败", &error),
+            }
+        });
+    };
+
+    let save_fee = move || {
+        if fee_saving.get_untracked() {
+            return;
+        }
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().error("请先选择工作空间", None);
+            return;
+        }
+
+        // 校验顺序与文案固定（改动即影响界面）
+        let Some(commission) = parse_number(&fee_commission.get_untracked()) else {
+            Notifier::global().error("请输入大于 0 的佣金费率", None);
+            return;
+        };
+        if commission <= 0.0 {
+            Notifier::global().error("请输入大于 0 的佣金费率", None);
+            return;
+        }
+        let min_text = fee_min.get_untracked();
+        let Some(min_commission_yuan) = parse_number(&min_text) else {
+            Notifier::global().error("请输入不小于 0 的最低佣金", None);
+            return;
+        };
+        if min_commission_yuan < 0.0 {
+            Notifier::global().error("请输入不小于 0 的最低佣金", None);
+            return;
+        }
+        let Some(stamp_duty) = parse_number(&fee_stamp.get_untracked()) else {
+            Notifier::global().error("印花税与过户费需不小于 0", None);
+            return;
+        };
+        let Some(transfer_fee) = parse_number(&fee_transfer.get_untracked()) else {
+            Notifier::global().error("印花税与过户费需不小于 0", None);
+            return;
+        };
+        if stamp_duty < 0.0 || transfer_fee < 0.0 {
+            Notifier::global().error("印花税与过户费需不小于 0", None);
+            return;
+        }
+
+        // 元 → 分必须走 `tr_domain::money`
+        let min_commission = match yuan_to_cents(&min_text) {
+            Ok(cents) => cents,
+            Err(_) => {
+                Notifier::global().error("请输入不小于 0 的最低佣金", None);
+                return;
+            }
+        };
+
+        fee_saving.set(true);
+        leptos::task::spawn_local(async move {
+            match api::stock::fee_settings_put(
+                &ledger_id,
+                commission / 10_000.0,
+                min_commission,
+                stamp_duty / 100.0,
+                transfer_fee / 100.0,
+            )
+            .await
+            {
+                Ok(setting) => {
+                    // 保存后以后端返回为准回填
+                    fill_fee_form(&setting);
+                    Notifier::global().success("费用设置已保存", None);
+                }
+                Err(error) => notify_error("保存费用设置失败", &error),
+            }
+            fee_saving.set(false);
+        });
+    };
+
+    // ---- 交易标签 ----
+    let load_tags = move |ledger_id: String| {
+        if ledger_id.is_empty() {
+            tags.set(Vec::new());
+            default_tag.set(String::new());
+            tags_loading.set(false);
+            return;
+        }
+        tags_loading.set(true);
+        leptos::task::spawn_local(async move {
+            match api::stock::tag_settings_get(&ledger_id).await {
+                Ok(setting) => {
+                    tags.set(setting.tags);
+                    default_tag.set(setting.default_tag);
+                }
+                Err(error) => notify_error("读取交易标签失败", &error),
+            }
+            tags_loading.set(false);
+        });
+    };
+
+    let save_tags = move |next: Vec<String>, success: Option<String>| {
+        if tags_saving.get_untracked() {
+            return;
+        }
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().error("请先选择工作空间", None);
+            return;
+        }
+        tags_saving.set(true);
+        leptos::task::spawn_local(async move {
+            match api::stock::tag_settings_put(&ledger_id, next).await {
+                Ok(setting) => {
+                    // 保存后以后端返回的 tags 为准
+                    tags.set(setting.tags);
+                    default_tag.set(setting.default_tag);
+                    if let Some(text) = success {
+                        Notifier::global().success(text, None);
+                        new_tag.set(String::new());
+                    }
+                }
+                Err(error) => notify_error("保存交易标签失败", &error),
+            }
+            tags_saving.set(false);
+        });
+    };
+
+    let add_tag = move || {
+        if tags_saving.get_untracked() {
+            return;
+        }
+        if stores.current_ledger_id.get_untracked().is_empty() {
+            Notifier::global().error("请先选择工作空间", None);
+            return;
+        }
+        let next = new_tag.get_untracked().trim().to_string();
+        if next.is_empty() {
+            return;
+        }
+        if tags.with(|list| list.contains(&next)) {
+            Notifier::global().error(format!("标签「{next}」已存在"), None);
+            return;
+        }
+        if tags.with(Vec::len) >= MAX_STOCK_TAGS {
+            Notifier::global().error("最多保存 20 个标签，请先删除不再需要的标签", None);
+            return;
+        }
+        let mut list = tags.get_untracked();
+        list.push(next.clone());
+        save_tags(list, Some(format!("标签「{next}」已添加")));
+    };
+
+    let remove_tag = move |tag: String| {
+        if tags_saving.get_untracked() || tag == default_tag.get_untracked() {
+            return;
+        }
+        if stores.current_ledger_id.get_untracked().is_empty() {
+            Notifier::global().error("请先选择工作空间", None);
+            return;
+        }
+        let next: Vec<String> = tags
+            .get_untracked()
+            .into_iter()
+            .filter(|item| item != &tag)
+            .collect();
+        save_tags(next, Some(format!("标签「{tag}」已删除")));
+    };
+
+    // ---- 重置 ----
+    let do_reset = move || {
+        if resetting.get_untracked() {
+            return;
+        }
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().error("重置股票数据失败", Some("请先选择工作空间".to_string()));
+            return;
+        }
+        resetting.set(true);
+        leptos::task::spawn_local(async move {
+            match api::stock::reset(&ledger_id).await {
+                Ok(_) => {
+                    confirm_open.set(false);
+                    // 重置会清掉费用设置与交易标签，重新拉一遍
+                    load_fee(ledger_id.clone());
+                    load_tags(ledger_id);
+                    Notifier::global().success("股票数据已重置", None);
+                }
+                Err(error) => notify_error("重置股票数据失败", &error),
+            }
+            resetting.set(false);
+        });
+    };
+
+    // 账本变化 → 重新加载费用设置与交易标签
+    Effect::new(move |_: Option<()>| {
+        let ledger_id = stores.current_ledger_id.get();
+        load_fee(ledger_id.clone());
+        load_tags(ledger_id);
+    });
+
+    let tag_empty_text = move || {
+        if tags_loading.get() {
+            "正在加载…".to_string()
+        } else if stores.current_ledger_id.get().is_empty() {
+            "选择工作空间后即可配置交易标签".to_string()
+        } else {
+            "暂无标签".to_string()
+        }
+    };
+
+    // 版心两块：工具栏（费用表单的提交键）/ 内容区（标签 + 费用 + 重置）
+    let toolbar = view! {
+        <div class="stock-toolbar">
+            <Button
+                variant=ButtonVariant::Primary
+                loading=fee_saving
+                disabled=Signal::derive(no_ledger)
+                on_click=move || save_fee()
+            >
+                "保存"
+            </Button>
+        </div>
+    }
+    .into_any();
+
+    let content = view! {
+        <div class="stock-body">
+        <div class="stock-settings">
+            <div class="st-list">
+                // ---- 交易标签 ----
+                <div class="st-card st-card--block">
+                    <div class="st-tag-head">
+                        <div class="st-card-info">
+                            <span class="st-card-title">"交易标签"</span>
+                            <span class="st-card-desc">
+                                "每轮交易可选（最多 20 个、单个不超过 8 字）；删除不影响历史记录。"
+                            </span>
+                        </div>
+                        <div class="st-tag-action">
+                            <div class="st-tag-input">
+                                <Input
+                                    value=new_tag
+                                    placeholder="如：低吸"
+                                    maxlength=8
+                                    allow_clear=true
+                                    on_enter=move || add_tag()
+                                />
+                            </div>
+                            <Button
+                                variant=ButtonVariant::Primary
+                                loading=tags_saving
+                                disabled=Signal::derive(move || {
+                                    new_tag.get().trim().is_empty()
+                                        || tags.with(Vec::len) >= MAX_STOCK_TAGS
+                                })
+                                on_click=move || add_tag()
+                            >
+                                "添加"
+                            </Button>
+                        </div>
+                    </div>
+
+                    <div class="st-tag-list">
+                        {move || {
+                            let list = tags.get();
+                            if list.is_empty() {
+                                view! {
+                                    <div class="st-tag-empty">{tag_empty_text()}</div>
+                                }
+                                    .into_any()
+                            } else {
+                                let default = default_tag.get();
+                                list
+                                    .into_iter()
+                                    .map(|tag| {
+                                        let is_default = tag == default;
+                                        let for_title = tag.clone();
+                                        let name = tag.clone();
+                                        let aria = format!("删除标签 {tag}");
+                                        // 回调先建好：`UnsyncCallback` 是 Copy，
+                                        // `Show` 的 children 要求 `Fn`，不能把 String move 进去
+                                        let remove_click =
+                                            UnsyncCallback::new(move |()| remove_tag(tag.clone()));
+                                        view! {
+                                            <span
+                                                class="st-tag-item"
+                                                class:st-tag-item--default=is_default
+                                                title=if is_default {
+                                                    "默认标签，不可删除".to_string()
+                                                } else {
+                                                    for_title
+                                                }
+                                            >
+                                                <span class="st-tag-item-name">{name}</span>
+                                                <Show when=move || is_default>
+                                                    <span class="st-tag-item-default">"默认"</span>
+                                                </Show>
+                                                <Show when=move || !is_default>
+                                                    <button
+                                                        type="button"
+                                                        class="st-tag-item-remove"
+                                                        disabled=move || tags_saving.get()
+                                                        aria-label=aria.clone()
+                                                        on:click=move |_| remove_click.run(())
+                                                    >
+                                                        {icons::icon(Icon::Close)}
+                                                    </button>
+                                                </Show>
+                                            </span>
+                                        }
+                                    })
+                                    .collect_view()
+                                    .into_any()
+                            }
+                        }}
+                    </div>
+                </div>
+
+                // ---- 交易费用设置 ----
+                <div class="st-card st-card--block">
+                    <div class="st-panel-head">
+                        <div class="st-panel-title-row">
+                            <h3 class="st-panel-title">"交易费用设置"</h3>
+                            // 这个图标在面板**左半边**：气泡左对齐向右铺开（右对齐会往左伸出面板压到侧栏）
+                            <Tooltip title=FEE_TOOLTIP class="st-fee-tip--start">
+                                <span class="st-panel-tip" aria-label="查看交易费用说明">
+                                    {icons::icon(Icon::InfoCircle)}
+                                </span>
+                            </Tooltip>
+                        </div>
+                    </div>
+
+                    <Form layout=FormLayout::Vertical class="st-fee-form">
+                        <FormItem label="佣金费率">
+                            <div class="st-fee-field">
+                                <Input
+                                    value=fee_commission
+                                    placeholder="如 2.354"
+                                    disabled=Signal::derive(no_ledger)
+                                />
+                                <span class="st-fee-addon">"万分之"</span>
+                            </div>
+                        </FormItem>
+                        <FormItem label="最低佣金">
+                            <div class="st-fee-field">
+                                <Input
+                                    value=fee_min
+                                    placeholder="如 5"
+                                    disabled=Signal::derive(no_ledger)
+                                />
+                                <span class="st-fee-addon">"元/委托"</span>
+                            </div>
+                        </FormItem>
+                        <FormItem label="印花税">
+                            <div class="st-fee-field">
+                                <Input
+                                    value=fee_stamp
+                                    placeholder="如 0.05"
+                                    disabled=Signal::derive(no_ledger)
+                                />
+                                <span class="st-fee-addon">"%"</span>
+                                <Tooltip title=STAMP_TOOLTIP class="st-fee-tip">
+                                    <span class="st-panel-tip" aria-label="印花税说明">
+                                        {icons::icon(Icon::InfoCircle)}
+                                    </span>
+                                </Tooltip>
+                            </div>
+                        </FormItem>
+                        <FormItem label="过户费">
+                            <div class="st-fee-field">
+                                <Input
+                                    value=fee_transfer
+                                    placeholder="如 0.001"
+                                    disabled=Signal::derive(no_ledger)
+                                />
+                                <span class="st-fee-addon">"%"</span>
+                                <Tooltip title=TRANSFER_TOOLTIP class="st-fee-tip">
+                                    <span class="st-panel-tip" aria-label="过户费说明">
+                                        {icons::icon(Icon::InfoCircle)}
+                                    </span>
+                                </Tooltip>
+                            </div>
+                        </FormItem>
+                    </Form>
+
+                    <Show when=move || no_ledger()>
+                        <p class="page-hint">"请先选择工作空间"</p>
+                    </Show>
+                </div>
+
+                // ---- 重置 ----
+                <div class="st-card">
+                    <div class="st-card-info">
+                        <span class="st-card-title">"重置"</span>
+                        <span class="st-card-desc">
+                            "清空当前账本的股票数据（账户本金、持仓、交易记录、资金记录、费用设置与交易标签），此操作不可恢复。"
+                        </span>
+                    </div>
+                    <div class="st-card-action">
+                        <Button
+                            variant=ButtonVariant::PrimaryDanger
+                            disabled=Signal::derive(no_ledger)
+                            on_click=move || confirm_open.set(true)
+                        >
+                            "重置"
+                        </Button>
+                    </div>
+                </div>
+            </div>
+
+            <Modal
+                open=confirm_open
+                title="重置股票数据"
+                width=440
+                ok_text="确认重置"
+                cancel_text="取消"
+                ok_danger=true
+                ok_loading=resetting
+                on_close=move || confirm_open.set(false)
+                on_ok=move || do_reset()
+            >
+                <p class="st-modal-text">
+                    "将清空当前账本的账户本金、持仓、交易记录、资金记录、费用设置与交易标签。此操作不可恢复，确定继续吗？"
+                </p>
+            </Modal>
+        </div>
+        </div>
+    }
+    .into_any();
+
+    view! {
+        <FeaturePage
+            title=PAGE_TITLE
+            class="stock-page"
+            rail=view! { <StockSubRail sub=sub /> }.into_any()
+            toolbar=toolbar
+            content=content
+        />
+    }
+    .into_any()
+}
+
+// ---------------------------------------------------------------- 工具函数
+
+/// 按 `scale` 换算并格式化：
+/// 先按 `scale` 换算，再四舍五入到 `digits` 位小数，最后去掉多余的 0。
+fn format_scaled(value: f64, scale: f64, digits: i32) -> String {
+    let factor = 10_f64.powi(digits);
+    let rounded = (value * scale * factor).round() / factor;
+    format!("{rounded}")
+}
+
+/// 解析用户输入的数值：非数字 / 非有限值（`NaN` / `inf`）视为非法。
+fn parse_number(input: &str) -> Option<f64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.parse::<f64>() {
+        Ok(value) if value.is_finite() => Some(value),
+        _ => None,
     }
 }

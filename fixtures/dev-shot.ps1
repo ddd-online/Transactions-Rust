@@ -8,8 +8,9 @@
 #
 # 用法（pwsh 7）：
 #   pwsh -File fixtures\dev-shot.ps1                       # 抓当前页面 → target\dev-shots\current.png
-#   pwsh -File fixtures\dev-shot.ps1 -Page 分类标签         # 先切页再抓 → target\dev-shots\分类标签.png
-#   pwsh -File fixtures\dev-shot.ps1 -AllPages             # 5 个顶级功能 + 4 个子功能各抓一张
+#   pwsh -File fixtures\dev-shot.ps1 -Page 股票            # 先切页再抓 → target\dev-shots\股票.png
+#   pwsh -File fixtures\dev-shot.ps1 -Page 持仓            # 子功能也能直接指定（走左侧图标条）
+#   pwsh -File fixtures\dev-shot.ps1 -AllPages             # 5 个顶级功能 + 9 个子功能各抓一张
 #   pwsh -File fixtures\dev-shot.ps1 -OutDir target\look    # 换输出目录
 #
 # 需要 dev 外壳正在运行：
@@ -53,17 +54,27 @@ public class TrDevShot {
 }
 '@ -Language CSharp
 
-# 侧栏的 5 个顶级功能 + 记账页的 4 个子功能（子功能走左侧图标条，不进侧栏）
+# 侧栏的 5 个顶级功能 + 两个页的子功能（子功能走左侧图标条，不进侧栏）
 # （原「数据分析」顶级页已并入记账、更名「分析」，所以顶级功能由 6 个减为 5 个）
-$ALL_PAGES = @('记账', '记录', '分析', '标签', '模板', '股票', '事件', '日记', '应用设置')
+$ALL_PAGES = @('记账', '记录-记账', '分析', '标签', '模板', '股票', '记录-股票', '持仓', '统计', '设置', '事件', '日记', '应用设置')
 
-# 子功能 → 该子功能自己的一个标志性控件（判断"真的切过去了"用它，比找同名标题可靠：
-# 四个子功能共用标题栏「记账」，而「标签」这类名字在内容里也有同名文字）
+# 子功能 → @(父页, 该子功能自己的一个标志性控件)。
+# 标志控件用来判断"真的切过去了"，比找同名标题可靠：子功能共用父页的标题栏，
+# 而「标签」「记录」这类名字在内容里也有同名文字。
+# ⚠ 记账页与股票页都有「记录」，键名撞车 → 键写成 `<子功能>-<父页>`（只有这一对重名；
+#   其余子功能保持原名，`-Page 持仓` 这种短名字仍然好用）。
+# ⚠ 标志控件必须是**任何数据状态下都在**的：统计子功能没有结算记录时走空态
+#   （面板标题「结算统计」不渲染），用工具栏里的「刷新」更稳。
 $SUB_FUNCTIONS = [ordered]@{
-    '记录' = '记一笔'
-    '分析' = '新增图表'
-    '标签' = '新增分类'
-    '模板' = '新建模板'
+    '记录-记账' = @('记账', '记一笔')
+    '分析' = @('记账', '新增图表')
+    '标签' = @('记账', '新增分类')
+    '模板' = @('记账', '新建模板')
+    '账户' = @('股票', '追加本金')
+    '持仓' = @('股票', '建仓')
+    '记录-股票' = @('股票', '已实现盈亏')
+    '统计' = @('股票', '刷新')
+    '设置' = @('股票', '交易费用设置')
 }
 
 function Get-RepoAppWindow {
@@ -160,25 +171,44 @@ function Test-PageLoaded {
     return (($best.X - $win.X) -gt 260)                                # 侧栏宽 200 + 余量
 }
 
+# 子功能的标志控件出现了吗？
+#
+# ⚠ 标志控件必须是**任何数据状态下都在**的：统计子功能没有结算记录时走空态面板，
+# 里面的标题根本不渲染 —— 早前拿「结算统计」当标志，于是每次都被误判成"没切过去"。
+# 工具栏上的控件（如「刷新」）恒在，是可靠标志。这里按可见性筛一遍，避开幽灵节点。
+function Test-SubMarker {
+    param($Window, [string]$Marker)
+    foreach ($el in @(Find-All $Window $Marker)) {
+        $r = $el.Current.BoundingRectangle
+        if (-not [double]::IsFinite($r.X) -or $r.Width -le 0) { continue }
+        if (-not $el.Current.IsOffscreen) { return $true }
+    }
+    return $false
+}
+
 foreach ($name in $targets) {
     $done = $false
-    $subMarker = if ($SUB_FUNCTIONS.Contains($name)) { $SUB_FUNCTIONS[$name] } else { $null }
+    $sub = if ($SUB_FUNCTIONS.Contains($name)) { $SUB_FUNCTIONS[$name] } else { $null }
+    $subParent = if ($sub) { $sub[0] } else { $null }
+    $subMarker = if ($sub) { $sub[1] } else { $null }
+    # 点图标条要用**子功能原名**（键里可能带 `-父页` 后缀，只用于消歧）
+    $subName = if ($sub) { $name.Split('-')[0] } else { $null }
     for ($attempt = 1; $attempt -le 3 -and -not $done; $attempt++) {
         [void][TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle)
         Start-Sleep -Milliseconds 150
         if ($subMarker) {
-            # 子功能：先回到「记账」页，再点左侧图标条上的那一项
-            $nav = Find-NamedElement -Window $window -Name '记账'
+            # 子功能：先回到它的父页，再点左侧图标条上的那一项
+            $nav = Find-NamedElement -Window $window -Name $subParent
             if ($nav) {
                 $r = $nav.Current.BoundingRectangle
                 [TrDevShot]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
                 Start-Sleep -Milliseconds 500
             }
-            Invoke-SubFunction -Window $window -Name $name | Out-Null
+            Invoke-SubFunction -Window $window -Name $subName | Out-Null
             $deadline = (Get-Date).AddSeconds(8)
             while ((Get-Date) -lt $deadline -and -not $done) {
                 Start-Sleep -Milliseconds 250
-                if (Find-First $window $subMarker) { $done = $true }
+                $done = Test-SubMarker -Window $window -Marker $subMarker
             }
         } else {
             $nav = Find-NamedElement -Window $window -Name $name

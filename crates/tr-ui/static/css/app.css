@@ -905,7 +905,7 @@
  *
  * **顶部怎么留白，取决于内容形态**：
  *   * **贴边型**（表格 / 分栏列表）：顶部为 0 —— 表头与行的分隔线要从工具栏底边那条
- *     发丝线开始（`.tr-body`、`.ct-column*`、`.tpl-pane`、`.st-panes`、`.stock-tab-body`）。
+ *     发丝线开始（`.tr-body`、`.ct-column*`、`.tpl-pane`、`.st-panes`、`.stock-body`）。
  *   * **卡片型**（卡片列表 / 面板）：四边都留 16px —— 卡片/面板不该贴着工具栏的线
  *     （事件的三条轨道、分析的图表面板都是这类；两处都曾被我按贴边型一刀切成 0）。
  *
@@ -927,10 +927,6 @@
  * 卡片没了就变成"最后一行被窗口底边切掉"）。 */
 .da-main {
   padding: var(--transactions-space-lg);
-}
-
-.stock-tab-body {
-  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
 }
 
 .tr-body {

@@ -1,9 +1,13 @@
-//! 应用设置页（P6-a）：4 个分栏。
+//! 应用设置页（P6-a）：3 个分栏。
 //!
-//! 分栏与顺序（固定文案，改动即影响界面）：通用设置 / 日记配置 / 股票 / 关于软件。
+//! 分栏与顺序（固定文案，改动即影响界面）：通用设置 / 日记配置 / 关于软件。
 //!
-//! 「消费模板」原本是本页的第 2 个分栏，现已迁到记账页的**模板**子功能
-//! （见 [`crate::pages::templates`]）：它属于记账事务，不属于应用配置。
+//! 两个分栏已经迁走，别再往这里加回：
+//! * 「消费模板」原是本页第 2 个分栏，现属记账事务 → 记账页的**模板**子功能
+//!   （见 [`crate::pages::templates`]）；
+//! * 「股票」（交易费用 / 交易标签 / 重置股票数据）原是本页第 3 个分栏，现属股票事务
+//!   → 股票页的**设置**子功能（见 [`crate::pages::stock`]）。费用设置与标签都是按账本存的，
+//!   放在股票页与下单、复盘、统计同屏更顺手。
 //!
 //! ## 本实现的设计取舍（逐条，均为有意为之）
 //!
@@ -27,20 +31,12 @@
 //! 5. **日记配置**：**没有**「文件勾选」（扫描后顺序导入全部文件），只是每行状态；
 //!    「浏览器 dev 模式降级」分支（手输路径）在 Tauri 下不存在，故不实现；
 //!    导入完成后无需刷新日记页，故省略。
-//! 5. **股票·费用设置卡片**：换算规则固定——佣金费率按「万分之」（×10000），
-//!    印花税/过户费按「%」（×100）。
-//!    印花税/过户费的 tooltip 本实现放在输入框行尾的图标上（语义不变；
-//!    因 `FormItem` 的 label 是字符串，无法内联到 label 里）。
-//!    最低佣金回填走 `tr_domain::money::cents_to_yuan`（任务要求的唯一金额换算入口），
-//!    因此显示两位小数（`5.00`）——这是**有意的**：
-//!    金额换算一律过 `tr_domain::money`，不自行实现 `/100`。
-//!    费率输入非法（非数字 / `NaN` / `inf`）时不发请求、只提示（不 panic）。
-//! 6. **关于软件**：GitHub 链接是本轮任务要求增补；只展示**应用名 / 版本 / GitHub / 版权行**
+//! 5. **关于软件**：GitHub 链接是本轮任务要求增补；只展示**应用名 / 版本 / GitHub / 版权行**
 //!    —— **构建时间与构建类型都不展示**（`app_info` 支持 `name` / `version` / `isDev`，
 //!    但开发版/正式版这行按需求移除了）。
 //!    更新说明照任务单按**纯文本 + 保留换行**渲染（本仓库没有 Markdown 解析器）；
 //!    下载进度额外用小字显示 `speed`。
-//! 7. 全页不使用 `unwrap` / `expect` 处理用户数据：解析失败、命令失败一律走通知。
+//! 6. 全页不使用 `unwrap` / `expect` 处理用户数据：解析失败、命令失败一律走通知。
 
 use std::cell::RefCell;
 use std::time::Duration;
@@ -48,8 +44,6 @@ use std::time::Duration;
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
 use tr_domain::dto::DiaryExportFileError;
-use tr_domain::models::StockFeeSetting;
-use tr_domain::money::{cents_to_yuan, yuan_to_cents};
 use tr_domain::proxy::{ProxySetting, PROXY_MODE_AUTO, PROXY_MODE_MANUAL, PROXY_MODE_OFF};
 
 use crate::api;
@@ -68,17 +62,8 @@ pub const PAGE_TITLE: &str = "应用设置";
 
 const TAB_GENERAL: &str = "general";
 const TAB_DIARY: &str = "diary";
-const TAB_STOCK: &str = "stock";
 const TAB_ABOUT: &str = "about";
 
-/// 交易费用说明（「股票」分栏标题旁的说明浮层；与「股票」页的费用说明同口径）。
-const FEE_TOOLTIP: &str = "佣金：委托成交总额 × 费率，不足最低佣金时按最低佣金收取（买卖双向）\n一笔委托分多笔成交时，费用按委托成交总额计算一次，再按各笔成交金额比例分摊\n买入实际成本 = 成交金额 + 佣金 + 过户费";
-/// 印花税说明（固定文案）。
-const STAMP_TOOLTIP: &str = "卖出时按成交金额 × 费率收取";
-/// 过户费说明（固定文案）。
-const TRANSFER_TOOLTIP: &str = "买卖双向收取，仅沪市（60/68 开头）适用";
-/// 交易标签最多保存数量（上限 20）。
-const MAX_STOCK_TAGS: usize = 20;
 /// 外部链接（本仓库地址，改动即影响「关于软件」）。
 const GITHUB_URL: &str = "https://github.com/ddd-online/Transactions-Rust";
 
@@ -88,7 +73,6 @@ pub fn SettingsPage() -> impl IntoView {
     let items = vec![
         TabItem::new(TAB_GENERAL, "通用设置"),
         TabItem::new(TAB_DIARY, "日记配置"),
-        TabItem::new(TAB_STOCK, "股票"),
         TabItem::new(TAB_ABOUT, "关于软件"),
     ];
 
@@ -105,9 +89,6 @@ pub fn SettingsPage() -> impl IntoView {
             </TabPane>
             <TabPane active=active key=TAB_DIARY>
                 <DiarySetting />
-            </TabPane>
-            <TabPane active=active key=TAB_STOCK>
-                <StockSetting />
             </TabPane>
             <TabPane active=active key=TAB_ABOUT>
                 <AboutSetting />
@@ -927,473 +908,6 @@ fn diary_failed_row(item: DiaryExportFileError) -> impl IntoView {
     }
 }
 
-// ---------------------------------------------------------------- 股票
-
-/// 股票：交易费用设置 + 交易标签 + 重置股票数据。
-#[component]
-fn StockSetting() -> impl IntoView {
-    let stores = AppStores::global();
-
-    // ---- 费用设置 ----
-    let fee_commission = RwSignal::new(String::new());
-    let fee_min = RwSignal::new(String::new());
-    let fee_stamp = RwSignal::new(String::new());
-    let fee_transfer = RwSignal::new(String::new());
-    let fee_saving = RwSignal::new(false);
-
-    // ---- 交易标签 ----
-    let tags = RwSignal::new(Vec::<String>::new());
-    let default_tag = RwSignal::new(String::new());
-    let tags_loading = RwSignal::new(false);
-    let tags_saving = RwSignal::new(false);
-    let new_tag = RwSignal::new(String::new());
-
-    // ---- 重置 ----
-    let confirm_open = RwSignal::new(false);
-    let resetting = RwSignal::new(false);
-
-    let no_ledger = move || stores.current_ledger_id.get().is_empty();
-
-    // 回填：佣金 ×10000、最低佣金（分→元）、印花税/过户费 ×100
-    let fill_fee_form = move |setting: &StockFeeSetting| {
-        fee_commission.set(format_scaled(setting.commission_rate, 10_000.0, 4));
-        fee_min.set(cents_to_yuan(setting.min_commission));
-        fee_stamp.set(format_scaled(setting.stamp_duty_rate, 100.0, 3));
-        fee_transfer.set(format_scaled(setting.transfer_fee_rate, 100.0, 3));
-    };
-
-    let load_fee = move |ledger_id: String| {
-        if ledger_id.is_empty() {
-            fee_commission.set(String::new());
-            fee_min.set(String::new());
-            fee_stamp.set(String::new());
-            fee_transfer.set(String::new());
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            match api::stock::fee_settings_get(&ledger_id).await {
-                Ok(setting) => fill_fee_form(&setting),
-                Err(error) => notify_error("读取费用设置失败", &error),
-            }
-        });
-    };
-
-    let save_fee = move || {
-        if fee_saving.get_untracked() {
-            return;
-        }
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            Notifier::global().error("请先选择工作空间", None);
-            return;
-        }
-
-        // 校验顺序与文案固定（改动即影响界面）
-        let Some(commission) = parse_number(&fee_commission.get_untracked()) else {
-            Notifier::global().error("请输入大于 0 的佣金费率", None);
-            return;
-        };
-        if commission <= 0.0 {
-            Notifier::global().error("请输入大于 0 的佣金费率", None);
-            return;
-        }
-        let min_text = fee_min.get_untracked();
-        let Some(min_commission_yuan) = parse_number(&min_text) else {
-            Notifier::global().error("请输入不小于 0 的最低佣金", None);
-            return;
-        };
-        if min_commission_yuan < 0.0 {
-            Notifier::global().error("请输入不小于 0 的最低佣金", None);
-            return;
-        }
-        let Some(stamp_duty) = parse_number(&fee_stamp.get_untracked()) else {
-            Notifier::global().error("印花税与过户费需不小于 0", None);
-            return;
-        };
-        let Some(transfer_fee) = parse_number(&fee_transfer.get_untracked()) else {
-            Notifier::global().error("印花税与过户费需不小于 0", None);
-            return;
-        };
-        if stamp_duty < 0.0 || transfer_fee < 0.0 {
-            Notifier::global().error("印花税与过户费需不小于 0", None);
-            return;
-        }
-
-        // 元 → 分必须走 `tr_domain::money`
-        let min_commission = match yuan_to_cents(&min_text) {
-            Ok(cents) => cents,
-            Err(_) => {
-                Notifier::global().error("请输入不小于 0 的最低佣金", None);
-                return;
-            }
-        };
-
-        fee_saving.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::fee_settings_put(
-                &ledger_id,
-                commission / 10_000.0,
-                min_commission,
-                stamp_duty / 100.0,
-                transfer_fee / 100.0,
-            )
-            .await
-            {
-                Ok(setting) => {
-                    // 保存后以后端返回为准回填
-                    fill_fee_form(&setting);
-                    Notifier::global().success("费用设置已保存", None);
-                }
-                Err(error) => notify_error("保存费用设置失败", &error),
-            }
-            fee_saving.set(false);
-        });
-    };
-
-    // ---- 交易标签 ----
-    let load_tags = move |ledger_id: String| {
-        if ledger_id.is_empty() {
-            tags.set(Vec::new());
-            default_tag.set(String::new());
-            tags_loading.set(false);
-            return;
-        }
-        tags_loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::tag_settings_get(&ledger_id).await {
-                Ok(setting) => {
-                    tags.set(setting.tags);
-                    default_tag.set(setting.default_tag);
-                }
-                Err(error) => notify_error("读取交易标签失败", &error),
-            }
-            tags_loading.set(false);
-        });
-    };
-
-    let save_tags = move |next: Vec<String>, success: Option<String>| {
-        if tags_saving.get_untracked() {
-            return;
-        }
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            Notifier::global().error("请先选择工作空间", None);
-            return;
-        }
-        tags_saving.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::tag_settings_put(&ledger_id, next).await {
-                Ok(setting) => {
-                    // 保存后以后端返回的 tags 为准
-                    tags.set(setting.tags);
-                    default_tag.set(setting.default_tag);
-                    if let Some(text) = success {
-                        Notifier::global().success(text, None);
-                        new_tag.set(String::new());
-                    }
-                }
-                Err(error) => notify_error("保存交易标签失败", &error),
-            }
-            tags_saving.set(false);
-        });
-    };
-
-    let add_tag = move || {
-        if tags_saving.get_untracked() {
-            return;
-        }
-        if stores.current_ledger_id.get_untracked().is_empty() {
-            Notifier::global().error("请先选择工作空间", None);
-            return;
-        }
-        let next = new_tag.get_untracked().trim().to_string();
-        if next.is_empty() {
-            return;
-        }
-        if tags.with(|list| list.contains(&next)) {
-            Notifier::global().error(format!("标签「{next}」已存在"), None);
-            return;
-        }
-        if tags.with(Vec::len) >= MAX_STOCK_TAGS {
-            Notifier::global().error("最多保存 20 个标签，请先删除不再需要的标签", None);
-            return;
-        }
-        let mut list = tags.get_untracked();
-        list.push(next.clone());
-        save_tags(list, Some(format!("标签「{next}」已添加")));
-    };
-
-    let remove_tag = move |tag: String| {
-        if tags_saving.get_untracked() || tag == default_tag.get_untracked() {
-            return;
-        }
-        if stores.current_ledger_id.get_untracked().is_empty() {
-            Notifier::global().error("请先选择工作空间", None);
-            return;
-        }
-        let next: Vec<String> = tags
-            .get_untracked()
-            .into_iter()
-            .filter(|item| item != &tag)
-            .collect();
-        save_tags(next, Some(format!("标签「{tag}」已删除")));
-    };
-
-    // ---- 重置 ----
-    let do_reset = move || {
-        if resetting.get_untracked() {
-            return;
-        }
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            Notifier::global().error("重置股票数据失败", Some("请先选择工作空间".to_string()));
-            return;
-        }
-        resetting.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::reset(&ledger_id).await {
-                Ok(_) => {
-                    confirm_open.set(false);
-                    // 重置会清掉费用设置与交易标签，重新拉一遍
-                    load_fee(ledger_id.clone());
-                    load_tags(ledger_id);
-                    Notifier::global().success("股票数据已重置", None);
-                }
-                Err(error) => notify_error("重置股票数据失败", &error),
-            }
-            resetting.set(false);
-        });
-    };
-
-    // 账本变化 → 重新加载费用设置与交易标签
-    Effect::new(move |_: Option<()>| {
-        let ledger_id = stores.current_ledger_id.get();
-        load_fee(ledger_id.clone());
-        load_tags(ledger_id);
-    });
-
-    let tag_empty_text = move || {
-        if tags_loading.get() {
-            "正在加载…".to_string()
-        } else if stores.current_ledger_id.get().is_empty() {
-            "选择工作空间后即可配置交易标签".to_string()
-        } else {
-            "暂无标签".to_string()
-        }
-    };
-
-    view! {
-        <div class="page-pane">
-            // 分区标题去掉：页签已经说明这是哪一页（见「消费模板」处的同一条说明）
-            <div class="st-list">
-                // ---- 交易标签 ----
-                <div class="st-card st-card--block">
-                    <div class="st-tag-head">
-                        <div class="st-card-info">
-                            <span class="st-card-title">"交易标签"</span>
-                            <span class="st-card-desc">
-                                "每轮交易可选（最多 20 个、单个不超过 8 字）；删除不影响历史记录。"
-                            </span>
-                        </div>
-                        <div class="st-tag-action">
-                            <div class="st-tag-input">
-                                <Input
-                                    value=new_tag
-                                    placeholder="如：低吸"
-                                    maxlength=8
-                                    allow_clear=true
-                                    on_enter=move || add_tag()
-                                />
-                            </div>
-                            <Button
-                                variant=ButtonVariant::Primary
-                                loading=tags_saving
-                                disabled=Signal::derive(move || {
-                                    new_tag.get().trim().is_empty()
-                                        || tags.with(Vec::len) >= MAX_STOCK_TAGS
-                                })
-                                on_click=move || add_tag()
-                            >
-                                "添加"
-                            </Button>
-                        </div>
-                    </div>
-
-                    <div class="st-tag-list">
-                        {move || {
-                            let list = tags.get();
-                            if list.is_empty() {
-                                view! {
-                                    <div class="st-tag-empty">{tag_empty_text()}</div>
-                                }
-                                    .into_any()
-                            } else {
-                                let default = default_tag.get();
-                                list
-                                    .into_iter()
-                                    .map(|tag| {
-                                        let is_default = tag == default;
-                                        let for_title = tag.clone();
-                                        let name = tag.clone();
-                                        let aria = format!("删除标签 {tag}");
-                                        // 回调先建好：`UnsyncCallback` 是 Copy，
-                                        // `Show` 的 children 要求 `Fn`，不能把 String move 进去
-                                        let remove_click =
-                                            UnsyncCallback::new(move |()| remove_tag(tag.clone()));
-                                        view! {
-                                            <span
-                                                class="st-tag-item"
-                                                class:st-tag-item--default=is_default
-                                                title=if is_default {
-                                                    "默认标签，不可删除".to_string()
-                                                } else {
-                                                    for_title
-                                                }
-                                            >
-                                                <span class="st-tag-item-name">{name}</span>
-                                                <Show when=move || is_default>
-                                                    <span class="st-tag-item-default">"默认"</span>
-                                                </Show>
-                                                <Show when=move || !is_default>
-                                                    <button
-                                                        type="button"
-                                                        class="st-tag-item-remove"
-                                                        disabled=move || tags_saving.get()
-                                                        aria-label=aria.clone()
-                                                        on:click=move |_| remove_click.run(())
-                                                    >
-                                                        {icons::icon(Icon::Close)}
-                                                    </button>
-                                                </Show>
-                                            </span>
-                                        }
-                                    })
-                                    .collect_view()
-                                    .into_any()
-                            }
-                        }}
-                    </div>
-                </div>
-
-                // ---- 交易费用设置 ----
-                <div class="st-card st-card--block">
-                    <div class="st-panel-head">
-                        <div class="st-panel-title-row">
-                            <h3 class="st-panel-title">"交易费用设置"</h3>
-                            // 这个图标在面板**左半边**：气泡左对齐向右铺开（右对齐会往左伸出面板压到侧栏）
-                            <Tooltip title=FEE_TOOLTIP class="st-fee-tip--start">
-                                <span class="st-panel-tip" aria-label="查看交易费用说明">
-                                    {icons::icon(Icon::InfoCircle)}
-                                </span>
-                            </Tooltip>
-                        </div>
-                        <Button
-                            variant=ButtonVariant::Primary
-                            loading=fee_saving
-                            disabled=Signal::derive(no_ledger)
-                            on_click=move || save_fee()
-                        >
-                            "保存"
-                        </Button>
-                    </div>
-
-                    <Form layout=FormLayout::Vertical class="st-fee-form">
-                        <FormItem label="佣金费率">
-                            <div class="st-fee-field">
-                                <Input
-                                    value=fee_commission
-                                    placeholder="如 2.354"
-                                    disabled=Signal::derive(no_ledger)
-                                />
-                                <span class="st-fee-addon">"万分之"</span>
-                            </div>
-                        </FormItem>
-                        <FormItem label="最低佣金">
-                            <div class="st-fee-field">
-                                <Input
-                                    value=fee_min
-                                    placeholder="如 5"
-                                    disabled=Signal::derive(no_ledger)
-                                />
-                                <span class="st-fee-addon">"元/委托"</span>
-                            </div>
-                        </FormItem>
-                        <FormItem label="印花税">
-                            <div class="st-fee-field">
-                                <Input
-                                    value=fee_stamp
-                                    placeholder="如 0.05"
-                                    disabled=Signal::derive(no_ledger)
-                                />
-                                <span class="st-fee-addon">"%"</span>
-                                <Tooltip title=STAMP_TOOLTIP class="st-fee-tip">
-                                    <span class="st-panel-tip" aria-label="印花税说明">
-                                        {icons::icon(Icon::InfoCircle)}
-                                    </span>
-                                </Tooltip>
-                            </div>
-                        </FormItem>
-                        <FormItem label="过户费">
-                            <div class="st-fee-field">
-                                <Input
-                                    value=fee_transfer
-                                    placeholder="如 0.001"
-                                    disabled=Signal::derive(no_ledger)
-                                />
-                                <span class="st-fee-addon">"%"</span>
-                                <Tooltip title=TRANSFER_TOOLTIP class="st-fee-tip">
-                                    <span class="st-panel-tip" aria-label="过户费说明">
-                                        {icons::icon(Icon::InfoCircle)}
-                                    </span>
-                                </Tooltip>
-                            </div>
-                        </FormItem>
-                    </Form>
-
-                    <Show when=move || no_ledger()>
-                        <p class="page-hint">"请先选择工作空间"</p>
-                    </Show>
-                </div>
-
-                // ---- 重置 ----
-                <div class="st-card">
-                    <div class="st-card-info">
-                        <span class="st-card-title">"重置"</span>
-                        <span class="st-card-desc">
-                            "清空当前账本的股票数据（账户本金、持仓、交易记录、资金记录、费用设置与交易标签），此操作不可恢复。"
-                        </span>
-                    </div>
-                    <div class="st-card-action">
-                        <Button
-                            variant=ButtonVariant::PrimaryDanger
-                            disabled=Signal::derive(no_ledger)
-                            on_click=move || confirm_open.set(true)
-                        >
-                            "重置"
-                        </Button>
-                    </div>
-                </div>
-            </div>
-
-            <Modal
-                open=confirm_open
-                title="重置股票数据"
-                width=440
-                ok_text="确认重置"
-                cancel_text="取消"
-                ok_danger=true
-                ok_loading=resetting
-                on_close=move || confirm_open.set(false)
-                on_ok=move || do_reset()
-            >
-                <p class="st-modal-text">
-                    "将清空当前账本的账户本金、持仓、交易记录、资金记录、费用设置与交易标签。此操作不可恢复，确定继续吗？"
-                </p>
-            </Modal>
-        </div>
-    }
-}
-
 // ---------------------------------------------------------------- 关于软件
 
 /// 「关于软件」的更新状态（模块级全局状态，见下）。
@@ -1860,26 +1374,6 @@ fn AboutSetting() -> impl IntoView {
 }
 
 // ---------------------------------------------------------------- 工具函数
-
-/// 按 `scale` 换算并格式化：
-/// 先按 `scale` 换算，再四舍五入到 `digits` 位小数，最后去掉多余的 0。
-fn format_scaled(value: f64, scale: f64, digits: i32) -> String {
-    let factor = 10_f64.powi(digits);
-    let rounded = (value * scale * factor).round() / factor;
-    format!("{rounded}")
-}
-
-/// 解析用户输入的数值：非数字 / 非有限值（`NaN` / `inf`）视为非法。
-fn parse_number(input: &str) -> Option<f64> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    match trimmed.parse::<f64>() {
-        Ok(value) if value.is_finite() => Some(value),
-        _ => None,
-    }
-}
 
 /// `YYYY` → 年；空串或非法一律 `None`（表示"不限"）。
 fn parse_year(input: &str) -> Option<i64> {

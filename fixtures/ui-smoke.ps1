@@ -1,5 +1,6 @@
 # ui-smoke.ps1 —— 逐页界面冒烟：用 UI Automation 驱动真实窗口，挨个点开 5 个顶级功能 +
-# 记账页的 4 个子功能（记录 / 分析 / 标签 / 模板，走左侧图标条）并断言内容渲染。
+# 记账页的 4 个子功能（记录 / 分析 / 标签 / 模板）与股票页的 5 个子功能
+# （账户 / 持仓 / 记录 / 统计 / 设置，都走左侧图标条）并断言内容渲染。
 # 注：原「数据分析」顶级页已并入记账并更名「分析」，所以顶级功能从 6 个减为 5 个。
 #
 # 为什么需要它：`fixtures/smoke.ps1` 只能证明"应用起来了、工作空间打开了"，
@@ -60,14 +61,15 @@ if ($sameExe) { throw "同一个可执行文件已有实例在运行（PID $($sa
 # 用 `-Discover` 生成的清单来维护这张表（发现缺失标记时先跑 Discover 看真实文案）。
 # 标记刻意选"页面结构/常驻控件"而不是随数据变化的文案，换工作空间也能过。
 $markers = [ordered]@{
-    '股票' = @('账户', '持仓', '成交记录', '交易统计', '追加本金')
+    '股票' = @('账户', '持仓', '记录', '统计', '设置')
     '事件' = @('新增事件', '上一年', '下一年')
     '日记' = @('今天', '全部收起', '心情')
     '应用设置' = @('工作空间', '外观', '关闭行为', '开发者工具')
 }
 
-# 记账页的四个**子功能**（左侧图标条切换，不是侧栏条目）：子功能名 → 标记。
-# 「记账」这一项看的是默认子功能「记录」。原「数据分析」顶级页已并入这里并更名「分析」。
+# 记账页与股票页的**子功能**（左侧图标条切换，不是侧栏条目）：子功能名 → 标记。
+# 「记账」这一项看的是默认子功能「记录」。原「数据分析」顶级页已并入这里并更名「分析」；
+# 股票页的子功能原为顶部页签（账户/持仓/成交记录/交易统计），现改为图标条并多了「设置」。
 $subMarkers = [ordered]@{
     '记录' = @('记一笔', '排序', '筛选', '每页条数')
     # 「曲线合计」是**随数据变化**的：图表区间没有记录时整列隐藏（画布走空态）。
@@ -75,6 +77,25 @@ $subMarkers = [ordered]@{
     '分析' = @('新增图表', '曲线配置', '月度消费趋势')
     '标签' = @('新增分类', '新增标签', '分类', '标签')
     '模板' = @('新建模板', '模板名称', '交易类型')
+}
+
+# 子功能 → 它所属的顶级页（点子功能前要先回这一页）。
+# 图标条按钮按"同名 Button 里最靠左的那个"定位（见 lib/TrUia.ps1 的 Invoke-SubFunction）。
+$subParents = [ordered]@{
+    '记录' = '记账'; '分析' = '记账'; '标签' = '记账'; '模板' = '记账'
+    '账户' = '股票'; '持仓' = '股票'; '统计' = '股票'; '设置' = '股票'
+}
+
+# 股票子功能各自的页面标记（股票页里「记录」这个名字与记账的「记录」重名，
+# 靠 $subParents 决定先回哪一页，所以这张表与 $subMarkers 分开维护）。
+# ⚠ 标记要选**常驻**的：统计子功能没有结算记录时走空态（面板标题「结算统计」不渲染），
+#   所以用工具栏里的筛选与刷新（任何数据状态下都在）。
+$stockSubMarkers = [ordered]@{
+    '账户' = @('总资产', '追加本金')
+    '持仓' = @('建仓')
+    '记录' = @('已实现盈亏')
+    '统计' = @('刷新', '最近 N 笔')
+    '设置' = @('交易费用设置', '交易标签')
 }
 
 function Get-AppWindow {
@@ -180,25 +201,30 @@ function Invoke-NavigationChecks {
     param($Session)
     $window = $Session.Window
 
-    # 待检查的页面清单：先记账页（默认子功能「记录」），再它的其余子功能（走左侧图标条），
+    # 待检查的页面清单：先记账页（默认子功能「记录」），再两个页的子功能（走左侧图标条），
     # 最后其余顶级功能（走侧栏）。
-    $checks = @([pscustomobject]@{ Name = '记账'; Markers = $subMarkers['记录']; Sub = $false })
+    $checks = @([pscustomobject]@{ Name = '记账'; Run = '记录'; Parent = '记账'; Markers = $subMarkers['记录']; Sub = $false })
     foreach ($key in $subMarkers.Keys) {
         if ($key -eq '记录') { continue }   # 已经由「记账」这一条覆盖（默认子功能就是它）
-        $checks += [pscustomobject]@{ Name = $key; Markers = $subMarkers[$key]; Sub = $true }
+        $checks += [pscustomobject]@{ Name = $key; Run = $key; Parent = '记账'; Markers = $subMarkers[$key]; Sub = $true }
     }
     foreach ($key in $markers.Keys) {
-        $checks += [pscustomobject]@{ Name = $key; Markers = $markers[$key]; Sub = $false }
+        $checks += [pscustomobject]@{ Name = $key; Run = $key; Parent = ''; Markers = $markers[$key]; Sub = $false }
+    }
+    # 股票页的子功能：名字与记账的重名（两边都有「记录」），用例名加前缀区分，
+    # 断言与点击仍用 `Run` 里的原名。
+    foreach ($key in $stockSubMarkers.Keys) {
+        $checks += [pscustomobject]@{ Name = "股票·$key"; Run = $key; Parent = '股票'; Markers = $stockSubMarkers[$key]; Sub = $true }
     }
 
     foreach ($check in $checks) {
         $page = $check.Name
         Write-Host "`n[ui-smoke] 打开页面：$page" -ForegroundColor Cyan
         if ($check.Sub) {
-            # 子功能：先回记账页，再点左侧图标条上的那一项
-            Invoke-ByName -Window $window -Name '记账' -TimeoutSec 10 | Out-Null
+            # 子功能：先回它的顶级页，再点左侧图标条上的那一项
+            Invoke-ByName -Window $window -Name $check.Parent -TimeoutSec 10 | Out-Null
             Start-Sleep -Milliseconds 600
-            $clicked = Invoke-SubFunction -Window $window -Name $page
+            $clicked = Invoke-SubFunction -Window $window -Name $check.Run
         } else {
             $clicked = Invoke-ByName -Window $window -Name $page
         }
@@ -389,5 +415,5 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { "  - $_" }
     exit 1
 }
-Write-Host "`n[ui-smoke] ✅ 5 个顶级功能 + 4 个子功能都能打开并渲染" -ForegroundColor Green
+Write-Host "`n[ui-smoke] ✅ 5 个顶级功能 + 9 个子功能（记账 4 / 股票 5）都能打开并渲染" -ForegroundColor Green
 exit 0

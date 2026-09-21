@@ -4,7 +4,8 @@
 #   * `ui-smoke.ps1` 用 UI Automation 证明"页面结构在"，但 UIA 树里元素齐全、屏幕上却可能是一片空白
 #     （CSS 没生效、wasm 渲染失败、图片全是碎图）。这里直接抓窗口像素来兜底。
 #   * 主题切换只能看颜色：这里抓浅色/深色两张图，用平均亮度差来断言 `<html data-theme>` 真的生效。
-#   * 顺带产出 7 张 PNG：人工验收时不用逐个点开页面，先翻图找可疑点即可。
+#   * 顺带产出 14 张 PNG（5 个顶级功能 + 记账 4 个子功能 + 股票 5 个子功能）：
+#     人工验收时不用逐个点开页面，先翻图找可疑点即可。
 #
 # 用法（pwsh 7；需要内嵌界面的产物，见 AGENTS.md 的 custom-protocol 说明）：
 #   pwsh -File fixtures/ui-shots.ps1 -Workspace target\smoke\ws-write
@@ -58,9 +59,21 @@ public class TrShot {
 '@ -Language CSharp
 
 $pages = @('记账', '股票', '事件', '日记', '应用设置')
-# 记账页的四个子功能（左侧图标条切换）：每个也各抓一张，界面上它们是四块不同的内容
-# （「分析」原为顶级页「数据分析」，已并入记账并更名）
-$subPages = @('记录', '分析', '标签', '模板')
+# 有子功能的顶级页（左侧图标条切换）：每个子功能各抓一张，界面上它们是不同的内容块。
+# 「分析」原为顶级页「数据分析」，已并入记账并更名；股票页的五个子功能同理走图标条
+# （原顶部页签「账户/持仓/成交记录/交易统计」改成了图标条，并多了一个「设置」）。
+$subPages = [ordered]@{
+    '记账' = @('记录', '分析', '标签', '模板')
+    '股票' = @('账户', '持仓', '记录', '统计', '设置')
+}
+# 子功能 → 判定"真的切过去了"的标志控件。
+# ⚠ 必须选**任何数据状态下都在**的元素：统计子功能没有结算记录时走空态面板，
+#   里面的标题不渲染；这里用工具栏上的控件（工具栏恒在）。
+$subMarkers = [ordered]@{
+    '记账-记录' = '记一笔'; '记账-分析' = '新增图表'; '记账-标签' = '新增分类'; '记账-模板' = '新建模板'
+    '股票-账户' = '追加本金'; '股票-持仓' = '建仓'; '股票-记录' = '已实现盈亏'
+    '股票-统计' = '刷新'; '股票-设置' = '交易费用设置'
+}
 $failures = New-Object System.Collections.Generic.List[string]
 $rows = New-Object System.Collections.Generic.List[object]
 
@@ -174,23 +187,31 @@ try {
             })
     }
 
-    # 记账页的四个子功能：走左侧图标条（不是侧栏）
-    foreach ($page in $subPages) {
-        Invoke-ByName -Window $window -Name '记账' | Out-Null
-        Start-Sleep -Milliseconds 800
-        if (-not (Invoke-SubFunction -Window $window -Name $page)) {
-            $failures.Add("找不到记账子功能入口: $page")
-            continue
+    # 各页的子功能：走左侧图标条（不是侧栏）。先回**父页**，再点子功能，
+    # 最后轮询它的标志控件确认真的切过去了（空态页尤其必要）。
+    foreach ($parent in $subPages.Keys) {
+        foreach ($page in $subPages[$parent]) {
+            Invoke-ByName -Window $window -Name $parent | Out-Null
+            Start-Sleep -Milliseconds 800
+            if (-not (Invoke-SubFunction -Window $window -Name $page)) {
+                $failures.Add("找不到 $parent 子功能入口: $page")
+                continue
+            }
+            $marker = $subMarkers["$parent-$page"]
+            $deadline = (Get-Date).AddSeconds(8)
+            while ((Get-Date) -lt $deadline -and -not (Find-First $window $marker)) {
+                Start-Sleep -Milliseconds 300
+            }
+            Start-Sleep -Milliseconds 1200
+            $file = Join-Path $OutDir "$parent-$page.png"
+            $stat = Save-WindowShot -Handle $handle -Path $file
+            $blank = ($stat.StdDev -lt 8) -or ($stat.Colors -lt 20)
+            if ($blank) { $failures.Add("$parent·$page 疑似空白：标准差 $($stat.StdDev)、颜色数 $($stat.Colors)") }
+            $rows.Add([pscustomobject]@{
+                    Page = "$parent·$page"; StdDev = $stat.StdDev; Colors = $stat.Colors
+                    Mean = $stat.Mean; PngKB = [math]::Round($stat.Bytes / 1KB, 1); Blank = $blank
+                })
         }
-        Start-Sleep -Milliseconds 1500
-        $file = Join-Path $OutDir "记账-$page.png"
-        $stat = Save-WindowShot -Handle $handle -Path $file
-        $blank = ($stat.StdDev -lt 8) -or ($stat.Colors -lt 20)
-        if ($blank) { $failures.Add("记账·$page 疑似空白：标准差 $($stat.StdDev)、颜色数 $($stat.Colors)") }
-        $rows.Add([pscustomobject]@{
-                Page = "记账·$page"; StdDev = $stat.StdDev; Colors = $stat.Colors
-                Mean = $stat.Mean; PngKB = [math]::Round($stat.Bytes / 1KB, 1); Blank = $blank
-            })
     }
 
     # ---------- 主题切换 ----------

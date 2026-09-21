@@ -23,7 +23,7 @@
 #   三种激活方式都无效，而表头那个不写 selected_code 的「建仓」按钮一直正常）。
 #   修法：那三处去掉冗余的 `selected_code.set`（见 `src/pages/stock.rs` 的注释）。
 #
-# 写这个脚本踩到的三个坑（都留在注释里）：
+# 写这个脚本踩到的坑（都留在注释里）：
 #   * 成交记录表的行内「编辑/删除」在**持仓详情区**，所以要有持仓才看得到；清仓后它们就不在了；
 #   * 「编辑成交」弹窗的输入框**预填之后可访问名就是那个值**（不是占位符），按名字找会命中旁边的
 #     标签 <p>，必须按 Y 序取弹窗里的 Edit（`Get-ModalEdits`）；
@@ -31,10 +31,11 @@
 #     而且种子记录与我们的是同一秒 —— "我们的那笔"只能按"该类型里 created_at 最新"认（`Get-NewestTrade`）；
 #     另外**编辑会触发整个账本的派生资金记录重放**，
 #     所以资金记录也只能按"变动额"认，不能用"条数/相邻两条"这种全局判据；
-#   * 「建仓」按钮在**持仓**页签、费用设置在**账户**页签、重置在**设置页**——
-#     换页签后再下单，必须先切回去，否则会出现"设置存好了但下单弹窗压根没弹"的假象；
-#   * 设置页里「股票」这个名字**侧栏导航也有**，按名字取第一个会点到导航（跑错页）；
-#     只认 `ControlType == TabItem` 的那个。
+#   * 股票页的子功能走**左侧图标条**：「建仓」在**持仓**子功能、「下单」也在持仓、
+#     费用设置与重置在**设置**子功能、已清仓轮次在**记录**子功能 —— 换子功能后再下单必须先切回去，
+#     否则会出现"设置存好了但下单弹窗压根没弹"的假象（`Switch-StockSub`）；
+#   * 子功能名与页面文案同名（图标条「记录」/ 面板里的「记录」字样、图标条「设置」/ 侧栏「应用设置」），
+#     按名字取第一个会点到页内元素 —— 共享版 `Invoke-SubFunction` 按"同名 Button 里最靠左的那个"定位。
 #
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/ui-stock.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
@@ -123,7 +124,7 @@ function Find-UnnamedEditRight { param($Window)
     return ($band | Sort-Object { $_.Rect.X } | Select-Object -Last 1).Element
 }
 
-# 设置页费用表单里的 4 个输入框（佣金费率 / 最低佣金 / 印花税 / 过户费）。
+# 「设置」子功能费用表单里的 4 个输入框（佣金费率 / 最低佣金 / 印花税 / 过户费）。
 # 它们是同一行里的四列（标签在上、输入框在下），所以按"同一 Y 带 + 按 X 排序"取。
 function Get-FeeFormEdits { param($Window)
     $edits = @()
@@ -207,24 +208,17 @@ function Wait-VisibleButton { param($Window, [string]$Name, [int]$TimeoutSec = 2
     return $null
 }
 
-# 分栏是 TabItem，**不是** Button；而且页签名（账户/持仓/成交记录/交易统计）与页面里的
-# 文案（「总资产」「持仓市值」「成交记录」面板标题）可能同名，只按名字取第一个会点到页内元素。
-# 因此这里同时约束 ControlType = TabItem。
-function Find-Tab { param($Window, [string]$Name)
-    foreach ($element in @(Get-Elements $Window)) {
-        if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem) { continue }
-        if ($element.Current.Name -eq $Name) { return $element }
-    }
-    return $null
-}
-function Wait-Tab { param($Window, [string]$Name, [int]$TimeoutSec = 25)
+# 股票页的子功能走**左侧图标条**（不是顶部页签，也不是侧栏条目）。
+# 图标条按钮的可访问名 = 子功能名，与页面里的文案可能同名（「记录」既是图标条项、
+# 「结算统计」面板里也有「记录」字样），所以统一用共享版的 `Invoke-SubFunction`：
+# 它按"同名 Button 里**最靠左**的那个"定位（图标条在版心最左边）。
+function Switch-StockSub { param($Window, [string]$Name, [int]$TimeoutSec = 20)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    do {
-        $element = Find-Tab -Window $Window -Name $Name
-        if ($element) { return $element }
+    while ((Get-Date) -lt $deadline) {
+        if (Invoke-SubFunction -Window $Window -Name $Name -TimeoutSec 3) { return $true }
         Start-Sleep -Milliseconds 400
-    } while ((Get-Date) -lt $deadline)
-    return $null
+    }
+    return $false
 }
 
 # 提交一笔委托：点开弹窗（**重试到出现标题为止**，因为持仓卡片/按钮会随重渲染换元素）→
@@ -388,7 +382,7 @@ try {
     Write-Host "`n[stock] 1/7 建仓 $code × $buyLots 手 @ $buyPrice"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票')) '打开「股票」页'
     Start-Sleep -Seconds 3
-    Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '持仓')) '切到「持仓」页签（建仓按钮在这里）'
+    Assert-True (Switch-StockSub -Window $window -Name '持仓') '切到「持仓」子功能（建仓按钮在工具栏）'
     Start-Sleep -Seconds 2
 
     $opened = $false
@@ -463,7 +457,7 @@ try {
         Assert-True ($cardText -match '持仓\s*3\s*手') "卡片上写着持仓 3 手（$cardText）"
     }
 
-    Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '成交记录')) '切到「成交记录」页签'
+    Assert-True (Switch-StockSub -Window $window -Name '记录') '切到「记录」子功能'
     Start-Sleep -Seconds 3
     $seen = $false
     $deadline = (Get-Date).AddSeconds(15)
@@ -474,7 +468,7 @@ try {
         if (-not $seen) { Start-Sleep -Milliseconds 500 }
     } while (-not $seen -and (Get-Date) -lt $deadline)
     Assert-True $seen "成交记录里出现「$name / $code」"
-    Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '持仓')) '切回「持仓」（减仓/清仓按钮在详情区）'
+    Assert-True (Switch-StockSub -Window $window -Name '持仓') '切回「持仓」（减仓/清仓按钮在详情区）'
     Start-Sleep -Seconds 3
 
     # ================= 3/7 编辑成交（改成交价 → 费用/成本/资金链重算）=================
@@ -720,31 +714,16 @@ try {
         }
     }
     # ================= 6/7 交易费用设置：改完费率，**新委托立刻按新费率计费** =================
-    # ⚠ 费用设置的编辑入口**在「应用设置 → 股票」**（股票页只读取它来估费，不渲染表单）。
+    # ⚠ 费用设置的编辑入口**在股票页的「设置」子功能**（原来在「应用设置 → 股票」分栏，
+    # 已随股票设置整体迁进股票页；股票页的其他子功能只读取它来估费，不渲染表单）。
     # 费用设置的 UI 单位：佣金费率是**万分之**（÷10000 落库）、最低佣金是**元**（转分）、
     # 印花税/过户费是**百分比**（÷100）；公式见 `tr-domain/src/fee.rs`：
     #   佣金 = max(round(金额×费率), 最低佣金)；买入 = 佣金 + 过户费(沪市)；
     #   卖出 = 佣金 + 印花税 + 过户费(沪市)（印花税只卖出收）。
-    Write-Host "`n[stock] 6/7 费用设置（应用设置 → 股票）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置')) '打开「应用设置」'
+    Write-Host "`n[stock] 6/7 费用设置（股票 → 设置）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
+    Assert-True (Switch-StockSub -Window $window -Name '设置') '切到「设置」子功能（费用设置在这里）'
     Start-Sleep -Seconds 2
-    # ⚠ 侧栏也有个「股票」，按名字取第一个会点到导航！只认 ControlType 是 TabItem 的那个
-    $feeTab = $null
-    $feeTabDeadline = (Get-Date).AddSeconds(15)
-    do {
-        foreach ($element in @(Get-Elements $window)) {
-            if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem) { continue }
-            if ($element.Current.Name -ne '股票') { continue }
-            if ($element.Current.IsOffscreen) { continue }
-            $feeTab = $element
-            break
-        }
-        if (-not $feeTab) { Start-Sleep -Milliseconds 400 }
-    } while (-not $feeTab -and (Get-Date) -lt $feeTabDeadline)
-    Assert-True ([bool]$feeTab) '切到「股票」设置分栏'
-    if ($feeTab) { Invoke-Element $feeTab | Out-Null }
-    Start-Sleep -Seconds 2
-    Assert-True ([bool](Wait-Element -Root $window -Name '佣金费率' -TimeoutSec 15)) '设置页出现费用表单'
+    Assert-True ([bool](Wait-Element -Root $window -Name '佣金费率' -TimeoutSec 15)) '设置子功能出现费用表单'
     $feeEdits = @(Get-FeeFormEdits -Window $window)
     Assert-True ($feeEdits.Count -ge 4) "费用表单有 4 个输入框（实际 $($feeEdits.Count)）"
     if ($feeEdits.Count -ge 4) {
@@ -772,24 +751,8 @@ try {
     }
 
     # ---- 买入：3,000,000 分 → 佣金 300 + 过户费 60 = 360 分（印花税 0）----
-    # ⚠ 费用设置改在「应用设置」里，下单要回「股票」页的**持仓**页签；
-    # 不回页面会导致"设置存好了，但下单弹窗压根没弹"。
-    # 侧栏的「股票」与设置页的页签同名，这里按**非 TabItem**筛出侧栏导航项。
-    $stockNav = $null
-    $navDeadline = (Get-Date).AddSeconds(15)
-    do {
-        foreach ($element in @(Find-All $window '股票')) {
-            if ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::TabItem) { continue }
-            if ($element.Current.IsOffscreen) { continue }
-            $stockNav = $element
-            break
-        }
-        if (-not $stockNav) { Start-Sleep -Milliseconds 400 }
-    } while (-not $stockNav -and (Get-Date) -lt $navDeadline)
-    Assert-True ([bool]$stockNav) '从设置页回到「股票」'
-    if ($stockNav) { Invoke-Element $stockNav | Out-Null }
-    Start-Sleep -Seconds 3
-    Assert-True (Invoke-Element (Wait-Tab -Window $window -Name '持仓')) '切回「持仓」再下单'
+    # ⚠ 下单在「持仓」子功能：费用存好后要切过去，否则下单弹窗压根没弹。
+    Assert-True (Switch-StockSub -Window $window -Name '持仓') '从「设置」切到「持仓」再下单'
     Start-Sleep -Seconds 3
     Assert-True (Add-Position -Window $window -Code $code -Name $name -Price $buyPrice -Lots $buyLots) `
         '按新费率建仓 3 手 @ 100'
@@ -822,7 +785,7 @@ try {
             "卖出费用 = 120 + 1200 + 24 = 1344 分（实际 $($feeSellTrade.fee)）"
     }
     # ================= 7/7 重置股票数据：清空股票侧、**不动记账数据** =================
-    Write-Host "`n[stock] 7/7 重置股票数据（设置页 → 股票 → 重置）"
+    Write-Host "`n[stock] 7/7 重置股票数据（股票 → 设置 → 重置）"
     $recordsBeforeReset = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     $stockTables = @(
         'tbl_billadm_stock_account', 'tbl_billadm_stock_position', 'tbl_billadm_stock_trade',
@@ -835,27 +798,11 @@ try {
     }
     Assert-True ($stockRowsBefore -gt 0) "重置前该账本有股票数据（$stockRowsBefore 行）"
 
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置')) '打开「应用设置」'
-    Start-Sleep -Seconds 2
-    # ⚠ 侧栏也有个「股票」，按名字取第一个会点到导航！只认 ControlType 是 TabItem 的那个
-    $stockTab = $null
-    $deadline = (Get-Date).AddSeconds(15)
-    do {
-        foreach ($element in @(Get-Elements $window)) {
-            if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem) { continue }
-            if ($element.Current.Name -ne '股票') { continue }
-            if ($element.Current.IsOffscreen) { continue }
-            $stockTab = $element
-            break
-        }
-        if (-not $stockTab) { Start-Sleep -Milliseconds 400 }
-    } while (-not $stockTab -and (Get-Date) -lt $deadline)
-    Assert-True ([bool]$stockTab) '切到「股票」设置分栏（TabItem）'
-    if ($stockTab) { Invoke-Element $stockTab | Out-Null }
+    Assert-True (Switch-StockSub -Window $window -Name '设置') '切到「设置」子功能（重置在这里）'
     Start-Sleep -Seconds 3
 
     $resetButton = Wait-VisibleButton -Window $window -Name '重置' -TimeoutSec 15
-    Assert-True ([bool]$resetButton) '找到设置页的「重置」按钮'
+    Assert-True ([bool]$resetButton) '找到设置子功能的「重置」按钮'
     if ($resetButton) { Invoke-Element $resetButton | Out-Null }
     Start-Sleep -Seconds 2
     Assert-True ([bool](Wait-Element -Root $window -Name '重置股票数据' -TimeoutSec 10)) `
@@ -869,7 +816,7 @@ try {
     Start-Sleep -Seconds 4
 
     # 交易类表重置后必须是空的；**费用设置与交易标签这两张表会被界面立刻"重新拉一遍"
-    # 而按默认值重建**（设置页 `do_reset` 之后 load_fee/load_tags，与代码注释一致），
+    # 而按默认值重建**（设置子功能 `do_reset` 之后 load_fee/load_tags，与代码注释一致），
     # 所以对这两张表断言的是"回到默认值"，而不是"没有行"。
     foreach ($table in @('tbl_billadm_stock_account', 'tbl_billadm_stock_position', 'tbl_billadm_stock_trade',
             'tbl_billadm_stock_trade_round', 'tbl_billadm_stock_trade_history', 'tbl_billadm_stock_fund_record')) {
