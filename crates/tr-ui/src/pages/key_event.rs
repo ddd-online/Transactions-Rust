@@ -250,6 +250,11 @@ pub fn KeyEventPage() -> impl IntoView {
     };
 
     // ---- 删除事件 ----
+    // 卡片上的删除按钮**只登记"要删哪一条"**，真正删除由确认弹窗的「删除」触发
+    // （原来是 `Popconfirm` 气泡，现改成弹窗：气泡太小、标题长了会折行，而且和其它删除确认
+    // 不是一个交互）。载荷是 `(标题, 日期)`：标题只用于弹窗文案，删除只认日期。
+    let pending_delete = RwSignal::new(None::<(String, String)>);
+
     let delete_event = move |date: String| {
         let ledger_id = stores.current_ledger_id.get_untracked();
         if ledger_id.is_empty() || date.is_empty() {
@@ -280,6 +285,8 @@ pub fn KeyEventPage() -> impl IntoView {
                         );
                     }
                     refresh_list(ledger_id, year.get_untracked(), events, event_dates);
+                    // 确认弹窗到这一步才关：失败时它还在，用户能直接再点一次「删除」
+                    pending_delete.set(None);
                 }
                 Err(error) => notify_error("删除事件失败", &error),
             }
@@ -405,7 +412,7 @@ pub fn KeyEventPage() -> impl IntoView {
                     list_loading,
                     selected_date,
                     UnsyncCallback::new(move |date: String| select_event(date)),
-                    UnsyncCallback::new(move |date: String| delete_event(date)),
+                    pending_delete,
                     UnsyncCallback::new(move |()| add_open.set(true)),
                 )}
             </div>
@@ -628,6 +635,15 @@ pub fn KeyEventPage() -> impl IntoView {
             add_title,
             add_loading,
             UnsyncCallback::new(move |()| confirm_add()),
+        )}
+
+        {confirm_delete_modal(
+            pending_delete,
+            UnsyncCallback::new(move |()| {
+                if let Some((_, date)) = pending_delete.get_untracked() {
+                    delete_event(date);
+                }
+            }),
         )}
     }
     .into_any();
@@ -1034,12 +1050,15 @@ fn mark_file(controls: UploadControls, index: usize, mutate: impl FnOnce(&mut Up
 // ==================================================================== 子视图
 
 /// 左栏：事件卡片列表 + 底部「新增事件」。
+///
+/// `request_delete` 里放的是**待确认**的 `(标题, 日期)`：卡片上的删除按钮只登记，
+/// 真正的删除由页面级的确认弹窗执行（见 `confirm_delete_modal`）。
 fn event_list(
     events: RwSignal<Vec<KeyEvent>>,
     loading: RwSignal<bool>,
     selected_date: RwSignal<String>,
     on_select: UnsyncCallback<String>,
-    on_delete: UnsyncCallback<String>,
+    request_delete: RwSignal<Option<(String, String)>>,
     on_add: UnsyncCallback<()>,
 ) -> AnyView {
     let sorted = move || {
@@ -1089,13 +1108,10 @@ fn event_list(
                                 let summary_for_text = summary.clone();
                                 let click_date = date.clone();
                                 let click_date_for_key = date.clone();
+                                // 登记待删除项：`RwSignal` 是 `Copy`，可以直接被多个闭包捕获，
+                                // 不必像 `String` 那样每个闭包各留一份克隆。
+                                let delete_label = label.clone();
                                 let delete_date = date.clone();
-                                let label_for_title = label.clone();
-                                // 回调先建好（`UnsyncCallback` 是 Copy）：`view!` 的 children
-                                // 可能多次求值，直接 move 捕获 `String` 会让闭包退化成 FnOnce。
-                                let delete_click = UnsyncCallback::new(move |()| {
-                                    on_delete.run(delete_date.clone())
-                                });
                                 view! {
                                     <div
                                         class="key-event-card"
@@ -1126,28 +1142,22 @@ fn event_list(
                                                 </div>
                                             </Show>
                                         </div>
-                                        <Popconfirm
-                                            title=format!(
-                                                "删除事件「{label_for_title}」？",
-                                            )
-                                            ok_text="删除"
-                                            cancel_text="取消"
-                                            on_confirm=move || delete_click.run(())
+                                        <IconButton
+                                            variant=IconButtonVariant::Danger
+                                            label="删除事件"
+                                            class="key-event-card__delete"
+                                            // 只负责"登记待删除项"，并让确认弹窗打开；
+                                            // 删除动作**只在弹窗的「删除」上**（`delete_event`）。
+                                            // 曾经这里直接挂着删除：第一下点击就删掉了，二次确认形同虚设。
+                                            // `stop_propagation` 让点删除不顺带选中整张卡片。
+                                            stop_propagation=true
+                                            on_click=move |_| {
+                                                request_delete
+                                                    .set(Some((delete_label.clone(), delete_date.clone())))
+                                            }
                                         >
-                                            <IconButton
-                                                variant=IconButtonVariant::Danger
-                                                label="删除事件"
-                                                class="key-event-card__delete"
-                                                // 删除动作**只挂在 `on_confirm` 上**：这个按钮只负责
-                                                // "打开确认气泡"。曾经这里挂着 `on_click=<删除>`，
-                                                // 于是第一下点击就直接删掉了 —— 二次确认形同虚设。
-                                                // `stop_propagation` 让点删除不顺带选中整行；它**不影响**
-                                                // 气泡开关（`Popconfirm` 的触发在**捕获阶段**，先于冒泡）。
-                                                stop_propagation=true
-                                            >
-                                                {icons::icon(Icon::Close)}
-                                            </IconButton>
-                                        </Popconfirm>
+                                            {icons::icon(Icon::Close)}
+                                        </IconButton>
                                     </div>
                                 }
                             })
@@ -1677,6 +1687,8 @@ fn linked_panel(
                                                     label="删除交易"
                                                     class="key-event-linked__delete"
                                                     // 同上：删除只走 `on_confirm`，这里只管开气泡
+                                                    // （这处**仍是气泡**：关联交易卡上只有一行文字，
+                                                    // 气泡够用；事件卡改弹窗是因为它的标题可能很长）
                                                     stop_propagation=true
                                                 >
                                                     {icons::icon(Icon::Trash)}
@@ -1691,6 +1703,40 @@ fn linked_panel(
                 </Show>
             </Show>
         </div>
+    }
+    .into_any()
+}
+
+/// 删除事件的确认弹窗（原先是卡片上的 `Popconfirm` 气泡，现改成弹窗）。
+///
+/// 约定：
+/// * `open` 与"要删哪一条"是**同一个信号**（`Some((标题, 日期))` = 打开）——
+///   分成两个信号会出现"打开了但不知道删哪条"的中间态。
+/// * 确认按钮用**危险样式**（`ok_danger`）：这是删除类确认框。
+/// * 标题带上事件名，删除对象一目了然；事件没有标题时卡片显示的是日期，
+///   所以这里拿到的就已经是"界面上看到的那一串"。
+/// * 日期为空 = 不该打开（也没得删），此时不渲染。
+fn confirm_delete_modal(
+    open: RwSignal<Option<(String, String)>>,
+    on_ok: UnsyncCallback<()>,
+) -> AnyView {
+    view! {
+        <Modal
+            open=Signal::derive(move || open.get().is_some())
+            title=Signal::derive(move || {
+                open.get()
+                    .map(|(label, _)| format!("删除事件「{label}」？"))
+                    .unwrap_or_default()
+            })
+            size=ModalSize::Small
+            ok_text="删除"
+            ok_danger=true
+            cancel_text="取消"
+            on_close=move || open.set(None)
+            on_ok=move || on_ok.run(())
+        >
+            <p class="key-event-confirm-text">"删除后无法恢复，该事件的图片也会一起删掉。"</p>
+        </Modal>
     }
     .into_any()
 }

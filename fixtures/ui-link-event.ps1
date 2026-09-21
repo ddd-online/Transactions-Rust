@@ -5,7 +5,9 @@
 #     触发器是按钮、日期格子是 `<button class="ui-date-picker__cell">`，可访问名就是"日"数字）→ 确认关联；
 #   * 断言 `tbl_billadm_transaction_record.key_event_date` 写成所选日期；
 #     该日期若还没有事件，后端会**懒创建**一条空事件 → 一并断言；
-#   * 再点「修改关联」→「解除关联」→ 断言 `key_event_date` 清空。
+#   * 再点「修改关联」→「解除关联」→ 断言 `key_event_date` 清空；
+#   * 关联交易卡上的「删除交易」气泡**向上弹**（锁住
+#     `.key-event-linked__card .ui-popconfirm__panel` 这条容易被顺手删掉的覆盖规则）。
 #
 # 为什么需要它：关联/解除此前只覆盖了**落库**（`link_to_key_event` / `unlink`），
 # 界面这条路径（含日期选择器、`修改关联` 这个按钮名切换）此前没人走过。
@@ -153,7 +155,7 @@ try {
     Write-Host "[link] UIA 可读元素 $((Get-Elements $window).Count) 个" -ForegroundColor Cyan
 
     # ================= 1/3 记一笔 =================
-    Write-Host "`n[link] 1/3 记一笔 11.11（$description）"
+    Write-Host "`n[link] 1/4 记一笔 11.11（$description）"
     Assert-True (Add-Record -Window $window -Description $description -Amount '11.11') '记一笔'
     $records = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     $rows = @($records | Where-Object { $_.description -eq $description })
@@ -162,7 +164,7 @@ try {
     Assert-True ([string]::IsNullOrEmpty($rows[0].key_event_date)) '初始没有关联（key_event_date 为空）'
 
     # ================= 2/3 关联事件 =================
-    Write-Host "`n[link] 2/3 关联事件：选 $linkDate（当月第 $linkDay 天）"
+    Write-Host "`n[link] 2/4 关联事件：选 $linkDate（当月第 $linkDay 天）"
     $linkButton = Find-RowButton -Window $window -RowText $description -ButtonName '关联事件'
     Assert-True ([bool]$linkButton) '找到「关联事件」按钮'
     if (-not $linkButton) { throw '找不到关联按钮' }
@@ -187,8 +189,67 @@ try {
     $events = @((Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir) | Where-Object { $_.date -eq $linkDate -and $_.ledger_id -eq $linked[0].ledger_id })
     Assert-True ($events.Count -ge 1) "该日期在库里有一条事件（懒创建，$linkDate）"
 
-    # ================= 3/3 解除关联 =================
-    Write-Host "`n[link] 3/3 解除关联"
+    # ================= 3/4 关联交易卡上的删除气泡**要向上弹** =================
+    # 这条锁的是一个很容易被顺手删掉的 CSS 规则：`.key-event-linked__card .ui-popconfirm__panel`
+    # 在「删除事件」改成弹窗、清掉事件卡那套气泡定位时**差点被一起删掉**
+    # （事件卡与关联交易卡相邻，很容易看成一整套规则）。
+    # 它的触发器在卡片**右下角**，默认向下弹会顶出卡片、被关联栏的滚动容器裁掉。
+    # 别的护栏覆盖不到这条路：ui-crud 删的是图表（另一个页面）。
+    # ⚠ 必须在**解除关联之前**做：解除后这张卡就从右栏消失了（那里会变成「暂无关联交易」）。
+    # ⚠ 而且得先切到**事件页**：刚才那笔的「关联事件」按钮在记账页的行内，
+    #   关联交易卡在事件页的**右栏**（第一版没切页，找一个不存在的按钮找了 15 秒）。
+    Write-Host "`n[link] 3/4 事件页右栏：关联交易卡的「删除交易」气泡应向上弹（不被裁掉）"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '事件' -TimeoutSec 20)) '切到「事件」页'
+    Start-Sleep -Seconds 3
+    # 事件卡上的日期文案走 `format::short_date`（`2026-09-01` → `9-1`）。
+    # ⚠ 用 `Find-Like`（按子串找元素）而**不是** `Wait-Element`（按可访问名精确匹配）：
+    #   卡片自己没有 aria-label，它的可访问名是浏览器把子节点拼出来的，
+    #   直接按 `9-1` 精确匹配会找不到（第一版就这样，白等 15 秒）。
+    $shortDate = "$([int]$linkDate.Substring(5, 2))-$([int]$linkDate.Substring(8, 2))"
+    $eventCard = $null
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $eventCard = Find-Like -Root $window -Pattern $shortDate
+        if (-not $eventCard) { Start-Sleep -Milliseconds 500 }
+    } while (-not $eventCard -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$eventCard) "找到 $shortDate 那张事件卡"
+    if (-not $eventCard) {
+        $names = @(Get-Elements $window | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -First 25)
+        Write-Host "    事件页上的元素名（前 25 个）: $($names -join ' | ')" -ForegroundColor DarkYellow
+    }
+    if ($eventCard) {
+        Invoke-Element $eventCard | Out-Null
+        Start-Sleep -Seconds 3
+    }
+    $tradeDelete = $null
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $tradeDelete = Find-RowButton -Window $window -RowText $description -ButtonName '删除交易'
+        if (-not $tradeDelete) { Start-Sleep -Milliseconds 500 }
+    } while (-not $tradeDelete -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$tradeDelete) '找到关联交易卡上的「删除交易」按钮'
+    if ($tradeDelete) {
+        $triggerRect = $tradeDelete.Current.BoundingRectangle
+        Click-Element $tradeDelete | Out-Null
+        Start-Sleep -Milliseconds 1200
+        $bubble = Find-First $window '删除这条关联交易？'
+        Assert-True ([bool]$bubble) '气泡已弹出（标题「删除这条关联交易？」）'
+        if ($bubble) {
+            $bubbleRect = $bubble.Current.BoundingRectangle
+            $triggerY = $triggerRect.Y + $triggerRect.Height / 2
+            $bubbleY = $bubbleRect.Y + $bubbleRect.Height / 2
+            Assert-True ($bubbleY -lt $triggerY) "气泡在触发器**上方**（气泡中心 $([int]$bubbleY) < 按钮中心 $([int]$triggerY)）"
+            # 只关掉气泡，**不确认删除**（本脚本不验删关联，只验气泡位置）
+            $cancel = Find-All $window '取消'
+            if ($cancel.Count -gt 0) { Invoke-Element $cancel[$cancel.Count - 1] | Out-Null }
+            Start-Sleep -Milliseconds 600
+        }
+    }
+
+    # ================= 4/4 解除关联（回记账页，按钮在行内）=================
+    Write-Host "`n[link] 4/4 解除关联"
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '记账' -TimeoutSec 20)) '切回「记账」页'
+    Start-Sleep -Seconds 3
     $modifyButton = Find-RowButton -Window $window -RowText $description -ButtonName '修改关联'
     Assert-True ([bool]$modifyButton) '按钮名已变成「修改关联」（说明界面认得这个关联）'
     if ($modifyButton) {

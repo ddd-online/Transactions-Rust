@@ -220,13 +220,17 @@ try {
         Where-Object { $_ -and $_.Contains($titleA) })
     Assert-True ($oldShown.Count -eq 0) '列表里不再显示旧标题'
 
-    # ================= 3/3 删除 =================
+    # ================= 3/3 删除（卡片删除 → **弹窗**二次确认）=================
     Write-Host "[ke] 3/3 删除事件「$titleB」"
     $deleteButton = Find-RowButton -Window $window -RowName $titleB -ButtonName '删除事件'
     Assert-True ([bool]$deleteButton) '找到该事件的「删除事件」按钮'
     if ($deleteButton) {
         Click-Element $deleteButton | Out-Null
-        Start-Sleep -Milliseconds 1200
+        # 二次确认是弹窗（原为 Popconfirm 气泡）：标题带事件名，用它断言弹窗真的开了
+        $modalTitle = Wait-Like -Root $window -Pattern "删除事件「$titleB」" -TimeoutSec 10
+        Assert-True ([bool]$modalTitle) '弹出「删除事件」二次确认弹窗'
+        Start-Sleep -Milliseconds 600
+        # 弹窗主按钮是「删除」（与卡片上的「删除事件」不同名，不会认错）
         $confirmDelete = Find-All $window '删除'
         if ($confirmDelete.Count -gt 0) { Invoke-Element $confirmDelete[$confirmDelete.Count - 1] | Out-Null }
         Start-Sleep -Seconds 3

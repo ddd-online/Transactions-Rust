@@ -382,6 +382,10 @@ cargo clippy --all-targets -- -D warnings
   验证方式分两侧看：触发侧看气泡是否弹出（标题 + `取消/删除` 按钮）；确认侧用设置页删模板
   （普通 `<Button>` 子元素）走一遍"气泡 → 点确认 → 库里行数 -1"，它与那三处用的是同一个组件、
   同一条确认链路。改动共享组件后请用 `fixtures/ui-smoke.ps1` 做回归。
+  注：「删除事件」现已改成**弹窗**（`key_event.rs` 的 `confirm_delete_modal`），不再是这条的调用点；
+  仍在用气泡的是「删除图表」与「删除关联交易」。
+  改动卡片上的删除按钮时别忘了 CSS —— 定位原先写在 `Popconfirm` 的包裹层上
+  （`.key-event-card .ui-popconfirm`），去掉包裹层后要落到按钮自己身上（`.key-event-card__delete`）。
 - **弹窗里的下拉面板会被 `overflow: hidden` 裁掉**（真实缺陷）：DatePicker / Select 的下拉都是绝对定位的
   子元素，而 `.ui-modal__content` 原来带 `overflow: hidden`（只为圆角），小弹窗（如「关联事件」，
   只有一个表单项）里日历被裁到只剩月份标题和星期行，日期格子看不见也点不动；中等高度的弹窗

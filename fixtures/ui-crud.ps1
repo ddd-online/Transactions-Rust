@@ -4,7 +4,7 @@
 #   * 分类标签页：新增分类 → 库里多一行 → 删除 → 库里少一行；标签同理
 #   * 记账 · 分析子功能（原顶级页「数据分析」）：新增图表 → 库里多一行 → 删除（气泡确认）→ 库里少一行
 #   * 事件页：点色板改颜色 → 库里 color 变；编辑描述写 Markdown → 保存 → 库里 content 变；
-#                 删除事件（气泡确认）→ 库里少一行
+#                 删除事件（**弹窗**二次确认）→ 库里少一行
 # 断言全部落在**数据库**上（不看提示文案），所以和实现的措辞解耦。
 #
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
@@ -420,14 +420,22 @@ try {
     if ($rawLeftovers.Count -gt 0) { Write-Host "  仍显示原文的元素: $($rawLeftovers -join ' | ')" -ForegroundColor DarkYellow }
     Assert-True ($rawLeftovers.Count -eq 0) '可见区域内没有留下 `# 标题` 这种未渲染的原文'
 
-    # ---- 删除事件（列表卡片上的「删除事件」→ 气泡确认）----
+    # ---- 删除事件（列表卡片上的「删除事件」→ **弹窗**二次确认）----
+    # 二次确认原先是卡片上的 Popconfirm 气泡，现改成弹窗：弹窗是 portal 出去的浮层，
+    # 但主按钮就是弹窗底部那个「删除」（可访问名与卡片上的「删除事件」不同，不会认错）。
     $eventDeleteButton = Find-RowButton -Window $window -RowName $eventTitle -ButtonName '删除事件'
     Assert-True ([bool]$eventDeleteButton) '找到该事件的「删除事件」按钮'
     if ($eventDeleteButton) {
         Click-Element $eventDeleteButton | Out-Null
-        Start-Sleep -Milliseconds 1200
-        $confirmButtons = Find-All $window '删除'
-        if ($confirmButtons.Count -gt 0) { Invoke-Element $confirmButtons[$confirmButtons.Count - 1] | Out-Null }
+        # 弹窗标题带事件名（"删除事件「…」？"），用它断言弹窗真的开了（用本脚本自己的等待函数）
+        $modalTitle = Wait-ElementLike -Root $window -Pattern "删除事件「$eventTitle」" -TimeoutSec 10
+        Assert-True ([bool]$modalTitle) '弹出「删除事件」二次确认弹窗'
+        Start-Sleep -Milliseconds 600
+        $confirmButton = Find-All $window '删除'
+        Assert-True ($confirmButton.Count -gt 0) '弹窗上有「删除」按钮'
+        if ($confirmButton.Count -gt 0) {
+            Invoke-Element $confirmButton[$confirmButton.Count - 1] | Out-Null
+        }
         Start-Sleep -Seconds 3
     }
     $eventGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir | Where-Object { $_.date -eq $eventDate })

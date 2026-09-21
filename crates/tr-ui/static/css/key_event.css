@@ -188,33 +188,28 @@
   margin-top: var(--transactions-space-2xs);
 }
 
-/* Popconfirm 的包裹层自带 `position: relative`（气泡要相对触发器定位），它会把这个
- * 绝对定位的删除按钮“吸”到自己身上 —— 按钮于是落在包裹层所在处，而不是卡片的角上。
- * 把定位挪到包裹层（尺寸与按钮一致），按钮就落在卡片的**右上角**。
- * 正文另留 `padding-right` 给它让位（见 `.key-event-card__body`），标题因此不会被压在按钮下。 */
-.key-event-card .ui-popconfirm {
-  position: absolute;
-  top: var(--transactions-space-xs);
-  right: var(--transactions-space-xs);
-}
-
-/* 触发器在**右上角** → 气泡向下弹：向上会弹到卡片外面、被列表的滚动容器裁掉；
- * 向下则落在卡片正文之上（覆盖下面的卡片是弹层的正常行为）。 */
-.key-event-card .ui-popconfirm__panel {
-  top: calc(100% + var(--transactions-space-xs));
-  bottom: auto;
-}
-
-/* 关联交易卡的删除仍在**右下角**（那张卡的右上角是金额，挪上去会压住它）→ 气泡向上弹。 */
+/* 关联交易卡的删除**仍在用气泡**（事件卡那处已改成弹窗），它的触发器在**右下角** →
+ * 气泡向上弹：向下会顶出卡片、被关联栏的滚动容器裁掉。默认方向（`ui.css` 里
+ * `top: calc(100% + …)`，向下）在这里是错的，所以这条覆盖必须留着。
+ * ⚠ 删掉它不会报错、`ui-crud` 也不覆盖这条路（它删的是图表），只有人眼在
+ * 「关联交易」卡片上点删除才看得见。 */
 .key-event-linked__card .ui-popconfirm__panel {
   top: auto;
   bottom: calc(100% + var(--transactions-space-xs));
 }
 
-/* 事件卡的删除：默认隐形，hover / 选中时出现；圆形浅底（本体见 .ui-icon-btn）。
- * 位置由上面的 `.key-event-card .ui-popconfirm` 定在**卡片右上角**。 */
+/* 事件卡的删除按钮：默认隐形，hover / 选中时出现；圆形浅底（本体见 .ui-icon-btn）。
+ *
+ * 定位在卡片的**右上角**。CSS 史：这里以前是 `Popconfirm` 的包裹层（它自带
+ * `position: relative`，会把绝对定位的按钮"吸"到自己身上），所以定位写在
+ * `.key-event-card .ui-popconfirm` 上、按钮自己写 `position: static`。
+ * 二次确认改成弹窗（`confirm_delete_modal`）后包裹层没了，按钮直接是卡片的子元素，
+ * 定位就落在按钮自己身上 —— 卡片本身已有 `position: relative`（见 `.key-event-card`）。
+ * 正文另留 `padding-right` 给它让位（见 `.key-event-card__body`）。 */
 .key-event-card__delete {
-  position: static;
+  position: absolute;
+  top: var(--transactions-space-xs);
+  right: var(--transactions-space-xs);
   border-radius: var(--transactions-radius-full);
   /* 卡片悬停时是白底，白圆底会消失 —— 同样改用软灰底 + 发丝描边 */
   background: var(--transactions-color-minor-background);
@@ -223,6 +218,14 @@
   transition: color var(--transactions-transition-fast),
     background-color var(--transactions-transition-fast),
     transform var(--transactions-transition-fast);
+}
+
+/* 确认弹窗的正文（删除事件不可恢复，顺带说明图片会一起删） */
+.key-event-confirm-text {
+  margin: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-secondary);
 }
 
 .key-event-card:hover .key-event-card__delete,

@@ -473,8 +473,11 @@ try {
     Assert-True ([bool]$deleteButton) '找到该事件的「删除事件」按钮'
     if ($deleteButton) {
         Click-Element $deleteButton | Out-Null
-        Start-Sleep -Milliseconds 1200
-        # 气泡确认：按钮文案「删除」，取最后一个（弹窗/气泡在 DOM 末尾）
+        # 二次确认是弹窗（原为 Popconfirm 气泡）：标题带事件名，先断言弹窗真的开了
+        $modalTitle = Wait-Like -Root $window -Pattern "删除事件「$eventCardTitle」" -TimeoutSec 10
+        Assert-True ([bool]$modalTitle) '弹出「删除事件」二次确认弹窗'
+        Start-Sleep -Milliseconds 600
+        # 弹窗主按钮文案「删除」，取最后一个（弹窗在 DOM 末尾）
         $confirmButtons = @(Find-ByName $window '删除')
         if ($confirmButtons.Count -gt 0) {
             Invoke-Element $confirmButtons[$confirmButtons.Count - 1] | Out-Null

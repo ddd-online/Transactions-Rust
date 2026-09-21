@@ -230,7 +230,9 @@ function Find-RowButton { param($Window, [string]$RowText, [string]$ButtonName)
     Start-Sleep -Milliseconds 400
     $rowCenter = $rowRect.Y + $rowRect.Height / 2
     $best = $null; $bestDistance = [double]::MaxValue
-    foreach ($button in (Find-All $Window $ButtonName)) {
+    # `@(…)` 不能少：`Find-All` 只找到一个元素时返回的是**元素本身**（不是数组），
+    # 一个都没有时返回 `$null` —— 后者在 `foreach` 里算一次迭代，下一行读 `.Current` 就炸。
+    foreach ($button in @(Find-All $Window $ButtonName)) {
         if ($button.Current.IsOffscreen) { continue }
         $rect = $button.Current.BoundingRectangle
         if ($rect.Width -le 0) { continue }
@@ -238,7 +240,15 @@ function Find-RowButton { param($Window, [string]$RowText, [string]$ButtonName)
         if ($distance -lt $bestDistance) { $best = $button; $bestDistance = $distance }
     }
     if ($best -and $bestDistance -le 40) { return $best }
-    Write-Host "    行「$RowText」附近没有「$ButtonName」（最近距离 $([int]$bestDistance)）" -ForegroundColor DarkYellow
+    # 一个都没找到时 `$bestDistance` 还是 `[double]::MaxValue`，直接 `[int]` 转换会抛
+    # "Value was either too large or too small for an Int32" —— **诊断代码自己崩掉**，
+    # 把一句"没找到按钮"变成异常（曾经就这样盖住了真正的原因）。
+    $distanceText = if ($bestDistance -eq [double]::MaxValue) {
+        '没找到同名按钮'
+    } else {
+        "最近距离 $([int][Math]::Round($bestDistance))"
+    }
+    Write-Host "    行「$RowText」附近没有「$ButtonName」（$distanceText）" -ForegroundColor DarkYellow
     return $null
 }
 
