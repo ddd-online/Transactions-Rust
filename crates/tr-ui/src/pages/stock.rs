@@ -110,12 +110,13 @@ impl StockSub {
         }
     }
 
-    /// 图标条上的图标（复用已有图标，不为本页新增图形）。
+    /// 图标条上的图标（与全站同一套 Ant Design 图标；「记录」早前用的 `Icon::Sync`
+    /// 路径坐标越出 viewBox，渲染出来是变形的，已换掉）。
     pub fn icon(self) -> Icon {
         match self {
-            Self::Account => Icon::Stock,
-            Self::Position => Icon::LineChart,
-            Self::Trade => Icon::Sync,
+            Self::Account => Icon::User,
+            Self::Position => Icon::MoneyCollect,
+            Self::Trade => Icon::AccountBook,
             Self::Statistics => Icon::BarChart,
             Self::Setting => Icon::Setting,
         }
@@ -1228,16 +1229,8 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         }
     };
 
-    // 版心两块：工具栏（本子功能的主操作「建仓」）/ 内容区
-    let toolbar = view! {
-        <div class="stock-toolbar">
-            <Button variant=ButtonVariant::Primary on_click=move |_| open_trade("open")>
-                "建仓"
-            </Button>
-        </div>
-    }
-    .into_any();
-
+    // 本子功能**没有页面级操作**：「建仓」属于左侧持仓列表（空态文案写着"先点下方「建仓」"，
+    // 按钮就贴在列表底栏），所以不给 `FeaturePage` 的 `toolbar` —— 空工具栏只会白占一条发丝线。
     let content = view! {
         <div class="stock-body">
         <div class="stock-position">
@@ -1252,7 +1245,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                         if positions_loading.get() {
                                             "正在加载持仓…"
                                         } else {
-                                            "暂无持仓，先点上方「建仓」"
+                                            "暂无持仓，先点下方「建仓」"
                                         }
                                     }}
                                 </div>
@@ -1362,6 +1355,17 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                             }}
                         </div>
                     </Show>
+                    // 主操作「建仓」回到左栏底栏（`.stock-panel__footer` 自带顶部分隔线，
+                    // 与「资金变化记录」的底栏同一套）—— 空态文案说的"下方"就是这里。
+                    <div class="stock-panel__footer">
+                        <Button
+                            variant=ButtonVariant::Primary
+                            block=true
+                            on_click=move |_| open_trade("open")
+                        >
+                            "建仓"
+                        </Button>
+                    </div>
                 </div>
 
                 <div class="stock-panel stock-panel--detail">
@@ -1674,7 +1678,6 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
             title=PAGE_TITLE
             class="stock-page"
             rail=view! { <StockSubRail sub=sub /> }.into_any()
-            toolbar=toolbar
             content=content
         />
     }
@@ -3368,8 +3371,12 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     let latest_point = move || stats.get().and_then(|data| data.points.last().cloned());
 
     // 版心两块：工具栏（筛选组 + 刷新）/ 内容区（结算统计结果）
+    //
+    // ⚠ 筛选组**不能吃剩余宽度**：`stock-toolbar` 是 flex 行，给筛选组 `flex: 1` 时
+    // 它会先把宽度占满，把「刷新」压成一个窄按钮（实测按钮变形）。这里靠
+    // `margin-left: auto` 把「刷新」顶到右边，两边各按内容宽度排（见 stock.css）。
     let toolbar = view! {
-        <div class="stock-toolbar stock-toolbar--between">
+        <div class="stock-toolbar">
             <div class="stock-statistics__filters">
                 <Segmented
                     value=filter_mode
@@ -3424,13 +3431,16 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                     />
                 </div>
             </div>
-            <Button
-                variant=ButtonVariant::Primary
-                loading=Signal::derive(move || loading.get())
-                on_click=move |_| apply_filter()
-            >
-                "刷新"
-            </Button>
+            // `.stock-toolbar__end` = `margin-left: auto`：把刷新顶到右边，且**不被压缩**
+            <div class="stock-toolbar__end">
+                <Button
+                    variant=ButtonVariant::Primary
+                    loading=Signal::derive(move || loading.get())
+                    on_click=move |_| apply_filter()
+                >
+                    "刷新"
+                </Button>
+            </div>
         </div>
     }
     .into_any();
@@ -4115,21 +4125,9 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
         }
     };
 
-    // 版心两块：工具栏（费用表单的提交键）/ 内容区（标签 + 费用 + 重置）
-    let toolbar = view! {
-        <div class="stock-toolbar">
-            <Button
-                variant=ButtonVariant::Primary
-                loading=fee_saving
-                disabled=Signal::derive(no_ledger)
-                on_click=move || save_fee()
-            >
-                "保存"
-            </Button>
-        </div>
-    }
-    .into_any();
-
+    // 本子功能**没有页面级操作**：「保存」是费用表单的提交键，属于那张卡片，
+    // 所以不给 `FeaturePage` 的 `toolbar`（空工具栏只会白占一条发丝线，
+    // 而"保存"孤零零挂在页头、离它要保存的表单很远）。
     let content = view! {
         <div class="stock-body">
         <div class="stock-settings">
@@ -4235,6 +4233,14 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                                 </span>
                             </Tooltip>
                         </div>
+                        <Button
+                            variant=ButtonVariant::Primary
+                            loading=fee_saving
+                            disabled=Signal::derive(no_ledger)
+                            on_click=move || save_fee()
+                        >
+                            "保存"
+                        </Button>
                     </div>
 
                     <Form layout=FormLayout::Vertical class="st-fee-form">
@@ -4340,7 +4346,6 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
             title=PAGE_TITLE
             class="stock-page"
             rail=view! { <StockSubRail sub=sub /> }.into_any()
-            toolbar=toolbar
             content=content
         />
     }

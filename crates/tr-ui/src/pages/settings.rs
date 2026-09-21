@@ -48,8 +48,8 @@ use tr_domain::proxy::{ProxySetting, PROXY_MODE_AUTO, PROXY_MODE_MANUAL, PROXY_M
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, FeaturePage, Form, FormItem, FormLayout, Input, Modal,
-    Progress, Segmented, SegmentedOption, Spin, SpinSize, TabItem, TabPane, Tabs, Tooltip,
+    Button, ButtonSize, ButtonVariant, FeaturePage, Input, Progress, Segmented, SegmentedOption,
+    Spin, SpinSize, TabItem, TabPane, Tabs, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};

@@ -283,6 +283,18 @@ cargo clippy --all-targets -- -D warnings
   窗口内的**最后一个**（`ui-transactions` 的 `Invoke-ButtonByName`、共享版的 `Add-Record` 都这么做）；
   ② 只排除 ±∞ 幽灵、不过滤可见性（`ui-crud` 删图表/删事件）。更稳的是别把"点到没点到"当断言，
   改成断言结果（库里少一行、表格顺序变了），点击只做尽力而为。
+- **图标只渲染 `<path>`，且路径坐标必须落在 `view_box` 内**：`icons.rs` 的 `icon()` 输出内联
+  `<svg><path d=…/></svg>`（`fill: currentColor`），没有 `<circle>`/`<rect>` 那套。新增图标时
+  两件事一起核：① 路径坐标范围要与 `view_box()` 匹配（历史事故：24 格线稿套了 `64 64 896 896`，
+  箭头整体被裁到看不见）；② **别只看"它是 Ant Design 图标"就放心** —— 有的旧条目路径本身就
+  越界，落在按钮里是变形的（实测 `Icon::Sync` 的 x 到 1133，而 896 格只到 960，
+  股票页图标条上画成一条扭曲的线）。当年它只出现在"同步"那类行内小按钮上、没人细看，
+  直到被摆进图标条才暴露。取新图标直接用官方包：
+  `curl -sSL https://cdn.jsdelivr.net/npm/@ant-design/icons-svg@4.4.2/inline-namespaced-svg/outlined/<name>.svg`
+  （本机走代理；GitHub 原仓库连不上），它给的 `d` 可与 `view_box = 64 64 896 896` 直接配对。
+- **翻译/新增 UI 文案前先看有没有同名元素**：图标条按钮的可访问名 = 子功能名，很容易与页面里的
+  面板标题、侧栏条目重名（「记录」两边都有、「设置」与侧栏「应用设置」相邻）。
+  fixtures 用 `Invoke-SubFunction`（同名 Button 里最靠左的那个）定位，新增子功能时沿用即可。
 - **`Input` 的 UIA 判据是 `ControlType.Edit`，不是 ClassName**：本项目的输入框渲染成
   `class='ui-input__control'`，用 `ClassName -eq 'Edit'` 过滤一个都找不到（当时表现为"建仓弹窗里找不到
   股票代码输入框"，整轮全红）。只有原生 `<textarea>` 那类才是 `ClassName='Edit'`，所以判据要写成

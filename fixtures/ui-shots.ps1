@@ -254,5 +254,5 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { "  - $_" }
     exit 1
 }
-Write-Host "[ui-shots] ✅ 5 个顶级功能 + 4 个子功能都有真实像素内容，主题切换生效" -ForegroundColor Green
+Write-Host "[ui-shots] ✅ 5 个顶级功能 + 9 个子功能（记账 4 / 股票 5）都有真实像素内容，主题切换生效" -ForegroundColor Green
 exit 0

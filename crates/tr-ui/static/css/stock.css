@@ -31,9 +31,12 @@
   padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
 }
 
-/* 子功能工具栏：**本子功能的操作**都归到这里（追加本金/支取、建仓、筛选、保存）。
- * 默认单簇贴右（主动作靠右，与全站版心一致）；`--between` 用于筛选这类"左边一组控件 +
- * 右边一个动作"的排布。 */
+/* 子功能工具栏：**本子功能的操作**都归到这里（追加本金/支取、筛选 + 刷新）。
+ * 默认单簇贴右（主动作靠右，与全站版心一致）。
+ *
+ * ⚠ 工具栏里"左一组控件 + 右一个按钮"时**别给左组 `flex: 1`**：它会把宽度占满，
+ * 把右边那个按钮压成窄条（实测「刷新」被压变形）。右边那个套 `.stock-toolbar__end`
+ * （`margin-left: auto` 顶到最右 + `flex-shrink: 0`），两组各按内容宽度排。 */
 .stock-toolbar {
   flex: 1;
   display: flex;
@@ -43,8 +46,11 @@
   gap: var(--transactions-space-md);
 }
 
-.stock-toolbar--between {
-  justify-content: space-between;
+.stock-toolbar__end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 /* 设置子功能用设置页那套 `.st-card` 卡片（类名与样式都在 settings.css，两页共用同一份，

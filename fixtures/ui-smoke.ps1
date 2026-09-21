@@ -98,6 +98,11 @@ $stockSubMarkers = [ordered]@{
     '设置' = @('交易费用设置', '交易标签')
 }
 
+# 注：`FeaturePage` 的 `toolbar` 是**可选插槽**，没人用的页面整段不渲染（不留空发丝线）。
+# 股票页里只有「账户」和「统计」给了工具栏（标记表里的「追加本金」/「刷新」就是它的按钮）；
+# 持仓的「建仓」在左侧持仓列表底栏、记录的汇总与轮次自成一栏、设置的「保存」在费用卡片里，
+# 这三个子功能都没有工具栏。
+
 function Get-AppWindow {
     param([int]$ProcessId, [int]$TimeoutSec = 40)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
