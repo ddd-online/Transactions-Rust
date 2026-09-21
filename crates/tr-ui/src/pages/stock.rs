@@ -110,13 +110,16 @@ impl StockSub {
         }
     }
 
-    /// 图标条上的图标（与全站同一套 Ant Design 图标；「记录」早前用的 `Icon::Sync`
-    /// 路径坐标越出 viewBox，渲染出来是变形的，已换掉）。
+    /// 图标条上的图标（与全站同一套 Ant Design outlined 图标）。
+    ///
+    /// ⚠ 选图标时核两件事：**语义**与**路径坐标是否落在 896 格里**。「记录」早前用的
+    /// `Icon::Sync` 路径 x 到 1133（896 格只到 960），渲染出来是一条扭曲的线 —— 换成了
+    /// `Icon::History`（官方 outlined，坐标正常）。
     pub fn icon(self) -> Icon {
         match self {
             Self::Account => Icon::User,
-            Self::Position => Icon::MoneyCollect,
-            Self::Trade => Icon::AccountBook,
+            Self::Position => Icon::Stock,
+            Self::Trade => Icon::History,
             Self::Statistics => Icon::BarChart,
             Self::Setting => Icon::Setting,
         }

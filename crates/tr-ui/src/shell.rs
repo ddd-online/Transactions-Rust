@@ -88,8 +88,10 @@ impl Page {
         match self {
             // 导航图标的排列：记账 / 股票 / 事件 / 日记管理，
             // 底部是应用设置（`Icon::LineChart` 现在是记账·分析子功能的图标条图标）
+            // 「股票」用参数滑杆：股票域的可调项（费用费率 / 标签）都在页内的设置子功能里，
+            // 比折线更贴切；折线留给了「持仓」子功能（见 `pages/stock.rs` 的 `StockSub::icon`）。
             Page::Accounting => Icon::Transaction,
-            Page::Stock => Icon::Stock,
+            Page::Stock => Icon::Sliders,
             Page::KeyEvent => Icon::Star,
             Page::Diary => Icon::Read,
             Page::Settings => Icon::Setting,
