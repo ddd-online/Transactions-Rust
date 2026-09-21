@@ -168,6 +168,43 @@ cargo clippy --all-targets -- -D warnings
 的初始化窗口，主循环要的侧栏「记账」永远不出现，最后只看到一句"没找到主窗口"）。`NO_COLOR` 也由脚本自己
 清掉，不必先 `Remove-Item Env:NO_COLOR`。
 
+## 只跑受影响的测试（默认）
+
+**默认不跑全量**：每轮把十几个 fixture 全跑一遍要十几分钟，而这些时间换不到任何新信息。
+按改动范围挑，**只跑会被这次改动碰到的那几个**；只有大改动（见下面的"什么时候才跑全量"）才全跑。
+
+- **按页面/模块挑**（改哪儿跑哪儿）：
+
+  | 改了哪里 | 跑哪个脚本 |
+  |---|---|
+  | 记账 · 记录（记一笔 / 编辑 / 排序 / 筛选 / 模板） | `ui-transactions` |
+  | 记账 · 分析 / 标签 / 模板 | `ui-crud` |
+  | 记账 · 标签拖拽排序 | `ui-drag` |
+  | 事件页 | `ui-key-event`；涉及关联交易卡 → `ui-link-event` |
+  | 日记页 | `ui-diary-edit`、`ui-diary-ledger`；导入导出 → `ui-diary-io` |
+  | 股票页（任意子功能 / 费用 / 标签 / 下单 / 清仓） | `ui-stock` |
+  | 应用设置（通用 / 功能开关 / 日记配置 / 关于软件） | `ui-proxy`（代理）、`ui-about`（关于）、`ui-features`（功能开关） |
+  | 图片上传 / 资产协议 | `ui-upload` |
+  | 侧栏 / 外壳 / 窗口（窗口几何、关闭行为、首启动） | `window-bounds`、`close-behavior`、`smoke` |
+  | 建库 / 迁移 / schema | `cargo xtask schema-diff`、`migrate-workspace`、`cargo test -p tr-store` |
+
+- **共享代码会扩大范围**（这几处一改，影响面是"好几个页面"，按最坏的算）：
+  `components/ui/` 下的组件（如 `Modal`、`Popconfirm`、`Button`、`Table`）、`shell.rs`、`store.rs`、
+  `fixtures/lib/TrUia.ps1`。改这些至少跑覆盖到的 2~3 个脚本，改动大就按下面的全量跑。
+  例：改弹窗宽度档位（`Modal`）→ 记账 + 股票 + 事件 + 设置都过一遍（当时跑的是
+  `ui-transactions` / `ui-stock` / `ui-smoke` / `ui-crud` / `ui-key-event`）。
+- **连带效果算进影响面**：分支只在某个具体检查里时，只跑那个脚本（如"只改了功能开关的断言" → 只跑
+  `ui-features`）。反过来，一个 fixture 里的检查可能由**别处**触发（如 `ui-upload` 最后一步要删事件，
+  所以改动"删除事件"就得带上它）。
+
+- **什么时候才跑全量**：① 动 `fixtures/lib/TrUia.ps1`、公共组件或外壳这类共享面；
+  ② 一次改动跨 3 个以上页面/模块；③ 合并前或发布前；④ 长时间没跑过（不确定上次基线是否还绿）。
+
+- **每次必跑的还是那三条便宜的**（几秒到几十秒，不占时间）：
+  `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`pwsh -File fixtures/design-audit.ps1`
+  （改界面时再加 `cargo check -p tr-ui --target wasm32-unknown-unknown`）。
+  单元测试也按包挑：`cargo test -p tr-store` 之类，不必每次 `-p tr-domain -p tr-store -p tr-service -p transactions`。
+
 ## 本机环境注意事项（踩过的坑）
 
 ### 构建与工具链
