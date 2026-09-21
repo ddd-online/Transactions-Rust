@@ -6,7 +6,8 @@
 //! * 类目轴 —— `categories`（月份 / 年份 / 序号），按可用宽度**抽稀**（首尾必显）
 //! * 数值轴 —— 刻度文案随 [`ChartValueKind`] 走（金额千分位元、百分比带 `%`）
 //! * 图例 —— [`ChartConfig::hide_legend`] 控制，由 charts-rs 画在 SVG 内
-//! * tooltip —— `pointermove` 命中最近类目 → 竖参考线 + 浮层（多序列整列显示）
+//! * tooltip —— `pointermove` 命中最近类目 → 竖参考线 + 浮层（多序列整列显示）；
+//!   浮层**跟随鼠标**（贴着指针显示、自动避让画布四边），不再钉在图表顶部
 //! * 虚线参考线 —— [`ChartConfig::reference`]
 //! * 入场动画 —— 折线自左向右描出（`prefers-reduced-motion` 下由 CSS 关闭）
 //!
@@ -176,6 +177,79 @@ const TICK_FONT_PX: f32 = 12.0;
 const MARGIN: f32 = 8.0;
 /// Y 轴文案区预留宽度（抽稀时估算可用绘图宽度用）
 const Y_LABEL_AREA: f64 = 56.0;
+/// tooltip 与指针之间留的空隙（px，浮层不盖住光标）
+const TOOLTIP_GAP: f64 = 14.0;
+/// 量不到 tooltip 实际宽度时的兜底估算（首帧用；CSS 的 `min-width` 是 160，加上两侧内边距）
+const TOOLTIP_FALLBACK_WIDTH: f64 = 200.0;
+
+/// tooltip 相对画布的落点（纯计算，便于单测）。
+///
+/// 语义：**跟着鼠标** —— 以指针为基准，但收在画布内：
+/// * 左右贴边时不再居中，`transform` 由 `-50%` 换成 `0` / `-100%`（浮层完整可见）；
+/// * 上方放不下（画布顶边）就翻到指针下方。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TooltipPlacement {
+    /// 浮层左边缘（px，相对画布）
+    left: f64,
+    /// 浮层上边缘（px，相对画布）
+    top: f64,
+    /// `translateX` 的百分比（0 / 50 / 100，配合负号）
+    translate_x: f64,
+    /// `translateY` 的百分比（`-100` = 浮层整体位于 `top` 之上，`0` = 位于其下）
+    translate_y: f64,
+}
+
+impl TooltipPlacement {
+    /// 内联样式串（`view!` 里直接用）。
+    fn style(self) -> String {
+        format!(
+            "left: {:.1}px; top: {:.1}px; transform: translateX(-{:.0}%) translateY({:.0}%);",
+            self.left, self.top, self.translate_x, self.translate_y
+        )
+    }
+}
+
+/// 按"指针位置 + 画布尺寸 + 浮层尺寸"算落点。
+fn place_tooltip(
+    cursor: (f64, f64),
+    canvas_width: f64,
+    tooltip_width: f64,
+    tooltip_height: f64,
+) -> TooltipPlacement {
+    let (cursor_x, cursor_y) = cursor;
+    let width = if tooltip_width > 0.0 {
+        tooltip_width
+    } else {
+        TOOLTIP_FALLBACK_WIDTH
+    };
+    let half = width / 2.0;
+
+    // 水平：能居中就居中，贴边则夹住（`translate_x` 随之从 50 变 0 / 100）
+    let (left, translate_x) = if canvas_width <= width {
+        // 画布比浮层还窄：居中即可，没有可挪的余地
+        (canvas_width / 2.0, 50.0)
+    } else if cursor_x - half < 0.0 {
+        (0.0, 0.0)
+    } else if cursor_x + half > canvas_width {
+        (canvas_width, 100.0)
+    } else {
+        (cursor_x, 50.0)
+    };
+
+    // 垂直：默认在指针上方，画布顶部放不下就翻到下方
+    let (top, translate_y) = if cursor_y - tooltip_height < TOOLTIP_GAP {
+        (cursor_y + TOOLTIP_GAP, 0.0)
+    } else {
+        (cursor_y - TOOLTIP_GAP, -100.0)
+    };
+
+    TooltipPlacement {
+        left,
+        top,
+        translate_x,
+        translate_y,
+    }
+}
 
 // ==================================================================== 组件
 
@@ -196,6 +270,10 @@ pub fn LineChart(
     class: Option<String>,
 ) -> impl IntoView {
     let hover = RwSignal::new(Option::<usize>::None);
+    // 指针在**画布坐标系**里的位置（叠层与 plotters 层同一个 viewBox，所以取自 `offsetX/offsetY`）。
+    // tooltip 按它定位 —— 用户的要求是"跟着鼠标"，所以位置与命中的类目分开存：
+    // 命中类目决定**内容**与竖参考线，指针位置决定**浮层放在哪**。
+    let pointer = RwSignal::new(None::<(f64, f64)>);
     let class = class.unwrap_or_default();
     let geometry_config = config.clone();
     let reference = config.reference;
@@ -208,6 +286,8 @@ pub fn LineChart(
 
     // 画布实测尺寸：charts-rs **按容器真实像素渲染**，图表因此自适应高宽、铺满区域
     let canvas = NodeRef::<leptos::html::Div>::new();
+    // tooltip 元素：用来量它的实际宽高（宽 → 左右避让，高 → 上下翻转）
+    let tooltip = NodeRef::<leptos::html::Div>::new();
     let size = RwSignal::new((FALLBACK_WIDTH, f64::from(config.height.max(120))));
     watch_canvas_size(canvas, size);
 
@@ -241,6 +321,11 @@ pub fn LineChart(
     });
 
     let on_move = move |event: leptos::ev::PointerEvent| {
+        // 先记指针位置（即使还没量到几何，浮层位置也该跟上）
+        pointer.set(Some((
+            f64::from(event.offset_x()),
+            f64::from(event.offset_y()),
+        )));
         let Some(geometry) = geometry.get_untracked() else {
             return;
         };
@@ -248,6 +333,10 @@ pub fn LineChart(
             return;
         }
         hover.set(hit_index(&geometry, f64::from(event.offset_x())));
+    };
+    let on_leave = move |_| {
+        hover.set(None);
+        pointer.set(None);
     };
 
     view! {
@@ -271,7 +360,7 @@ pub fn LineChart(
                     }
                     preserveAspectRatio="none"
                     on:pointermove=on_move
-                    on:pointerleave=move |_| hover.set(None)
+                    on:pointerleave=on_leave
                 >
                     {move || {
                         let Some(geometry) = geometry.get() else {
@@ -336,9 +425,12 @@ pub fn LineChart(
                     }}
                 </svg>
 
-                // ---- tooltip（按悬停类目定位） ----
+                // ---- tooltip（跟着鼠标走，位置由指针决定、内容由命中的类目决定） ----
                 {move || {
                     let Some(index) = hover.get() else {
+                        return ().into_any();
+                    };
+                    let Some((cursor_x, cursor_y)) = pointer.get() else {
                         return ().into_any();
                     };
                     let Some(geometry) = geometry.get() else {
@@ -351,15 +443,28 @@ pub fn LineChart(
                     if rows.is_empty() {
                         return ().into_any();
                     }
-                    let (left, right) = geometry.x_extent();
-                    let percent = if right > left {
-                        ((geometry.xs.get(index).copied().unwrap_or(left) - left) / (right - left))
-                            * 100.0
-                    } else {
-                        0.0
-                    };
+                    // 水平/垂直避让都收在 `place_tooltip` 里（纯函数，单测覆盖）
+                    let (canvas_width, _) = size.get_untracked();
+                    let measured = tooltip.get_untracked();
+                    // 浮层的实际宽高：量到的值优先，量不到（首帧/还未挂载）用兜底值
+                    let tip_width = measured
+                        .as_ref()
+                        .map(|element| f64::from(element.offset_width()))
+                        .filter(|width| *width > 0.0)
+                        .unwrap_or(TOOLTIP_FALLBACK_WIDTH);
+                    let tip_height = measured
+                        .as_ref()
+                        .map(|element| f64::from(element.offset_height()))
+                        .filter(|height| *height > 0.0)
+                        .unwrap_or(0.0);
+                    let placement =
+                        place_tooltip((cursor_x, cursor_y), canvas_width, tip_width, tip_height);
                     view! {
-                        <div class="chart__tooltip" style=format!("left: {percent:.2}%")>
+                        <div
+                            class="chart__tooltip"
+                            node_ref=tooltip
+                            style=placement.style()
+                        >
                             <div class="chart__tooltip-title">{category}</div>
                             {rows
                                 .into_iter()
@@ -1216,6 +1321,71 @@ mod tests {
         assert_eq!(hit_index(&geometry, 48.0), Some(1));
         assert_eq!(hit_index(&geometry, 200.0), Some(2));
         assert_eq!(hit_index(&ChartGeometry::default(), 12.0), None);
+    }
+
+    /// tooltip 必须**跟着鼠标**（用户报的缺陷：它一直钉在图表顶部）。
+    #[test]
+    fn tooltip_follows_the_pointer_vertically() {
+        // 同一根竖线上，鼠标在上半部 vs 下半部 → 浮层的 top 必须跟着走
+        let high = place_tooltip((400.0, 60.0), 800.0, 200.0, 80.0);
+        let low = place_tooltip((400.0, 300.0), 800.0, 200.0, 80.0);
+        assert!(
+            low.top > high.top,
+            "浮层要跟着鼠标往下走（high={}, low={}）",
+            high.top,
+            low.top
+        );
+        // 鼠标在上方时浮层在其**上方**（`translateY(-100%)`），在下方时翻到其**下方**
+        assert_eq!(high.translate_y, -100.0);
+        assert_eq!(high.top, 60.0 - TOOLTIP_GAP);
+        assert_eq!(low.translate_y, -100.0);
+        // 贴着画布顶边放不下 → 翻到指针下方
+        let at_top = place_tooltip((400.0, 20.0), 800.0, 200.0, 80.0);
+        assert_eq!(at_top.translate_y, 0.0);
+        assert_eq!(at_top.top, 20.0 + TOOLTIP_GAP);
+    }
+
+    #[test]
+    fn tooltip_stays_inside_the_canvas_horizontally() {
+        // 中间：以指针为中心
+        let center = place_tooltip((400.0, 300.0), 800.0, 200.0, 80.0);
+        assert_eq!((center.left, center.translate_x), (400.0, 50.0));
+        // 贴左边：贴住左边缘（完整可见）
+        let left = place_tooltip((30.0, 300.0), 800.0, 200.0, 80.0);
+        assert_eq!((left.left, left.translate_x), (0.0, 0.0));
+        // 贴右边：贴住右边缘
+        let right = place_tooltip((790.0, 300.0), 800.0, 200.0, 80.0);
+        assert_eq!((right.left, right.translate_x), (800.0, 100.0));
+        // 画布比浮层窄：居中，没有可挪的余地
+        let narrow = place_tooltip((40.0, 300.0), 120.0, 200.0, 80.0);
+        assert_eq!((narrow.left, narrow.translate_x), (60.0, 50.0));
+        // 首帧量不到宽度（0）时按兜底宽度算，不会算出 NaN / 负值
+        let unmeasured = place_tooltip((400.0, 300.0), 800.0, 0.0, 0.0);
+        assert_eq!(unmeasured.translate_x, 50.0);
+        assert!(unmeasured.left.is_finite() && unmeasured.left >= 0.0);
+    }
+
+    #[test]
+    fn tooltip_style_string_matches_the_placement() {
+        let placement = place_tooltip((400.0, 300.0), 800.0, 200.0, 80.0);
+        let style = placement.style();
+        assert!(style.contains("left: 400.0px"), "{style}");
+        assert!(style.contains("top: 286.0px"), "{style}");
+        assert!(style.contains("translateX(-50%)"), "{style}");
+        assert!(style.contains("translateY(-100%)"), "{style}");
+        // 定位必须**全部**走内联样式：CSS 里再写 top/left/transform 会盖掉它
+        let css = include_str!("../../../static/css/ui.css");
+        let rule_start = css
+            .find(".chart__tooltip {")
+            .expect("ui.css 应有 .chart__tooltip");
+        let rule = &css[rule_start..rule_start + 600];
+        let body = &rule[..rule.find('}').expect("规则应闭合")];
+        for forbidden in ["top:", "left:", "transform:"] {
+            assert!(
+                !body.contains(forbidden),
+                "`.chart__tooltip` 里不该再写 `{forbidden}`（会盖掉内联定位）"
+            );
+        }
     }
 
     #[test]

@@ -2165,17 +2165,20 @@
   stroke-width: 1.5;
 }
 
+/* tooltip：**位置由 JS 内联样式给**（贴着鼠标、并按画布四边避让/翻面），
+ * 这里只负责外观 —— 不要再写 `top`/`left`/`transform`，否则会盖掉内联定位。 */
 .chart__tooltip {
   position: absolute;
-  top: 0;
-  transform: translateX(-50%);
   min-width: 160px;
+  max-width: 280px;
   padding: var(--transactions-space-sm) var(--transactions-space-md);
   border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-md);
   background: var(--transactions-color-major-background);
   box-shadow: var(--transactions-shadow-lg);
   pointer-events: none;
+  /* 浮层跟着鼠标走：不要在它身上做过渡，否则会"追着鼠标飘" */
+  transition: none;
   z-index: 2;
 }
 
