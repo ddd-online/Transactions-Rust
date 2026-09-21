@@ -18,9 +18,11 @@ release = false
 minify = "never"
 
 [serve]
-# 端口刻意避开 1420：本机 Windows 的保留端口段（Hyper-V/WSL）覆盖 1332-1431，
-# 在 1420 上绑定会直接失败（os error 10013）。1520 已实测可绑定。
-port = 1520
+# 端口刻意避开 1420 与 1520：本机 Windows 的保留端口段（WinNAT/Hyper-V）会漂，
+# 2026-09 实测被保留的是 1463-1562（早先是 1332-1431），1420 与 1520 都在里面，
+# 绑上去直接失败（os error 10013）。1600 已实测可绑定。
+# 自查：netsh interface ipv4 show excludedportrange protocol=tcp
+port = 1600
 addresses = ["127.0.0.1"]
 open = false
 

@@ -5,7 +5,7 @@
   "identifier": "com.github.Transactions",
   "build": {
     "frontendDist": "../crates/tr-ui/dist",
-    "devUrl": "http://127.0.0.1:1520",
+    "devUrl": "http://127.0.0.1:1600",
     "beforeDevCommand": {
       "cwd": "..",
       "script": "trunk serve --config crates/tr-ui/Trunk.toml"
