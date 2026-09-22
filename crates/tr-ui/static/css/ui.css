@@ -2097,8 +2097,36 @@
   min-height: 0;
 }
 
-/* 图例由 charts-rs 画在 SVG 内（`.chart__legend*` 那一套 HTML 图例已删除）；
- * 只剩 tooltip 行首的色点还用这个类。 */
+/* 图例：**自绘 HTML**（不再是 charts-rs 画在 SVG 里的那份）。
+ * 换行与间距由浏览器按真实字体度量排版 —— SVG 那份用 charts-rs 内置的 Roboto 量宽，
+ * 与页面字体（JetBrains Mono + 中文回退）不一致，中文系列名会叠在一起。 */
+.chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--transactions-space-xs) var(--transactions-space-md);
+  flex-shrink: 0;
+  padding: 0 0 var(--transactions-space-xs) 0;
+}
+
+.chart__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  min-width: 0;
+}
+
+.chart__legend-label {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  /* 再长的系列名也只是一行被平台省略号截断，不会把整行撑破 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* tooltip 行首与图例共用的色点 */
 .chart__legend-swatch {
   display: inline-block;
   width: 8px;

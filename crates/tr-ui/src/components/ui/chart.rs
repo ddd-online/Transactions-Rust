@@ -5,7 +5,10 @@
 //! * 多序列 —— [`ChartSeries`] 列表
 //! * 类目轴 —— `categories`（月份 / 年份 / 序号），按可用宽度**抽稀**（首尾必显）
 //! * 数值轴 —— 刻度文案随 [`ChartValueKind`] 走（金额千分位元、百分比带 `%`）
-//! * 图例 —— [`ChartConfig::hide_legend`] 控制，由 charts-rs 画在 SVG 内
+//! * 图例 —— **自绘 HTML**（可换行），由 [`ChartConfig::hide_legend`] 控制显隐。
+//!   不用 charts-rs 自带的那份：它按内置 Roboto 量文字宽度排版，而 SVG 里的文字按页面字体
+//!   （JetBrains Mono + 中文回退）渲染，中文系列名会被排得太近而**互相重叠**；
+//!   它只能注册 TTF/OTF（仓库里的字体是 woff2，fontdue 解析不了），量不准这件事没法从它那侧修。
 //! * tooltip —— `pointermove` 命中最近类目 → 竖参考线 + 浮层（多序列整列显示）；
 //!   浮层**跟随鼠标**（贴着指针显示、自动避让画布四边），不再钉在图表顶部
 //! * 虚线参考线 —— [`ChartConfig::reference`]
@@ -40,8 +43,8 @@ use leptos::web_sys;
 use wasm_bindgen::JsCast;
 
 use charts_rs::{
-    Align, AnimationConfig, Box as ChartBox, Color as ChartColor, LegendCategory,
-    LineChart as ChartsLineChart, Series as ChartSeriesData, Symbol, THEME_DARK, THEME_LIGHT,
+    AnimationConfig, Box as ChartBox, Color as ChartColor, LineChart as ChartsLineChart,
+    Series as ChartSeriesData, Symbol, THEME_DARK, THEME_LIGHT,
 };
 
 use crate::store::AppStores;
@@ -270,6 +273,8 @@ pub fn LineChart(
     class: Option<String>,
 ) -> impl IntoView {
     let hover = RwSignal::new(Option::<usize>::None);
+    // 图例由本组件自绘（原因见 `view!` 里的注释），所以这里读配置、不再交给 charts-rs
+    let hide_legend = RwSignal::new(config.hide_legend);
     // 指针在**画布坐标系**里的位置（叠层与 plotters 层同一个 viewBox，所以取自 `offsetX/offsetY`）。
     // tooltip 按它定位 —— 用户的要求是"跟着鼠标"，所以位置与命中的类目分开存：
     // 命中类目决定**内容**与竖参考线，指针位置决定**浮层放在哪**。
@@ -341,6 +346,39 @@ pub fn LineChart(
 
     view! {
         <div class=format!("chart {class}")>
+            // ---- 图例：**自绘 HTML**，不交给 charts-rs ----
+            //
+            // 为什么不用它自带的：它按**自己内置的 Roboto** 量文字宽度来排图例，
+            // 而 SVG 里的文字是按我们声明的字体（JetBrains Mono + 中文回退）渲染的。
+            // 中文/CJK 回退字比 Roboto 宽不少，于是"量出来 40px、画出来 60px"，
+            // 相邻两项就叠在一起（实测「餐饮总支出」和「餐饮支出 - 商场」首尾重叠）。
+            // charts-rs 只能注册 TTF/OTF，而仓库里的字体是 woff2（fontdue 解析不了），
+            // 所以量不准这件事没法从它那侧修 —— 改由浏览器排版：换行、间距都由真实字体度量决定。
+            <Show when=move || !hide_legend.get() && !series.get().is_empty()>
+                <div class="chart__legend">
+                    {move || {
+                        series
+                            .get()
+                            .into_iter()
+                            .map(|item| {
+                                view! {
+                                    <span class="chart__legend-item">
+                                        <span
+                                            class="chart__legend-swatch"
+                                            style=format!(
+                                                "background: {}",
+                                                hex_of(&resolve_color(&item.color)),
+                                            )
+                                        ></span>
+                                        <span class="chart__legend-label">{item.label}</span>
+                                    </span>
+                                }
+                            })
+                            .collect_view()
+                    }}
+                </div>
+            </Show>
+
             <div class="chart__canvas" node_ref=canvas>
                 // ---- charts-rs 的静态图层：网格 / 刻度 / 轴线 / 图例 / 折线与数据点 ----
                 {move || {
@@ -603,17 +641,10 @@ fn build_chart(
     });
 
     // ---- 图例 ----
-    chart.legend_show = Some(!config.hide_legend);
-    chart.legend_align = Align::Left;
-    chart.legend_category = LegendCategory::Circle;
-    chart.legend_font_color = token_color("--transactions-color-text-secondary");
-    chart.legend_font_size = TICK_FONT_PX;
-    chart.legend_margin = Some(ChartBox {
-        left: MARGIN,
-        top: MARGIN,
-        right: MARGIN,
-        bottom: 4.0,
-    });
+    // **关掉 charts-rs 自带的图例**：它按内置 Roboto 量宽，与 SVG 实际渲染的字体
+    // （JetBrains Mono + 中文回退）不一致，中文系列名会叠在一起。图例改由组件自绘成 HTML
+    // （见 `view!` 顶部那段注释），排版交给浏览器，字体度量天然一致。
+    chart.legend_show = Some(false);
 
     // ---- Y 轴 ----
     // charts-rs 的模板只有两档：`{c}` 会缩写（38.5k）、`{t}` 是千分位全值（38,500）。
@@ -1386,6 +1417,43 @@ mod tests {
                 "`.chart__tooltip` 里不该再写 `{forbidden}`（会盖掉内联定位）"
             );
         }
+    }
+
+    /// 图例必须是**自绘 HTML + 可换行**：交给 charts-rs 时它按内置 Roboto 量宽，
+    /// 而 SVG 按页面字体渲染（JetBrains Mono + 中文回退），中文系列名会互相重叠。
+    #[test]
+    fn legend_is_self_drawn_html_that_wraps() {
+        let css = include_str!("../../../static/css/ui.css");
+        let rule = |selector: &str| -> String {
+            let start = css
+                .find(selector)
+                .unwrap_or_else(|| panic!("ui.css 里应有 {selector}"));
+            let tail = &css[start..];
+            let end = tail.find('}').expect("规则应闭合");
+            tail[..end].to_string()
+        };
+
+        // 自绘图例：容器允许换行（否则长系列名会把整行撑破而不是换行）
+        let legend = rule(".chart__legend {");
+        assert!(legend.contains("display: flex"), "{legend}");
+        assert!(
+            legend.contains("flex-wrap: wrap"),
+            "图例必须可换行: {legend}"
+        );
+
+        // 单项允许收缩、标签过长走省略号，不会把别的项挤出去
+        let item = rule(".chart__legend-item {");
+        assert!(item.contains("min-width: 0"), "{item}");
+        let label = rule(".chart__legend-label {");
+        assert!(label.contains("text-overflow: ellipsis"), "{label}");
+        assert!(label.contains("white-space: nowrap"), "{label}");
+
+        // 反向断言：SVG 内置图例必须关掉，否则会和自绘图例同时出现
+        let source = include_str!("chart.rs");
+        assert!(
+            source.contains("chart.legend_show = Some(false)"),
+            "charts-rs 自带的图例必须关掉（它的量宽与页面字体不一致）"
+        );
     }
 
     #[test]
