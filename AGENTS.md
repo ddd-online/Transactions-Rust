@@ -331,6 +331,18 @@ cargo clippy --all-targets -- -D warnings
   所以必须显式排除非有限值（`[double]::IsInfinity/IsNaN` 四个分量都查一遍）；而且要轮询等真正渲染出来的
   那个出现，不要固定 sleep 后取第一个同名元素——命中的很可能是页面里没显示、格子却还挂在树上的另一个
   日期选择器，点它当然毫无反应。
+- **确认/保存键按"类名"定位，别按名字取最后一个**（真实缺陷：`ui-crud` 的分类/标签/图表/事件/模板
+  删除断言整段连坐变红）。原因是三类按钮的**可访问名都含「删除」**，而 UIA 树里还会留下陈旧/幽灵节点，
+  "取同名里最后一个"经常拿到错的那个（点了毫无反应）：
+  | 位置 | 类名 |
+  |---|---|
+  | 行内图标按钮（列表行右侧） | `ui-icon-btn--danger` |
+  | 弹窗底栏确认键（`ok_danger=true`） | `ui-btn--primary-danger` |
+  | 气泡（`Popconfirm`）确认键 | `ui-btn--primary` |
+  所以 `fixtures/ui-crud.ps1` 用 `Find-ConfirmButton -ClassPart <类名>`（+ 可见、矩形有效、
+  取最靠下/最靠右），并**用 `Wait-ConfirmButton` 轮询等它出现** —— 点完行内按钮只 `sleep` 一次就查，
+  会偶发查不到（实测同一脚本两次里红一次；`Show` 挂载 + Chromium 惰性建树都要时间）。
+  只断言"页面存在叫『删除』的元素"是无效断言：行内那颗按钮就叫这个名字，条件恒真。
 - **浮层里的按钮别拿 `IsOffscreen` 当判据**（真实假红：`ui-crud` 的「删除图表」气泡确认、
   `ui-transactions` 排序弹窗的「应用」）：弹窗/气泡是 portal 出去的浮层节点，UIA 可见性不稳
   （有时报 `IsOffscreen=true`），而重渲染留下的幽灵节点反而报 `false`。两条正解：① 按名字取可见且在
@@ -392,6 +404,12 @@ cargo clippy --all-targets -- -D warnings
   但那时 `$Workspace` 已经非空，条件恒为 false → 永远不重新播种。断言"持仓数量"这类绝对状态时必须每次
   重新播种，否则上一轮的持仓会叠加（实测 300 股变 600 股，后面全崩）。做法：函数开头先
   `$explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)`。
+  **`ui-crud` 就中过这条**（第二次）：它只在"库文件不存在"时才播种，于是失败运行留下的
+  `UIA分类*` 越积越多（实测 6 条）；下拉里出现多个**同名**分类后，脚本按名字点到了陈旧节点，
+  表单里"分类"其实是空的 → 保存被「分类不能为空」拦住 → `库里出现新模板` 变红。
+  更早那批"删除断言整段变红"也是同一批残留引起的连锁反应。判据改成
+  `if (-not $explicitWorkspace) { Remove-Item $ws -Recurse -Force }` 之后，连跑三次全绿。
+  教训：**"脏基线"会让断言以完全无关的面目变红** —— 看到奇怪的连坐失败，先确认工作空间是不是新的。
 - **托盘图标能抓到，但浮出面板太"脆"，所以没做成常驻护栏**：Win11 下我们的托盘图标在
   `TopLevelWindowForOverflowXamlIsland`（名字「系统托盘溢出窗口」）里，是一个 `Button`，
   `Name='Transactions'`；点任务栏的「显示隐藏的图标」按钮能把它弹出来，右键会开一个 `#32768` 菜单。

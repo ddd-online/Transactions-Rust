@@ -22,6 +22,9 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
 
 $repo = Split-Path -Parent $PSScriptRoot
+# **必须在这里先记下**"调用方是否显式给了 -Workspace"：下面马上会给它赋默认值，
+# 之后再判断就恒为"给了"，于是永远不重新播种（AGENTS.md 里记过的坑）。
+$explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
 if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\crud-smoke\home' }
 if (-not $OutDir) { $OutDir = Join-Path $repo 'target\crud-smoke' }
@@ -39,6 +42,43 @@ $ws = [System.IO.Path]::GetFullPath($Workspace)
 # 公共鼠标 P/Invoke 类（TrCrud）已统一到 fixtures/lib/TrUia.ps1 的 TrUia（调用点是 [TrUia]::…）
 
 $failures = New-Object System.Collections.Generic.List[string]
+
+# 删除确认浮层的**主按钮**：弹窗底栏的确认键带 `ui-btn--primary-danger`
+# （`Modal` 的 `ok_danger=true`），气泡里的「删除」是文本按钮 —— 两者类名不同，
+# 所以按类名定位比"按名字取最后一个"可靠得多。
+#
+# 为什么必须换掉"取最后一个叫『删除』的元素"：页面上的行内删除按钮也叫「删除」，
+# 而 UIA 树里会留下**陈旧/幽灵节点**，取到的那一个未必是浮层里的（实测整段删除断言
+# 因此连坐变红）。按类名 + 可见性 + 在窗口内筛，才是"真的点了浮层那颗按钮"。
+function Find-ConfirmButton { param($Window, [string]$ClassPart = 'ui-btn--primary-danger')
+    $best = $null
+    foreach ($element in @(Get-Elements $Window)) {
+        if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+        if ($element.Current.ClassName -notlike "*$ClassPart*") { continue }
+        if ($element.Current.IsOffscreen) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if ($rect.Width -le 0) { continue }
+        # 浮层在 DOM 末尾、确认键在同一行末尾：取最靠下（其次最靠右）的那个
+        if (-not $best) { $best = $element; continue }
+        $bestRect = $best.Current.BoundingRectangle
+        if ($rect.Y -gt $bestRect.Y -or ($rect.Y -eq $bestRect.Y -and $rect.X -gt $bestRect.X)) {
+            $best = $element
+        }
+    }
+    return $best
+}
+
+# 等浮层的主按钮出现：`Show` 挂载 + Chromium 惰性建 UIA 树都需要时间，
+# 点完行内「删除」只 sleep 一次就查，会偶发查不到（实测同一脚本两次里红一次）。
+function Wait-ConfirmButton { param($Window, [string]$ClassPart = 'ui-btn--primary-danger', [int]$TimeoutSec = 12)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $found = Find-ConfirmButton -Window $Window -ClassPart $ClassPart
+        if ($found) { return $found }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
 
 function Wait-ElementLike { param($Root, [string]$Pattern, [int]$TimeoutSec = 15)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -210,8 +250,16 @@ function Invoke-ModalPrimaryButton { param($Window)
 }
 
 # ---- 播种（每次重新播种，保证"新增/删除"是干净的基线）----
-if (-not $Workspace -or -not (Test-Path (Join-Path $ws 'transactions.db'))) {
+#
+# ⚠ 判据必须用**开头记下的 `$explicitWorkspace`**，不能写成 `-not $Workspace` ——
+# 那时的 `$Workspace` 早就被赋过默认值了，条件恒为真/假，结果就是"库文件在就再也不播种"。
+# 这曾让 `UIA分类*/UIA标签*/UIA模板*` 这类残留跨轮累积，下拉里同名项变多之后
+# 脚本按名字点到了陈旧节点 → 表单里"分类"其实是空的 → 保存被「分类不能为空」拦住
+# （实测现象：模板建不出来；更早还表现为删除断言连坐变红）。
+if (-not $explicitWorkspace) {
     if (Test-Path $ws) { Remove-Item $ws -Recurse -Force }
+}
+if (-not (Test-Path (Join-Path $ws 'transactions.db'))) {
     Push-Location $repo
     & cargo -q xtask seed $ws *> (Join-Path $OutDir 'seed.log')
     $seedExit = $LASTEXITCODE
@@ -279,9 +327,13 @@ try {
     if ($deleteButton) {
         Click-Element $deleteButton | Out-Null
         Start-Sleep -Milliseconds 1200
-        # 删除分类是**弹窗**（标题「删除分类」，确认按钮「删除」）
-        $modalDelete = Find-All $window '删除'
-        if ($modalDelete.Count -gt 0) { Invoke-Element $modalDelete[$modalDelete.Count - 1] | Out-Null }
+        # 删除分类是**弹窗**（标题「删除分类」，确认按钮「删除」）。
+        # 确认键按**类名**定位：弹窗底栏是 `ui-btn--primary-danger`，行内那颗是
+        # `ui-icon-btn--danger`，气泡里的确认键是 `ui-btn--primary` —— 三者可访问名都含「删除」，
+        # 只按名字取"最后一个"会认错（实测整段删除断言因此连坐变红）。
+        $modalDelete = Wait-ConfirmButton -Window $window
+        Assert-True ([bool]$modalDelete) '找到弹窗的确认「删除」按钮'
+        if ($modalDelete) { Invoke-Element $modalDelete | Out-Null }
         Start-Sleep -Seconds 3
     }
     $gone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_category' -OutDir $OutDir | Where-Object { $_.name -eq $categoryName })
@@ -310,8 +362,9 @@ try {
     if ($tagDeleteButton) {
         Click-Element $tagDeleteButton | Out-Null
         Start-Sleep -Milliseconds 1200
-        $modalButtons = Find-All $window '删除'
-        if ($modalButtons.Count -gt 0) { Invoke-Element $modalButtons[$modalButtons.Count - 1] | Out-Null }
+        $modalButtons = Wait-ConfirmButton -Window $window
+        Assert-True ([bool]$modalButtons) '找到标签删除弹窗的确认按钮'
+        if ($modalButtons) { Invoke-Element $modalButtons | Out-Null }
         Start-Sleep -Seconds 3
     }
     $tagGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_tag' -OutDir $OutDir | Where-Object { $_.name -eq $tagName })
@@ -431,11 +484,9 @@ try {
         $modalTitle = Wait-ElementLike -Root $window -Pattern "删除事件「$eventTitle」" -TimeoutSec 10
         Assert-True ([bool]$modalTitle) '弹出「删除事件」二次确认弹窗'
         Start-Sleep -Milliseconds 600
-        $confirmButton = Find-All $window '删除'
-        Assert-True ($confirmButton.Count -gt 0) '弹窗上有「删除」按钮'
-        if ($confirmButton.Count -gt 0) {
-            Invoke-Element $confirmButton[$confirmButton.Count - 1] | Out-Null
-        }
+        $confirmButton = Wait-ConfirmButton -Window $window
+        Assert-True ([bool]$confirmButton) '弹窗上有确认「删除」按钮（ui-btn--primary-danger）'
+        if ($confirmButton) { Invoke-Element $confirmButton | Out-Null }
         Start-Sleep -Seconds 3
     }
     $eventGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir | Where-Object { $_.date -eq $eventDate })
@@ -476,8 +527,15 @@ try {
         if ($templateDelete) {
             Click-Element $templateDelete | Out-Null
             Start-Sleep -Milliseconds 1200
-            $templateConfirm = Find-All $window '删除'
-            if ($templateConfirm.Count -gt 0) { Invoke-Element $templateConfirm[$templateConfirm.Count - 1] | Out-Null }
+            # 模板删除的二次确认是**气泡**（`Popconfirm`），确认键是 `ui-btn--primary`（不带 danger）；
+            # 事件/分类/标签那三处是**弹窗**，确认键带 `ui-btn--primary-danger`。
+            # 所以先按弹窗找，找不到再按气泡的类名找 —— 两边都比"按名字取最后一个"精确。
+            $templateConfirm = Wait-ConfirmButton -Window $window
+            if (-not $templateConfirm) {
+                $templateConfirm = Wait-ConfirmButton -Window $window -ClassPart 'ui-btn--primary'
+            }
+            Assert-True ([bool]$templateConfirm) '找到模板删除确认浮层的确认按钮'
+            if ($templateConfirm) { Invoke-Element $templateConfirm | Out-Null }
             Start-Sleep -Seconds 3
         }
         $templateGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_tpl' -OutDir $OutDir | Where-Object { $_.template_name -eq $templateName })
