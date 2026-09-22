@@ -211,9 +211,24 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// 是否有统计请求在飞行中（跨视图重建保留）
     static STATS_LOADING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// 标签下拉的选项（跨视图重建保留，否则每次重建都要重新拉一次）
+    static STATS_TAGS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// **已经为哪个账本初始化过**。
+    ///
+    /// 必须有它：`统计` 视图每次重建都会把里面那个 Effect **重新创建**，而 Effect 自己的
+    /// `prev` 参数是新建的、每次都从 `None` 开始 —— 用 `prev` 判断"账本有没有换"
+    /// 等于每次重建都判定为"换了"，于是重跑：清缓存 → 重新拉标签 → 写 `tags` →
+    /// 上层视图重渲染 → 再重建 → **自激循环**。
+    /// 实测：统计页每秒重渲染 30+ 次，每轮都重建整块图表 SVG、**入场动画不断重播**，
+    /// 用户看到的就是"曲线一直在闪"（闪的是动画起点那一段）。
+    static STATS_LEDGER: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
 }
 
 /// 切账本时清掉统计缓存与去重状态（否则新账本会看到上一个账本的数据/被旧键挡住）。
+///
+/// 注意**不清 `STATS_LEDGER`**：它由下面那个 Effect 负责推进，两边都动会互相抵消。
 fn reset_stats_cache() {
     STATS_DEDUPE.with(|state| {
         let mut state = state.borrow_mut();
@@ -222,6 +237,7 @@ fn reset_stats_cache() {
     });
     STATS_DATA.with(|data| *data.borrow_mut() = None);
     STATS_LOADING.with(|loading| loading.set(false));
+    STATS_TAGS.with(|tags| tags.borrow_mut().clear());
 }
 
 /// 这次统计请求要不要真的发出去（纯函数，便于单测）。
@@ -3350,7 +3366,9 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     // 旁边那个下拉选不动的来源）。这里单独建一个、并在 `recent` 被重置时同步。
     let recent_signal = RwSignal::new(recent.get_untracked().to_string());
     let tag_filter = RwSignal::new(String::new());
-    let tags = RwSignal::new(Vec::<String>::new());
+    // 选项从**模块级缓存**起手：视图重建（切子功能再切回来）时下拉不会空掉，
+    // 也就不必为了填它而重新拉一次标签（那次重新拉正是过去自激循环的一环）。
+    let tags = RwSignal::new(STATS_TAGS.with(|tags| tags.borrow().clone()));
 
     let apply_filter = move |force: bool| {
         let ledger_id = stores.current_ledger_id.get_untracked();
@@ -3411,17 +3429,49 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
         }
         leptos::task::spawn_local(async move {
             if let Ok(data) = api::stock::tag_settings_get(&ledger_id).await {
-                tags.set(data.tags);
+                // 落到模块级缓存（跨重建保留）+ **只在真的变了时写信号**：
+                // `RwSignal::set` 同值也会通知，而 `tags` 被上层视图同步读着
+                // （`Select.options` 要的是 `Vec`，调用方只能 `.get()`），
+                // 于是"同值也通知"会变成一次上层重建 —— 那正是自激循环的燃料。
+                let changed = STATS_TAGS.with(|slot| {
+                    let mut slot = slot.borrow_mut();
+                    if *slot == data.tags {
+                        false
+                    } else {
+                        *slot = data.tags.clone();
+                        true
+                    }
+                });
+                if changed {
+                    tags.set(data.tags);
+                }
             }
         });
     };
 
-    Effect::new(move |prev: Option<String>| {
+    // 账本变化才重新初始化。判据是**模块级**的"已初始化账本"（不能用 Effect 自己的
+    // `prev`：视图重建会重新创建这个 Effect，`prev` 每次都从 `None` 起步 —— 详见
+    // `STATS_LEDGER` 的注释，那正是"曲线一直在闪"的根因）。
+    Effect::new(move |_| {
         let ledger_id = stores.current_ledger_id.get();
-        if prev.as_deref() == Some(ledger_id.as_str()) {
-            return ledger_id;
+        let switched = STATS_LEDGER.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if *slot == ledger_id {
+                return false;
+            }
+            slot.clear();
+            slot.push_str(&ledger_id);
+            true
+        });
+        if !switched {
+            // 视图重建（不是账本切换）：把**模块级缓存**同步回本次的信号。
+            // 否则上一份 invocation 的飞行结果会落在已销毁的信号上，本次永远停在空态。
+            stats.set(STATS_DATA.with(|data| data.borrow().clone()));
+            loading.set(STATS_LOADING.with(|flag| flag.get()));
+            tags.set(STATS_TAGS.with(|tags| tags.borrow().clone()));
+            return;
         }
-        // 账本切换：清掉统计去重状态，否则新账本会被上一个账本的请求键挡住
+        // 账本切换（或首次进入）：清掉上一个账本的缓存
         reset_stats_cache();
         // 账本切换时重置筛选
         filter_mode.set("all".to_string());
@@ -3432,11 +3482,10 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
         tag_filter.set(String::new());
         if ledger_id.is_empty() {
             stats.set(None);
-            return ledger_id;
+            return;
         }
         load_tags();
         apply_filter(false);
-        ledger_id
     });
 
     let is_filtered = move || {
@@ -3495,19 +3544,25 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                     </div>
                 </Show>
                 <div class="stock-statistics__tag">
-                    <Select
-                        value=tag_filter
-                        options=Signal::derive(move || {
-                            let mut options = vec![SelectOption::new("", "全部标签")];
-                            options.extend(tags.get().into_iter().map(SelectOption::same));
-                            options
-                        })
-                        .get()
-                        on_change=UnsyncCallback::new(move |value: String| {
-                            tag_filter.set(value);
-                            apply_filter(false);
-                        })
-                    />
+                    // **选项必须在自己的动态块里读**：`Select.options` 是 `Vec`（不是信号），
+                    // 调用方只能 `.get()` —— 若直接在工具栏里同步读 `tags`，就把它记成了
+                    // **上层视图的依赖**，于是"标签列表一变 → 整个统计子视图重建 → 图表 SVG 重建
+                    // → 入场动画重播"，而且重建会把飞行中的统计请求结果写进已销毁的信号。
+                    // 放进这个 `move ||` 之后，`tags` 只由这一小块负责，重建范围仅限这个下拉。
+                    {move || {
+                        let mut options = vec![SelectOption::new("", "全部标签")];
+                        options.extend(tags.get().into_iter().map(SelectOption::same));
+                        view! {
+                            <Select
+                                value=tag_filter
+                                options=options
+                                on_change=UnsyncCallback::new(move |value: String| {
+                                    tag_filter.set(value);
+                                    apply_filter(false);
+                                })
+                            />
+                        }
+                    }}
                 </div>
             </div>
         </div>
