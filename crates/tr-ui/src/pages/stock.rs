@@ -199,31 +199,35 @@ struct ImpactPrompt {
 
 // ==================================================================== 页面外壳
 
-// 统计请求去重：`(已请求过的键, 正在飞行中的键)`。
-//
-// **必须放在模块级**（thread_local）而不是组件信号里：统计视图是普通函数，
-// 父级每次重渲染都会重新调用它、把函数体里的信号重建一遍 ——
-// 用信号做去重等于每轮都从空开始，挡不住任何东西（实测同一份筛选仍发了上千次请求）。
+// 统计视图是**普通函数**（不是组件）：父级每次重渲染都会重新调用它，函数体里的信号
+// 跟着重建 —— 所以"数据/加载中/去重状态"都**不能放在组件信号里**，必须放模块级，
+// 否则新挂载的那份看到的永远是空的（实测：去重挡住了请求风暴，页面却仍停在
+// 「正在加载」/「暂无统计」，因为回来的数据写进了**上一份**已经被丢掉的信号）。
 thread_local! {
     static STATS_DEDUPE: std::cell::RefCell<(String, Option<String>)> =
         const { std::cell::RefCell::new((String::new(), None)) };
+    /// 最近一次成功取到的统计（跨视图重建保留）
+    static STATS_DATA: std::cell::RefCell<Option<StockStatisticsDto>> =
+        const { std::cell::RefCell::new(None) };
+    /// 是否有统计请求在飞行中（跨视图重建保留）
+    static STATS_LOADING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// 切账本时清掉统计去重状态（否则新账本会被上一个账本的键挡住、永远不刷新）。
-fn reset_stats_dedupe() {
+/// 切账本时清掉统计缓存与去重状态（否则新账本会看到上一个账本的数据/被旧键挡住）。
+fn reset_stats_cache() {
     STATS_DEDUPE.with(|state| {
         let mut state = state.borrow_mut();
         state.0.clear();
         state.1 = None;
     });
+    STATS_DATA.with(|data| *data.borrow_mut() = None);
+    STATS_LOADING.with(|loading| loading.set(false));
 }
 
 /// 这次统计请求要不要真的发出去（纯函数，便于单测）。
 ///
 /// 返回 `true` 表示"发"，并把 `in_flight` 置为当前键；同一份键**已经请求过**、
-/// 或**正在飞行中**时返回 `false`。飞行中也要挡：统计视图会被反复重建，
-/// 每次重建都会触发一次请求 —— 挡住之后才不会把后端刷爆（实测几秒内上千次），
-/// 页面也就不会卡在「正在加载」。
+/// 或**正在飞行中**时返回 `false`。
 fn stats_request_needed(state: &mut (String, Option<String>), key: &str, force: bool) -> bool {
     if force || (state.0 != key && state.1.as_deref() != Some(key)) {
         state.0 = key.to_string();
@@ -3333,8 +3337,8 @@ impl Metric {
 /// 都渲染 —— 否则空态会把筛选入口一起藏掉。
 fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
-    let stats = RwSignal::new(Option::<StockStatisticsDto>::None);
-    let loading = RwSignal::new(false);
+    let stats = RwSignal::new(STATS_DATA.with(|data| data.borrow().clone()));
+    let loading = RwSignal::new(STATS_LOADING.with(|loading| loading.get()));
     let metric = RwSignal::new(Metric::TotalPnl.label().to_string());
     let filter_mode = RwSignal::new("all".to_string());
     let range_start = RwSignal::new(String::new());
@@ -3371,15 +3375,21 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             return;
         }
         loading.set(true);
+        STATS_LOADING.with(|flag| flag.set(true));
         leptos::task::spawn_local(async move {
             match api::stock::statistics(&ledger_id, &start_month, &end_month, recent_value, &tag)
                 .await
             {
-                Ok(data) => stats.set(Some(data)),
+                Ok(data) => {
+                    // 数据落到**模块级缓存**：视图被重建后新挂载的那份也能拿到
+                    STATS_DATA.with(|slot| *slot.borrow_mut() = Some(data.clone()));
+                    stats.set(Some(data));
+                }
                 Err(error) => notify_error("查询交易统计失败", &error),
             }
             // 飞行结束：把 in_flight 清掉（键保留，重复触发仍然不会再发）
             STATS_DEDUPE.with(|state| state.borrow_mut().1 = None);
+            STATS_LOADING.with(|flag| flag.set(false));
             loading.set(false);
         });
     };
@@ -3402,7 +3412,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             return ledger_id;
         }
         // 账本切换：清掉统计去重状态，否则新账本会被上一个账本的请求键挡住
-        reset_stats_dedupe();
+        reset_stats_cache();
         // 账本切换时重置筛选
         filter_mode.set("all".to_string());
         range_start.set(String::new());
