@@ -3344,6 +3344,11 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     let range_start = RwSignal::new(String::new());
     let range_end = RwSignal::new(String::new());
     let recent = RwSignal::new(0_i64);
+    // 「最近 N 笔」下拉的绑定值：**必须建在组件体里**。
+    // 之前写成 `value=RwSignal::new(recent.get().to_string())` —— 那是"把信号建在 props 里"，
+    // 视图每重渲染一次就新建一个、值回到初始的 `0`，选中项立刻被弹回去（就是"刷新按钮异常"
+    // 旁边那个下拉选不动的来源）。这里单独建一个、并在 `recent` 被重置时同步。
+    let recent_signal = RwSignal::new(recent.get_untracked().to_string());
     let tag_filter = RwSignal::new(String::new());
     let tags = RwSignal::new(Vec::<String>::new());
 
@@ -3385,7 +3390,12 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                     STATS_DATA.with(|slot| *slot.borrow_mut() = Some(data.clone()));
                     stats.set(Some(data));
                 }
-                Err(error) => notify_error("查询交易统计失败", &error),
+                Err(error) => {
+                    notify_error("查询交易统计失败", &error);
+                    // 失败时把去重键也清掉：没有「刷新」按钮了，失败后总得让下一次筛选
+                    // （或重新进入本页）能再试一次，不能因为"已经请求过"就永远不再发。
+                    STATS_DEDUPE.with(|state| state.borrow_mut().0.clear());
+                }
             }
             // 飞行结束：把 in_flight 清掉（键保留，重复触发仍然不会再发）
             STATS_DEDUPE.with(|state| state.borrow_mut().1 = None);
@@ -3418,6 +3428,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
         range_start.set(String::new());
         range_end.set(String::new());
         recent.set(0);
+        recent_signal.set(String::new());
         tag_filter.set(String::new());
         if ledger_id.is_empty() {
             stats.set(None);
@@ -3455,6 +3466,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                         filter_mode.set(next.clone());
                         if next == "recent" && recent.get_untracked() == 0 {
                             recent.set(10);
+                            recent_signal.set("10".to_string());
                         }
                         apply_filter(false);
                     })
@@ -3469,7 +3481,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                 <Show when=move || filter_mode.get() == "recent">
                     <div class="stock-statistics__recent">
                         <Select
-                            value=RwSignal::new(recent.get().to_string())
+                            value=recent_signal
                             options=vec![
                                 SelectOption::new("10", "最近 10 笔"),
                                 SelectOption::new("50", "最近 50 笔"),
@@ -3491,21 +3503,12 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                             options
                         })
                         .get()
-                        on_change=UnsyncCallback::new(move |_value: String| {
+                        on_change=UnsyncCallback::new(move |value: String| {
+                            tag_filter.set(value);
                             apply_filter(false);
                         })
                     />
                 </div>
-            </div>
-            // `.stock-toolbar__end` = `margin-left: auto`：把刷新顶到右边，且**不被压缩**
-            <div class="stock-toolbar__end">
-                <Button
-                    variant=ButtonVariant::Primary
-                    loading=Signal::derive(move || loading.get())
-                    on_click=move |_| apply_filter(true)
-                >
-                    "刷新"
-                </Button>
             </div>
         </div>
     }

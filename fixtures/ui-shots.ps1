@@ -72,7 +72,7 @@ $subPages = [ordered]@{
 $subMarkers = [ordered]@{
     '记账-记录' = '记一笔'; '记账-分析' = '新增图表'; '记账-标签' = '新增分类'; '记账-模板' = '新建模板'
     '股票-账户' = '追加本金'; '股票-持仓' = '建仓'; '股票-记录' = '已实现盈亏'
-    '股票-统计' = '刷新'; '股票-设置' = '交易费用设置'
+    '股票-统计' = '全部标签'; '股票-设置' = '交易费用设置'
 }
 $failures = New-Object System.Collections.Generic.List[string]
 $rows = New-Object System.Collections.Generic.List[object]
