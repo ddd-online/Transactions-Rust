@@ -4,7 +4,7 @@
 
 记账数据放在你自己选的本地工作空间里，一个工作空间就是一个 SQLite 数据库。没有云端账户，也没有常驻后台。
 
-本文档描述 **0.3.0**。
+本文档描述 **0.4.0**。
 
 ## 功能
 
@@ -48,7 +48,7 @@ fixtures/            # schema 基线、端到端脚本（**不含任何真实个
 ## 下载安装
 
 到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载
-`Transactions-x64-v0.3.0.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
+`Transactions-x64-v0.4.0.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
 
 首次启动会让你选一个工作空间目录。空目录按当前 schema 建库，当前格式的目录直接打开，更早格式的目录会在打开时自动升级，升级前先备份。
 应用内「设置 → 关于软件」检查本仓库的 Release，有新版本可以下载，装之前校验 `sha256`。
@@ -70,7 +70,7 @@ cargo tauri dev
 pwsh -File build/build.ps1
 ```
 
-产物：`build\target\Transactions-x64-v0.3.0.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
+产物：`build\target\Transactions-x64-v0.4.0.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
 发布流程：`build/clean.ps1` → `build/build.ps1` → `build/release.ps1`（`gh release create` + 上传安装包）。
 版本号唯一来源是 `src-tauri/tauri.conf.json`。
 
