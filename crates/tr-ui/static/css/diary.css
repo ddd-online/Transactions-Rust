@@ -200,7 +200,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: var(--transactions-space-lg);
+  /* 上下**对称**：日期行是这一栏的第一行，只有下内边距时它会贴住工具栏底边，
+   * 而自己下方却空出 16px —— 内容看着"顶在上沿"、上间距也像丢了。
+   * 上下各一份之后，日期行落在自己这条带的垂直中线上。
+   * （`6ee7bb7` 把内容容器顶部内边距统一成 0 是为了各页与工具栏顶对齐；
+   *   这一栏的第一行是**标题行**而不是内容，所以在这里按需要把它补回来。） */
+  padding: var(--transactions-space-lg) 0;
   border-bottom: 1px solid var(--transactions-color-divider);
   flex-shrink: 0;
 }
