@@ -767,6 +767,15 @@ fn display_value(value: i64, kind: ChartValueKind) -> f32 {
 /// 从 DOM 量回来的数据点（每个序列一组 `(颜色, x, y)`，像素相对画布左上角）。
 type MeasuredPoints = Vec<Vec<(String, f64, f64)>>;
 
+/// 这个 `<g>` 分组算不算"一条可用的序列"（判定抽成纯函数，便于单测）。
+///
+/// ⚠ **不能要求至少两个圆**：只有一个类目时每个序列只有一个数据点、只有一个 `<circle>`，
+/// 按"< 2 就跳过"会把整条序列丢掉 → 几何为空 → tooltip 永远不显示
+/// （实测缺陷：「只有一组数据时图表上的 tooltip 不显示」）。非空即可。
+fn group_is_series(paths: usize, circles: usize) -> bool {
+    paths > 0 && circles > 0
+}
+
 /// 叠层几何：DOM 量回来的像素坐标 + 组件自己知道的数据。
 #[derive(Debug, Clone, Default)]
 pub struct ChartGeometry {
@@ -922,7 +931,8 @@ fn read_points(canvas: Option<web_sys::HtmlDivElement>) -> Option<MeasuredPoints
         let Ok(circles) = group.query_selector_all("circle") else {
             continue;
         };
-        if paths.length() == 0 || circles.length() < 2 {
+        // ⚠ 判定见 `group_is_series`：只有一个类目时也只有一个圆，不能当成"没量到"。
+        if !group_is_series(paths.length() as usize, circles.length() as usize) {
             continue;
         }
         let color = paths
@@ -1454,6 +1464,41 @@ mod tests {
             source.contains("chart.legend_show = Some(false)"),
             "charts-rs 自带的图例必须关掉（它的量宽与页面字体不一致）"
         );
+    }
+
+    /// 只有一组数据时，tooltip 也必须能出来（实测缺陷：单点图 hover 没反应）。
+    ///
+    /// 根因是"每个序列至少两个圆才算序列"那条判定把单点序列整条丢掉了。
+    #[test]
+    fn single_point_series_still_yields_geometry() {
+        // 判定本身：一个圆也算序列
+        assert!(group_is_series(1, 1), "单点序列必须被收下");
+        assert!(!group_is_series(1, 0), "没有数据点的分组才算无效");
+        assert!(!group_is_series(0, 1), "没有路径的分组算无效");
+
+        // 单点几何：3 个序列各 1 个点、同一个类目
+        let points: MeasuredPoints = vec![
+            vec![("#DC2626".to_string(), 100.0, 40.0)],
+            vec![("#16A34A".to_string(), 100.0, 55.0)],
+            vec![("#3964FE".to_string(), 100.0, 90.0)],
+        ];
+        let categories = vec!["2022-04".to_string()];
+        let series = vec![
+            ChartSeries::new("支出", "#DC2626", vec![10_400]),
+            ChartSeries::new("收入", "#16A34A", vec![8_000]),
+            ChartSeries::new("转账", "#3964FE", vec![0]),
+        ];
+        let geometry = ChartGeometry::assemble(points, &categories, &series, ChartValueKind::Money);
+
+        assert_eq!(geometry.xs, vec![100.0], "单类目也要有一个 x");
+        assert_eq!(geometry.categories.len(), 1);
+        // tooltip 的内容来自 `rows_at`：单点上三个序列都要在
+        let rows = geometry.rows_at(0);
+        assert_eq!(rows.len(), 3, "三个序列都应出现在 tooltip 里");
+        assert!(rows.iter().any(|(label, _, _)| label == "支出"));
+        // 命中：鼠标落在那个点上（唯一类目）
+        assert_eq!(hit_index(&geometry, 100.0), Some(0));
+        assert_eq!(hit_index(&geometry, 40.0), Some(0), "唯一类目怎么指都是它");
     }
 
     #[test]
