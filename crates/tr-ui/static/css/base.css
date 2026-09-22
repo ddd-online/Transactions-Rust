@@ -470,15 +470,22 @@ textarea,
   padding-top: var(--transactions-space-xl);
 }
 
-/* 页面标题：**不留下外边距** —— 标题与工具栏之间的间距统一由 `.page-header` 给
- * （原来这里还有 16px，和 `.page-header` 的间距叠加，中间会空出 24px） */
+/* 页面标题 = 标题栏（`.page-header`）里的**居中小字**，文案 `Transactions-记账`。
+ *
+ * 它是"窗口标题"性质的处所标签，不是页面大标题：页面身份由侧栏当前项与子功能
+ * 图标条给出，这里只留一行安静的说明，不与内容抢注意力（弱化色 + caption 档）。
+ * 居中由 `.page-header` 的左右等宽内边距保证，这里不参与定位。
+ * 窄窗口里宁可省略号收尾，也不让长标题把右上角的窗口三键顶开。 */
 .page-title {
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-display-sm);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
   font-weight: 500;
-  color: var(--transactions-color-text-major);
+  color: var(--transactions-color-text-secondary);
   margin: 0;
-  letter-spacing: -0.01em;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 区块标题行 */
