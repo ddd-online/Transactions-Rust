@@ -6,6 +6,7 @@
 //! | `update_download` | [`UpdateDownloadRequest`]（`url` + 可选 `digest`） | [`UpdateResponse`] |
 //! | `update_install` | **无 `req` 形参** | [`UpdateResponse`] |
 //! | `update_cancel` | **无 `req` 形参** | `()` |
+//! | `update_download_status` | **无 `req` 形参** | [`UpdateDownloadStatus`]（恢复下载状态用） |
 //!
 //! 三个事件（名字与后端逐字一致）：
 //! * [`EVENT_DOWNLOAD_PROGRESS`] `update:download-progress` → [`UpdateProgress`]
@@ -94,6 +95,23 @@ pub struct UpdateError {
     pub message: String,
 }
 
+/// `update_download_status` 的返回：界面（重新）进入「关于软件」时恢复下载状态。
+///
+/// 下载是**单例**（一次只有一笔，跑在外壳的线程里），界面进来时先问一次当前状态，
+/// 这样切换页面回来、甚至重开界面，都能接着显示进度而不是回到"未下载"。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct UpdateDownloadStatus {
+    /// 是否有下载正在跑
+    pub active: bool,
+    /// 已经下载好、等待安装
+    pub downloaded: bool,
+    /// 最近一次上报的百分比
+    pub percent: u32,
+    /// 最近一次上报的速度串
+    pub speed: String,
+}
+
 #[derive(Debug, Serialize)]
 struct DownloadRequest {
     url: String,
@@ -126,6 +144,11 @@ pub async fn download(url: &str, digest: &str) -> Result<UpdateResponse, IpcErro
 /// 打开已下载的安装包并退出应用（**无 `req` 形参**）。
 pub async fn install() -> Result<UpdateResponse, IpcError> {
     ipc::call_no_args("update_install").await
+}
+
+/// 当前下载状态（**无 `req` 形参**）：界面进入「关于软件」时用它恢复进度。
+pub async fn download_status() -> Result<UpdateDownloadStatus, IpcError> {
+    ipc::call_no_args("update_download_status").await
 }
 
 /// 取消下载并清理临时文件（**无 `req` 形参**）。

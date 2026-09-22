@@ -1157,6 +1157,14 @@ impl UpdateState {
     }
 }
 
+thread_local! {
+    /// 本进程内是否已经**进过**「关于软件」。
+    ///
+    /// 首次进入要自动检查一次更新；之后每次进入只恢复下载状态（见 `AboutSetting` 的 Effect）——
+    /// 下载是外壳侧的单例任务，反复走 check 会把界面状态搅乱。
+    static ABOUT_ENTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// 关于软件：应用信息 + 更新检查 + 下载进度 + GitHub 链接。
 ///
 /// 只展示**应用名 / 版本 / GitHub / 版权行**：构建时间后端未提供
@@ -1225,12 +1233,50 @@ fn AboutSetting() -> impl IntoView {
         });
     };
 
-    // 挂载时自动检查一次
-    Effect::new(move |_: Option<()>| check_for_update());
+    // 挂载时自动检查一次。
+    //
+    // 但**第二次以后进入本页不再重新检查**，而是去问外壳"现在有没有下载在跑"：
+    // 下载是外壳侧的单例任务（切换页面/重建界面都不会中断它），
+    // 若这里照旧走一遍 check，正在下载的状态会被 `check_for_update` 的守卫挡住，
+    // 而**进度条**却会因为状态被重置而消失 —— 用户看到的就是"回来以后下载不见了"。
+    Effect::new(move |_: Option<()>| {
+        if ABOUT_ENTERED.with(|entered| entered.replace(true)) {
+            // 不是第一次进来：以**外壳的真实状态**为准恢复
+            leptos::task::spawn_local(async move {
+                match api::update::download_status().await {
+                    Ok(current) => {
+                        if current.active {
+                            status.set("downloading".to_string());
+                            download_percent.set(current.percent as f64);
+                            download_speed.set(current.speed);
+                        } else if current.downloaded {
+                            status.set("downloaded".to_string());
+                            download_percent.set(100.0);
+                        } else {
+                            // 没有下载在跑也没有下载好的文件 → 回到可更新的状态
+                            let known = status.get_untracked();
+                            if known == "downloading" || known == "downloaded" {
+                                status.set("available".to_string());
+                                download_percent.set(0.0);
+                                download_speed.set(String::new());
+                            }
+                        }
+                    }
+                    Err(error) => notify_error("读取下载状态", &error),
+                }
+            });
+            return;
+        }
+        check_for_update();
+    });
 
     let download_update = move || {
         let url = download_url.get_untracked();
         if url.is_empty() {
+            return;
+        }
+        // 单例：已经在下载就别再发一次（外壳侧也会拒绝，这里只是省一次往返）
+        if status.get_untracked() == "downloading" {
             return;
         }
         status.set("downloading".to_string());
@@ -1250,6 +1296,10 @@ fn AboutSetting() -> impl IntoView {
                         status.set("available".to_string());
                         download_percent.set(0.0);
                         download_speed.set(String::new());
+                    } else if response.error.as_deref() == Some("already_downloading") {
+                        // 外壳报告已有一笔在跑（例如刚切回本页又点了下载）：
+                        // 回到"下载中"，让进度事件继续驱动界面
+                        status.set("downloading".to_string());
                     } else {
                         let message = response.error.unwrap_or_else(|| "下载失败".to_string());
                         if status.get_untracked() != "error" {

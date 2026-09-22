@@ -66,6 +66,7 @@ pwsh -File fixtures/ui-link-event.ps1      [-Exe <exe>] [-Workspace <ws>] [-OutD
 pwsh -File fixtures/ui-proxy.ps1           [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 pwsh -File fixtures/ui-about.ps1           [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 pwsh -File fixtures/ui-features.ps1        [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+pwsh -File fixtures/ui-update-restore.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
 pwsh -File fixtures/migrate-workspace.ps1  [-Exe <exe>] [-OutDir <dir>]
 
 # 代码规范
@@ -134,6 +135,12 @@ cargo clippy --all-targets -- -D warnings
   开回来 → 侧栏恢复 + `features.diary=true` → 关掉再**重启**，断言侧栏仍然没有它（证明真的读了配置，
   不是只在内存里）。开关按钮是 `<button role="switch">`（UIA 带 `TogglePattern`），侧栏条目是带图标文字的
   普通按钮 —— 两边可访问名都可能叫「日记」，所以定位不能只看名字。
+- `ui-update-restore`：「关于软件」的**下载状态跨页面恢复**。下载是外壳侧的**单例任务**
+  （界面切走不会中断它），所以这条护栏在下载进行中切到「记账」再切回「关于软件」，
+  断言界面自己恢复了下载态（还在下载 → 出现「取消下载」；已下完 → 「安装并退出」），
+  并验证取消后回到「立即更新」。判据是固定文案，与 `settings.rs` 的状态分支一一对应。
+  ⚠ 它依赖真实 GitHub API：当前已是最新版时只验证检查链路（没有可下载的更新），
+  网络不通时会明确报红而不是静默跳过。
 
 工具链要求：rust stable 1.96.0 加 `wasm32-unknown-unknown` target。仓库故意不放 `rust-toolchain.toml`，
 因为指定具体版本会让 rustup 每次调用都校验并重装组件（实测会触发数百 MB 的重复下载），

@@ -16,7 +16,7 @@
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -44,10 +44,34 @@ const EVENT_COMPLETE: &str = "update:download-complete";
 const EVENT_ERROR: &str = "update:download-error";
 
 /// 更新流程的可变状态（由 Tauri 托管）。
-#[derive(Default)]
+///
+/// 下载是**单例**：`active` 非空表示正有一笔下载在跑（值是 `url|digest`），
+/// 同一时间只允许一笔。界面据此恢复进度（见 `update_download_status`）。
+///
+/// 字段内部再包一层 `Arc`：下载跑在 `spawn_blocking` 的闭包里（要求 `'static`），
+/// 需要把进度句柄**移动**进去，光有 `&UpdaterState` 是不够的。
+#[derive(Default, Clone)]
 pub struct UpdaterState {
     cancel: Arc<AtomicBool>,
-    downloaded_path: Mutex<Option<PathBuf>>,
+    downloaded_path: Arc<Mutex<Option<PathBuf>>>,
+    /// 正在下载的键（`url|digest`）；`None` = 没有下载在跑
+    active: Arc<Mutex<Option<String>>>,
+    /// 最近一次上报的进度百分比
+    percent: Arc<AtomicU32>,
+    /// 最近一次上报的速度文案
+    speed: Arc<Mutex<String>>,
+}
+
+/// `update_download_status` 的返回：界面用它恢复下载状态。
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpdateDownloadStatus {
+    /// 是否有下载正在跑
+    pub active: bool,
+    /// 已经下载好、正在等待安装（`%TEMP%` 里那份文件还在）
+    #[serde(rename = "downloaded")]
+    pub downloaded: bool,
+    pub percent: u32,
+    pub speed: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -241,10 +265,36 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
 }
 
 /// 下载并校验安装包（阻塞；由命令层放到工作线程执行）。
+///
+/// **单例**：同一时间只允许一笔下载。已有下载在跑时直接返回 `already_downloading`，
+/// 界面据此不重复触发。下载期间会更新 `UpdaterState` 的进度，供界面切回时恢复。
 #[tauri::command]
 pub async fn update_download(
     app: AppHandle,
     state: State<'_, UpdaterState>,
+    req: UpdateDownloadRequest,
+) -> ApiResult<UpdaterResponse> {
+    let key = request_key(&req.url, req.digest.as_deref());
+    {
+        let mut active = state.active.lock().expect("更新状态锁中毒");
+        if active.is_some() {
+            return Ok(UpdaterResponse::failed("already_downloading"));
+        }
+        *active = Some(key);
+    }
+
+    let result = run_download(&app, &state, req).await;
+    // 无论成败都要把"正在下载"清掉，否则会永远挡住下一次下载
+    *state.active.lock().expect("更新状态锁中毒") = None;
+    state.percent.store(0, Ordering::SeqCst);
+    state.speed.lock().expect("更新状态锁中毒").clear();
+    result
+}
+
+/// 真正执行下载（单例判断由 [`update_download`] 负责）。
+async fn run_download(
+    app: &AppHandle,
+    state: &State<'_, UpdaterState>,
     req: UpdateDownloadRequest,
 ) -> ApiResult<UpdaterResponse> {
     // URL 白名单：仅允许 GitHub 域名（防止界面被注入后下载任意地址）
@@ -261,8 +311,10 @@ pub async fn update_download(
     let app_handle = app.clone();
     let url = req.url.clone();
     let digest = req.digest.clone();
+    // 进度句柄：`UpdaterState` 的字段都是 `Arc`，clone 一份移动进阻塞线程
+    let progress = (**state).clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        download_and_verify(&app_handle, &url, digest.as_deref(), &cancel)
+        download_and_verify(&app_handle, &url, digest.as_deref(), &cancel, &progress)
     })
     .await
     .map_err(internal)?;
@@ -282,6 +334,29 @@ pub async fn update_download(
             Ok(UpdaterResponse::failed(message))
         }
     }
+}
+
+/// 当前下载状态：界面（重新）进入「关于软件」时调用它恢复进度。
+#[tauri::command]
+pub fn update_download_status(state: State<'_, UpdaterState>) -> ApiResult<UpdateDownloadStatus> {
+    let active = state.active.lock().expect("更新状态锁中毒").is_some();
+    let downloaded = state
+        .downloaded_path
+        .lock()
+        .expect("更新状态锁中毒")
+        .as_ref()
+        .is_some_and(|path| path.exists());
+    Ok(UpdateDownloadStatus {
+        active,
+        downloaded,
+        percent: state.percent.load(Ordering::SeqCst),
+        speed: state.speed.lock().expect("更新状态锁中毒").clone(),
+    })
+}
+
+/// 下载去重键：同一个地址 + 同一份 digest 视为同一次下载。
+fn request_key(url: &str, digest: Option<&str>) -> String {
+    format!("{url}|{}", digest.unwrap_or_default())
 }
 
 /// 用户主动取消：置位取消标记并清理临时文件。
@@ -338,6 +413,7 @@ fn download_and_verify(
     url: &str,
     expected_digest: Option<&str>,
     cancel: &AtomicBool,
+    progress: &UpdaterState,
 ) -> Result<PathBuf, String> {
     let file_name = url
         .rsplit('/')
@@ -411,6 +487,10 @@ fn download_and_verify(
         } else {
             "0 B/s".to_string()
         };
+        // 进度同时落到 `UpdaterState`：界面（重新）进入「关于软件」时
+        // 靠 `update_download_status` 立刻回显，不必等下一个事件（大文件时事件间隔可能很久）
+        progress.percent.store(percent, Ordering::SeqCst);
+        *progress.speed.lock().expect("更新状态锁中毒") = speed.clone();
         let _ = app.emit(
             EVENT_PROGRESS,
             serde_json::json!({
@@ -503,6 +583,92 @@ fn url_host(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 下载状态查询：**这是"切回「关于软件」能恢复进度"的判据**。
+    ///
+    /// 三种情况都要能如实报出来：没有下载、正在下载（带最近一次进度）、
+    /// 已下载但文件被清理掉了（此时不能再报"已下载"，否则用户点安装会拿到空文件）。
+    #[test]
+    fn download_status_reports_active_progress_and_missing_file() {
+        let state = UpdaterState::default();
+
+        // 没有任何下载：active/downloaded 都是 false
+        let idle = status_of(&state);
+        assert!(!idle.active);
+        assert!(!idle.downloaded);
+        assert_eq!((idle.percent, idle.speed.as_str()), (0, ""));
+
+        // 正在下载：active=true，并带上最近一次上报的进度
+        *state.active.lock().unwrap() =
+            Some(request_key("https://github.com/x.exe", Some("sha256:AB")));
+        state.percent.store(42, Ordering::SeqCst);
+        *state.speed.lock().unwrap() = "2.0 MB/s".to_string();
+        let running = status_of(&state);
+        assert!(running.active);
+        assert!(!running.downloaded);
+        assert_eq!((running.percent, running.speed.as_str()), (42, "2.0 MB/s"));
+
+        // 下载完成且文件还在 → downloaded=true
+        let file = std::env::temp_dir().join(format!(
+            "tr-updater-status-{}-{}.exe",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&file, b"payload").unwrap();
+        *state.active.lock().unwrap() = None;
+        *state.downloaded_path.lock().unwrap() = Some(file.clone());
+        let done = status_of(&state);
+        assert!(!done.active);
+        assert!(done.downloaded, "文件在、应报已下载");
+
+        // 文件被清理掉（`%TEMP%` 会被系统清理）→ 不能再报已下载
+        std::fs::remove_file(&file).unwrap();
+        let gone = status_of(&state);
+        assert!(!gone.downloaded, "文件不在、不能报已下载");
+    }
+
+    /// 把 `UpdaterState` 读成返回结构（与命令体同一套逻辑，避免测试里也抄一份）。
+    fn status_of(state: &UpdaterState) -> UpdateDownloadStatus {
+        let active = state.active.lock().unwrap().is_some();
+        let downloaded = state
+            .downloaded_path
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|path| path.exists());
+        UpdateDownloadStatus {
+            active,
+            downloaded,
+            percent: state.percent.load(Ordering::SeqCst),
+            speed: state.speed.lock().unwrap().clone(),
+        }
+    }
+
+    /// 去重键：同一个下载（同 URL + 同 digest）必须得到同一个键。
+    #[test]
+    fn request_key_identifies_the_same_download() {
+        assert_eq!(
+            request_key("https://github.com/a.exe", Some("sha256:AB")),
+            request_key("https://github.com/a.exe", Some("sha256:AB"))
+        );
+        // digest 缺失（release 未提供）也要稳定
+        assert_eq!(
+            request_key("https://github.com/a.exe", None),
+            request_key("https://github.com/a.exe", None)
+        );
+        // 不同版本是不同的下载
+        assert_ne!(
+            request_key("https://github.com/a.exe", Some("sha256:AB")),
+            request_key("https://github.com/a.exe", Some("sha256:CD"))
+        );
+        assert_ne!(
+            request_key("https://github.com/a.exe", None),
+            request_key("https://github.com/b.exe", None)
+        );
+    }
 
     #[test]
     fn version_comparison_orders_by_numeric_segments() {

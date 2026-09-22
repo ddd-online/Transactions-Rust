@@ -79,6 +79,7 @@ fn main() {
             // 自动更新（自研实现）
             updater::update_check,
             updater::update_download,
+            updater::update_download_status,
             updater::update_cancel,
             updater::update_install,
             // 业务命令（tr-ipc）
