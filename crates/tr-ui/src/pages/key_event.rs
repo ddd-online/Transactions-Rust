@@ -2,12 +2,12 @@
 //!
 //! ## 组成
 //!
-//! * [`KeyEventPage`]：年份导航 + 三栏编排 + 状态流转
+//! * [`KeyEventPage`]：年份导航 + 三栏编排（右栏可收起）+ 状态流转
 //! * [`event_list`]：事件卡片（色条 / 短日期 / 30 字摘要 / 删除气泡）
 //! * [`add_modal`]：日期 + 名称
-//! * [`detail_panel`]：20 个颜色 + 描述（查看/编辑）+ 底部操作
+//! * 中栏详情 = **一张卡**（20 个颜色 + 图片 + 描述 + 底部动作都在同一张卡面上）
 //! * [`image_gallery`]：左大图 + 右侧 160px 缩略图列 + 另存/删除
-//! * [`linked_panel`]：关联消费记录卡片 + 解除关联
+//! * [`linked_panel`]：关联消费记录卡片 + 解除关联；整栏可用骑在竖线上的把手收起/展开
 //! * [`ImageUploadHost`] + [`crate::components::ui::UploadProgressBar`]：串行上传状态机与进度条，
 //!   单张图片的内容由 [`crate::components::ui::read_as_data_url`] 读出
 //!
@@ -131,6 +131,9 @@ pub fn KeyEventPage() -> impl IntoView {
     // ---- 关联消费记录 ----
     let linked = RwSignal::new(Vec::<TransactionRecordDto>::new());
     let tr_cache = RwSignal::new(BTreeMap::<String, Vec<TransactionRecordDto>>::new());
+    // 右栏是否展开：只在本次会话里记住（不落配置）。收起时栏宽归 0、竖线隐去、中栏吃满宽度，
+    // 骑在竖线上的把手留在原处，随时能收回来。
+    let linked_open = RwSignal::new(true);
 
     // ---- 上传 ----
     let progress = RwSignal::new(UploadProgress::default());
@@ -425,7 +428,10 @@ pub fn KeyEventPage() -> impl IntoView {
     .into_any();
 
     let content = view! {
-        <div class="key-event-body">
+        <div
+            class="key-event-body"
+            class:is-rail-collapsed=move || !linked_open.get()
+        >
             <div class="key-event-panel key-event-panel--left">
                 {event_list(
                     events,
@@ -438,12 +444,28 @@ pub fn KeyEventPage() -> impl IntoView {
             </div>
 
             <div class="key-event-panel key-event-panel--center">
-                <div class="key-event-detail">
+                // 卡顶那条主题色带由 `--event-accent` 给（见 CSS 的 `.key-event-detail::before`）：
+                // 事件没设颜色时不写这个属性，兜底透明、卡面高度不跳。
+                <div
+                    class="key-event-detail"
+                    style=move || {
+                        current_event
+                            .get()
+                            .filter(|event| !event.color.is_empty())
+                            .map(|event| format!("--event-accent: {}", event.color))
+                            .unwrap_or_default()
+                    }
+                >
                     <Show
                         when=move || current_event.get().is_some()
                         fallback=|| {
                             view! {
-                                <div class="key-event-empty">
+                                // 详情是一张几乎铺满整栏的卡，空态只有一行小字会飘；
+                                // 给一个图标当落点（用本页自己的星标），卡大而不空。
+                                <div class="key-event-empty key-event-empty--detail">
+                                    <span class="key-event-empty__icon">
+                                        {icons::icon(Icon::Star)}
+                                    </span>
                                     <span class="key-event-empty__text">
                                         "选择左侧事件查看详情"
                                     </span>
@@ -647,6 +669,30 @@ pub fn KeyEventPage() -> impl IntoView {
                     UnsyncCallback::new(move |id: String| unlink(id)),
                 )}
             </div>
+
+            // 右栏的展开/收起把手：骑在中栏与右栏那条竖线上（收起后贴窗口右缘），
+            // 尖角方向 = 这一栏会往哪边走。它是**开关**，所以带 `aria-expanded`；
+            // 收起时右栏整条 `visibility: hidden`（退出无障碍树与键盘序，见 CSS）。
+            <button
+                type="button"
+                class="ui-icon-btn ui-icon-btn--bordered key-event-rail-toggle"
+                title=move || {
+                    if linked_open.get() { "收起关联交易" } else { "展开关联交易" }
+                }
+                aria-label=move || {
+                    if linked_open.get() { "收起关联交易" } else { "展开关联交易" }
+                }
+                aria-expanded=move || if linked_open.get() { "true" } else { "false" }
+                on:click=move |_| linked_open.update(|open| *open = !*open)
+            >
+                {move || {
+                    if linked_open.get() {
+                        icons::icon(Icon::ChevronRight)
+                    } else {
+                        icons::icon(Icon::ChevronLeft)
+                    }
+                }}
+            </button>
         </div>
 
         {add_modal(

@@ -1,7 +1,8 @@
 /* ============================================
  * 事件页（`/key_event_view`）
  * 取值全部走 `--transactions-*` 令牌。
- * 布局：工具栏（年份导航）+ 三栏（280px 事件列表 / 自适应详情 / 280px 关联消费记录）。
+ * 布局：工具栏（年份导航）+ 三栏（280px 事件列表 / 自适应详情卡 / 280px 关联消费记录）。
+ * 右栏可收起（`is-rail-collapsed`）：栏宽归 0、竖线隐去，中栏吃满；把手一直骑在竖线上。
  * ============================================ */
 
 .key-event-page .page-header {
@@ -36,12 +37,25 @@
  * 内边距下放给各栏自己（`.key-event-body` 不再吃统一内边距），
  * 左右轨的底色与竖线才能从版心顶贯通到底。 */
 .key-event-body {
+  /* 右轨宽度只有这一个来源：网格第三列与收起把手的落点都用它 */
+  --key-event-rail-w: 280px;
+  /* 收起/展开的时长：网格列宽与把手的位移用同一条，竖直方向的 `visibility` 也按它延迟 */
+  --key-event-rail-dur: 220ms;
   flex: 1;
+  position: relative;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) 280px;
+  grid-template-columns: 280px minmax(0, 1fr) var(--key-event-rail-w);
   gap: 0;
   min-height: 0;
   overflow: hidden;
+  transition: grid-template-columns var(--key-event-rail-dur)
+    var(--transactions-ease-out-expo);
+}
+
+/* 收起右栏：第三列归 0。中栏自己会把这部分宽度吃掉（`1fr`），
+ * 所以不需要给中栏写任何"展开动画"，宽度只有一个动因。 */
+.key-event-body.is-rail-collapsed {
+  grid-template-columns: 280px minmax(0, 1fr) 0px;
 }
 
 /* 中间详情栏：纸的底色，留出内容内边距（**顶部为 0**：详情紧贴工具栏底边线） */
@@ -69,6 +83,51 @@
 
 .key-event-panel--right {
   border-left: 1px solid var(--transactions-color-divider);
+  /* 收起时才切 `visibility`，且**延迟到收起动画结束**：动画期间内容还在（不会先空掉），
+   * 收完才退出无障碍树与键盘序（`visibility: hidden` 的元素不可聚焦、也不被读屏念）。 */
+  transition: border-color var(--key-event-rail-dur) var(--transactions-ease-out-expo),
+    visibility 0s linear 0s;
+}
+
+.key-event-body.is-rail-collapsed .key-event-panel--right {
+  border-left-color: transparent;
+  visibility: hidden;
+  transition: border-color var(--key-event-rail-dur) var(--transactions-ease-out-expo),
+    visibility 0s linear var(--key-event-rail-dur);
+}
+
+/* 收起/展开把手：骑在中栏与右栏的竖线上（半颗在左半颗在右），收起后贴窗口右缘。
+ * 24 × 48 药丸，Paper 面 + 发丝由共用的 `.ui-icon-btn--bordered` 给；**静置不投影**
+ * （与卡片"静置 shadow-sm"不同档，因为它骑在线上、靠形状立住即可），悬停才抬到 `shadow-md`。
+ * 读起来是"这条线上的一个把手"而不是又一张卡。
+ * 24px 宽同时是**点按目标下限**（WCAG 2.5.8 的 24×24）—— 这一栏唯一的开关不该比页面里
+ * 别的控件更难点到。 */
+.key-event-rail-toggle {
+  position: absolute;
+  top: 50%;
+  right: calc(var(--key-event-rail-w) - 12px);
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 24px;
+  height: 48px;
+  border-radius: var(--transactions-radius-full);
+  /* 尖角按 body 档（14px）画：药丸只有 24px 宽，caption 档的尖角太小、
+   * 作为"这一栏唯一的开关"不够显眼。 */
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-icon);
+  transition: right var(--key-event-rail-dur) var(--transactions-ease-out-expo),
+    box-shadow var(--transactions-transition-fast),
+    border-color var(--transactions-transition-fast),
+    background-color var(--transactions-transition-fast);
+}
+
+.key-event-rail-toggle:hover:not(:disabled) {
+  box-shadow: var(--transactions-shadow-md);
+}
+
+/* 收起后竖线没了，把手贴到版心右缘（`- 8px` 内缩，不贴死窗口边） */
+.key-event-body.is-rail-collapsed .key-event-rail-toggle {
+  right: var(--transactions-space-sm);
 }
 
 /* ---------------- 左栏：事件列表 ---------------- */
@@ -102,6 +161,21 @@
 .key-event-empty__text {
   font-size: var(--transactions-size-text-body-sm);
   color: var(--transactions-color-text-secondary);
+}
+
+/* 详情卡里的空态（区别于两条侧轨的一行小字空态）：图标在上、文字在下，
+ * 因为卡片本身就很大，落点得有两个。 */
+.key-event-empty--detail {
+  flex-direction: column;
+  gap: var(--transactions-space-md);
+}
+
+.key-event-empty__icon {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  /* 图形按 3:1 的档取（`text-tertiary` = 3.9:1），不跟正文抢，也不掉到 disabled 档去 */
+  color: var(--transactions-color-text-tertiary);
 }
 
 /* 事件卡 = 侧轨里的**行**，不是白卡：默认透明（露出侧轨的软灰底），
@@ -246,14 +320,37 @@
   padding-top: var(--transactions-space-sm);
 }
 
-/* ---------------- 中栏：事件详情 ---------------- */
-
+/* ---------------- 中栏：事件详情（一张卡） ----------------
+ *
+ * 详情是**这张纸上的一件物件**：主题色带 / 图片 / 描述 / 底部动作都在同一个卡面上，
+ * 与左栏那排小事件卡构成"容器 / 条目"两档（前者 12px 圆角、后者 8px）。
+ * 卡内**不再套卡**：层次靠色阶（描述区是软灰内嵌井、图片区是虚线框），
+ * 只有顶部与底部两条发丝线把"工具条 / 内容 / 动作"三段分开。 */
 .key-event-detail {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: var(--transactions-space-lg);
+  padding: var(--transactions-space-xl);
   overflow: hidden;
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-divider);
+  border-radius: var(--transactions-radius-lg);
+  box-shadow: var(--transactions-shadow-sm);
+}
+
+/* 卡顶的主题色带：与左栏事件卡左侧那条 4px 色条**同色、同粗细** ——
+ * 左栏给颜色、卡面接住它，"这张卡属于这篇事件"就不必靠读标题去认。
+ * 绝对定位（不占布局）+ `var()` 兜底透明：事件没设颜色时卡面高度不跳。 */
+.key-event-detail::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background-color: var(--event-accent, transparent);
+  border-radius: var(--transactions-radius-lg) var(--transactions-radius-lg) 0 0;
 }
 
 .key-event-detail__body {
@@ -267,9 +364,9 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--transactions-space-sm);
-  padding-bottom: var(--transactions-space-md);
+  padding-bottom: var(--transactions-space-lg);
   border-bottom: 1px solid var(--transactions-color-divider);
-  margin-bottom: var(--transactions-space-md);
+  margin-bottom: var(--transactions-space-lg);
   flex-shrink: 0;
 }
 
@@ -343,7 +440,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--transactions-color-text-disabled);
+  /* 空态文案要读得清：`text-secondary`（≈5.4:1）而不是 `text-disabled`（≈2.6:1）——
+   * 它现在长在卡片里，比原来摊在画布上时更显眼，对比度就该按正文那一档给。 */
+  color: var(--transactions-color-text-secondary);
   font-size: var(--transactions-size-text-body-sm);
   border: 1px dashed var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-md);
@@ -473,7 +572,12 @@
 }
 
 .key-event-description__content {
-  flex: 1;
+  /* 灰井**只包住文字**：内容多高井就多高；内容超出可用高度时收到上限、井内滚动。
+   * 省下来的高度留白（卡面 Paper），所以短描述不会再拖出一个大半空的灰块 ——
+   * 长描述仍然有整栏的滚动空间，只是"井"和"留白"不再长得一样。 */
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 100%;
   overflow-y: auto;
   border-radius: var(--transactions-radius-md);
   padding: var(--transactions-space-md);
@@ -504,20 +608,25 @@
   min-height: 160px;
 }
 
+/* 卡片的底栏：一条发丝线把动作区收住（卡内第二条线，与顶部色带那条同款），
+ * 动作右对齐。按钮高度 28px 比线下的 12px 内边距更"重"，所以线下留 0：线到按钮 12px，
+ * 按钮到卡底边 24px（卡自己的内边距），是卡片标准的下边距。 */
 .key-event-detail__footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--transactions-space-sm);
-  padding: var(--transactions-space-sm) 0;
+  margin-top: var(--transactions-space-md);
+  padding-top: var(--transactions-space-md);
+  border-top: 1px solid var(--transactions-color-divider);
   flex-shrink: 0;
 }
 
+/* 加载态：骨架就长在卡里，所以只出线条、不再给一层内边距（否则线条比真内容缩进两档） */
 .key-event-skeleton {
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-sm);
-  padding: var(--transactions-space-md);
 }
 
 .key-event-skeleton__line {
@@ -1044,6 +1153,14 @@
   .key-event-card:hover,
   .key-event-thumb:hover {
     transform: none;
+  }
+  /* 收起/展开不做动画：栏宽与把手瞬间到位，但 `visibility` 的延迟也要撤掉，
+   * 否则收起后右栏还会在无障碍树里多留 220ms。 */
+  .key-event-body,
+  .key-event-panel--right,
+  .key-event-body.is-rail-collapsed .key-event-panel--right,
+  .key-event-rail-toggle {
+    transition: none;
   }
 }
 
