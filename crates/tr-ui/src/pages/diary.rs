@@ -2,8 +2,10 @@
 //!
 //! ## 组成
 //!
-//! * [`DiaryPage`]：工具栏（今天 / 收起全部 / 日期选择器）+ 两栏编排
-//! * [`DiaryTree`]：年 → 月 → 日三级折叠树（年/月降序、日降序）
+//! * [`DiaryPage`]：工具栏（今天 + 日期选择器 + 右侧「已保存 / 删除」）+ 两栏编排
+//! * [`DiaryTree`]：年 → 月 → 日三级折叠树（年/月降序、日降序）；
+//!   它上面还有一条**顶栏**（`.diary-tree-bar`）放整棵树的三个图标动作
+//!   （定位到当前日记 / 全部展开 / 全部收起）—— 顶栏属于左栏，不是页面工具栏
 //! * [`DiaryEditor`]：心情 + 字数 + **始终可编辑**（无预览/Markdown 渲染）+ 1500ms 防抖自动保存 + 删除
 //! * 状态直接由本文件持有信号（与其余页面一致）
 //! * 正文按**纯文本**呈现（换行原样保留）：日记页不做 Markdown 渲染
@@ -18,7 +20,12 @@
 //!   失败为「保存失败」。换日期时状态回到 `Idle`（不把上一条的状态带过来）。
 //!   保存期间又发生改动时，完成回调会再排一次防抖保存，因此「编辑中」一定会收敛到「已保存」。
 //! * **左右两处字数口径不同**：编辑器按本地草稿的码点数实时算，左树用服务端的 `wordCount`。
-//! * **折叠状态**：首次拿到非空数据时全部年份收起；月份默认全收起；「收起全部」把所有年份收起。
+//! * **打开页面自动展开定位到今天**：日期树第一次拿到数据时，展开「今天」（准确说是选中那天）
+//!   所在的年与月、其余年份收起，并把那天滚进视野（见 [`DiaryTree`] 的 `locate_date`）。
+//!   工具栏的「今天」跳到今天并做同一件事。
+//! * **顶栏的瞄准图标 = 定位到当前打开的日记**：只展开那天所在的路径、把它滚进视野，
+//!   不换日期也不重新加载 —— 树跟着编辑器走，翻到别的日期后能一键找回来。
+//! * **折叠状态**：左栏顶栏的展开/收起图标分别把全部年-月展开、把全部年份收起。
 //!
 //! ## 设计取舍
 //!
@@ -31,10 +38,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use leptos::prelude::*;
 use tr_domain::models::{DiaryDateItem, DiaryEntry};
+use wasm_bindgen::JsCast;
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonVariant, DatePicker, FeaturePage, Modal, ModalSize, Textarea,
+    Button, ButtonSize, ButtonVariant, DatePicker, FeaturePage, Modal, ModalSize, Textarea,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -119,6 +127,9 @@ pub fn DiaryPage() -> impl IntoView {
     let collapsed_years = RwSignal::new(BTreeSet::<i32>::new());
     let expanded_months = RwSignal::new(BTreeSet::<String>::new());
     let tree_initialized = RwSignal::new(false);
+    // 「定位」请求：非空时日期树把那天滚进视野，滚完由树自己清空。
+    // 打开页面（首次拿到数据）与点瞄准图标（今天）各置一次。
+    let locate_date = RwSignal::new(String::new());
 
     // 防抖句柄
     let timer = StoredValue::new(Option::<leptos::leptos_dom::helpers::TimeoutHandle>::None);
@@ -316,7 +327,7 @@ pub fn DiaryPage() -> impl IntoView {
         jump_date.set(String::new());
         let today = today_ymd();
         go_to_date(today.clone());
-        // 展开今天所在的年与月
+        // 展开今天所在的年与月，并让日期树滚到今天（瞄准图标的「定位」语义）
         if let Some((year, month, _)) = split_ymd(&today) {
             collapsed_years.update(|years| {
                 years.remove(&year);
@@ -325,6 +336,50 @@ pub fn DiaryPage() -> impl IntoView {
                 months.insert(format!("{year}-{month}"));
             });
         }
+        locate_date.set(today);
+    };
+
+    // 展开全部：年份一个都不收起 + 所有年-月都进展开集合
+    let expand_all = move || {
+        let months = dates
+            .get_untracked()
+            .iter()
+            .filter_map(|item| {
+                split_ymd(&item.date).map(|(year, month, _)| format!("{year}-{month}"))
+            })
+            .collect::<BTreeSet<_>>();
+        collapsed_years.set(BTreeSet::new());
+        expanded_months.set(months);
+    };
+
+    // 收起全部：所有年份收起（月份集合一并清空，下次展开年时从干净状态开始）
+    let collapse_all = move || {
+        let years = dates
+            .get_untracked()
+            .iter()
+            .filter_map(|item| split_ymd(&item.date).map(|(year, _, _)| year))
+            .collect::<BTreeSet<_>>();
+        collapsed_years.set(years);
+        expanded_months.set(BTreeSet::new());
+    };
+
+    // 瞄准图标：把日期树**定位到当前打开的那一篇**（`selected_date`，编辑器里显示的那天）。
+    // 只展开路径 + 滚动，不换日期、不重新加载 —— 这是"树跟着编辑器走"，不是"跳到今天"。
+    // 没有打开的日记时（删掉之后 `selected_date` 为空）什么都不做。
+    let locate_current = move || {
+        let date = selected_date.get_untracked();
+        if date.is_empty() {
+            return;
+        }
+        if let Some((year, month, _)) = split_ymd(&date) {
+            collapsed_years.update(|years| {
+                years.remove(&year);
+            });
+            expanded_months.update(|months| {
+                months.insert(format!("{year}-{month}"));
+            });
+        }
+        locate_date.set(date);
     };
 
     let confirm_delete = move || {
@@ -357,6 +412,9 @@ pub fn DiaryPage() -> impl IntoView {
     };
 
     // 版心两块：工具栏 / 内容区各自建好视图再交给 `FeaturePage`（骨架见 components/ui/feature_page.rs）
+    //
+    // 页面工具栏：「今天」+ 日期选择器，右侧「已保存 / 删除」。
+    // 日期树自己的三个动作（定位到当前日记 / 全部展开 / 全部收起）在左栏顶部的顶栏里。
     let toolbar = view! {
         <div class="diary-tools">
             <Button
@@ -364,22 +422,6 @@ pub fn DiaryPage() -> impl IntoView {
                 on_click=move |_| go_to_today()
             >
                 "今天"
-            </Button>
-            <Button
-                variant=ButtonVariant::Secondary
-                on_click=move |_| {
-                    let years = dates
-                        .get_untracked()
-                        .iter()
-                        .filter_map(|item| {
-                            split_ymd(&item.date).map(|(year, _, _)| year)
-                        })
-                        .collect::<BTreeSet<_>>();
-                    collapsed_years.set(years);
-                    expanded_months.set(BTreeSet::new());
-                }
-            >
-                "全部收起"
             </Button>
             <div class="diary-jump">
                 <DatePicker value=jump_date placeholder="选择日期" />
@@ -422,12 +464,48 @@ pub fn DiaryPage() -> impl IntoView {
         >
             <div class="diary-body">
                 <div class="diary-panel diary-panel--left">
+                    // 日期树的顶栏：整棵树的三个动作（都在 260px 这一栏里面、树的上方）。
+                    // 28px 描边图标按钮 —— 栏头内部的动作按按钮规范用 Small，与页面工具栏的
+                    // 36px 控件不是一档。
+                    <div class="diary-tree-bar">
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            size=ButtonSize::Small
+                            icon_only=true
+                            title="定位到当前日记"
+                            aria_label="定位到当前日记"
+                            on_click=move |_| locate_current()
+                        >
+                            {icons::icon(Icon::Aim)}
+                        </Button>
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            size=ButtonSize::Small
+                            icon_only=true
+                            title="全部展开"
+                            aria_label="全部展开"
+                            on_click=move |_| expand_all()
+                        >
+                            {icons::icon(Icon::Expand)}
+                        </Button>
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            size=ButtonSize::Small
+                            icon_only=true
+                            title="全部收起"
+                            aria_label="全部收起"
+                            on_click=move |_| collapse_all()
+                        >
+                            {icons::icon(Icon::Shrink)}
+                        </Button>
+                    </div>
                     <DiaryTree
                         dates=dates
                         selected_date=selected_date
                         collapsed_years=collapsed_years
                         expanded_months=expanded_months
                         initialized=tree_initialized
+                        locate_date=locate_date
                         on_select=UnsyncCallback::new(move |date: String| go_to_date(date))
                     />
                 </div>
@@ -515,7 +593,72 @@ fn build_tree(items: &[DiaryDateItem]) -> TreeMap {
     map
 }
 
+/// 年 / 月 / 日三种树节点的 DOM id。
+///
+/// 滚动定位靠 id 反查元素（见 [`scroll_to_date`]）：日节点只在它那个月展开时才存在，
+/// 所以渲染侧与滚动侧必须用**同一份** id 规则 —— 就这三条，别在别处手写字符串。
+fn year_node_id(year: i32) -> String {
+    format!("diary-tree-year-{year}")
+}
+
+fn month_node_id(year: i32, month: u32) -> String {
+    format!("diary-tree-month-{year}-{month}")
+}
+
+fn day_node_id(date: &str) -> String {
+    format!("diary-tree-day-{date}")
+}
+
+/// 把「定位到今天」的落点滚进视野：那天 → 那天所在月 → 那天所在年，逐级退让。
+///
+/// 退让是必要的：**今天可能还没写过日记**，树里就没有它的日节点（月也一样可能没有），
+/// 这时滚到更粗的那一级仍比什么都不做更接近"定位到今天"。
+/// `scroll_into_view` 滚的是最近的滚动祖先，也就是 `.diary-tree` 这个容器。
+///
+/// 对齐方式取 **居中**（`block: center`）：默认的顶对齐会把落点**上面**那一行一起滚出去
+/// （日节点上面是月、月节点上面是它所属的年），而"定位到今天"不该把今天的上下文弄丢。
+/// 落点本来就在树顶附近（今天总是最新那一天，它所在的年/月都排在前面），所以居中通常会被
+/// 浏览器钳回"能滚到的最上面" —— 效果正是"滚回顶部，且年、月两行都还在视野里"；
+/// 只有用户先手动展开/全部展开、把落点推到下面去之后，居中的差别才显出来。
+///
+/// 推到下一帧再滚：月展开后日节点由 `<Show>` 挂载，这一帧的 DOM 才算数。
+fn scroll_to_date(date: String) {
+    let Some((year, month, _)) = split_ymd(&date) else {
+        return;
+    };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let callback = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+        let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+            return;
+        };
+        let candidates = [
+            day_node_id(&date),
+            month_node_id(year, month),
+            year_node_id(year),
+        ];
+        if let Some(element) = candidates
+            .iter()
+            .find_map(|id| document.get_element_by_id(id))
+        {
+            // 横向只求"看得见"（本页没有横向滚动，`nearest` 等于不动）
+            let options = web_sys::ScrollIntoViewOptions::new();
+            options.set_block(web_sys::ScrollLogicalPosition::Center);
+            options.set_inline(web_sys::ScrollLogicalPosition::Nearest);
+            element.scroll_into_view_with_scroll_into_view_options(&options);
+        }
+    });
+    let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+    // 回调只跑一次：句柄活到应用结束（界面进程即应用进程，与 chart.rs 同一手法）
+    callback.forget();
+}
+
 /// 左栏：年 → 月 → 日三级折叠树。
+///
+/// * 第一次拿到数据时只展开「选中那天」（打开页面时就是今天）所在的年与月，其余年份收起，
+///   并把那天滚进视野 —— 打开日记页因此不需要手动找今天。
+/// * `locate_date` 非空即请求一次滚动（由本组件滚完后清空，是一次性的）。
 #[component]
 fn DiaryTree(
     dates: RwSignal<Vec<DiaryDateItem>>,
@@ -523,20 +666,48 @@ fn DiaryTree(
     collapsed_years: RwSignal<BTreeSet<i32>>,
     expanded_months: RwSignal<BTreeSet<String>>,
     initialized: RwSignal<bool>,
+    locate_date: RwSignal<String>,
     on_select: UnsyncCallback<String>,
 ) -> impl IntoView {
-    // 首次拿到非空数据时把所有年份收起（只触发一次）
+    // 首次拿到非空数据时：只留「选中那天」所在年展开、只展开它那个月（其余全收起）。
+    // 选中那天在页面打开时就是今天；换账本后 `initialized` 被重置，这里对新数据再做一次。
     Effect::new(move |_| {
         let items = dates.get();
         if items.is_empty() || initialized.get_untracked() {
             return;
         }
-        let years = items
+        let focus = selected_date.get_untracked();
+        let focus = if focus.is_empty() { today_ymd() } else { focus };
+        let mut collapsed = items
             .iter()
             .filter_map(|item| split_ymd(&item.date).map(|(year, _, _)| year))
             .collect::<BTreeSet<_>>();
-        collapsed_years.set(years);
+        let mut expanded = BTreeSet::new();
+        if let Some((year, month, _)) = split_ymd(&focus) {
+            collapsed.remove(&year);
+            expanded.insert(format!("{year}-{month}"));
+        }
+        collapsed_years.set(collapsed);
+        expanded_months.set(expanded);
         initialized.set(true);
+        // 展开只是让那天"在树里"，还要把它滚进视野才算定位到今天
+        locate_date.set(focus);
+    });
+
+    // 「定位」：数据到了、展开状态也应用了之后，把落点滚进视野。落点由 id 查（见 `scroll_to_date`）。
+    // 体内只读信号、只做副作用（不在这里创建任何响应式值 —— 那会被随后的重跑 dispose）。
+    Effect::new(move |_| {
+        let target = locate_date.get();
+        if target.is_empty() {
+            return;
+        }
+        // 订阅三处树状态：数据到达 / 展开状态生效之后 DOM 里才有落点
+        let _ = dates.get();
+        let _ = collapsed_years.get();
+        let _ = expanded_months.get();
+        // 一次性：先清空再滚，避免后续任何重渲染把它再滚一次（用户手动折叠不该被拽回去）
+        locate_date.set(String::new());
+        scroll_to_date(target);
     });
 
     view! {
@@ -571,6 +742,7 @@ fn DiaryTree(
                                 <div class="diary-tree__year">
                                     <button
                                         type="button"
+                                        id=year_node_id(year)
                                         class="diary-tree__node diary-tree__year-node"
                                         aria-expanded=!is_collapsed
                                         on:click=move |_| {
@@ -610,6 +782,7 @@ fn DiaryTree(
                                                         <div class="diary-tree__month">
                                                             <button
                                                                 type="button"
+                                                                id=month_node_id(year, month)
                                                                 class="diary-tree__node diary-tree__month-node"
                                                                 aria-expanded=is_open
                                                                 on:click=move |_| {
@@ -668,6 +841,7 @@ fn DiaryTree(
                                                                             view! {
                                                                                 <button
                                                                                     type="button"
+                                                                                    id=day_node_id(&date)
                                                                                     class="diary-tree__node diary-tree__day-node"
                                                                                     class:is-active=is_active
                                                                                     on:click=move |_| {

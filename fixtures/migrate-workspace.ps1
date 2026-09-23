@@ -39,6 +39,19 @@ Assert-NoRepoInstance -Repo $repo
 $ws = [System.IO.Path]::GetFullPath((Join-Path $OutDir 'ws'))
 $failures = New-Object System.Collections.Generic.List[string]
 
+# 日期树里的年/月行：可访问名形如「2026年 7篇」「9月 2篇」（年/月标签 + 篇数）。
+# 模式**必须带上「*篇」**：编辑器的日期标题（「2026年9月24日」）也含有「2026年」和「9月」，
+# 不带篇数就会把标题当成树节点（假绿），断言也就失去意义。
+function Find-TreeRow { param($Window, [string]$Pattern, [int]$TimeoutSec = 15)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $hit = @(Get-Elements $Window) | Where-Object { $_.Current.Name -like $Pattern } | Select-Object -First 1
+        if ($hit) { return $hit }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
+
 # ---- 1. 播种一份干净的工作空间（当前格式）----
 if (Test-Path $SourceWorkspace) { Remove-Item $SourceWorkspace -Recurse -Force }
 Push-Location $repo
@@ -161,15 +174,21 @@ try {
     Assert-True ($newest.Count -eq 1) '取到一篇老日记用于界面核对'
     $year = ([string]$newest[0].date).Substring(0, 4)
     $month = [int]([string]$newest[0].date).Substring(5, 2)
-    $yearNode = Wait-Like -Root $window -Pattern "$($year)年" -TimeoutSec 20
+    $yearNode = Find-TreeRow -Window $window -Pattern "$($year)年*篇" -TimeoutSec 20
     Assert-True ([bool]$yearNode) "日期树里出现 $year 年节点（升级后的老日记在当前账本里可见）"
     if ($yearNode) {
         Assert-True ($yearNode.Current.Name -like '*1篇*') `
             "该年份下计到 1 篇（实际 '$($yearNode.Current.Name)'）"
-        Invoke-Element $yearNode | Out-Null
-        Start-Sleep -Seconds 1
-        $monthNode = Wait-Like -Root $window -Pattern "$($month)月" -TimeoutSec 15
-        Assert-True ([bool]$monthNode) "展开后出现 $($month) 月节点"
+        # ⚠ 这一年**可能本来就是展开的**：日记页打开时会自动展开「今天」所在的年，而这份 fixture
+        #   里老日记的年份恰好就是今年。所以先按"月行在不在"判断初始状态、只在收起时才点 ——
+        #   无条件点下去会把自动展开的年收起来，下面那句「展开后出现 X 月」就永远等不到了。
+        $monthNode = Find-TreeRow -Window $window -Pattern "$($month)月*篇" -TimeoutSec 2
+        if (-not $monthNode) {
+            Invoke-Element $yearNode | Out-Null
+            Start-Sleep -Seconds 1
+            $monthNode = Find-TreeRow -Window $window -Pattern "$($month)月*篇" -TimeoutSec 15
+        }
+        Assert-True ([bool]$monthNode) "年份展开后出现 $($month) 月节点"
     }
 }
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }

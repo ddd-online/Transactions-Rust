@@ -48,6 +48,8 @@ web-sys = { version = "0.3", features = [
     "ImageBitmap",
     "MediaQueryList",
     "Node",
+    "ScrollIntoViewOptions",
+    "ScrollLogicalPosition",
     "Url",
     "Window",
     "console",

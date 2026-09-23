@@ -1,9 +1,9 @@
 /* ============================================
  * 日记页（`/diary_view`）
- * 布局：工具栏 + 两栏（260px 日期树 / 自适应编辑器）。
+ * 布局：工具栏（日期选择器）+ 两栏（260px 日期树[含顶栏] / 自适应编辑器）。
  * ============================================ */
 
-/* 日记工具栏（今天 / 全部收起 / 日期选择器）：外边距由 `.page-toolbar` 统一给 */
+/* 日记工具栏（今天 / 日期选择器；日期树的三个动作在左栏顶栏里）：外边距由 `.page-toolbar` 统一给 */
 .diary-tools {
   display: flex;
   align-items: center;
@@ -36,12 +36,32 @@
 
 .diary-panel--left {
   border-right: 1px solid var(--transactions-color-divider);
+  /* 顶栏 + 日期树两段：只有树滚动，顶栏钉在栏顶（`flex: 1` 见 `.diary-tree`） */
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------- 日期树的顶栏 ---------------- */
+
+/* 三个动作（定位到当前日记 / 全部展开 / 全部收起）都在这一栏**内部**、树的上方；
+ * 页面工具栏（今天 / 日期选择器 / 已保存 / 删除）是另一条带，两者不要混。
+ * 底边一条发丝线把顶栏与树分开（与 `.diary-editor__header` 原来那条同一手法）。 */
+.diary-tree-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  flex-shrink: 0;
+  /* 顶部 4px 与树自己的 `padding-top` 同值；下方留出与分隔线的距离 */
+  padding: var(--transactions-space-xs) 0 var(--transactions-space-md);
+  border-bottom: 1px solid var(--transactions-color-divider);
 }
 
 /* ---------------- 日期树 ---------------- */
 
 .diary-tree {
-  height: 100%;
+  /* 占满顶栏以下的剩余高度（左栏是 flex 列，`height: 100%` 会连顶栏一起算进去而溢出） */
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: var(--transactions-space-xs) var(--transactions-space-sm) var(--transactions-space-xs)
     0;
@@ -49,7 +69,7 @@
 }
 
 .diary-tree__empty {
-  height: 100%;
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -200,13 +220,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  /* 上下**对称**：日期行是这一栏的第一行，只有下内边距时它会贴住工具栏底边，
-   * 而自己下方却空出 16px —— 内容看着"顶在上沿"、上间距也像丢了。
-   * 上下各一份之后，日期行落在自己这条带的垂直中线上。
+  /* 标题带上下的呼吸空间**相等**（各 16px），但**下面那条发丝线已去掉**：
+   * 上 16px 在这里，下 16px 由 `.diary-editor__body` 的上内边距给（见那一处注释）。
+   * 日期行是这一栏的第一行，没有上内边距时它会贴住工具栏底边线，看着"顶在上沿"。
    * （`6ee7bb7` 把内容容器顶部内边距统一成 0 是为了各页与工具栏顶对齐；
    *   这一栏的第一行是**标题行**而不是内容，所以在这里按需要把它补回来。） */
-  padding: var(--transactions-space-lg) 0;
-  border-bottom: 1px solid var(--transactions-color-divider);
+  padding: var(--transactions-space-lg) 0 0;
   flex-shrink: 0;
 }
 
@@ -300,7 +319,9 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: var(--transactions-space-md) 0;
+  /* 上 16px = 标题到编辑区的间隔（标题带那条发丝线去掉后，间距统一由这里给，
+   * 与标题**上方**的 16px 等值）；下 12px 是编辑框到版心底边的留白。 */
+  padding: var(--transactions-space-lg) 0 var(--transactions-space-md);
 }
 
 .diary-editor__textarea-wrap {
@@ -359,9 +380,9 @@
 
 /* 预览区里的 Markdown 元素样式复用 `.md-body`（见 key_event.css） */
 
-/* 右栏（编辑器）的底部内边距去掉：编辑框的留白由 `.diary-editor__body` 的上下各 12px 决定，
- * 再叠上 `.diary-panel` 的 16px 下内边距 → 底部 28px、顶部只有 12px，看着"下边距更大"。
- * 左栏（日期树）保留原内边距。 */
+/* 右栏（编辑器）的底部内边距去掉：编辑框的留白由 `.diary-editor__body` 的上下内边距决定
+ * （上 16px / 下 12px），再叠上 `.diary-panel` 的 16px 下内边距 → 底部 28px、顶部只有 16px，
+ * 看着"下边距更大"。左栏（日期树）保留原内边距。 */
 .diary-panel--right {
   padding-bottom: 0;
 }
