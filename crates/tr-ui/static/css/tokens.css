@@ -209,6 +209,13 @@
   /* 顶部容器分隔线到下方内容之间的距离 */
   --transactions-space-top-gap: 8px;
 
+  /* ---------- 左侧导航栏宽度 ----------
+   * 侧栏是固定宽度（不折叠、不拖拽）。
+   * ⚠ 这个值同时是**标题栏的居中补偿**：标题栏画在内容区里（侧栏右边那一列），
+   * 所以"在容器里居中"会比窗口正中偏右半个侧栏宽 —— 见 base.css 的 `.page-title`。
+   * 两处必须同源，别再手写 200px。 */
+  --transactions-size-sidebar: 200px;
+
   /* 动效专用缓动：落地感（exponential ease-out），用于“数据落定”类进场 */
   --transactions-ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }

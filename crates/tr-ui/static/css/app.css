@@ -27,10 +27,10 @@
   overflow: hidden;
 }
 
-/* 侧边栏 —— 固定 200px */
+/* 侧边栏 —— 固定宽度（`--transactions-size-sidebar`：标题栏的居中补偿要用同一个值） */
 .app-sidebar {
-  width: 200px;
-  min-width: 200px;
+  width: var(--transactions-size-sidebar);
+  min-width: var(--transactions-size-sidebar);
   height: 100%;
   background-color: var(--transactions-color-sidebar-fill);
   flex-shrink: 0;
