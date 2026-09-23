@@ -45,11 +45,31 @@ use crate::time::{split_ymd, today_ymd};
 /// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "事件";
 
-/// 事件颜色（顺序即渲染顺序，共 20 个）。
-const EVENT_COLORS: [&str; 20] = [
-    "#D9705A", "#C25460", "#D07048", "#D48838", "#C6963A", "#A09040", "#5C9858", "#4A8E70",
-    "#5C9E7C", "#3D8878", "#389098", "#4A78A0", "#5C8DB5", "#6070A0", "#7868A0", "#8C6B9E",
-    "#A06088", "#B06078", "#8C7B6E", "#7E8890",
+/// 事件颜色（顺序即渲染顺序，共 20 个）：`(色值, 中文色名)`。
+///
+/// 色名进色板的悬浮提示与 `aria-label`。色块本身说不出自己叫什么，而提示里给 `#D9705A`
+/// 这种色值对用户（尤其读屏）等于没说；入库的仍然是色值，色名只活在界面这一侧。
+const EVENT_COLORS: [(&str, &str); 20] = [
+    ("#D9705A", "砖红"),
+    ("#C25460", "玫红"),
+    ("#D07048", "橘红"),
+    ("#D48838", "橘黄"),
+    ("#C6963A", "土黄"),
+    ("#A09040", "橄榄黄"),
+    ("#5C9858", "草绿"),
+    ("#4A8E70", "松绿"),
+    ("#5C9E7C", "豆绿"),
+    ("#3D8878", "墨绿"),
+    ("#389098", "青蓝"),
+    ("#4A78A0", "钢蓝"),
+    ("#5C8DB5", "天蓝"),
+    ("#6070A0", "靛蓝"),
+    ("#7868A0", "蓝紫"),
+    ("#8C6B9E", "紫罗兰"),
+    ("#A06088", "紫红"),
+    ("#B06078", "胭脂"),
+    ("#8C7B6E", "茶褐"),
+    ("#7E8890", "青灰"),
 ];
 
 /// 事件标题上限（新建弹窗的 `maxlength` 与正文首行截断共用 200）。
@@ -1186,7 +1206,7 @@ fn ColorToolbar(
         <div class="key-event-colors">
             {EVENT_COLORS
                 .iter()
-                .map(|color| {
+                .map(|(color, name)| {
                     let value = color.to_string();
                     let value_for_click = value.clone();
                     let value_for_class = value.clone();
@@ -1200,10 +1220,10 @@ fn ColorToolbar(
                                     .map(|event| event.color == value_for_class)
                                     .unwrap_or(false)
                             }
-                            style=format!("background-color: {value_for_click}")
-                            title=value_for_click.clone()
-                            aria-label=value_for_click
-                            on:click=move |_| on_color.run(value.clone())
+                            style=format!("background-color: {value}")
+                            title=*name
+                            aria-label=*name
+                            on:click=move |_| on_color.run(value_for_click.clone())
                         ></button>
                     }
                 })

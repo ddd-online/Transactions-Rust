@@ -278,6 +278,8 @@ $tagName = "UIA标签$stamp"
 $chartTitle = "UIA图表$stamp"
 $eventTitle = "UIA事件$stamp"
 $eventColor = '#4A8E70'
+# 色板的可访问名是**中文色名**（悬浮提示也是它）；入库值仍是色值，两者别混
+$eventColorName = '松绿'
 $markdown = "# 标题`n`n- 第一项`n- 第二项"
 
 $process = $null
@@ -422,8 +424,8 @@ try {
     Assert-True ($events.Count -eq 1) "库里出现新事件（$eventTitle）"
     $eventDate = if ($events.Count -ge 1) { $events[0].date } else { '' }
 
-    # ---- 改颜色：点色板（aria-label 就是色值），点击即保存 ----
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name $eventColor)) "点色板 $eventColor"
+    # ---- 改颜色：点色板（aria-label 是中文色名，入库值是色值），点击即保存 ----
+    Assert-True (Invoke-Element (Wait-Element -Root $window -Name $eventColorName)) "点色板「$eventColorName」（$eventColor）"
     Start-Sleep -Seconds 3
     $colored = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir | Where-Object { $_.date -eq $eventDate } | Select-Object -First 1)
     Assert-True (($colored.Count -eq 1) -and ($colored[0].color -eq $eventColor)) "库里颜色已写入（$($colored[0].color)）"
