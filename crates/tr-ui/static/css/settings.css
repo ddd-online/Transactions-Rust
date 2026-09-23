@@ -166,9 +166,24 @@
   width: 140px;
 }
 
-/* 「代理」行的手动地址输入框：与分段控制器/按钮同一行，固定宽度免得把行撑变形 */
-.st-proxy-url {
-  width: 220px;
+/* 「代理」行的手动地址：协议 / 域名 / 端口三段一排。固定宽度免得把这一行撑变形，
+ * 顺序与"拼回一条 URL"的读法一致（`http://` + 域名 + `:` + 端口）。 */
+.st-proxy-fields {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.st-proxy-fields__scheme {
+  width: 104px;
+}
+
+.st-proxy-fields__host {
+  width: 150px;
+}
+
+.st-proxy-fields__port {
+  width: 84px;
 }
 
 .st-progress-card {

@@ -17,6 +17,8 @@ pub const PROXY_MODE_OFF: &str = "off";
 pub const PROXY_MODE_AUTO: &str = "auto";
 /// 手动指定 HTTP 代理。
 pub const PROXY_MODE_MANUAL: &str = "manual";
+/// 手动代理支持的协议：**目前只有它**（界面「协议」下拉框里就这一项）。
+pub const PROXY_SCHEME_HTTP: &str = "http";
 
 /// 代理设置（`~/.transactions.json` 的 `proxy` 键；字段名是配置契约，不可改）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,8 +136,59 @@ pub fn normalize_http_proxy(raw: &str) -> Result<String, String> {
     Ok(format!("http://{host}:{port}"))
 }
 
-/// 解析 Windows「Internet 选项」里的 `ProxyServer` 值。
+/// 手动地址 → 表单的「域名 / 端口」两段（协议恒为 `http`，不在这里返回）。
 ///
+/// 只做**形状**上的拆分，不做校验：拆不出来就返回空串（或整段），让表单留空/原样显示 ——
+/// 唯一的判据仍是 [`normalize_http_proxy`]，它给出用户看到的文案。表单不是第二个校验入口。
+/// 「域名」段保留 `user:pass@` 与 IPv6 的方括号，原样带回 [`join_http_proxy`]。
+pub fn split_http_proxy(raw: &str) -> (String, String) {
+    let raw = raw.trim();
+    let authority = match raw.split_once("://") {
+        Some((_, rest)) => rest,
+        None => raw,
+    };
+    // 路径 / 查询串没有意义（老配置里可能是 `http://host:8080/`）
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or("").trim();
+    if authority.is_empty() {
+        return (String::new(), String::new());
+    }
+    match authority.rsplit_once(':') {
+        // 从右往左找最后一个冒号（`[::1]:8080` 也切得对）；端口不像端口就整段当域名，
+        // 别在这里猜 —— 用户还能看见自己填的东西，后端会说明哪里不对。
+        Some((host, port))
+            if !host.is_empty() && !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            (host.to_string(), port.to_string())
+        }
+        _ => (authority.to_string(), String::new()),
+    }
+}
+
+/// 表单的「协议 / 域名 / 端口」→ 一条 `scheme://host:port`（仍由 [`normalize_http_proxy`] 校验）。
+///
+/// 宽容之处只有一处：往「域名」框里**粘贴整条地址**是常见操作，所以丢掉它自带的
+/// `scheme://` 前缀；它若自带端口而端口框空着，就原样带下去（拼出来还是 `host:port`，后端认得）。
+/// 其余一律照抄：端口空着就**不加冒号**，让后端说"缺少端口"，而不是这里替他猜一个 80。
+pub fn join_http_proxy(scheme: &str, host: &str, port: &str) -> String {
+    let scheme = scheme.trim().trim_end_matches("://");
+    let host = host.trim();
+    let host = host
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(host)
+        .trim();
+    let port = port.trim();
+    if host.is_empty() && port.is_empty() {
+        // 表单空着：交给后端说「请填写代理地址（形如 http://127.0.0.1:7890）」
+        return String::new();
+    }
+    if port.is_empty() {
+        return format!("{scheme}://{host}");
+    }
+    format!("{scheme}://{host}:{port}")
+}
+
+/// 解析 Windows「Internet 选项」里的 `ProxyServer` 值。///
 /// 该值有两种形态：裸 `host:port`，或 `http=host:port;https=host:port;ftp=…;socks=…`。
 /// 只取 `http=` 段（退而取 `https=` 段）；`socks=` 段**不认**（本版本只支持 HTTP 代理）。
 pub fn parse_wininet_proxy_server(raw: &str) -> Option<String> {
@@ -253,6 +306,73 @@ mod tests {
         assert!(normalize_http_proxy("http://127.0.0.1:78 90")
             .unwrap_err()
             .contains("空格"));
+    }
+
+    /// 表单三段 ↔ 一条地址：拆得干净、拼得回去，且拼出来的东西过得了后端那唯一一次校验。
+    #[test]
+    fn manual_form_parts_split_and_join_back_to_a_valid_url() {
+        // 拆：归一化过的、裸 host:port（老配置里可能存的就是它）、带认证、IPv6
+        assert_eq!(
+            split_http_proxy("http://127.0.0.1:7890"),
+            ("127.0.0.1".to_string(), "7890".to_string())
+        );
+        assert_eq!(
+            split_http_proxy("127.0.0.1:7890"),
+            ("127.0.0.1".to_string(), "7890".to_string())
+        );
+        assert_eq!(
+            split_http_proxy("http://user:pass@proxy.local:8080"),
+            ("user:pass@proxy.local".to_string(), "8080".to_string())
+        );
+        assert_eq!(
+            split_http_proxy("http://[::1]:1080"),
+            ("[::1]".to_string(), "1080".to_string())
+        );
+        // 缺端口 / 端口不像端口 / 空：都不猜，域名段原样留着让用户改
+        assert_eq!(
+            split_http_proxy("http://127.0.0.1"),
+            ("127.0.0.1".to_string(), String::new())
+        );
+        assert_eq!(
+            split_http_proxy("http://127.0.0.1:78a90"),
+            ("127.0.0.1:78a90".to_string(), String::new())
+        );
+        assert_eq!(split_http_proxy("   "), (String::new(), String::new()));
+
+        // 拼：正常、两端带空格、协议带 `://`、表单空着
+        assert_eq!(
+            join_http_proxy("http", "127.0.0.1", "7890"),
+            "http://127.0.0.1:7890"
+        );
+        assert_eq!(
+            join_http_proxy("http://", " 127.0.0.1 ", " 7890 "),
+            "http://127.0.0.1:7890"
+        );
+        assert_eq!(join_http_proxy("http", "", ""), "");
+        // 端口空着不加冒号（后端会说"缺少端口"），而不是替用户猜一个端口
+        assert_eq!(join_http_proxy("http", "127.0.0.1", ""), "http://127.0.0.1");
+        // 粘贴整条地址进「域名」框：丢掉自带 scheme，自带端口就留着
+        assert_eq!(
+            join_http_proxy("http", "http://127.0.0.1:7890", ""),
+            "http://127.0.0.1:7890"
+        );
+        assert_eq!(
+            join_http_proxy("http", "http://127.0.0.1", "7890"),
+            "http://127.0.0.1:7890"
+        );
+
+        // 拼出来的一定过得了后端那唯一一次校验（表单不自己造文案）
+        assert_eq!(
+            normalize_http_proxy(&join_http_proxy("http", "127.0.0.1", "7890")).unwrap(),
+            "http://127.0.0.1:7890"
+        );
+        assert_eq!(
+            normalize_http_proxy(&join_http_proxy("http", "http://127.0.0.1:7890", "")).unwrap(),
+            "http://127.0.0.1:7890"
+        );
+        assert!(
+            normalize_http_proxy(&join_http_proxy("http", "user:pass@proxy.local", "8080")).is_ok()
+        );
     }
 
     #[test]

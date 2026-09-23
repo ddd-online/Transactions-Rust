@@ -259,9 +259,13 @@ try {
 
     Assert-True (Invoke-Named -Window $window -Name '手动' -Right) '点「手动」'
     Start-Sleep -Seconds 1
-    $urlInput = Find-Named -Window $window -Name 'http://127.0.0.1:7890' -Right | Select-Object -First 1
-    Assert-True ([bool]$urlInput) '出现代理地址输入框'
-    Assert-True (Set-Value $urlInput $proxyUrl) "填入代理地址 $proxyUrl"
+    # 手动地址现在是**三段**：协议（下拉框，目前只有 HTTP）/ 域名 / 端口。
+    # 两个输入框用共享的 `Set-InputByPaste`（真实粘贴 + 读回校验）而不是 `ValuePattern.SetValue`：
+    # 它们是**受控**输入（Leptos 的 `<input value=signal>`），不触发 `input` 事件就白填
+    # （见 AGENTS.md「受控 input 要把值真的打进去」）。名字是**占位符**（空值时可访问名即它）。
+    Assert-True ([bool](Find-Named -Window $window -Name 'HTTP' -Right)) '协议控件在（显示 HTTP）'
+    Assert-True (Set-InputByPaste -Window $window -Name '127.0.0.1' -Text '127.0.0.1') '填入域名 127.0.0.1'
+    Assert-True (Set-InputByPaste -Window $window -Name '7890' -Text $proxyPort) "填入端口 $proxyPort"
     Start-Sleep -Milliseconds 500
     Assert-True (Invoke-Named -Window $window -Name '保存' -Right) '点「保存」'
     Start-Sleep -Seconds 3
@@ -269,6 +273,21 @@ try {
     $saved = Get-ConfigProxy
     Assert-True (($saved.mode -eq 'manual') -and ($saved.url -eq $proxyUrl)) `
         "配置里写入了手动代理（实际: mode=$($saved.mode) url=$($saved.url)）"
+    # 三段拼出来的一条地址经后端归一化后会**拆回**表单：端口框里应当还是那个端口。
+    # ⚠ 不能按名字找：输入框有值以后占位符不再当可访问名（空值时才是），所以按类名找这一行里
+    # **最靠右**的输入框，用 ValuePattern 读值。
+    $portEdit = @(Get-Elements $window) | Where-Object {
+        $_.Current.ClassName -eq 'ui-input__control' -and -not $_.Current.IsOffscreen -and
+            (Test-Rect $_.Current.BoundingRectangle)
+    } | Sort-Object { $_.Current.BoundingRectangle.X } | Select-Object -Last 1
+    $portValue = ''
+    if ($portEdit) {
+        $pattern = $null
+        if ($portEdit.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+            $portValue = $pattern.Current.Value
+        }
+    }
+    Assert-True ($portValue -eq $proxyPort) "保存后端口原样回填（实际 '$portValue'）"
 
     # ================= 2/4 行情查询必须打到假代理 =================
     Write-Host "`n[proxy] 2/4 股票：建仓 → 查询股票名称（应经假代理）"

@@ -44,12 +44,15 @@ use std::time::Duration;
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
 use tr_domain::dto::DiaryExportFileError;
-use tr_domain::proxy::{ProxySetting, PROXY_MODE_AUTO, PROXY_MODE_MANUAL, PROXY_MODE_OFF};
+use tr_domain::proxy::{
+    join_http_proxy, split_http_proxy, ProxySetting, PROXY_MODE_AUTO, PROXY_MODE_MANUAL,
+    PROXY_MODE_OFF, PROXY_SCHEME_HTTP,
+};
 
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, FeaturePage, Input, Progress, Segmented, SegmentedOption,
-    Spin, SpinSize, Switch, TabItem, TabPane, Tabs, Tooltip,
+    Select, SelectOption, Spin, SpinSize, Switch, TabItem, TabPane, Tabs, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
@@ -116,9 +119,11 @@ fn GeneralSetting() -> impl IntoView {
 
     let close_behavior = RwSignal::new(String::new());
     let appearance = RwSignal::new(stores.appearance.get_untracked());
-    // 代理：模式 + 手动地址（切换模式立即保存；地址靠回车或「保存」按钮提交）
+    // 代理：模式 + 手动地址（**协议 / 域名 / 端口**三段填写；协议目前只有 http）
     let proxy_mode = RwSignal::new(PROXY_MODE_AUTO.to_string());
-    let proxy_url = RwSignal::new(String::new());
+    let proxy_scheme = RwSignal::new(PROXY_SCHEME_HTTP.to_string());
+    let proxy_host = RwSignal::new(String::new());
+    let proxy_port = RwSignal::new(String::new());
     // 「当前生效：…」那一行（由 `proxy_detect` 填；切换模式/保存后刷新）
     let proxy_note = RwSignal::new(String::new());
     let proxy_detecting = RwSignal::new(false);
@@ -143,12 +148,26 @@ fn GeneralSetting() -> impl IntoView {
     // 保存失败时把界面拉回**磁盘上的真实值**。
     // ⚠ 不能"记住点击前的值"：`Segmented` 在触发 `on_change` **之前**就已经把绑定信号改成新值了，
     // 回调里读到的"之前"其实就是刚点的那一项（回滚会变成空操作）——只有重读配置才权威。
+    // 手动地址在配置里仍是**一条** `http://host:port`（配置契约不变）：三段 ↔ 一条的换算
+    // 走 `tr_domain::proxy` 的纯函数（那边有单测），这里只负责填/读信号。
+    let apply_proxy_url = move |url: &str| {
+        let (host, port) = split_http_proxy(url);
+        proxy_host.set(host);
+        proxy_port.set(port);
+    };
+    let compose_proxy_url = move || {
+        join_http_proxy(
+            &proxy_scheme.get_untracked(),
+            &proxy_host.get_untracked(),
+            &proxy_port.get_untracked(),
+        )
+    };
     let reload_proxy = move || {
         leptos::task::spawn_local(async move {
             match api::desktop::config_get().await {
                 Ok(config) => {
                     proxy_mode.set(config.proxy.effective_mode().to_string());
-                    proxy_url.set(config.proxy.url);
+                    apply_proxy_url(&config.proxy.url);
                 }
                 Err(error) => notify_error("读取配置", &error),
             }
@@ -164,7 +183,8 @@ fn GeneralSetting() -> impl IntoView {
             match api::desktop::config_set_proxy(setting).await {
                 Ok(saved) => {
                     proxy_mode.set(saved.mode);
-                    proxy_url.set(saved.url);
+                    // 回填的是**后端归一化过**的地址（`127.0.0.1:7890` 会变成两段填好）
+                    apply_proxy_url(&saved.url);
                     refresh_proxy_note();
                 }
                 Err(error) => {
@@ -177,12 +197,12 @@ fn GeneralSetting() -> impl IntoView {
         });
     };
 
-    // 模式切换：「手动」只把输入框露出来（地址还没填，提交必然失败），其余两种立即保存。
+    // 模式切换：「手动」只把三段输入露出来（地址还没填，提交必然失败），其余两种立即保存。
     let switch_proxy_mode = move |mode: String| {
         if mode == PROXY_MODE_MANUAL {
             proxy_mode.set(mode);
         } else {
-            submit_proxy(mode, proxy_url.get_untracked(), true);
+            submit_proxy(mode, compose_proxy_url(), true);
         }
     };
 
@@ -203,7 +223,7 @@ fn GeneralSetting() -> impl IntoView {
                 stores.apply_appearance();
                 // 空/未知模式一律回落到「自动探测」（与 `ProxySetting::effective_mode` 同口径）
                 proxy_mode.set(config.proxy.effective_mode().to_string());
-                proxy_url.set(config.proxy.url);
+                apply_proxy_url(&config.proxy.url);
                 // 首屏就把"当前到底走不走代理"显示出来（auto 模式尤其需要）
                 refresh_proxy_note();
             }
@@ -367,14 +387,37 @@ fn GeneralSetting() -> impl IntoView {
                 </div>
                 <div class="st-card-action">
                     <Show when=move || proxy_mode.get() == PROXY_MODE_MANUAL>
-                        <div class="st-proxy-url">
+                        // 手动地址分三段填（协议 / 域名 / 端口）：协议目前**只有 HTTP**，
+                        // 但仍做成下拉 —— 将来加 SOCKS/HTTPS 就是往选项里加一条，
+                        // 而不是让用户回来重学一种"整条地址"的写法。
+                        // 三段拼起来仍是一条 `http://host:port` 交给后端（配置契约不变）。
+                        <div class="st-proxy-fields">
+                            <Select
+                                value=proxy_scheme
+                                options=vec![SelectOption::new(PROXY_SCHEME_HTTP, "HTTP")]
+                                class="st-proxy-fields__scheme"
+                            />
                             <Input
-                                value=proxy_url
-                                placeholder="http://127.0.0.1:7890"
+                                value=proxy_host
+                                placeholder="127.0.0.1"
+                                class="st-proxy-fields__host"
                                 on_enter=move || {
                                     submit_proxy(
                                         PROXY_MODE_MANUAL.to_string(),
-                                        proxy_url.get_untracked(),
+                                        compose_proxy_url(),
+                                        false,
+                                    )
+                                }
+                            />
+                            <Input
+                                value=proxy_port
+                                placeholder="7890"
+                                maxlength=5
+                                class="st-proxy-fields__port"
+                                on_enter=move || {
+                                    submit_proxy(
+                                        PROXY_MODE_MANUAL.to_string(),
+                                        compose_proxy_url(),
                                         false,
                                     )
                                 }
@@ -396,7 +439,7 @@ fn GeneralSetting() -> impl IntoView {
                             on_click=move |_| {
                                 submit_proxy(
                                     PROXY_MODE_MANUAL.to_string(),
-                                    proxy_url.get_untracked(),
+                                    compose_proxy_url(),
                                     false,
                                 )
                             }
