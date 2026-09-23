@@ -819,6 +819,8 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     let trade_date = RwSignal::new(today_ymd());
     let trade_tag = RwSignal::new(String::new());
     let trade_mutating = RwSignal::new(false);
+    // 名称是"按代码自动查来的"还是用户手打的：只有换过代码才允许被覆盖（见查询回调）
+    let trade_queried_code = RwSignal::new(String::new());
 
     // 编辑 / 删除
     let edit_target = RwSignal::new(Option::<StockTradeDto>::None);
@@ -1047,12 +1049,18 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         } else {
             code.clone()
         });
-        trade_name.set(
+        // **建仓时名称也必须是空的**：它以前无条件取"当前选中那条持仓"的名字，
+        // 于是点「建仓」会带着上一只票的名字（用户报的"不该有山子高科四个字"）。
+        // 减仓 / 清仓是就着某条持仓下单，名称代码本来就要预填 —— 只有 open 清空。
+        trade_name.set(if next_type == "open" {
+            String::new()
+        } else {
             position
                 .as_ref()
                 .map(|item| item.stock_name.clone())
-                .unwrap_or_default(),
-        );
+                .unwrap_or_default()
+        });
+        trade_queried_code.set(String::new());
         // 清仓时预填全仓手数
         trade_rows.reset(vec![(
             String::new(),
@@ -1705,11 +1713,14 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                     if code.is_empty() || ledger_id.is_empty() {
                         return;
                     }
+                    // 已经为这个代码查过一次、且用户没再改代码 → 不再覆盖（手改过的名称要留住）
+                    let changed = trade_queried_code.get_untracked() != code;
+                    trade_queried_code.set(code.clone());
                     leptos::task::spawn_local(async move {
                         // 静默失败（查不到名称就保持为空）
                         if let Ok(data) = api::stock::stock_name(&code).await {
-                            if trade_name.get_untracked().trim().is_empty()
-                                && !data.stock_name.is_empty()
+                            if !data.stock_name.is_empty()
+                                && (trade_name.get_untracked().trim().is_empty() || changed)
                             {
                                 trade_name.set(data.stock_name);
                             }
@@ -2136,20 +2147,16 @@ fn trade_modal(
                 </div>
                 <div class="modal-form-item">
                     <p class="modal-form-label">"股票代码"</p>
+                    // **失焦即查名**：填完代码离开这一格，名称自动填上（原来要点右侧的
+                    // 「查询股票名称」按钮）。查不到就静默留空，不挡用户手填。
                     <Input
                         value=code
                         disabled=Signal::derive(move || trade_type.get() != "open")
+                        on_blur=UnsyncCallback::new(move |()| {
+                            on_code_blur.run(code.get_untracked())
+                        })
                     />
                 </div>
-            </div>
-            <div class="stock-trade-form__code-actions">
-                <button
-                    type="button"
-                    class="ui-btn ui-btn--sm"
-                    on:click=move |_| on_code_blur.run(code.get_untracked())
-                >
-                    "查询股票名称"
-                </button>
             </div>
 
             <div class="stock-trade-form__fills">

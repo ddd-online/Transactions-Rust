@@ -308,7 +308,10 @@ function Add-Position {
     if (-not $codeInput) { return $false }
     Set-Value $codeInput $Code | Out-Null
     Start-Sleep -Milliseconds 600
-    Invoke-Element (Wait-Element -Root $Window -Name '查询股票名称') | Out-Null
+    # 名称靠**失焦自动查**（「查询股票名称」按钮已去掉）：聚焦代码框 → Tab 离开它
+    $codeInput.SetFocus()
+    Start-Sleep -Milliseconds 300
+    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
     Start-Sleep -Seconds 3
     Set-Value (Wait-Element -Root $Window -Name '成交价（元/股）') $Price | Out-Null
     $lotsInput = Wait-EditLike -Root $Window -Pattern '手数'
@@ -398,12 +401,49 @@ try {
     }
     Assert-True $opened '弹窗「委托建仓」已打开'
 
+    # **建仓时两格都应当是空的**（真缺陷：以前「股票名称」无条件取"当前选中那条持仓"的名字，
+    # 于是点建仓会带着上一只票的名字 —— 用户当场抓到）。弹窗里**没有占位符**的两个 Edit
+    # 就是名称与代码：按包围盒从左到右读值，两格都得是空串。
+    $unnamedEdits = @(Get-Elements $window) | Where-Object {
+        (($_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
+            ($_.Current.ClassName -eq 'Edit')) -and
+            -not $_.Current.Name -and -not $_.Current.IsOffscreen -and
+            (Test-Rect $_.Current.BoundingRectangle)
+    } | Sort-Object { $_.Current.BoundingRectangle.X }
+    $blank = @()
+    foreach ($el in $unnamedEdits) {
+        $pattern = $null
+        if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+            $blank += [string]$pattern.Current.Value
+        }
+    }
+    Assert-True (($blank.Count -ge 2) -and ($blank[0] -eq '') -and ($blank[1] -eq '')) `
+        "建仓弹窗默认两格为空（实际: '$($blank -join " / ")'）"
+
     $codeInput = Find-UnnamedEditRight -Window $window
     Assert-True ([bool]$codeInput) '找到弹窗里的「股票代码」输入框（按包围盒靠右那个）'
     Assert-True (Set-Value $codeInput $code) "填入股票代码 $code"
     Start-Sleep -Milliseconds 600
-    Assert-True (Invoke-Element (Wait-Element -Root $window -Name '查询股票名称')) '点「查询股票名称」（走真实行情）'
+    # 名称靠**失焦自动查**（「查询股票名称」按钮已去掉）：聚焦代码框 → Tab 离开它 → 走真实行情
+    $codeInput.SetFocus()
+    Start-Sleep -Milliseconds 300
+    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
     Start-Sleep -Seconds 3
+    # 判据落在结果上：名称框（弹窗里**靠左**那个无名输入框）应当被自动填上
+    $nameValue = ''
+    $nameEdit = @(Get-Elements $window) | Where-Object {
+        (($_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) -or
+            ($_.Current.ClassName -eq 'Edit')) -and
+            -not $_.Current.Name -and -not $_.Current.IsOffscreen -and
+            (Test-Rect $_.Current.BoundingRectangle)
+    } | Sort-Object { $_.Current.BoundingRectangle.X } | Select-Object -First 1
+    if ($nameEdit) {
+        $pattern = $null
+        if ($nameEdit.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+            $nameValue = $pattern.Current.Value
+        }
+    }
+    Assert-True (-not [string]::IsNullOrWhiteSpace($nameValue)) "代码失焦后名称被自动填上（实际 '$nameValue'）"
 
     Assert-True (Set-Value (Wait-Element -Root $window -Name '成交价（元/股）') $buyPrice) "填入成交价 $buyPrice"
     $lotsInput = Wait-EditLike -Root $window -Pattern '手数'

@@ -666,16 +666,13 @@
   gap: var(--transactions-space-md);
 }
 
-.stock-trade-form__code-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: var(--transactions-space-sm);
-}
-
+/* 名称/代码两格之后直接是成交明细：这一条上边距原来由「查询股票名称」那一行
+ * （`.stock-trade-form__code-actions`）撑着，按钮去掉后补回来 */
 .stock-trade-form__fills {
   border: 1px solid var(--transactions-color-divider);
   border-radius: var(--transactions-radius-md);
   padding: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-md);
   margin-bottom: var(--transactions-space-md);
 }
 

@@ -309,7 +309,7 @@ try {
     Assert-True ([bool]$toast) "检测结果在窗口底部弹出了消息提示（带 $proxyUrl）"
 
     # ================= 2/4 行情查询必须打到假代理 =================
-    Write-Host "`n[proxy] 2/4 股票：建仓 → 查询股票名称（应经假代理）"
+    Write-Host "`n[proxy] 2/4 股票：建仓 → 填代码后失焦自动查名（应经假代理）"
     Assert-True (Invoke-Named -Window $window -Name '股票') '打开「股票」页'
     Start-Sleep -Seconds 3
     Assert-True (Select-Tab -Window $window -Name '持仓') '切到「持仓」页签'
@@ -321,7 +321,10 @@ try {
     Assert-True ([bool]$codeInput) '找到「股票代码」输入框'
     Assert-True (Set-Value $codeInput $quoteCode) "填入股票代码 $quoteCode"
     Start-Sleep -Milliseconds 600
-    Assert-True (Invoke-Named -Window $window -Name '查询股票名称') '点「查询股票名称」'
+    # 名称靠**失焦自动查**（「查询股票名称」按钮已去掉）：聚焦代码框 → Tab 离开它
+    $codeInput.SetFocus()
+    Start-Sleep -Milliseconds 300
+    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
 
     Assert-True (Wait-ProxyLog -Pattern 'qt.gtimg.cn' -TimeoutSec 20) `
         '假代理收到了行情请求（说明行情确实走了代理）'
@@ -364,7 +367,10 @@ try {
     Start-Sleep -Seconds 2
     $codeInput = Get-UnnamedEditRight -Window $window
     if ($codeInput) { Set-Value $codeInput $quoteCode | Out-Null }
-    Assert-True (Invoke-Named -Window $window -Name '查询股票名称') '再点「查询股票名称」'
+    # 同上：填完代码按 Tab 失焦，触发那次（应当直连的）行情查询
+    if ($codeInput) { $codeInput.SetFocus() }
+    Start-Sleep -Milliseconds 300
+    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
     Start-Sleep -Seconds 6
     $after = @(Get-ProxyLog | Where-Object { $_.Trim() })
     Assert-True ($after.Count -eq $before) `

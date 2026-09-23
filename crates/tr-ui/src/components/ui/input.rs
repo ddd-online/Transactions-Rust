@@ -32,6 +32,9 @@ pub fn Input(
     /// 回车回调
     #[prop(optional, into)]
     on_enter: Option<UnsyncCallback<()>>,
+    /// 失焦回调（例：股票代码填完就自动查名称，省一个「查询」按钮）
+    #[prop(optional, into)]
+    on_blur: Option<UnsyncCallback<()>>,
 ) -> impl IntoView {
     let disabled = disabled.unwrap_or_else(|| Signal::derive(|| false));
 
@@ -52,6 +55,11 @@ pub fn Input(
                         if let Some(callback) = on_enter {
                             callback.run(());
                         }
+                    }
+                }
+                on:blur=move |_| {
+                    if let Some(callback) = on_blur {
+                        callback.run(());
                     }
                 }
             />
