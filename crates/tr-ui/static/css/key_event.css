@@ -449,6 +449,10 @@
   background-color: var(--transactions-color-major-warm);
 }
 
+/* 主图容器：照片**完整**放在里面（`contain`），宁可两侧留底色也不裁 ——
+ * 这一格是"看这张照片"的地方，裁掉头和脚等于没看到（用户当场报的就是竖幅照片被 cover 裁了）。
+ * 底虚线只在**空态**（`.key-event-gallery__empty`，上传落点）保留：这里有真照片，
+ * 换一条实发丝线，跟卡片里别的面一样。 */
 .key-event-gallery__main {
   position: relative;
   flex: 1;
@@ -457,14 +461,14 @@
   overflow: hidden;
   cursor: pointer;
   background-color: var(--transactions-color-major-warm);
-  border: 1px dashed var(--transactions-color-window-border);
+  border: 1px solid var(--transactions-color-divider);
 }
 
 .key-event-gallery__img {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 /* 叠在图片上的下载：本体是 .ui-icon-btn--on-media（毛玻璃底），这里只固定位置 */
@@ -514,6 +518,8 @@
   transform: scale(1.03);
 }
 
+/* 缩略图保持 `cover`：它是**导航用的槽位**（160×90 固定格），要的是整齐的一列，
+ * 不是"看清这张照片"—— 完整显示交给主图和灯箱（用户明确要求侧边缩略图不改）。 */
 .key-event-thumb__img {
   width: 100%;
   height: 100%;
