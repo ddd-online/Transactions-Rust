@@ -133,6 +133,7 @@ fn main() {
             tr_ipc::commands::stock_overview,
             tr_ipc::commands::stock_principal_set,
             tr_ipc::commands::stock_principal_add,
+            tr_ipc::commands::stock_interest_add,
             tr_ipc::commands::stock_withdraw,
             tr_ipc::commands::stock_fee_settings_get,
             tr_ipc::commands::stock_fee_settings_put,

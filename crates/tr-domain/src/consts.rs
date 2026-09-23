@@ -32,6 +32,8 @@ pub const TRANSACTION_TYPES: [&str; 3] = [
 pub const STOCK_EVENT_ADD_PRINCIPAL: &str = "add_principal";
 /// 支取（从股票账户现金中取出，本金不变）
 pub const STOCK_EVENT_WITHDRAW: &str = "withdraw";
+/// 利息归本（账户利息 / 分红计入可用现金；本金不变，单独累计展示）
+pub const STOCK_EVENT_INTEREST_PRINCIPAL: &str = "interest_principal";
 /// 买入
 pub const STOCK_EVENT_BUY: &str = "buy";
 /// 卖出

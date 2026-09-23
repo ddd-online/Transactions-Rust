@@ -307,6 +307,16 @@ impl StockDao {
         )
     }
 
+    /// 累计利息归本金额：`amount_change` 存正数，直接求和。
+    pub fn sum_interest_principal(conn: &Connection, ledger_id: &str) -> rusqlite::Result<i64> {
+        conn.query_row(
+            "SELECT COALESCE(SUM(amount_change), 0) FROM tbl_billadm_stock_fund_record \
+             WHERE ledger_id = ?1 AND event_type = ?2",
+            params![ledger_id, consts::STOCK_EVENT_INTEREST_PRINCIPAL],
+            |row| row.get(0),
+        )
+    }
+
     /// 当前持仓成本：Σ 未清仓（`quantity > 0`）持仓的总成本。
     pub fn sum_position_cost(conn: &Connection, ledger_id: &str) -> rusqlite::Result<i64> {
         conn.query_row(
@@ -1284,39 +1294,56 @@ mod tests {
         StockDao::create_fund_record(&conn, &record("f2", "2026-01-10", "withdraw", -50, 1050))
             .unwrap();
         StockDao::create_fund_record(&conn, &record("f3", "2026-01-10", "buy", -1000, 50)).unwrap();
+        StockDao::create_fund_record(
+            &conn,
+            &record(
+                "f4",
+                "2026-01-11",
+                consts::STOCK_EVENT_INTEREST_PRINCIPAL,
+                25,
+                75,
+            ),
+        )
+        .unwrap();
 
         // 末条：日期最大，同日按 created_at DESC, id DESC
         let latest = StockDao::query_latest_fund_record(&conn, "l1").unwrap();
-        assert_eq!(latest.id, "f3");
+        assert_eq!(latest.id, "f4");
 
-        assert_eq!(StockDao::count_fund_records(&conn, "l1").unwrap(), 3);
+        assert_eq!(StockDao::count_fund_records(&conn, "l1").unwrap(), 4);
         assert_eq!(StockDao::sum_withdrawn(&conn, "l1").unwrap(), 50);
         assert_eq!(StockDao::sum_net_pnl(&conn, "l1").unwrap(), 0);
+        // 利息归本取正数求和；不并入「累计支取」
+        assert_eq!(StockDao::sum_interest_principal(&conn, "l1").unwrap(), 25);
 
         let (page, total) = StockDao::query_fund_records(&conn, "l1", 1, 2).unwrap();
-        assert_eq!(total, 3);
+        assert_eq!(total, 4);
         assert_eq!(page.len(), 2);
         let (page2, _) = StockDao::query_fund_records(&conn, "l1", 2, 2).unwrap();
-        assert_eq!(page2.len(), 1);
+        assert_eq!(page2.len(), 2);
 
         // 录入顺序：created_at ASC, id ASC
         let ordered = StockDao::list_fund_records_in_insert_order(&conn, "l1").unwrap();
         assert_eq!(
             ordered.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
-            vec!["f1", "f2", "f3"]
+            vec!["f1", "f2", "f3", "f4"]
         );
 
         StockDao::update_fund_record_cash_balance(&conn, "f3", 999).unwrap();
         assert_eq!(
-            StockDao::query_latest_fund_record(&conn, "l1")
+            StockDao::list_fund_records_in_insert_order(&conn, "l1")
+                .unwrap()
+                .iter()
+                .find(|r| r.id == "f3")
                 .unwrap()
                 .cash_balance,
             999
         );
 
-        // 只删买卖记录，保留本金/支取
+        // 只删买卖记录，保留本金/支取/利息归本
         StockDao::delete_trade_fund_records(&conn, "l1").unwrap();
-        assert_eq!(StockDao::count_fund_records(&conn, "l1").unwrap(), 2);
+        assert_eq!(StockDao::count_fund_records(&conn, "l1").unwrap(), 3);
+        assert_eq!(StockDao::sum_interest_principal(&conn, "l1").unwrap(), 25);
 
         std::fs::remove_dir_all(&dir).ok();
     }

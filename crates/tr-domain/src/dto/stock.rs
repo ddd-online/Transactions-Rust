@@ -23,6 +23,9 @@ pub struct StockOverviewDto {
     /// 累计支取（Σ 支取事件金额）
     #[serde(rename = "withdrawnTotal")]
     pub withdrawn_total: i64,
+    /// 累计利息归本（Σ 利息归本事件金额）
+    #[serde(rename = "interestTotal")]
+    pub interest_total: i64,
     /// 总资产 = 可用现金 + 持仓市值
     #[serde(rename = "totalAssets")]
     pub total_assets: i64,
@@ -537,6 +540,7 @@ mod tests {
         let value = serde_json::to_value(StockOverviewDto::default()).unwrap();
         assert!(value.get("availableCash").is_some());
         assert!(value.get("totalPnlPercent").is_some());
+        assert!(value.get("interestTotal").is_some());
     }
 
     #[test]

@@ -102,6 +102,25 @@ pub fn stock_principal_add(
     )?)
 }
 
+/// 利息归本（账户利息计入可用现金；本金不变，可指定发生日期）。
+#[tauri::command]
+pub fn stock_interest_add(
+    state: State<'_, AppState>,
+    req: StockAmountDateRequest,
+) -> ApiResult<StockOverviewDto> {
+    require_ledger_id(&req.ledger_id)?;
+    let amount = req
+        .amount
+        .ok_or_else(|| ApiError::from(AppError::bad_request("amount is required")))?;
+    let workspace = state.workspace()?;
+    Ok(stock::add_interest_at_date(
+        &workspace,
+        &req.ledger_id,
+        amount,
+        &req.date,
+    )?)
+}
+
 /// 从股票账户支取（本金不变；不得超过可用现金）。
 #[tauri::command]
 pub fn stock_withdraw(

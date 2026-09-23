@@ -11,6 +11,10 @@
 #     `realized_pnl = amount - fee - cost_basis`，数量与成本按比例结转；清空时成本归零并归档本轮
 #   * 费用设置：佣金费率（UI 单位**万分之**）/最低佣金（元）/印花税/过户费（%）→ 保存后
 #     **新委托立刻按新费率计费**（买入 = 佣金 + 过户费；卖出 = 佣金 + 印花税 + 过户费），逐项断言到分
+#   * 账户：工具栏三个资金操作按「支取 / 利息归本 / 追加本金」排列；「利息归本」落库为
+#     `interest_principal`（正数、进现金链），**本金口径不变**，但要在账户页指标区显示累计额、
+#     并且计入可用现金；资金记录分页的「下一页」必须真的换一批数据
+#     （修的是"页码动了、表格不动"——分页控件只写页码信号，缺一个依赖它的 Effect 去查数据）
 #   * 重置股票数据：清空该账本股票侧全部表，而**记账数据与账本本身不动**；
 #     费用设置/交易标签会被界面"重新拉一遍"按默认值重建 —— 对这两张表断言的是"回到默认值"
 #   * 资金记录：`cash_balance` 恒等于 `principal + Σ amount_change`（不变量，逐步校验）
@@ -173,6 +177,75 @@ function Assert-FundChain { param([string]$LedgerId, [string]$Stage)
     $previous = $records[$records.Count - 2]
     Assert-True ([int64]$new.cash_balance -eq ([int64]$previous.cash_balance + [int64]$new.amount_change)) `
         "$Stage：余额链一致（$($previous.cash_balance) + $($new.amount_change) = $($new.cash_balance)）"
+}
+
+# 分 → `1234.56`（与界面 `format::amount` 的 `cents_to_yuan` 同口径：两位小数、不做千分位）。
+function Format-Cents { param([int64]$Cents)
+    $sign = ''
+    $value = $Cents
+    if ($value -lt 0) { $sign = '-'; $value = -$value }
+    return ('{0}{1}.{2:d2}' -f $sign, [Math]::Floor([double]$value / 100), ($value % 100))
+}
+
+# 按服务层口径从**库**里算账户指标：可用现金 = 本金 + 累计利息归本 + 已实现盈亏 − 累计支取 − 持仓成本。
+# 断言先落在这里，界面那边只负责证明"这两个数字确实显示在指标区里"。
+function Get-ExpectedAccount { param([string]$LedgerId)
+    $interest = 0; $withdrawn = 0; $realized = 0
+    foreach ($record in (Get-FundRecords -LedgerId $LedgerId)) {
+        switch ([string]$record.event_type) {
+            'interest_principal' { $interest += [int64]$record.amount_change }
+            'withdraw' { $withdrawn += -[int64]$record.amount_change }
+            default { if ($null -ne $record.net_pnl) { $realized += [int64]$record.net_pnl } }
+        }
+    }
+    $account = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_account' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $LedgerId }) | Select-Object -First 1
+    $principal = if ($account) { [int64]$account.principal } else { 0 }
+    $positionCost = 0
+    foreach ($position in @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
+            Where-Object { $_.ledger_id -eq $LedgerId -and [int64]$_.quantity -gt 0 })) {
+        $positionCost += [int64]$position.total_cost
+    }
+    return [pscustomobject]@{
+        Principal    = $principal
+        Interest     = $interest
+        Withdrawn    = $withdrawn
+        Realized     = $realized
+        PositionCost = $positionCost
+        Available    = $principal + $interest + $realized - $withdrawn - $positionCost
+    }
+}
+
+# 「总资产」指标区（`总资产` 标题与「资金变化记录」面板标题之间）里所有包含 `$Match` 的可访问名。
+#
+# 为什么按**区域**找而不是"标签下方那个 Text"：Chromium 的 UIA 可能把卡片文字聚合成一个
+# 可访问名（持仓卡片那条断言就是这么取到 `贵州茅台 600519 持仓 3 手` 的），也可能拆成
+# 「标签」「值」两个 Text 节点 —— 两种形态下"指标区里出现了这个字符串"都成立。
+# 同时限定在**指标区**，避开资金记录表里的「现金余额」列：它最后一条本来就等于可用现金。
+function Find-OverviewText { param($Window, [string]$Match)
+    $topY = 0.0
+    $bottomY = [double]::MaxValue
+    $title = Find-First $Window '总资产'
+    if ($title) { $topY = $title.Current.BoundingRectangle.Y }
+    $panel = Find-First $Window '资金变化记录'
+    if ($panel) { $bottomY = $panel.Current.BoundingRectangle.Y }
+    $hits = New-Object System.Collections.Generic.List[string]
+    foreach ($element in @(Get-Elements $Window)) {
+        $name = [string]$element.Current.Name
+        if (-not $name -or -not $name.Contains($Match)) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if (-not (Test-Rect $rect)) { continue }
+        if ($rect.Y -lt $topY -or $rect.Y -ge $bottomY) { continue }
+        $hits.Add($name)
+    }
+    return $hits
+}
+
+# 资金记录表里的「日期」格子：账户页只有这张表会出现独立的 `YYYY-MM-DD` 文本，每行一个。
+# 行数按页码变、内容按页变 —— 翻页断言就用它（不需要解析整张表）。
+function Get-FundRowDates { param($Window)
+    return @(Get-Elements $Window | ForEach-Object { [string]$_.Current.Name } |
+        Where-Object { $_ -match '^\d{4}-\d{2}-\d{2}$' })
 }
 
 # 只认**真正可见**的按钮：页面里同名元素很多（另一个页签/未展开面板里也可能有「减仓」），
@@ -381,8 +454,8 @@ try {
     $ledgerId = ''
     $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 5
 
-    # ================= 1/7 建仓 =================
-    Write-Host "`n[stock] 1/7 建仓 $code × $buyLots 手 @ $buyPrice"
+    # ================= 1/8 建仓 =================
+    Write-Host "`n[stock] 1/8 建仓 $code × $buyLots 手 @ $buyPrice"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票')) '打开「股票」页'
     Start-Sleep -Seconds 3
     Assert-True (Switch-StockSub -Window $window -Name '持仓') '切到「持仓」子功能（建仓按钮在工具栏）'
@@ -483,8 +556,8 @@ try {
             "买入资金变动 = -(成交额 + 手续费)（$($buyRecord.amount_change)）"
     }
 
-    # ================= 2/7 界面展示（建仓之后）=================
-    Write-Host "`n[stock] 2/7 界面展示：持仓卡片与成交记录"
+    # ================= 2/8 界面展示（建仓之后）=================
+    Write-Host "`n[stock] 2/8 界面展示：持仓卡片与成交记录"
     $cardText = $null
     $deadline = (Get-Date).AddSeconds(20)
     do {
@@ -511,12 +584,12 @@ try {
     Assert-True (Switch-StockSub -Window $window -Name '持仓') '切回「持仓」（减仓/清仓按钮在详情区）'
     Start-Sleep -Seconds 3
 
-    # ================= 3/7 编辑成交（改成交价 → 费用/成本/资金链重算）=================
+    # ================= 3/8 编辑成交（改成交价 → 费用/成本/资金链重算）=================
     # 成交记录表每行的「编辑」按钮（在持仓详情区，所以这时必须还有持仓）。
     # ⚠ 两个坑：① 这个账本里**还有种子数据**的同代码成交（界面只显示当前轮次那笔，数据库查询会一起捞出来），
     # 所以"我们的成交"用与 1/5 相同的口径认：同类型里 created_at 最新的那一笔；
     # ② 编辑弹窗的输入框**预填后名字就是值**（不是占位符），必须按 Y 序取 Edit，不能按名字找。
-    Write-Host "`n[stock] 3/7 编辑成交：把建仓价从 $buyPrice 改成 101"
+    Write-Host "`n[stock] 3/8 编辑成交：把建仓价从 $buyPrice 改成 101"
     $orderTrade = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
     Assert-True ([bool]$orderTrade) '编辑前能认到我们的建仓成交（该类型最新一笔）'
     if ($orderTrade) {
@@ -581,8 +654,8 @@ try {
             "编辑后资金记录按新价重放（存在变动 = $expectedChange 的记录，实际 $($ourFundsAfterEdit.Count) 条）"
     }
 
-    # ================= 4/7 删除委托（整笔回放）→ 重新建仓 =================
-    Write-Host "`n[stock] 4/7 删除整笔委托 → 再建仓（好继续验减仓/清仓）"
+    # ================= 4/8 删除委托（整笔回放）→ 重新建仓 =================
+    Write-Host "`n[stock] 4/8 删除整笔委托 → 再建仓（好继续验减仓/清仓）"
     $ourBuyFundIds = @(if ($editedTrade) {
             $expected = -(([int64]$editedTrade.amount) + ([int64]$editedTrade.fee))
             Get-FundRecords -LedgerId $ledgerId | Where-Object { ([int64]$_.amount_change) -eq $expected } |
@@ -628,7 +701,7 @@ try {
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     Assert-True ([bool]$posRebuilt -and $posRebuilt.quantity -eq 300) "重建仓后持仓回到 300 股（实际 $(if ($posRebuilt) { $posRebuilt.quantity } else { 'n/a' })）"
 
-    # ================= 5/7 减仓 → 清仓 =================
+    # ================= 5/8 减仓 → 清仓 =================
     # 详情区的「减仓/清仓」现在真的能点开了（见文件顶部那条缺陷说明）。
     Write-Host "`n[stock] 3/3 减仓 1 手 @ $reducePrice → 清仓 2 手 @ $closePrice"
 
@@ -753,7 +826,7 @@ try {
             }
         }
     }
-    # ================= 6/7 交易费用设置：改完费率，**新委托立刻按新费率计费** =================
+    # ================= 6/8 交易费用设置：改完费率，**新委托立刻按新费率计费** =================
     # ⚠ 费用设置的编辑入口**在股票页的「设置」子功能**（原来在「应用设置 → 股票」分栏，
     # 已随股票设置整体迁进股票页；股票页的其他子功能只读取它来估费，不渲染表单）。
     # 费用设置的 UI 单位：佣金费率是**万分之**（÷10000 落库）、最低佣金是**元**（转分）、
@@ -761,7 +834,7 @@ try {
     #   佣金 = max(round(委托总额×费率), 最低佣金)（**整笔委托只收一次**）；
     #   买入 = 佣金 + 过户费(沪市)；卖出 = 佣金 + 印花税 + 过户费(沪市)（印花税只卖出收）；
     #   多笔成交时印花税/过户费**逐笔取整再相加**（各笔自己进整到分），下面这几笔都是单笔成交。
-    Write-Host "`n[stock] 6/7 费用设置（股票 → 设置）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
+    Write-Host "`n[stock] 6/8 费用设置（股票 → 设置）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
     Assert-True (Switch-StockSub -Window $window -Name '设置') '切到「设置」子功能（费用设置在这里）'
     Start-Sleep -Seconds 2
     Assert-True ([bool](Wait-Element -Root $window -Name '佣金费率' -TimeoutSec 15)) '设置子功能出现费用表单'
@@ -825,8 +898,126 @@ try {
         Assert-True (([int64]$feeSellTrade.fee) -eq 1344) `
             "卖出费用 = 120 + 1200 + 24 = 1344 分（实际 $($feeSellTrade.fee)）"
     }
-    # ================= 7/7 重置股票数据：清空股票侧、**不动记账数据** =================
-    Write-Host "`n[stock] 7/7 重置股票数据（股票 → 设置 → 重置）"
+    # ================= 7/8 账户：利息归本（支取 / 利息归本 / 追加本金）+ 资金记录翻页 =================
+    # 两条要求都落在这里：
+    #   ① 「利息归本」按钮在「支取」与「追加本金」**中间**，金额要显示在账户页指标区；
+    #   ② 可用现金要加上利息归本（本金口径不变）；
+    #   ③ 资金记录分页的上下页必须真的换一批数据（修的是"页码动了、表格不动"）。
+    Write-Host "`n[stock] 7/8 账户：利息归本 + 资金记录翻页"
+    Assert-True (Switch-StockSub -Window $window -Name '账户') '切到「账户」子功能'
+    Start-Sleep -Seconds 3
+
+    $withdrawBtn = Wait-VisibleButton -Window $window -Name '支取' -TimeoutSec 15
+    $interestBtn = Wait-VisibleButton -Window $window -Name '利息归本' -TimeoutSec 15
+    $principalBtn = Wait-VisibleButton -Window $window -Name '追加本金' -TimeoutSec 15
+    Assert-True ([bool]$withdrawBtn -and [bool]$interestBtn -and [bool]$principalBtn) `
+        '账户工具栏有「支取 / 利息归本 / 追加本金」三个按钮'
+    if ($withdrawBtn -and $interestBtn -and $principalBtn) {
+        $x0 = $withdrawBtn.Current.BoundingRectangle.X
+        $x1 = $interestBtn.Current.BoundingRectangle.X
+        $x2 = $principalBtn.Current.BoundingRectangle.X
+        Assert-True (($x0 -lt $x1) -and ($x1 -lt $x2)) "「利息归本」在中间（x = $x0 / $x1 / $x2）"
+    }
+
+    $beforeAccount = Get-ExpectedAccount -LedgerId $ledgerId
+    $fundsBeforeInterest = @(Get-FundRecords -LedgerId $ledgerId)
+    Assert-True ($beforeAccount.Interest -eq 0) "种子里没有利息归本记录（初始累计 $($beforeAccount.Interest) 分）"
+    Assert-True ((Find-OverviewText -Window $window -Match '利息归本').Count -gt 0) `
+        '账户指标区有「利息归本」一项'
+
+    $interestCents = 123456 # 1234.56 元
+    if ($interestBtn) {
+        $rect = $interestBtn.Current.BoundingRectangle
+        [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 300
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    }
+    Start-Sleep -Seconds 1
+    Assert-True ([bool](Wait-Element -Root $window -Name '利息金额' -TimeoutSec 10)) `
+        '「利息归本」弹窗打开（金额项是「利息金额」，三个入口各有自己的弹窗）'
+    Assert-True (Set-InputByPaste -Window $window -Name '请输入金额' -Text '1234.56') '填入利息金额 1234.56'
+    Start-Sleep -Milliseconds 500
+    # 确认键与工具栏入口同名（都叫「利息归本」）→ 取**最后一个**可见且落在窗口内的按钮
+    # （浮层在 DOM 末尾），这也是共享版处理「支取」同名入口的同一套做法。
+    $interestOk = Wait-VisibleButton -Window $window -Name '利息归本' -TimeoutSec 10 -Last
+    Assert-True ([bool]$interestOk) '找到弹窗里的「利息归本」确认键'
+    if ($interestOk) { Invoke-Element $interestOk | Out-Null }
+    Start-Sleep -Seconds 4
+    Assert-True (-not [bool](Find-First $window '利息金额')) '提交后弹窗关闭'
+
+    $fundsAfterInterest = @(Get-FundRecords -LedgerId $ledgerId)
+    Assert-True ($fundsAfterInterest.Count -eq ($fundsBeforeInterest.Count + 1)) `
+        "资金记录多一条（$($fundsBeforeInterest.Count) → $($fundsAfterInterest.Count)）"
+    if ($fundsAfterInterest.Count -gt 0) {
+        $interestRecord = $fundsAfterInterest[$fundsAfterInterest.Count - 1] # 按 created_at 升序
+        Assert-True ($interestRecord.event_type -eq 'interest_principal') `
+            "落库事件类型 interest_principal（实际 $($interestRecord.event_type)）"
+        Assert-True ($interestRecord.event_text -eq '利息归本') "事件文案「利息归本」（实际 $($interestRecord.event_text)）"
+        Assert-True ([int64]$interestRecord.amount_change -eq $interestCents) `
+            "金额变化 = +$interestCents 分（实际 $($interestRecord.amount_change)）"
+        if ($fundsBeforeInterest.Count -gt 0) {
+            $prevBalance = [int64]$fundsBeforeInterest[$fundsBeforeInterest.Count - 1].cash_balance
+            Assert-True ([int64]$interestRecord.cash_balance -eq ($prevBalance + $interestCents)) `
+                "现金余额 = 上一条 + 利息（$prevBalance + $interestCents = $($interestRecord.cash_balance)）"
+        }
+    }
+
+    $afterAccount = Get-ExpectedAccount -LedgerId $ledgerId
+    Assert-True ($afterAccount.Interest -eq $interestCents) "累计利息归本 = $interestCents 分"
+    Assert-True ($afterAccount.Principal -eq $beforeAccount.Principal) `
+        "本金口径不变（$($beforeAccount.Principal) → $($afterAccount.Principal)）：利息归本是账户生的钱"
+    Assert-True ($afterAccount.Available -eq ($beforeAccount.Available + $interestCents)) `
+        "可用现金 +$interestCents 分（$($beforeAccount.Available) → $($afterAccount.Available)）"
+
+    $interestText = '¥' + (Format-Cents $afterAccount.Interest)
+    Assert-True ((Find-OverviewText -Window $window -Match $interestText).Count -gt 0) `
+        "账户页指标区显示累计利息归本 $interestText"
+    $cashText = '¥' + (Format-Cents $afterAccount.Available)
+    $cashHits = Find-OverviewText -Window $window -Match $cashText
+    Assert-True ($cashHits.Count -gt 0) `
+        "指标区「可用现金」= 本金 + 利息归本 + 已实现 − 累计支取 − 持仓成本 = $cashText（命中: $($cashHits -join ' | ')）"
+
+    # ---- 资金记录翻页：第 2 页必须真的换一批数据 ----
+    $fundTotal = $fundsAfterInterest.Count
+    Assert-True ($fundTotal -gt 10) "资金记录 $fundTotal 条（够翻页）"
+    $page1Dates = Get-FundRowDates -Window $window
+    Assert-True ($page1Dates.Count -eq 10) "第 1 页显示 10 行（实际 $($page1Dates.Count)）"
+    $expectedPage2 = [Math]::Min(10, $fundTotal - 10)
+
+    $nextButton = Wait-VisibleButton -Window $window -Name '下一页' -TimeoutSec 10
+    Assert-True ([bool]$nextButton) '找到分页的「下一页」'
+    if ($nextButton) { Invoke-Element $nextButton | Out-Null }
+    $page2Dates = @()
+    $changed = $false
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        Start-Sleep -Milliseconds 400
+        $page2Dates = Get-FundRowDates -Window $window
+        # 判据是**结果**：行数变成第 2 页应有的条数，且出现了第 1 页没有的日期
+        $changed = ($page2Dates.Count -eq $expectedPage2) -and
+            (@($page2Dates | Where-Object { $page1Dates -notcontains $_ }).Count -gt 0)
+    } while (-not $changed -and (Get-Date) -lt $deadline)
+    Assert-True ($page2Dates.Count -eq $expectedPage2) `
+        "翻页后行数 = 第 2 页应有的 $expectedPage2 行（实际 $($page2Dates.Count)）"
+    Assert-True $changed '翻页后表格确实换了一批数据（第 1 页的日期集合与第 2 页不同）'
+
+    # 「上一页」要能回到第 1 页**同一批数据**（上下页走的是同一条查询路径）
+    $prevButton = Wait-VisibleButton -Window $window -Name '上一页' -TimeoutSec 10
+    Assert-True ([bool]$prevButton) '找到分页的「上一页」'
+    if ($prevButton) { Invoke-Element $prevButton | Out-Null }
+    $page1Key = (($page1Dates | Sort-Object) -join ',')
+    $backDates = @()
+    $restored = $false
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        Start-Sleep -Milliseconds 400
+        $backDates = Get-FundRowDates -Window $window
+        $restored = ((($backDates | Sort-Object) -join ',') -eq $page1Key)
+    } while (-not $restored -and (Get-Date) -lt $deadline)
+    Assert-True $restored "「上一页」回到第 1 页的同一批数据（实际 $($backDates.Count) 行）"
+
+    # ================= 8/8 重置股票数据：清空股票侧、**不动记账数据** =================
+    Write-Host "`n[stock] 8/8 重置股票数据（股票 → 设置 → 重置）"
     $recordsBeforeReset = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     $stockTables = @(
         'tbl_billadm_stock_account', 'tbl_billadm_stock_position', 'tbl_billadm_stock_trade',
@@ -890,4 +1081,4 @@ try {
 }
 
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
-Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓 → 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 重置股票数据（不动记账数据）"
+Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓 → 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 重置股票数据（不动记账数据）"

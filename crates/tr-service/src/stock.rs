@@ -196,9 +196,12 @@ pub fn get_overview_with(
     let realized_pnl = db(StockDao::sum_net_pnl(&conn, ledger_id))?;
     // 累计支取：Σ 支取事件金额
     let withdrawn_total = db(StockDao::sum_withdrawn(&conn, ledger_id))?;
-    // 现金余额 = 本金 + 已实现总盈亏 − 累计支取 − 持仓成本（与资金链一致）
+    // 累计利息归本：Σ 利息归本事件金额（本金不变，只进可用现金）
+    let interest_total = db(StockDao::sum_interest_principal(&conn, ledger_id))?;
+    // 现金余额 = 本金 + 累计利息归本 + 已实现总盈亏 − 累计支取 − 持仓成本（与资金链一致）
     let position_cost = db(StockDao::sum_position_cost(&conn, ledger_id))?;
-    let available_cash = account.principal + realized_pnl - withdrawn_total - position_cost;
+    let available_cash =
+        account.principal + interest_total + realized_pnl - withdrawn_total - position_cost;
 
     // 持仓市值与浮动盈亏：最新价 × 股数；行情缺失的股票按持仓成本计入并计数
     let held_positions = db(StockDao::list_positions(&conn, ledger_id))?;
@@ -221,6 +224,7 @@ pub fn get_overview_with(
         available_cash,
         position_market_value,
         withdrawn_total,
+        interest_total,
         total_assets,
         realized_pnl,
         unrealized_pnl,
@@ -406,6 +410,77 @@ pub fn add_withdraw_at_date(
         return Err(error);
     }
     tracing::info!("股票账户支取, ledger: {}, amount: {}", ledger_id, amount);
+    get_overview(workspace, ledger_id)
+}
+
+/// 利息归本：账户利息 / 分红计入可用现金，`principal`（累计投入本金）保持不变。
+///
+/// 与「追加本金」的区别是本金口径：追加本金改 `principal`（用户在统计里看到的投入），
+/// 利息是账户自己生出来的钱，只累计到 `interest_total` 并直接进可用现金。
+pub fn add_interest(
+    workspace: &Workspace,
+    ledger_id: &str,
+    amount: i64,
+) -> ServiceResult<StockOverviewDto> {
+    add_interest_at_date(workspace, ledger_id, amount, "")
+}
+
+/// 利息归本并指定资金变化的发生日期；`date` 为空时按当天记录。
+pub fn add_interest_at_date(
+    workspace: &Workspace,
+    ledger_id: &str,
+    amount: i64,
+    date: &str,
+) -> ServiceResult<StockOverviewDto> {
+    if amount <= 0 {
+        return Err(AppError::bad_request("利息金额必须大于 0").into());
+    }
+    let record_date = normalize_stock_record_date(date)?;
+
+    if let Err(error) = workspace.transaction(|conn| {
+        let account = get_or_create_account_in(conn, ledger_id)?;
+
+        // 当前现金：末条资金记录余额，无记录时为本金
+        let prev_cash = match StockDao::query_latest_fund_record(conn, ledger_id) {
+            Ok(latest) => latest.cash_balance,
+            Err(error) if is_not_found(&error) => account.principal,
+            Err(error) => return Err(ServiceError::Database(error)),
+        };
+
+        let after_cash = prev_cash + amount;
+        let record = StockFundRecord {
+            id: tr_store::util::new_uuid(),
+            ledger_id: ledger_id.to_string(),
+            record_date: record_date.clone(),
+            event_type: consts::STOCK_EVENT_INTEREST_PRINCIPAL.to_string(),
+            event_text: "利息归本".to_string(),
+            amount_change: amount,
+            cash_balance: after_cash,
+            net_pnl: None,
+            remark: format!(
+                "利息 {} 元，现金 {} → {}",
+                tr_domain::money::cents_to_yuan(amount),
+                tr_domain::money::cents_to_yuan(prev_cash),
+                tr_domain::money::cents_to_yuan(after_cash)
+            ),
+            created_at: 0,
+        };
+        db(StockDao::create_fund_record(conn, &record))?;
+        Ok(())
+    }) {
+        tracing::error!(
+            "利息归本失败, ledger: {}, amount: {}, err: {}",
+            ledger_id,
+            amount,
+            error
+        );
+        return Err(error);
+    }
+    tracing::info!(
+        "股票账户利息归本, ledger: {}, amount: {}",
+        ledger_id,
+        amount
+    );
     get_overview(workspace, ledger_id)
 }
 
@@ -3501,6 +3576,79 @@ mod tests {
     }
 
     #[test]
+    fn interest_principal_lifts_cash_without_changing_principal() {
+        let (workspace, dir) = workspace("interest-principal");
+
+        seed_principal(&workspace, 5_000_000);
+        // 利息归本：现金 +100000，本金口径不动
+        let after = add_interest(&workspace, TEST_LEDGER_ID, 100_000).unwrap();
+        assert_eq!(after.principal, 5_000_000, "利息归本不应改变本金");
+        assert_eq!(after.interest_total, 100_000);
+        assert_eq!(after.withdrawn_total, 0);
+        assert_eq!(after.available_cash, 5_100_000, "可用现金要加上利息归本");
+        assert_eq!(after.total_assets, 5_100_000);
+
+        // 资金记录：利息事件金额为正、带现金余额，且不是卖出（net_pnl 为空）
+        let page = list_fund_records(&workspace, TEST_LEDGER_ID, 1, 10).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(
+            page.items[0].event_type,
+            consts::STOCK_EVENT_INTEREST_PRINCIPAL
+        );
+        assert_eq!(page.items[0].event_text, "利息归本");
+        assert_eq!(page.items[0].amount_change, 100_000);
+        assert_eq!(page.items[0].cash_balance, 5_100_000);
+        assert_eq!(page.items[0].net_pnl, None);
+        assert!(
+            page.items[0].remark.contains("利息 1000"),
+            "备注应写明利息金额, 实际: {}",
+            page.items[0].remark
+        );
+
+        // 利息是账户里真实存在的现金：可以再支取出来
+        let withdrawn = add_withdraw(&workspace, TEST_LEDGER_ID, 100_000).unwrap();
+        assert_eq!(withdrawn.interest_total, 100_000, "支取不影响累计利息");
+        assert_eq!(withdrawn.available_cash, 5_000_000);
+
+        // 非法金额被拦下且不产生记录
+        assert!(add_interest(&workspace, TEST_LEDGER_ID, 0).is_err());
+        assert!(add_interest(&workspace, TEST_LEDGER_ID, -100).is_err());
+        assert!(add_interest_at_date(&workspace, TEST_LEDGER_ID, 100, "not-a-date").is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn interest_principal_accumulates_and_chains_with_other_events() {
+        let (workspace, dir) = workspace("interest-principal-chain");
+
+        seed_principal(&workspace, 1_000_000);
+        add_interest_at_date(&workspace, TEST_LEDGER_ID, 30_000, "2026-02-01").unwrap();
+        add_principal_at_date(&workspace, TEST_LEDGER_ID, 500_000, "2026-02-02").unwrap();
+        add_interest_at_date(&workspace, TEST_LEDGER_ID, 20_000, "2026-02-03").unwrap();
+
+        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(overview.principal, 1_500_000, "只有追加本金抬高本金");
+        assert_eq!(overview.interest_total, 50_000, "利息归本累计");
+        assert_eq!(overview.available_cash, 1_550_000);
+        assert_eq!(
+            overview.available_cash,
+            overview.principal + overview.interest_total + overview.realized_pnl
+                - overview.withdrawn_total
+        );
+
+        // 资金记录按日期由近及远，现金余额链逐条自洽
+        let page = list_fund_records(&workspace, TEST_LEDGER_ID, 1, 10).unwrap();
+        assert_eq!(page.total, 3);
+        assert_eq!(page.items[0].record_date, "2026-02-03");
+        assert_eq!(page.items[0].cash_balance, 1_550_000);
+        assert_eq!(page.items[1].cash_balance, 1_530_000);
+        assert_eq!(page.items[2].cash_balance, 1_030_000);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn available_cash_subtracts_position_cost() {
         let (workspace, dir) = workspace("available-cash");
 
@@ -5102,6 +5250,60 @@ mod tests {
         assert_eq!(p3.expectancy, 13_333);
         assert_eq!(p3.max_drawdown, 60_000);
         assert!((p3.max_drawdown_pct - 0.6).abs() < 0.001);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn statistics_interest_principal_joins_the_equity_curve() {
+        let (workspace, dir) = workspace("stats-interest");
+
+        seed_principal(&workspace, 10_000_000);
+        // 第 1 轮亏 80_000：本金 10_000_000 → 9_920_000，峰值仍是 10_000_000
+        seed_clean_round_from(
+            &workspace,
+            TEST_CODE,
+            TEST_NAME,
+            1000,
+            920,
+            10,
+            1_690_000_000,
+        );
+        // 亏损之后的**次日**记一笔利息归本：9_950_000 没有超过峰值
+        add_interest_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            30_000,
+            &unix_to_date(1_690_100_000),
+        )
+        .unwrap();
+        // 第 2 轮再亏 100_000
+        seed_clean_round_from(
+            &workspace,
+            TEST_CODE_B,
+            TEST_NAME_B,
+            1000,
+            900,
+            10,
+            1_690_200_000,
+        );
+
+        let stats = crate::stock_statistics::get_statistics(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(stats.principal, 10_000_000, "利息归本不改本金口径");
+
+        let p1 = &stats.points[0];
+        assert_eq!((p1.pnl, p1.max_drawdown), (-80_000, 80_000));
+
+        let p2 = &stats.points[1];
+        assert_eq!(p2.pnl, -100_000);
+        // 9_920_000 + 30_000 = 9_950_000 未超过峰值，再亏 100_000 → 回撤 150_000；
+        // 利息若不进总资产曲线，这里会算成 180_000
+        assert_eq!(p2.max_drawdown, 150_000, "利息归本要进总资产曲线");
+        assert!(
+            (p2.max_drawdown_pct - 1.5).abs() < 0.001,
+            "回撤率分母仍是投入本金, 实际 {}",
+            p2.max_drawdown_pct
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

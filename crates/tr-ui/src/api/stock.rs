@@ -276,6 +276,23 @@ pub async fn principal_add(
     .await
 }
 
+/// 利息归本（**分**，可指定发生日期）。本金不变，只增加可用现金与「累计利息归本」。
+pub async fn interest_add(
+    ledger_id: &str,
+    amount: i64,
+    date: &str,
+) -> Result<StockOverviewDto, IpcError> {
+    ipc::call(
+        "stock_interest_add",
+        AmountRequest {
+            ledger_id: ledger_id.to_string(),
+            amount,
+            date: date.to_string(),
+        },
+    )
+    .await
+}
+
 /// 从股票账户支取（**分**，不得超过可用现金）。
 pub async fn withdraw(
     ledger_id: &str,

@@ -41,11 +41,14 @@ struct StatAction {
     event_index: usize,
 }
 
-/// 一笔本金追加或支取：按记录日期参与统计时序，`withdraw` 为正数金额。
+/// 一笔本金追加 / 支取 / 利息归本：按记录日期参与统计时序，
+/// `withdraw` 与 `interest` 都记为正数金额。
 struct CapitalFlow {
     date: String,
     add: i64,
     withdraw: i64,
+    /// 利息归本（只增加总资产，不改本金口径）
+    interest: i64,
     created_at: i64,
     id: String,
 }
@@ -185,8 +188,10 @@ fn statistics(
     let mut cum_pnl = 0_i64;
     let mut principal_at = initial_principal;
     let mut withdrawn_at = 0_i64;
-    // 总资产曲线：从「初始本金」起步（`principal_at + cum_pnl - withdrawn_at`）
-    let mut equity = principal_at + cum_pnl - withdrawn_at;
+    // 累计利息归本：进总资产，但不进本金口径（最大回撤率的分母保持"投入本金"）
+    let mut interest_at = 0_i64;
+    // 总资产曲线：从「初始本金」起步（`principal_at + interest_at + cum_pnl - withdrawn_at`）
+    let mut equity = principal_at + interest_at + cum_pnl - withdrawn_at;
     let mut peak_equity = equity;
     let mut max_drawdown = 0_i64;
 
@@ -204,7 +209,8 @@ fn statistics(
             let flow = &flows[flow_index];
             principal_at += flow.add;
             withdrawn_at += flow.withdraw;
-            equity = principal_at + cum_pnl - withdrawn_at;
+            interest_at += flow.interest;
+            equity = principal_at + interest_at + cum_pnl - withdrawn_at;
             if equity > peak_equity {
                 peak_equity = equity;
             }
@@ -251,8 +257,8 @@ fn statistics(
         if window_drawdown > window_max_drawdown {
             window_max_drawdown = window_drawdown;
         }
-        // 当时总资产 = 当时本金 + 累计已结算盈亏 − 当时累计支取（全量口径）
-        equity = principal_at + cum_pnl - withdrawn_at;
+        // 当时总资产 = 当时本金 + 累计利息归本 + 累计已结算盈亏 − 当时累计支取（全量口径）
+        equity = principal_at + interest_at + cum_pnl - withdrawn_at;
         if equity > peak_equity {
             peak_equity = equity;
         }
@@ -408,7 +414,7 @@ fn last_day_of_month(year: i32, month: u32) -> u32 {
     last.day()
 }
 
-/// 返回账本全部「追加本金 / 支取」记录，按日期升序（同日按创建时间、再按 ID）。
+/// 返回账本全部「追加本金 / 支取 / 利息归本」记录，按日期升序（同日按创建时间、再按 ID）。
 fn list_capital_flows(
     conn: &rusqlite::Connection,
     ledger_id: &str,
@@ -442,6 +448,7 @@ fn push_capital_flow(flows: &mut Vec<CapitalFlow>, record: &StockFundRecord) {
             date: record.record_date.clone(),
             add: record.amount_change,
             withdraw: 0,
+            interest: 0,
             created_at: record.created_at,
             id: record.id.clone(),
         }),
@@ -450,6 +457,16 @@ fn push_capital_flow(flows: &mut Vec<CapitalFlow>, record: &StockFundRecord) {
             add: 0,
             // amount_change 为负数，取反得到正数支取额
             withdraw: -record.amount_change,
+            interest: 0,
+            created_at: record.created_at,
+            id: record.id.clone(),
+        }),
+        consts::STOCK_EVENT_INTEREST_PRINCIPAL => flows.push(CapitalFlow {
+            date: record.record_date.clone(),
+            add: 0,
+            withdraw: 0,
+            // amount_change 为正数
+            interest: record.amount_change,
             created_at: record.created_at,
             id: record.id.clone(),
         }),

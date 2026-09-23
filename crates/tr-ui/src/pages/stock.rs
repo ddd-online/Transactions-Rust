@@ -10,7 +10,7 @@
 //! |---|---|
 //! | [`StockPage`] | 只决定"当前是哪个子功能"（定义见 [`StockSub`]） |
 //! | [`StockSubRail`] | 子功能图标条（`FeaturePage` 的 `rail` 插槽内容） |
-//! | [`account_view`] | 总资产卡 + 资金记录分页；工具栏 = 支取 / 追加本金 |
+//! | [`account_view`] | 总资产卡 + 资金记录分页；工具栏 = 支取 / 利息归本 / 追加本金 |
 //! | [`position_view`] | 持仓卡片 + 行情面板 + 本轮复盘 + 下单弹窗 + 成交表 + 影响预演；工具栏 = 建仓 |
 //! | [`edit_modal`] / [`impact_modal`] | 编辑成交 / 删除委托 + 影响预演确认 |
 //! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签（无工具栏） |
@@ -77,7 +77,7 @@ pub const PAGE_TITLE: &str = "股票";
 /// 「设置」是原「应用设置 → 股票」整块（费用设置 / 交易标签 / 重置股票数据）的迁入地。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StockSub {
-    /// 账户：总资产 + 追加本金/支取 + 资金变化记录
+    /// 账户：总资产 + 支取/利息归本/追加本金 + 资金变化记录
     Account,
     /// 持仓：持仓卡片 + 行情 + 本轮复盘 + 下单 + 成交表
     Position,
@@ -303,10 +303,67 @@ pub fn StockSubRail(sub: RwSignal<StockSub>) -> impl IntoView {
 
 // ==================================================================== 子功能一：账户
 
-/// 账户子功能：总览卡 + **工具栏**（支取 / 追加本金）+ 资金变化记录。
+/// 账户子功能的三个资金操作（共用同一套「金额 + 日期」弹窗与提交逻辑）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FundAction {
+    /// 支取：现金减少，本金不变
+    Withdraw,
+    /// 利息归本：账户利息计入可用现金（本金不变，单独累计展示）
+    Interest,
+    /// 追加本金：现金增加并抬高本金口径
+    Principal,
+}
+
+impl FundAction {
+    /// 工具栏按钮名 / 弹窗标题（同一个词，两处一致）。
+    fn label(self) -> &'static str {
+        match self {
+            Self::Withdraw => "支取",
+            Self::Interest => "利息归本",
+            Self::Principal => "追加本金",
+        }
+    }
+
+    /// 弹窗确认键文案（与标题分开：「追加本金」的确认键一直是更短的「追加」）。
+    fn ok_text(self) -> &'static str {
+        match self {
+            Self::Withdraw => "支取",
+            Self::Interest => "利息归本",
+            Self::Principal => "追加",
+        }
+    }
+
+    /// 弹窗里金额输入项的标签。
+    fn amount_label(self) -> &'static str {
+        match self {
+            Self::Withdraw => "支取金额",
+            Self::Interest => "利息金额",
+            Self::Principal => "追加金额",
+        }
+    }
+
+    /// 提交成功 / 失败的提示文案。
+    fn success_text(self) -> &'static str {
+        match self {
+            Self::Withdraw => "支取成功",
+            Self::Interest => "利息归本成功",
+            Self::Principal => "追加本金成功",
+        }
+    }
+
+    fn failure_text(self) -> &'static str {
+        match self {
+            Self::Withdraw => "支取失败",
+            Self::Interest => "利息归本失败",
+            Self::Principal => "追加本金失败",
+        }
+    }
+}
+
+/// 账户子功能：总览卡 + **工具栏**（支取 / 利息归本 / 追加本金）+ 资金变化记录。
 ///
-/// 「追加本金 / 支取」是本子功能的主操作，放在工具栏里（与其余子功能一致）；
-/// 总资产卡里只留指标，不再重复放这两个入口。
+/// 三个资金操作是本子功能的主操作，放在工具栏里（与其余子功能一致）；
+/// 总资产卡里只留指标，不再重复放这些入口。
 fn account_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
     let overview = RwSignal::new(StockOverviewDto::default());
@@ -323,8 +380,9 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
     let fee_settings = RwSignal::new(Option::<StockFeeSetting>::None);
     let mutating = RwSignal::new(false);
 
-    // 本金 / 支取弹窗
+    // 三个资金操作的弹窗（共用 amount_text / amount_date）
     let principal_open = RwSignal::new(false);
+    let interest_open = RwSignal::new(false);
     let withdraw_open = RwSignal::new(false);
     let amount_text = RwSignal::new(String::new());
     let amount_date = RwSignal::new(today_ymd());
@@ -377,7 +435,7 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
         });
     };
 
-    // 账本切换 → 全量重载；切回本分栏 → 只重取行情口径的总览
+    // 账本切换 → 重载总览 / 费用设置，并把资金记录重置回第 1 页
     Effect::new(move |prev: Option<String>| {
         let ledger_id = stores.current_ledger_id.get();
         if prev.as_deref() == Some(ledger_id.as_str()) {
@@ -390,13 +448,38 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
                 page_size: FUND_PAGE_SIZE as i32,
                 ..StockFundRecordPage::default()
             });
+            // 页码一并收回第 1 页，避免切回账本时先闪一下上一个账本的页码
+            fund_page_signal.set(1);
             fee_settings.set(None);
             return ledger_id;
         }
         load_overview();
         load_fee_settings();
-        load_fund_records(1, FUND_PAGE_SIZE);
+        // 资金记录由下面那个 Effect 统一查（账本 / 页码都是它的依赖）
+        fund_page_signal.set(1);
         ledger_id
+    });
+
+    // 账本 / 页码 任一变化都要重查资金记录。
+    //
+    // 分页控件（`Pagination`）只写 `fund_page_signal`，**不会**自己去查数据；
+    // 早前资金记录只在"账本切换"和"提交资金操作"时查询，于是点「上一页 / 下一页 / 页码」
+    // 页码确实变了（按钮高亮跟着走），表格却还是原来那几行 —— 就是这里缺一个依赖页码的 Effect。
+    Effect::new(move |prev: Option<(String, i32)>| {
+        let ledger_id = stores.current_ledger_id.get();
+        let page = fund_page_signal.get();
+        // 账本换了就回第 1 页（不沿用上一个账本的页码）
+        let target = match prev.as_ref() {
+            Some((previous_ledger, _)) if previous_ledger == &ledger_id => page,
+            _ => 1,
+        };
+        let current = (ledger_id, target);
+        // 空账本不发查询；`prev == current` 时也不重查（服务端回写页码会再次触发本 Effect）
+        if current.0.is_empty() || prev.as_ref() == Some(&current) {
+            return current;
+        }
+        load_fund_records(target as i64, FUND_PAGE_SIZE);
+        current
     });
 
     Effect::new(move |prev: Option<bool>| {
@@ -407,7 +490,7 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
         is_active
     });
 
-    let submit_amount = move |is_withdraw: bool| {
+    let submit_amount = move |action: FundAction| {
         let ledger_id = stores.current_ledger_id.get_untracked();
         let raw = amount_text.get_untracked();
         let date = amount_date.get_untracked();
@@ -427,40 +510,42 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
         }
         mutating.set(true);
         leptos::task::spawn_local(async move {
-            let result = if is_withdraw {
-                api::stock::withdraw(&ledger_id, cents, &date).await
-            } else {
-                api::stock::principal_add(&ledger_id, cents, &date).await
+            let result = match action {
+                FundAction::Withdraw => api::stock::withdraw(&ledger_id, cents, &date).await,
+                FundAction::Interest => api::stock::interest_add(&ledger_id, cents, &date).await,
+                FundAction::Principal => api::stock::principal_add(&ledger_id, cents, &date).await,
             };
             match result {
                 Ok(data) => {
                     overview.set(data);
-                    Notifier::global().success(
-                        if is_withdraw {
-                            "支取成功"
-                        } else {
-                            "追加本金成功"
-                        }
-                        .to_string(),
-                        None,
-                    );
+                    Notifier::global().success(action.success_text().to_string(), None);
                     principal_open.set(false);
+                    interest_open.set(false);
                     withdraw_open.set(false);
                     amount_text.set(String::new());
-                    fund_page.update(|page| page.page = 1);
-                    load_fund_records(1, FUND_PAGE_SIZE);
+                    // 回到第 1 页看新记录：页码变了由上面的 Effect 查，
+                    // 本来就在第 1 页时页码信号不变，这里显式补一次查询
+                    let was_first_page = fund_page_signal.get_untracked() == 1;
+                    fund_page_signal.set(1);
+                    if was_first_page {
+                        load_fund_records(1, FUND_PAGE_SIZE);
+                    }
                 }
-                Err(error) => notify_error(
-                    if is_withdraw {
-                        "支取失败"
-                    } else {
-                        "追加本金失败"
-                    },
-                    &error,
-                ),
+                Err(error) => notify_error(action.failure_text(), &error),
             }
             mutating.set(false);
         });
+    };
+
+    // 工具栏三个入口共用一套弹窗状态：清空金额、回到今天，再开对应的弹窗
+    let open_amount_modal = move |action: FundAction| {
+        amount_text.set(String::new());
+        amount_date.set(today_ymd());
+        match action {
+            FundAction::Withdraw => withdraw_open.set(true),
+            FundAction::Interest => interest_open.set(true),
+            FundAction::Principal => principal_open.set(true),
+        }
     };
 
     let page_snapshot = move || fund_page.get();
@@ -470,30 +555,29 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
         ((snapshot.total + size - 1) / size).max(1) as i32
     });
 
-    // 版心两块：工具栏（本子功能的两个资金操作）/ 内容区，各自建好再交给 `FeaturePage`
+    // 版心两块：工具栏（本子功能的三个资金操作）/ 内容区，各自建好再交给 `FeaturePage`
     let toolbar = view! {
         <div class="stock-toolbar">
             <Button
                 variant=ButtonVariant::Secondary
                 loading=Signal::derive(move || mutating.get())
-                on_click=move |_| {
-                    amount_text.set(String::new());
-                    amount_date.set(today_ymd());
-                    withdraw_open.set(true);
-                }
+                on_click=move |_| open_amount_modal(FundAction::Withdraw)
             >
-                "支取"
+                {FundAction::Withdraw.label()}
+            </Button>
+            <Button
+                variant=ButtonVariant::Secondary
+                loading=Signal::derive(move || mutating.get())
+                on_click=move |_| open_amount_modal(FundAction::Interest)
+            >
+                {FundAction::Interest.label()}
             </Button>
             <Button
                 variant=ButtonVariant::Primary
                 loading=Signal::derive(move || mutating.get())
-                on_click=move |_| {
-                    amount_text.set(String::new());
-                    amount_date.set(today_ymd());
-                    principal_open.set(true);
-                }
+                on_click=move |_| open_amount_modal(FundAction::Principal)
             >
-                "追加本金"
+                {FundAction::Principal.label()}
             </Button>
         </div>
     }
@@ -559,10 +643,16 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
                                 "从股票账户支取出的累计金额，支取会相应减少总资产",
                             ),
                             (
+                                "利息归本",
+                                format!("¥{}", format::amount(data.interest_total)),
+                                "",
+                                "「利息归本」的累计金额；利息计入可用现金，本金口径不变",
+                            ),
+                            (
                                 "可用现金",
                                 format!("¥{}", format::amount(data.available_cash)),
                                 "",
-                                "可用现金为账户实际现金余额 = 总资产 − 持仓市值（行情缺失部分按成本计入）",
+                                "可用现金为账户实际现金余额 = 本金 + 累计利息归本 + 已实现盈亏 − 累计支取 − 持仓成本（等于总资产 − 持仓市值，行情缺失部分按成本计入）",
                             ),
                         ];
                         cards
@@ -675,24 +765,28 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
             </div>
 
             {amount_modal(
-                principal_open,
-                "追加本金",
-                "追加",
-                "追加金额",
+                withdraw_open,
+                FundAction::Withdraw,
                 amount_text,
                 amount_date,
                 mutating,
-                UnsyncCallback::new(move |()| submit_amount(false)),
+                UnsyncCallback::new(move |()| submit_amount(FundAction::Withdraw)),
             )}
             {amount_modal(
-                withdraw_open,
-                "支取",
-                "支取",
-                "支取金额",
+                interest_open,
+                FundAction::Interest,
                 amount_text,
                 amount_date,
                 mutating,
-                UnsyncCallback::new(move |()| submit_amount(true)),
+                UnsyncCallback::new(move |()| submit_amount(FundAction::Interest)),
+            )}
+            {amount_modal(
+                principal_open,
+                FundAction::Principal,
+                amount_text,
+                amount_date,
+                mutating,
+                UnsyncCallback::new(move |()| submit_amount(FundAction::Principal)),
             )}
         </div>
         </div>
@@ -752,31 +846,29 @@ fn fund_row(record: StockFundRecordDto) -> AnyView {
     .into_any()
 }
 
-/// 追加本金 / 支取弹窗（同一套字段，只有文案不同）。
-#[allow(clippy::too_many_arguments)]
+/// 资金操作弹窗（追加本金 / 利息归本 / 支取共用同一套字段，只有文案不同）。
 fn amount_modal(
     open: RwSignal<bool>,
-    title: &'static str,
-    ok_text: &'static str,
-    label: &'static str,
+    action: FundAction,
     amount: RwSignal<String>,
     date: RwSignal<String>,
     mutating: RwSignal<bool>,
     on_ok: UnsyncCallback<()>,
 ) -> AnyView {
+    let title = action.label();
     view! {
         <Modal
             open=Signal::derive(move || open.get())
             title=title
             size=ModalSize::Small
-            ok_text=ok_text
+            ok_text=action.ok_text()
             cancel_text="取消"
             ok_loading=Signal::derive(move || mutating.get())
             on_close=move || open.set(false)
             on_ok=move || on_ok.run(())
         >
             <div class="modal-form-item">
-                <p class="modal-form-label">{label}</p>
+                <p class="modal-form-label">{action.amount_label()}</p>
                 <Input value=amount placeholder="请输入金额" />
             </div>
             <div class="modal-form-item">
