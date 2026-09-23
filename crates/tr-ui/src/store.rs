@@ -45,6 +45,11 @@ pub struct AppStores {
     ///
     /// **默认全开**：首屏读到配置之前的短暂窗口里，侧边栏按"全开"渲染，与老配置一致。
     pub enabled_features: RwSignal<FeatureFlags>,
+    /// 事件页右栏（关联交易列表）是否展开（`config_get` 读入，事件页开合时写回配置）。
+    ///
+    /// 放在全局状态里而不是页面局部：换页回来时不必再等一次 IPC 往返，
+    /// 也就不会先按"展开"渲染一帧再收起来（闪一下）。
+    pub key_event_linked_open: RwSignal<bool>,
 }
 
 thread_local! {
@@ -62,6 +67,7 @@ impl AppStores {
             statistics: RwSignal::new(BTreeMap::new()),
             appearance: RwSignal::new(APPEARANCE_SYSTEM.to_string()),
             enabled_features: RwSignal::new(FeatureFlags::all_enabled()),
+            key_event_linked_open: RwSignal::new(true),
         }
     }
 

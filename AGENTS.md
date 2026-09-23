@@ -618,6 +618,10 @@ cargo clippy --all-targets -- -D warnings
   `store::AppStores::enabled_features`（`shell::Page::is_enabled` 是唯一判据），
   两边靠 `feature_key` 的字符串对齐 —— 名字写错不会编译报错，只会得到一句"无效的功能开关"。
   `cargo test -p transactions config` 会锁住键名与"缺省全开"；端到端见 `fixtures/ui-features.ps1`。
+  另有 `keyEventLinkedOpen`（事件页右栏「关联交易」展开/收起，**缺省展开**）走同一条路：
+  外壳只落盘（`config_set_key_event_linked_open`），界面读 `store::AppStores::key_event_linked_open`
+  —— 放在**全局状态**而不是页面局部，换页回来才不必等 IPC 往返、也不会先展开再收起闪一帧；
+  端到端见 `fixtures/ui-key-event.ps1` 的第 4 步（落盘 + 换页 + 重启）。
 - **界面无 Node**：仓库里没有 npm/package.json，没有 vendor 的 JS 库。
   图表、Markdown、拖拽排序、日期选择等全部是 Rust 实现（见 `tr-ui`）。
 - **设计令牌**：`--transactions-*` CSS 变量是颜色/尺寸的唯一来源（对应 `DESIGN.md` 的调色板；

@@ -113,6 +113,12 @@ pub struct AppConfig {
     /// 功能开关：哪些顶级功能在侧边栏出现（缺省 = 全开）。
     #[serde(rename = "features")]
     pub features: FeatureFlags,
+    /// 事件页右栏（关联交易）是展开还是收起。
+    ///
+    /// **缺省 = 展开**：老配置里没有这个键时行为与升级前一致；界面在开合时写回，
+    /// 因此换页、重启都保持用户上一次的选择。
+    #[serde(rename = "keyEventLinkedOpen")]
+    pub key_event_linked_open: bool,
     /// 未识别字段（其它版本写入的配置项）原样保留
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -131,6 +137,8 @@ impl Default for AppConfig {
             appearance: APPEARANCE_SYSTEM.to_string(),
             proxy: ProxySetting::default(),
             features: FeatureFlags::defaults(),
+            // 事件页右栏默认展开（老配置没有这个键也是它）
+            key_event_linked_open: true,
             extra: serde_json::Map::new(),
         }
     }
@@ -249,6 +257,29 @@ mod tests {
                 diary: true,
             }
         );
+        // 事件页右栏缺省 = 展开（老配置没有这个键时与升级前一致）
+        assert!(config.key_event_linked_open);
+    }
+
+    /// 事件页右栏偏好：缺省展开、写 false 能落盘、读回来还是 false。
+    #[test]
+    fn key_event_linked_open_defaults_to_open_and_roundtrips() {
+        let path = temp_path("ke-rail");
+        // 老配置（没有这个键）→ 展开
+        std::fs::write(&path, r#"{"width": 800, "workspaceDir": "D:\\ws"}"#).unwrap();
+        let mut config = AppConfig::load(&path);
+        assert!(config.key_event_linked_open, "缺省应当是展开");
+
+        config.key_event_linked_open = false;
+        config.save(&path).unwrap();
+        let reloaded: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded["keyEventLinkedOpen"], false);
+
+        let back = AppConfig::load(&path);
+        assert!(!back.key_event_linked_open, "收起要能读回来");
+
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

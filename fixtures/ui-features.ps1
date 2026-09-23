@@ -268,7 +268,10 @@ try {
     Start-Sleep -Seconds 3
     Assert-True (Select-Tab -Window $window -Name '功能开关') '页签「功能开关」可选中'
 
-    $diaryHint = '按账本隔离的 Markdown 日记'
+    # 行说明是与 `settings.rs` 的 `FeatureRow` 文案**逐字对齐**的定位锚点：文案一改这条就得跟着改，
+    # 否则 `Find-First`（按可访问名精确匹配）永远找不到 → 后面整段连坐变红。
+    # 它上一次失效是 `5a855b8`（日记从 Markdown 改成纯文本）—— 当时漏改了这里。
+    $diaryHint = '按账本隔离的纯文本日记，可导入导出 txt'
     $paneReady = $null
     $deadline = (Get-Date).AddSeconds(20)
     do {

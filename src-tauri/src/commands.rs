@@ -177,6 +177,9 @@ pub struct ConfigSnapshot {
     /// 功能开关；界面「功能开关」分栏直接编辑它（缺省 = 全开）
     #[serde(rename = "features")]
     pub features: FeatureFlags,
+    /// 事件页右栏（关联交易）是否展开（缺省 = 展开）；界面在开合时写回
+    #[serde(rename = "keyEventLinkedOpen")]
+    pub key_event_linked_open: bool,
 }
 
 #[tauri::command]
@@ -201,6 +204,7 @@ pub fn config_get(state: State<'_, DesktopState>) -> ApiResult<ConfigSnapshot> {
         is_dev: state.is_dev,
         proxy: config.proxy,
         features: config.features,
+        key_event_linked_open: config.key_event_linked_open,
     })
 }
 
@@ -298,8 +302,32 @@ pub fn config_set_feature(
     Ok(features)
 }
 
-// ------------------------------------------------------------ 代理设置
+// ------------------------------------------------------------ 事件页右栏偏好
 
+#[derive(Debug, Deserialize)]
+pub struct SetKeyEventLinkedOpenRequest {
+    /// 事件页右栏（关联交易）展开 = true，收起 = false。
+    pub open: bool,
+}
+
+/// 事件页右栏（关联交易列表）展开还是收起：写配置并返回落盘后的值。
+///
+/// 与功能开关同一套路：外壳只负责落盘，界面调成功后用返回值回显 —— 于是**换页**和
+/// **重启**都保持用户上一次的选择（偏好是会话无关的）。
+#[tauri::command]
+pub fn config_set_key_event_linked_open(
+    state: State<'_, DesktopState>,
+    req: SetKeyEventLinkedOpenRequest,
+) -> ApiResult<bool> {
+    let open = state.config.update(|config| {
+        config.key_event_linked_open = req.open;
+        config.key_event_linked_open
+    });
+    tracing::info!("IPC config_set_key_event_linked_open: open={open}");
+    Ok(open)
+}
+
+// ------------------------------------------------------------ 代理设置
 /// 校验 + 归一化（**纯函数**，单测直接断言用户看到的文案）。
 ///
 /// 地址只支持 `http://`：见 `tr_domain::proxy::normalize_http_proxy`。
@@ -750,6 +778,7 @@ mod tests {
             is_dev: false,
             proxy: ProxySetting::manual("http://127.0.0.1:7890"),
             features: FeatureFlags::defaults(),
+            key_event_linked_open: false,
         };
         let value = serde_json::to_value(&snapshot).unwrap();
         let mut keys: Vec<&str> = value
@@ -767,6 +796,7 @@ mod tests {
                 "configPath",
                 "features",
                 "isDev",
+                "keyEventLinkedOpen",
                 "proxy",
                 "workspaceDir"
             ]
@@ -778,6 +808,8 @@ mod tests {
         assert_eq!(value["features"]["stock"], true);
         assert_eq!(value["features"]["keyEvent"], true);
         assert_eq!(value["features"]["diary"], true);
+        // 事件页右栏偏好同样是契约（界面 `api::desktop::ConfigSnapshot` 手抄了它）
+        assert_eq!(value["keyEventLinkedOpen"], false);
     }
 
     #[test]

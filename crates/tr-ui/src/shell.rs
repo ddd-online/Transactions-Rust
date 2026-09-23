@@ -183,6 +183,10 @@ pub fn App() -> impl IntoView {
                 stores.workspace_dir.set(config.workspace_dir.clone());
                 // 功能开关：决定侧边栏显示哪几项（老配置里没有这个键 = 全开）
                 stores.set_enabled_features(config.features.clone());
+                // 事件页右栏偏好：换页/重启后仍保持用户上一次的开合（老配置缺键 = 展开）
+                stores
+                    .key_event_linked_open
+                    .set(config.key_event_linked_open);
 
                 if config.workspace_dir.is_empty() {
                     // 从未配置过：直接进强制选择屏（不再先渲染界面再弹窗）

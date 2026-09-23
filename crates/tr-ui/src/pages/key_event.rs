@@ -7,7 +7,8 @@
 //! * [`add_modal`]：日期 + 名称
 //! * 中栏详情 = **一张卡**（20 个颜色 + 图片 + 描述 + 底部动作都在同一张卡面上）
 //! * [`image_gallery`]：左大图 + 右侧 160px 缩略图列 + 另存/删除
-//! * [`linked_panel`]：关联消费记录卡片 + 解除关联；整栏可用骑在竖线上的把手收起/展开
+//! * [`linked_panel`]：关联消费记录卡片 + 解除关联；整栏可用骑在竖线上的把手收起/展开，
+//!   偏好写进用户配置（`keyEventLinkedOpen`），换页与重启都保持（见 `store::AppStores`）
 //! * [`ImageUploadHost`] + [`crate::components::ui::UploadProgressBar`]：串行上传状态机与进度条，
 //!   单张图片的内容由 [`crate::components::ui::read_as_data_url`] 读出
 //!
@@ -131,9 +132,10 @@ pub fn KeyEventPage() -> impl IntoView {
     // ---- 关联消费记录 ----
     let linked = RwSignal::new(Vec::<TransactionRecordDto>::new());
     let tr_cache = RwSignal::new(BTreeMap::<String, Vec<TransactionRecordDto>>::new());
-    // 右栏是否展开：只在本次会话里记住（不落配置）。收起时栏宽归 0、竖线隐去、中栏吃满宽度，
-    // 骑在竖线上的把手留在原处，随时能收回来。
-    let linked_open = RwSignal::new(true);
+    // 右栏是否展开：偏好存在配置里（`keyEventLinkedOpen`），状态放在全局 store ——
+    // 于是**换页回来**不必等一次 IPC 往返就能按上次的样子渲染（也不会先展开再收起闪一下），
+    // **重启**则由 `config_get` 在首屏读回来。老配置缺这个键 = 展开。
+    let linked_open = stores.key_event_linked_open;
 
     // ---- 上传 ----
     let progress = RwSignal::new(UploadProgress::default());
@@ -683,7 +685,28 @@ pub fn KeyEventPage() -> impl IntoView {
                     if linked_open.get() { "收起关联交易" } else { "展开关联交易" }
                 }
                 aria-expanded=move || if linked_open.get() { "true" } else { "false" }
-                on:click=move |_| linked_open.update(|open| *open = !*open)
+                on:click=move |_| {
+                    let next = !linked_open.get_untracked();
+                    // 先动界面（开合是即时反馈），再落盘；落盘失败回滚并提示 ——
+                    // 与「外观」那处同一条口径（偏好没存住就不该假装存住了）。
+                    linked_open.set(next);
+                    leptos::task::spawn_local(async move {
+                        match api::desktop::config_set_key_event_linked_open(next).await {
+                            Ok(persisted) => {
+                                // 期间若又点了一次，别用这次的结果盖掉新的选择
+                                if linked_open.get_untracked() == next {
+                                    linked_open.set(persisted);
+                                }
+                            }
+                            Err(error) => {
+                                if linked_open.get_untracked() == next {
+                                    linked_open.set(!next);
+                                }
+                                notify_error("保存事件页右栏偏好", &error);
+                            }
+                        }
+                    });
+                }
             >
                 {move || {
                     if linked_open.get() {

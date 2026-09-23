@@ -26,6 +26,8 @@ related_targets: ["crates/tr-ui/static/css/key_event.css"]
 
 ## 未决 / 备注
 
-- 收起状态只活在本次会话（用户确认）；跨会话记忆要动外壳配置键，不在本轮。
+- 收起状态**写进用户配置**（`keyEventLinkedOpen`，缺省展开）：外壳 `config_set_key_event_linked_open`
+  落盘，界面读全局 `store::AppStores::key_event_linked_open`。放在全局状态而不是页面局部，
+  是为了换页回来不必等 IPC 往返、也不会先展开再收起闪一帧。端到端见 `fixtures/ui-key-event.ps1` 第 4 步。
 - 卡片取 DESIGN.md 的 12px 圆角（`radius-lg`），左栏小事件卡保持既有 8px：容器与条目两档，不为了统一去改既有卡片。
 - 收起时右栏用 `visibility: hidden`（延迟到动画结束才切），既退出无障碍树与键盘序，又保住滚动位置。

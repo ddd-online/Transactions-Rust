@@ -1,4 +1,5 @@
-# ui-key-event.ps1 —— 事件页「新建事件」端到端：**任选日期** + **同一天 upsert（日期唯一）** + 删除。
+# ui-key-event.ps1 —— 事件页端到端：**任选日期**新建 + **同一天 upsert（日期唯一）** + 删除 +
+# **右栏（关联交易）开合偏好落盘/换页/重启保持**。
 #
 # 为什么需要它：`fixtures/ui-crud.ps1` 里已经用「添加事件」建过事件，但它走的是**默认日期（今天）**，
 # 只验了"能建出来 + 改颜色/写 Markdown/删除"；`fixtures/ui-link-event.ps1` 验的是"记账记录关联到
@@ -6,6 +7,8 @@
 #   * 在「添加事件」弹窗里用 DatePicker **任选一个不是今天的日期** → 事件要落在**那一天**；
 #   * 同一天再建一次是 **upsert（覆盖）而不是新增**：`(ledger_id, date)` 唯一，**原 id 与 createdAt 保留**，
 #     只替换标题/正文/颜色（落库语义已由数据层测试覆盖，这里覆盖界面这条路径）。
+# 第 4 步是被用户当场抓到的缺陷的回归：右栏开合原来只活在页面里，换页回来又默认展开；
+# 现在偏好写进配置文件 `keyEventLinkedOpen`，判据落在**磁盘 + 重启**上（不是"点完看一眼"）。
 #
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/ui-key-event.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
@@ -237,7 +240,61 @@ try {
     }
     $gone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_key_event' -OutDir $OutDir | Where-Object { $_.date -eq $eventDate })
     Assert-True ($gone.Count -eq 0) "删除后 $eventDate 在库里没有事件了（实际 $($gone.Count) 条）"
+
+    # ================= 4/4 右栏偏好：落盘 + 换页保持 + 重启保持 =================
+    # 这一条是被用户当场抓到的缺陷：原来右栏开合只活在页面组件里，换页回来就默认又展开了。
+    # 现在偏好写进配置文件（`keyEventLinkedOpen`），判据落在**磁盘 + 重启**上。
+    Write-Host "[ke] 4/4 右栏（关联交易）偏好：收起 → 写配置 → 换页保持 → 重启仍保持"
+    $configPath = Join-Path $smokeHome '.transactions.json'
+    $collapse = Wait-Element -Root $window -Name '收起关联交易' -TimeoutSec 10
+    Assert-True ([bool]$collapse) '找到右栏收起把手'
+    if ($collapse) { Invoke-Element $collapse | Out-Null }
+    Start-Sleep -Seconds 2
+    Assert-True ([bool](Wait-Element -Root $window -Name '展开关联交易' -TimeoutSec 6)) `
+        '收起后把手变成「展开关联交易」'
+    $savedConfig = Get-Content $configPath -Raw | ConvertFrom-Json
+    Assert-True ($savedConfig.keyEventLinkedOpen -eq $false) `
+        "配置里写入 keyEventLinkedOpen=false（实际 '$($savedConfig.keyEventLinkedOpen)'）"
+
+    # 换页（事件 → 记账 → 事件）：右栏应当仍是收起的
+    Invoke-Element (Wait-Element -Root $window -Name '记账' -TimeoutSec 10) | Out-Null
+    Start-Sleep -Seconds 2
+    Invoke-Element (Wait-Element -Root $window -Name '事件' -TimeoutSec 10) | Out-Null
+    Start-Sleep -Seconds 3
+    Assert-True ([bool](Wait-Element -Root $window -Name '展开关联交易' -TimeoutSec 6)) `
+        '换页回来后右栏仍是收起的'
+
+    # 重启：同一个临时 HOME/工作空间，偏好应当被读回来
+    Stop-TrApp -Process $process -Failures (New-Object System.Collections.Generic.List[string]) -OutDir $OutDir
+    $envSaved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME }
+    try {
+        $env:USERPROFILE = $smokeHome
+        $env:HOME = $smokeHome
+        $process = Start-Process -FilePath $Exe -PassThru
+    }
+    finally {
+        $env:USERPROFILE = $envSaved.USERPROFILE
+        $env:HOME = $envSaved.HOME
+    }
+    $window = Get-ReadyWindow -ProcessId $process.Id -TimeoutSec 60
+    Assert-True ([bool]$window) '重启后拿到主窗口'
+    if ($window) {
+        [TrUia]::ShowWindow([IntPtr]$window.Current.NativeWindowHandle, 9) | Out-Null
+        [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        Invoke-Element (Wait-Element -Root $window -Name '事件' -TimeoutSec 15) | Out-Null
+        Start-Sleep -Seconds 3
+        Assert-True ([bool](Wait-Element -Root $window -Name '展开关联交易' -TimeoutSec 8)) `
+            '重启后右栏仍是收起的（偏好被记住）'
+
+        # 反向也要落盘：展开后配置写回 true（别只验一个方向）
+        $expand = Wait-Element -Root $window -Name '展开关联交易' -TimeoutSec 5
+        if ($expand) { Invoke-Element $expand | Out-Null }
+        Start-Sleep -Seconds 2
+        $restoredConfig = Get-Content $configPath -Raw | ConvertFrom-Json
+        Assert-True ($restoredConfig.keyEventLinkedOpen -eq $true) `
+            "再展开后写回 true（实际 '$($restoredConfig.keyEventLinkedOpen)'）"
+    }
 }
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Show-TrSummary -Failures $failures -Tag 'ke' -SuccessMessage "[ke] 全部通过：任选日期新建 → 同一天 upsert（id 保留）→ 删除"
+Show-TrSummary -Failures $failures -Tag 'ke' -SuccessMessage "[ke] 全部通过：任选日期新建 → 同一天 upsert（id 保留）→ 删除 → 右栏偏好落盘/换页/重启保持"

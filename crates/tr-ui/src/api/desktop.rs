@@ -12,6 +12,7 @@
 //! | [`config_set_close_behavior`] | `{ behavior: quit\|tray\|"" }` |
 //! | [`config_set_proxy`] | `{ mode: off\|auto\|manual, url }`（返回归一化后的设置） |
 //! | [`config_set_feature`] | `{ feature: accounting\|stock\|keyEvent\|diary, enabled }`（返回落盘后的全部开关） |
+//! | [`config_set_key_event_linked_open`] | `{ open: bool }`（返回落盘后的值） |
 //! | [`proxy_detect`] | 无参数（报告当前设置最终会用哪个代理） |
 //! | [`workspace_get`] | 无参数 |
 //! | [`workspace_set`] | `{ workspaceDir }` |
@@ -70,6 +71,19 @@ struct CloseBehaviorRequest {
 struct SetFeatureRequest {
     feature: String,
     enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SetKeyEventLinkedOpenRequest {
+    open: bool,
+}
+
+/// `bool` 字段的 serde 缺省值：**true**。
+///
+/// 容器上的 `#[serde(default)]` 会用 `bool::default()`（= false），对"缺省应当是开"
+/// 的偏好是错的 —— 外壳漏发字段或老后端不认识它时，界面会静默变成"收起"。
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize)]
@@ -164,6 +178,12 @@ pub struct ConfigSnapshot {
     pub proxy: ProxySetting,
     /// 功能开关（缺省 = 全开，见 [`FeatureFlags`]）。
     pub features: FeatureFlags,
+    /// 事件页右栏（关联交易）是否展开。
+    ///
+    /// **缺省 = 展开**（见 [`default_true`]）：字段缺失时按"没关过"处理，
+    /// 与外壳 `AppConfig::key_event_linked_open` 的默认值一致。
+    #[serde(rename = "keyEventLinkedOpen", default = "default_true")]
+    pub key_event_linked_open: bool,
 }
 
 /// `proxy_detect` 的返回（逐字段照抄 `commands.rs` 的 `ProxyDetectResponse`）。
@@ -286,6 +306,17 @@ pub async fn config_set_feature(feature: &str, enabled: bool) -> Result<FeatureF
 /// 检测：按当前设置报告最终会用哪个代理（只读，不写配置、不改系统设置）。
 pub async fn proxy_detect() -> Result<ProxyDetectResponse, IpcError> {
     ipc::call_no_args("proxy_detect").await
+}
+
+/// 记住事件页右栏（关联交易列表）是展开还是收起；返回落盘后的值。
+///
+/// 偏好是**会话无关**的：界面在开合时写一次，换页与重启都从 `config_get` 读回来。
+pub async fn config_set_key_event_linked_open(open: bool) -> Result<bool, IpcError> {
+    ipc::call(
+        "config_set_key_event_linked_open",
+        SetKeyEventLinkedOpenRequest { open },
+    )
+    .await
 }
 
 /// 读取已保存的工作空间目录（空串表示尚未选择）。

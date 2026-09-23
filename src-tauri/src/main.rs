@@ -66,6 +66,7 @@ fn main() {
             commands::config_set_appearance,
             commands::config_set_proxy,
             commands::config_set_feature,
+            commands::config_set_key_event_linked_open,
             commands::proxy_detect,
             commands::config_file_path,
             commands::workspace_get,
