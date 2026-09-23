@@ -18,11 +18,12 @@ release = false
 minify = "never"
 
 [serve]
-# 端口刻意避开 1420 与 1520：本机 Windows 的保留端口段（WinNAT/Hyper-V）会漂，
-# 2026-09 实测被保留的是 1463-1562（早先是 1332-1431），1420 与 1520 都在里面，
-# 绑上去直接失败（os error 10013）。1600 已实测可绑定。
-# 自查：netsh interface ipv4 show excludedportrange protocol=tcp
-port = 1600
+# 本机 Windows 的保留端口段（WinNAT/Hyper-V）会漂，落在里面的端口非提权进程绑不上
+# （os error 10013）：1420（早先保留 1332-1431）、1520（后来 1463-1562）、
+# 1600（2026-09 又漂成 1563-1662）都因此废掉过。所以选端口只有一条标准：**段外**。
+# 16000 同时在保留段与本机动态端口段（1024-15000，见 netsh int ipv4 show dynamicport tcp）之外，
+# 不会被系统临时端口抢走。自查：netsh interface ipv4 show excludedportrange protocol=tcp
+port = 16000
 addresses = ["127.0.0.1"]
 open = false
 

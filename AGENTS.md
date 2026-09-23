@@ -33,7 +33,7 @@ cargo check -p tr-domain -p tr-store -p tr-service -p xtask --all-targets
 cargo test  -p tr-domain -p tr-store -p tr-service
 
 # 界面与外壳（发布链路必须走脚本，原因见下方环境注意事项）
-trunk serve --config crates/tr-ui/Trunk.toml      # 开发服务 http://127.0.0.1:1600
+trunk serve --config crates/tr-ui/Trunk.toml      # 开发服务 http://127.0.0.1:16000
 cargo tauri dev                                   # 开发（会自动先跑 trunk）
 cargo tauri build                                 # 打包，产出 NSIS 安装包
 
@@ -157,7 +157,7 @@ cargo clippy --all-targets -- -D warnings
    pwsh -File fixtures/dev-hot.ps1 -Trunk -Launch -Workspace <ws> -ShotDir target\dev-shots
    ```
 
-   它拉起 `trunk serve`（:1600）+ dev 外壳（`target\debug`，走 `devUrl`）+ 盯 trunk 日志；trunk 重建完
+   它拉起 `trunk serve`（:16000）+ dev 外壳（`target\debug`，走 `devUrl`）+ 盯 trunk 日志；trunk 重建完
    就给窗口发 `Ctrl+R`，窗口自己刷新；带 `-ShotDir` 时还会把刷新后的窗口存成
    `target\dev-shots\current.png`（不用手动截图）。原理：trunk 的自动刷新信号浏览器吃、Tauri 的
    WebView2 不吃，但 WebView2 吃键盘刷新（实测 0.8s）。
@@ -230,11 +230,14 @@ cargo clippy --all-targets -- -D warnings
   管道缓冲写满会让 cargo 阻塞假死；一律 `*> 文件` 重定向。
 - **`NO_COLOR=1` 会让 trunk 直接报错**（`invalid value '1' for '--no-color'`）：
   调用 trunk 前 `Remove-Item Env:NO_COLOR`。
-- **开发端口留 1600，且保留段会漂**（踩过两次）：本机 Windows 的保留端口段（WinNAT/Hyper-V）
+- **开发端口留 16000，且保留段会漂**（踩过三次）：本机 Windows 的保留端口段（WinNAT/Hyper-V）
   归管理员所有，落在里面的端口非提权进程绑不上，trunk/`cargo tauri dev` 直接 `os error 10013` 起不来。
-  先撞的是 1420（当时保留 1332-1431），2026-09 又漂到 **1463-1562**，把 1520 也吞了。
-  所以不要以为"某端口实测能绑"是永久的：起不来先跑 `netsh interface ipv4 show excludedportrange protocol=tcp`，
-  把端口挪到段外（现用 1600）。三处**必须一起改**：`crates/tr-ui/Trunk.toml` 的 `[serve] port`、
+  先撞的是 1420（当时保留 1332-1431），2026-09 漂到 **1463-1562** 吞掉 1520，之后又漂成
+  **1563-1662** 吞掉 1600。所以不要以为"某端口实测能绑"是永久的：起不来先跑
+  `netsh interface ipv4 show excludedportrange protocol=tcp`，把端口挪到段外。
+  选端口时**同时在动态端口段之外**更省事（`netsh int ipv4 show dynamicport tcp`，本机是 1024-15000）：
+  落在动态段里的监听端口会被系统临时端口偶发抢占。**现用 16000**（段外 + 动态段外）。
+  三处**必须一起改**：`crates/tr-ui/Trunk.toml` 的 `[serve] port`、
   `src-tauri/tauri.conf.json` 的 `devUrl`、`fixtures/dev-hot.ps1 -Port`（`shell.rs` 的
   `is_allowed_navigation` 单测里还有两条 localhost 样例）。`fixtures/dev-hot.ps1` 现在会先试着
   绑定该端口，几秒内直接报"端口不可用"而不是干等 240 秒。
@@ -260,7 +263,7 @@ cargo clippy --all-targets -- -D warnings
   便携版 exe 没被留档（`build\target` 里只有安装包），而退出码依然是 0。
   教训：构建脚本的"最后一步"也要有产物断言（`Test-Path` + `Fail`），别只看退出码。
 - **手跑 exe 必须带 `custom-protocol`**（两条都踩过）：
-  1. debug 构建会走 `devUrl`（`http://127.0.0.1:1600`），所以 `cargo build -p transactions`
+  1. debug 构建会走 `devUrl`（`http://127.0.0.1:16000`），所以 `cargo build -p transactions`
      之后直接运行 `target\debug\transactions.exe` 只会得到一个空白窗口；
   2. release 也一样。Tauri 只有在启用 `tauri/custom-protocol` 特性时才会内嵌界面资源，
      而 `cargo tauri build` 会自动加上它、裸 `cargo build --release` 不会。

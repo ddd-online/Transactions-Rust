@@ -34,7 +34,7 @@ param(
     [int]$PollMs = 500,
     # trunk serve 的端口，必须与 crates/tr-ui/Trunk.toml 的 [serve] port 和
     # src-tauri/tauri.conf.json 的 devUrl 一致（换了就三处一起换）
-    [int]$Port = 1600,
+    [int]$Port = 16000,
     # 给了就把每次刷新后的窗口抓成 <ShotDir>\current.png（免手动跑 dev-shot.ps1）
     [string]$ShotDir
 )
@@ -180,7 +180,7 @@ function Start-DevShell {
     if (-not (Test-Path $Exe)) { throw "找不到 dev 外壳: $Exe（先跑 cargo build -p transactions）" }
     # devUrl 是**编译期**读进外壳的（tauri.conf.json），不是运行时读的：外壳比 Trunk.toml /
     # tauri.conf.json 旧就直接 throw，否则窗口里是 ERR_CONNECTION_REFUSED，
-    # 看着像界面坏了（实测踩过：trunk 在 1600 上服务着，外壳却还按旧的 1520 连）。
+    # 看着像界面坏了（实测踩过：trunk 在 16000 上服务着，外壳却还按旧的 1520 连）。
     $stale = @('crates\tr-ui\Trunk.toml', 'src-tauri\tauri.conf.json') | Where-Object {
         (Test-Path (Join-Path $repo $_)) -and (Get-Item (Join-Path $repo $_)).LastWriteTime -gt (Get-Item $Exe).LastWriteTime
     }

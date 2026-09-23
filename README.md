@@ -63,7 +63,7 @@ rustup target add wasm32-unknown-unknown
 cargo install trunk
 cargo install wasm-bindgen-cli --version 0.2.128 --locked
 
-# 开发：trunk serve（界面 :1600）+ 桌面窗口
+# 开发：trunk serve（界面 :16000）+ 桌面窗口
 cargo tauri dev
 
 # 发布：界面(WASM) + 桌面应用(NSIS) 一键构建 → build/target/

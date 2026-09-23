@@ -216,7 +216,7 @@ pub fn show_main_window(app: &AppHandle) {
 fn is_allowed_navigation(url: &tauri::Url) -> bool {
     match url.scheme() {
         // 生产构建：`http://tauri.localhost/index.html`（Windows 的 custom-protocol）
-        // 开发构建：`http://localhost:1600/`（trunk serve）
+        // 开发构建：`http://localhost:16000/`（trunk serve）
         // 个别平台/版本会用 `tauri://localhost`。
         "http" | "https" | "tauri" => matches!(
             url.host_str(),
@@ -429,8 +429,8 @@ mod tests {
         for allowed in [
             "http://tauri.localhost/index.html",
             "http://tauri.localhost/",
-            "http://localhost:1600/index.html",
-            "http://127.0.0.1:1600/",
+            "http://localhost:16000/index.html",
+            "http://127.0.0.1:16000/",
             "tauri://localhost/index.html",
         ] {
             assert!(is_allowed_navigation(&url(allowed)), "应放行: {allowed}");
