@@ -289,6 +289,25 @@ try {
     }
     Assert-True ($portValue -eq $proxyPort) "保存后端口原样回填（实际 '$portValue'）"
 
+    # 「检测」的结果要**弹一条提示**（用户报过"点了没反应"——原来只更新卡片里那行灰字）。
+    # ⚠ 提示的文案与卡片里那行灰字**一字不差**，所以只能按**位置**区分：提示挂在窗口底部的
+    # 消息栈里（`.notice-stack-message`，那条 div 在 UIA 里被剪掉、只剩无类名的 Text 节点），
+    # 灰字在设置卡片里、靠上。判据：同文案里 y 落在窗口下五分之一的那个。
+    Assert-True (Invoke-Named -Window $window -Name '检测' -Right) '点「检测」'
+    $win = $window.Current.BoundingRectangle
+    $toastBottom = $win.Y + $win.Height * 0.8
+    $toast = $null
+    $deadline = (Get-Date).AddSeconds(6)
+    do {
+        $toast = @(Get-Elements $window) | Where-Object {
+            $_.Current.Name -and $_.Current.Name.Contains($proxyUrl) -and
+                -not $_.Current.IsOffscreen -and (Test-Rect $_.Current.BoundingRectangle) -and
+                ($_.Current.BoundingRectangle.Y -gt $toastBottom)
+        } | Select-Object -First 1
+        if (-not $toast) { Start-Sleep -Milliseconds 300 }
+    } while (-not $toast -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$toast) "检测结果在窗口底部弹出了消息提示（带 $proxyUrl）"
+
     # ================= 2/4 行情查询必须打到假代理 =================
     Write-Host "`n[proxy] 2/4 股票：建仓 → 查询股票名称（应经假代理）"
     Assert-True (Invoke-Named -Window $window -Name '股票') '打开「股票」页'

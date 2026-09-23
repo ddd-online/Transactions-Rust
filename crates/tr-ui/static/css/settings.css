@@ -186,6 +186,13 @@
   width: 84px;
 }
 
+/* 「检测」按钮的宽度在**两种状态之间钉住**：`Button` 的 loading 会在文案前插一个 14px 图标
+ * （外加 8px 间隙 = +22px），不钉住的话一点「检测」整排按钮就向左挤一下、松手又弹回来
+ * （用户报的）。84px = 文案 28 + 图标 14 + 间隙 8 + 左右内边距 32 + 边框 2。 */
+.st-proxy-detect {
+  min-width: 84px;
+}
+
 .st-progress-card {
   margin-top: var(--transactions-space-md);
   padding: var(--transactions-space-md);

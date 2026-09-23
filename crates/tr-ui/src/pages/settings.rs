@@ -145,6 +145,32 @@ fn GeneralSetting() -> impl IntoView {
         });
     };
 
+    // 「检测」按钮：与上面那条小字走同一条命令，但**结果要弹一条提示** ——
+    // 只更新卡片里那行灰字，用户点完跟没反应一样（用户报的就是这个）。
+    // 提示的语气按后端给的事实分两种（不是猜文案，是两个确定的坏情况）：
+    //   * 解析不出地址、而用户明明选了「手动」→ 手动地址无效（`resolve()` 那条"已按直连处理"）
+    //   * 解析不出地址、而系统只配了 PAC → 本版本不解析 PAC
+    // 其余（关掉了代理 / 本机没代理 / 真的探到了代理）都是一条信息提示。
+    let detect_proxy = move || {
+        proxy_detecting.set(true);
+        leptos::task::spawn_local(async move {
+            match api::desktop::proxy_detect().await {
+                Ok(response) => {
+                    proxy_note.set(response.message.clone());
+                    let troublesome = response.url.is_empty()
+                        && (proxy_mode.get_untracked() == PROXY_MODE_MANUAL || response.pac);
+                    if troublesome {
+                        Notifier::global().warning(response.message, None);
+                    } else {
+                        Notifier::global().info(response.message, None);
+                    }
+                }
+                Err(error) => notify_error("检测代理", &error),
+            }
+            proxy_detecting.set(false);
+        });
+    };
+
     // 保存失败时把界面拉回**磁盘上的真实值**。
     // ⚠ 不能"记住点击前的值"：`Segmented` 在触发 `on_change` **之前**就已经把绑定信号改成新值了，
     // 回调里读到的"之前"其实就是刚点的那一项（回滚会变成空操作）——只有重读配置才权威。
@@ -449,8 +475,9 @@ fn GeneralSetting() -> impl IntoView {
                     </Show>
                     <Button
                         variant=ButtonVariant::Secondary
+                        class="st-proxy-detect"
                         loading=proxy_detecting
-                        on_click=move |_| refresh_proxy_note()
+                        on_click=move |_| detect_proxy()
                     >
                         "检测"
                     </Button>
