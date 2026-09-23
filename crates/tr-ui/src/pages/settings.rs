@@ -853,7 +853,6 @@ fn DiarySetting() -> impl IntoView {
                                 })
                                 on_click=move || pick_import_directory()
                             >
-                                {icons::icon(Icon::Inbox)}
                                 "批量导入"
                             </Button>
                         </Tooltip>
@@ -903,7 +902,6 @@ fn DiarySetting() -> impl IntoView {
                                 })
                                 on_click=move || pick_export_directory()
                             >
-                                {icons::icon(Icon::Read)}
                                 "批量导出"
                             </Button>
                         </Tooltip>
