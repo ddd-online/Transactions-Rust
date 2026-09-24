@@ -4,8 +4,8 @@
 //!
 //! * [`DiaryPage`]：工具栏（今天 + 日期选择器 + 右侧「已保存 / 删除」）+ 两栏编排
 //! * [`DiaryTree`]：年 → 月 → 日三级折叠树（年/月降序、日降序）；
-//!   它上面还有一条**顶栏**（`.diary-tree-bar`）放整棵树的三个图标动作
-//!   （定位到当前日记 / 全部展开 / 全部收起）—— 顶栏属于左栏，不是页面工具栏
+//!   它上面是一条**栏头**（`.diary-tree-bar`）：左边「日记列表」，右边整棵树的三个安静图标动作
+//!   （定位到当前日记 / 全部展开 / 全部收起）—— 栏头属于左栏，不是页面工具栏
 //! * [`DiaryEditor`]：心情 + 字数 + **始终可编辑**（无预览/Markdown 渲染）+ 1500ms 防抖自动保存 + 删除
 //! * 状态直接由本文件持有信号（与其余页面一致）
 //! * 正文按**纯文本**呈现（换行原样保留）：日记页不做 Markdown 渲染
@@ -23,9 +23,9 @@
 //! * **打开页面自动展开定位到今天**：日期树第一次拿到数据时，展开「今天」（准确说是选中那天）
 //!   所在的年与月、其余年份收起，并把那天滚进视野（见 [`DiaryTree`] 的 `locate_date`）。
 //!   工具栏的「今天」跳到今天并做同一件事。
-//! * **顶栏的瞄准图标 = 定位到当前打开的日记**：只展开那天所在的路径、把它滚进视野，
+//! * **栏头的瞄准图标 = 定位到当前打开的日记**：只展开那天所在的路径、把它滚进视野，
 //!   不换日期也不重新加载 —— 树跟着编辑器走，翻到别的日期后能一键找回来。
-//! * **折叠状态**：左栏顶栏的展开/收起图标分别把全部年-月展开、把全部年份收起。
+//! * **折叠状态**：左栏栏头的展开/收起图标分别把全部年-月展开、把全部年份收起。
 //!
 //! ## 设计取舍
 //!
@@ -414,7 +414,7 @@ pub fn DiaryPage() -> impl IntoView {
     // 版心两块：工具栏 / 内容区各自建好视图再交给 `FeaturePage`（骨架见 components/ui/feature_page.rs）
     //
     // 页面工具栏：「今天」+ 日期选择器，右侧「已保存 / 删除」。
-    // 日期树自己的三个动作（定位到当前日记 / 全部展开 / 全部收起）在左栏顶部的顶栏里。
+    // 日期树自己的三个动作（定位到当前日记 / 全部展开 / 全部收起）在左栏的栏头里。
     let toolbar = view! {
         <div class="diary-tools">
             <Button
@@ -464,40 +464,44 @@ pub fn DiaryPage() -> impl IntoView {
         >
             <div class="diary-body">
                 <div class="diary-panel diary-panel--left">
-                    // 日期树的顶栏：整棵树的三个动作（都在 260px 这一栏里面、树的上方）。
-                    // 28px 描边图标按钮 —— 栏头内部的动作按按钮规范用 Small，与页面工具栏的
-                    // 36px 控件不是一档。
+                    // 日期树的栏头：左边是这一栏的名字，右边是整棵树的三个动作。
+                    // 三个动作是 **`Text` 变体的安静按钮**（透明底、无描边，只有 hover 才浮出一层浅底）——
+                    // 它们是"树自己的附属操作"，不该长得像页面工具栏上的控件。
+                    // 栏头与树之间**不画发丝线**：靠留白分段（见 `diary.css` 的 `.diary-tree-bar`）。
                     <div class="diary-tree-bar">
-                        <Button
-                            variant=ButtonVariant::Secondary
-                            size=ButtonSize::Small
-                            icon_only=true
-                            title="定位到当前日记"
-                            aria_label="定位到当前日记"
-                            on_click=move |_| locate_current()
-                        >
-                            {icons::icon(Icon::Aim)}
-                        </Button>
-                        <Button
-                            variant=ButtonVariant::Secondary
-                            size=ButtonSize::Small
-                            icon_only=true
-                            title="全部展开"
-                            aria_label="全部展开"
-                            on_click=move |_| expand_all()
-                        >
-                            {icons::icon(Icon::Expand)}
-                        </Button>
-                        <Button
-                            variant=ButtonVariant::Secondary
-                            size=ButtonSize::Small
-                            icon_only=true
-                            title="全部收起"
-                            aria_label="全部收起"
-                            on_click=move |_| collapse_all()
-                        >
-                            {icons::icon(Icon::Shrink)}
-                        </Button>
+                        <span class="diary-tree-bar__title">"日记列表"</span>
+                        <div class="diary-tree-bar__actions">
+                            <Button
+                                variant=ButtonVariant::Text
+                                size=ButtonSize::Small
+                                icon_only=true
+                                title="定位到当前日记"
+                                aria_label="定位到当前日记"
+                                on_click=move |_| locate_current()
+                            >
+                                {icons::icon(Icon::Aim)}
+                            </Button>
+                            <Button
+                                variant=ButtonVariant::Text
+                                size=ButtonSize::Small
+                                icon_only=true
+                                title="全部展开"
+                                aria_label="全部展开"
+                                on_click=move |_| expand_all()
+                            >
+                                {icons::icon(Icon::Expand)}
+                            </Button>
+                            <Button
+                                variant=ButtonVariant::Text
+                                size=ButtonSize::Small
+                                icon_only=true
+                                title="全部收起"
+                                aria_label="全部收起"
+                                on_click=move |_| collapse_all()
+                            >
+                                {icons::icon(Icon::Shrink)}
+                            </Button>
+                        </div>
                     </div>
                     <DiaryTree
                         dates=dates

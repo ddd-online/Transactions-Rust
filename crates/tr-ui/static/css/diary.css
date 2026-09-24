@@ -41,19 +41,40 @@
   flex-direction: column;
 }
 
-/* ---------------- 日期树的顶栏 ---------------- */
+/* ---------------- 日期树的栏头 ---------------- */
 
-/* 三个动作（定位到当前日记 / 全部展开 / 全部收起）都在这一栏**内部**、树的上方；
+/* 左 = 这一栏的名字（「日记列表」），右 = 整棵树的三个动作（定位到当前日记 / 全部展开 / 全部收起）。
  * 页面工具栏（今天 / 日期选择器 / 已保存 / 删除）是另一条带，两者不要混。
- * 底边一条发丝线把顶栏与树分开（与 `.diary-editor__header` 原来那条同一手法）。 */
+ *
+ * **不画分隔线**：栏头与树靠留白分段。原来那条 `border-bottom` 把栏头做成了一条"带"，
+ * 而这三个动作是树自己的附属操作 —— 一条横线会把它们抬成页面级的工具栏。
+ * 三个动作也因此是 `Text` 变体的安静按钮（透明底、无描边，只有 hover 才浮出一层浅底）。 */
 .diary-tree-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--transactions-space-sm);
   flex-shrink: 0;
-  /* 顶部 4px 与树自己的 `padding-top` 同值；下方留出与分隔线的距离 */
+  /* 顶部 4px 与树自己的 `padding-top` 同值；下方留出与第一个树节点之间的距离 */
   padding: var(--transactions-space-xs) 0 var(--transactions-space-md);
-  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+/* 栏头标题与「分类标签」左栏的 `.ct-column-title` 同一档（body / 600 / ink） */
+.diary-tree-bar__title {
+  font-size: var(--transactions-size-text-body);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 三个动作贴右成一组：图标按钮之间只留 2px —— 读作"一组操作"，而不是三个独立控件 */
+.diary-tree-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-2xs);
+  flex-shrink: 0;
 }
 
 /* ---------------- 日期树 ---------------- */
