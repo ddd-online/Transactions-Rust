@@ -53,6 +53,12 @@
   flex-shrink: 0;
 }
 
+/* 工具栏左侧的两个分栏页签（统计 / 明细）：**不换行、不压缩** ——
+ * 可伸缩的那一半是右侧的筛选组，页签被挤窄就点不准了。 */
+.stock-tabs {
+  flex-shrink: 0;
+}
+
 /* 设置子功能用设置页那套 `.st-card` 卡片（类名与样式都在 settings.css，两页共用同一份，
  * 不复制一份到本文件）。但设置页的 `.st-card` 有一组**为它自己的版心**写的负外边距
  * （`margin: 0 -16px`，好让分隔线通到 `.st-panes` 的边缘），而这里的祖先少了内边距：
@@ -220,6 +226,25 @@
 
 .stock-table tbody tr:hover td {
   background: var(--transactions-color-hover-bg);
+}
+
+/* 空态：表格里只有一行「暂无…」时，让表格**撑满滚动区**，那一行才会吃掉剩余高度、
+ * 空态在表头与底栏之间垂直居中 —— 否则行只有内容高度，空态浮在表格区上沿。
+ * 钩子类由页面在"列表为空"时加上（见 `stock.rs` 的 `account_view`），所以有数据时
+ * 整段规则都不参与，滚动与行高按原样。`flex: 1 0 auto` 与模板页同一条口径：
+ * 有空余时长高，内容比滚动区高时保持自然高度（滚动交给 `.stock-table-wrap`）。 */
+.stock-table-wrap--empty {
+  display: flex;
+  flex-direction: column;
+}
+
+.stock-table-wrap--empty > .stock-table {
+  flex: 1 0 auto;
+}
+
+/* 空态行不是数据行：整块都是"空"，hover 高亮只会让它变成一大片灰（看着像被选中）。 */
+.stock-table-wrap--empty > .stock-table > tbody > tr:hover > td {
+  background: transparent;
 }
 
 .stock-table .is-center {
@@ -1025,13 +1050,85 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------------- 子功能五：设置 ---------------- */
+
+/* 「操作记录」弹窗里的列表：一行一次操作 —— 上一行是操作名（+「最新」标记）与时间，
+ * 下一行是摘要。窄弹窗里三列会挤，所以纵向堆叠而不是做表格。 */
+.stock-op-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-xs);
+  margin-bottom: var(--transactions-space-sm);
+}
+
+.stock-op-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-minor-background);
+}
+
+.stock-op-item__head {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.stock-op-item__action {
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-major);
+}
+
+/* 「最新」= 下一次回滚会撤销的那一条：用强调色 tint（全站"选中/当前"的语言） */
+.stock-op-item__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--transactions-space-sm);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-primary-tint);
+  color: var(--transactions-color-primary);
+  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.stock-op-item__time {
+  margin-left: auto;
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+  white-space: nowrap;
+}
+
+.stock-op-item__detail {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 只读弹窗（`footer=false`）自带的关闭入口：贴右下，与 `Modal` 底栏同一位置 */
+.stock-op-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--transactions-space-md);
+}
+
 /* ---------------- 子功能四：统计 ---------------- */
 
+/* 统计子功能：**左侧分栏页签 + 右侧筛选组**。
+ * `margin-left: auto` 把筛选组顶到最右（`.stock-toolbar` 那行仍是 flex，
+ * 第一条是页签、按内容宽度排），于是页签贴左、筛选贴右，两边都不抢宽度。 */
 .stock-statistics__filters {
   display: flex;
   align-items: center;
   gap: var(--transactions-space-sm);
   flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .stock-statistics__range {
@@ -1056,6 +1153,8 @@
   gap: var(--transactions-space-lg);
   padding: var(--transactions-space-lg);
   border-bottom: 1px solid var(--transactions-color-divider);
+  /* 指标块是"引文"：按内容高排版，剩余高度全留给下面的曲线 */
+  flex-shrink: 0;
 }
 
 .stock-stats-overview__lead {
@@ -1112,14 +1211,39 @@
   color: var(--transactions-color-text-tertiary);
 }
 
+/* 统计曲线块：**吃掉结算统计之外的全部高度**（"这一页不再整页滚动"的关键一环）。
+ * 它自己不再给内边距与下边线 —— 头部用面板那套 `.stock-panel__head`（自带发丝线），
+ * 内边距下放给 `__body`，图表贴着自己那块留白。 */
 .stock-chart-block {
-  padding: var(--transactions-space-md);
-  border-bottom: 1px solid var(--transactions-color-divider);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-/* 这一块不在 flex 高度链上：高度给**图表根**，画布再靠 flex 吃满图例之下 */
+.stock-chart-block__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--transactions-space-md);
+}
+
+/* 图表根吃满 `__body`：`.chart__canvas` 自己 `flex: 1`，
+ * 于是画布拿到的是"图例之下、块之内的实际像素"（`watch_canvas_size` 按它重画 SVG）。
+ * 这覆盖了 ui.css 里"内容流里固定 320px"的用法 —— 在分栏里高度由容器决定。 */
 .stock-chart-block .chart {
-  height: 320px;
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+/* 明细分栏：表格区吃掉面板剩余高度（纵向/横向滚动都发生在这一块里），
+ * 「共 N 条 + 分页」那一行因此贴在分栏底边 —— 与账户子功能的资金记录同一条口径。
+ * 只作用于统计子功能的页签面板，不动其余子功能里的同名表格。 */
+.stock-statistics__pane .stock-table-wrap {
+  flex: 1;
+  min-height: 0;
 }
 
 /* ---------------- 自绘 SVG 图表 ---------------- */
@@ -1578,24 +1702,39 @@
   flex-direction: column;
 }
 
-/* 交易统计（`.stock-statistics`）：**可以长高，但绝不压缩** —— `flex: 1 0 auto`。
- *   * 内容比可视区矮时（空态「还没有结算记录」、加载态）它长到填满子功能，
- *     里面的 `.stock-empty` / `Empty` 才有剩余空间可居中；
- *   * 内容比可视区高时保持自然高度，交给 `.stock-body` 滚动。
+/* ============================================
+ * 统计子功能（`.stock-statistics`）—— 两个分栏都**恰好填满内容区**
  *
- * 关键在 `flex-shrink: 0`：早前那一刀切用的是可压缩的 `flex: 1`，内容被压进子功能高度，
- * 曲线面板的实测宽度塌到 213px（图表按实测尺寸出 SVG，压一次就画坏了）。 */
+ * 这一页原来整页滚动：根容器是 `flex: 1 0 auto`（可长高、不压缩），
+ * 指标 + 定高 320px 的曲线 + 不设上限的明细表摞起来必然超过可视区，
+ * 于是滚动条落在 `.stock-body` 上（用户看到的"页面滚动"）。
+ * 现在明细搬进第二个分栏并分页、曲线按剩余高度自适应，根容器就必须**恰好等于**内容区：
+ *   ① `flex: 1` + `min-height: 0`：不溢出（溢出就在 `.stock-body` 出现滚动条）；
+ *   ② 下面每一级（页签面板 → 面板 / 居中空态）同样可伸缩，剩余高度才有处可去。
+ *
+ * 早前这里曾用 `.ui-tab-pane > *` 一刀切把根容器变弹性列，曲线面板被挤到 213px 宽
+ * （图表按实测尺寸出 SVG，压一次就画坏了）—— 压不坏的前提是"分栏内部已经把剩余高度
+ * 指派给了曲线"，而那正是这一版把明细移走换来的空间。
+ * ============================================ */
+
 .stock-statistics {
   display: flex;
   flex-direction: column;
-  flex: 1 0 auto;
+  flex: 1;
+  min-height: 0;
 }
 
-/* 统计子功能**空态那个面板**才填满内容区（`--empty` 由 stock.rs 只在空态分支加）：
- * 空态链路是 `.stock-statistics > .stock-panel > .stock-empty > Empty`，而 `.stock-panel`
- * 自己是"内容高"的（有数据时它必须由内容决定高度，不能被 flex 分配）——
- * 少了这一环，上面给根容器和 `.stock-empty` 的 `flex: 1` 全都没有剩余空间可用。 */
-.stock-statistics > .stock-panel--empty {
+/* 页签面板（`TabPane` 渲染出的 `.ui-tab-pane`）与它的唯一子节点都要可伸缩：
+ * 前者承接根容器给的高度，后者（面板 / 居中空态）再吃满它。
+ * 加载态与空态是面板的替代品，所以这里用 `> *` —— 两条分支都在这一个钩子下。 */
+.stock-statistics > .ui-tab-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stock-statistics > .ui-tab-pane > * {
   flex: 1;
   min-height: 0;
 }

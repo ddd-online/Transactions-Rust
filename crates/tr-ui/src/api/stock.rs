@@ -27,7 +27,8 @@
 
 use serde::Serialize;
 use tr_domain::dto::{
-    StockFundRecordPage, StockNameDto, StockOverviewDto, StockPositionDto, StockStatisticsDto,
+    StockFundRecordPage, StockNameDto, StockOperationDto, StockOperationRollbackDto,
+    StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockStatisticsDto,
     StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
     StockTradeImpactDto, StockTradeTagSettingDto,
 };
@@ -554,6 +555,41 @@ pub async fn stock_name(stock_code: &str) -> Result<StockNameDto, IpcError> {
         "stock_name",
         StockNameRequest {
             stock_code: stock_code.to_string(),
+        },
+    )
+    .await
+}
+
+/// 操作记录列表（最新的在前，最多 10 条）。
+pub async fn operation_list(ledger_id: &str) -> Result<Vec<StockOperationDto>, IpcError> {
+    ipc::call(
+        "stock_operation_list",
+        LedgerIdRequest {
+            ledger_id: ledger_id.to_string(),
+        },
+    )
+    .await
+}
+
+/// 回滚预演（**不落库**）：要撤销哪一次操作、会不会让某些轮次失效。
+pub async fn operation_preview(
+    ledger_id: &str,
+) -> Result<StockOperationRollbackPreviewDto, IpcError> {
+    ipc::call(
+        "stock_operation_preview",
+        LedgerIdRequest {
+            ledger_id: ledger_id.to_string(),
+        },
+    )
+    .await
+}
+
+/// 回滚最新一次操作。
+pub async fn operation_rollback(ledger_id: &str) -> Result<StockOperationRollbackDto, IpcError> {
+    ipc::call(
+        "stock_operation_rollback",
+        LedgerIdRequest {
+            ledger_id: ledger_id.to_string(),
         },
     )
     .await

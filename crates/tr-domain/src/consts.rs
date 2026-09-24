@@ -50,6 +50,18 @@ pub const STOCK_TRADE_REDUCE: &str = "reduce";
 /// 清仓
 pub const STOCK_TRADE_CLOSE: &str = "close";
 
+// ---------- 可回滚操作的种类 ----------
+//
+// 「操作记录」里的 `kind`：决定回滚时用哪条逆路径（见 `tr-service` 的 `rollback_latest`）。
+// 八种可回滚操作只有两种形状，所以只有两个取值：
+//   * `fund`  —— 追加本金 / 支取 / 利息归本：新建了一条资金记录（`target_id` = 资金记录 id），
+//                追加本金另外把 `principal` 加上金额；
+//   * `order` —— 建仓 / 加仓 / 减仓 / 清仓：新建了一个委托（`target_id` = `order_id`）。
+/// 资金类操作（追加本金 / 支取 / 利息归本）
+pub const STOCK_OP_KIND_FUND: &str = "fund";
+/// 委托类操作（建仓 / 加仓 / 减仓 / 清仓）
+pub const STOCK_OP_KIND_ORDER: &str = "order";
+
 // ---------- 轮次交易标签（策略分类，每轮一个；不设置时默认「分析」）----------
 
 pub const STOCK_TAG_ANALYSIS: &str = "分析";

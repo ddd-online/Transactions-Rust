@@ -14,7 +14,8 @@ use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::dto::{
-    StockFundRecordPage, StockNameDto, StockOverviewDto, StockPositionDto, StockStatisticsDto,
+    StockFundRecordPage, StockNameDto, StockOperationDto, StockOperationRollbackDto,
+    StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockStatisticsDto,
     StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
     StockTradeImpactDto, StockTradeTagSettingDto,
 };
@@ -681,6 +682,53 @@ pub fn stock_reset(state: State<'_, AppState>, req: StockOverviewRequest) -> Api
     let workspace = state.workspace()?;
     stock::reset_data(&workspace, &req.ledger_id)?;
     Ok(true)
+}
+
+// ---------- 操作记录 / 回滚 ----------
+//
+// 三条命令共用 `StockOverviewRequest`（只需要 ledger_id），界面侧对应 `api::stock` 的
+// `LedgerIdRequest` —— 字段集一致，契约审计逐字段比得过。
+
+/// 某账本的操作记录（最新的在前，最多 10 条）。
+#[tauri::command]
+pub fn stock_operation_list(
+    state: State<'_, AppState>,
+    req: StockOverviewRequest,
+) -> ApiResult<Vec<StockOperationDto>> {
+    require_ledger_id(&req.ledger_id)?;
+    let workspace = state.workspace()?;
+    Ok(tr_service::stock::list_operations(
+        &workspace,
+        &req.ledger_id,
+    )?)
+}
+
+/// 回滚预演：要撤销哪一次操作、会不会让某些轮次失效（复盘随之丢失）。**不落库**。
+#[tauri::command]
+pub fn stock_operation_preview(
+    state: State<'_, AppState>,
+    req: StockOverviewRequest,
+) -> ApiResult<StockOperationRollbackPreviewDto> {
+    require_ledger_id(&req.ledger_id)?;
+    let workspace = state.workspace()?;
+    Ok(tr_service::stock::preview_rollback(
+        &workspace,
+        &req.ledger_id,
+    )?)
+}
+
+/// 回滚最新一次操作（撤销后把它从记录里弹掉）。
+#[tauri::command]
+pub fn stock_operation_rollback(
+    state: State<'_, AppState>,
+    req: StockOverviewRequest,
+) -> ApiResult<StockOperationRollbackDto> {
+    require_ledger_id(&req.ledger_id)?;
+    let workspace = state.workspace()?;
+    Ok(tr_service::stock::rollback_latest(
+        &workspace,
+        &req.ledger_id,
+    )?)
 }
 
 #[cfg(test)]

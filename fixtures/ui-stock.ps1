@@ -18,6 +18,10 @@
 #   * 重置股票数据：清空该账本股票侧全部表，而**记账数据与账本本身不动**；
 #     费用设置/交易标签会被界面"重新拉一遍"按默认值重建 —— 对这两张表断言的是"回到默认值"
 #   * 资金记录：`cash_balance` 恒等于 `principal + Σ amount_change`（不变量，逐步校验）
+#   * 统计：子功能内的分栏页签（统计 / 明细）在 UIA 里是 **TabItem**（不是 Button，按 Button 找
+#     会静默失败）；「明细」分栏渲染逐笔结算明细表 + 页脚的「共 N 条」与分页控件。
+#     这一页原来把「结算统计 + 曲线 + 逐笔明细」竖向摞在一屏（整页滚动），现在两个分栏
+#     各自填满内容区、明细走分页 —— 分栏切换与页脚这两条链路就锁在这里。
 #
 # ⚠ 它顺带锁死一个**真实缺陷**（本轮才发现，"减仓/清仓按钮点不动"的真凶）：
 #   详情区那三个按钮（清仓/减仓/加仓）原来在 `on_click` 里先写 `selected_code.set(code)`
@@ -250,7 +254,7 @@ function Get-FundRowDates { param($Window)
 
 # 只认**真正可见**的按钮：页面里同名元素很多（另一个页签/未展开面板里也可能有「减仓」），
 # 按名字取第一个常常拿到隐藏节点，点它什么都不会发生（实测：三次点击都没弹窗）。
-function Find-VisibleButton { param($Window, [string]$Name, [switch]$Last, [switch]$Like)
+function Find-VisibleButton { param($Window, [string]$Name, [switch]$Last, [switch]$Like, [string]$ClassPart)
     $windowRect = $Window.Current.BoundingRectangle
     $matches = @()
     foreach ($element in @(Get-Elements $Window)) {
@@ -260,6 +264,13 @@ function Find-VisibleButton { param($Window, [string]$Name, [switch]$Last, [swit
         if (-not $elementName) { continue }
         $nameMatches = if ($Like) { $elementName.Contains($Name) } else { $elementName -eq $Name }
         if (-not $nameMatches) { continue }
+        # ⚠ 外壳的窗口三键里有 `aria-label="关闭"`（class `window-btn`）：按名字点「关闭」会
+        # **把应用关掉**（实测：整轮脚本跑到一半窗口就没了，后面每一步都拿不到窗口矩形）。
+        # 界面按钮的类名一律以 `ui-btn` 开头，按类名把两者分开 —— 同名键按类名定位是本仓库既有纪律。
+        if ($ClassPart) {
+            $className = [string]$element.Current.ClassName
+            if (-not $className -or -not $className.Contains($ClassPart)) { continue }
+        }
         $rect = $element.Current.BoundingRectangle
         if ($rect.Width -le 0 -or $rect.Height -le 0) { continue }
         # 矩形必须在窗口可视范围内（隐藏面板里的元素会被排到可视区之外）
@@ -271,10 +282,10 @@ function Find-VisibleButton { param($Window, [string]$Name, [switch]$Last, [swit
     if ($Last) { return $matches[$matches.Count - 1] }
     return $matches[0]
 }
-function Wait-VisibleButton { param($Window, [string]$Name, [int]$TimeoutSec = 20, [switch]$Last)
+function Wait-VisibleButton { param($Window, [string]$Name, [int]$TimeoutSec = 20, [switch]$Last, [string]$ClassPart)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     do {
-        $element = Find-VisibleButton -Window $Window -Name $Name -Last:$Last
+        $element = Find-VisibleButton -Window $Window -Name $Name -Last:$Last -ClassPart $ClassPart
         if ($element) { return $element }
         Start-Sleep -Milliseconds 400
     } while ((Get-Date) -lt $deadline)
@@ -289,6 +300,40 @@ function Switch-StockSub { param($Window, [string]$Name, [int]$TimeoutSec = 20)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if (Invoke-SubFunction -Window $Window -Name $Name -TimeoutSec 3) { return $true }
+        Start-Sleep -Milliseconds 400
+    }
+    return $false
+}
+
+# 统计子功能**内**的分栏页签（统计 / 明细）：UIA 里是 `TabItem`（用 SelectionItemPattern），
+# 按 Button 找只会静默失败（这条坑 AGENTS.md 里记着）。判据与 `Find-VisibleButton` 同口径：
+# 关掉 offscreen、矩形有效、且落在窗口内 —— 同名页签在另一个分栏里不会同时存在，
+# 但惰性建树期间会查到 ±∞ 的幽灵节点，所以矩形必须校验。
+function Find-VisibleTabItem { param($Window, [string]$Name)
+    $windowRect = $Window.Current.BoundingRectangle
+    $tabType = [System.Windows.Automation.ControlType]::TabItem
+    foreach ($element in @(Get-Elements $Window)) {
+        if ($element.Current.ControlType -ne $tabType) { continue }
+        if ($element.Current.IsOffscreen) { continue }
+        if ($element.Current.Name -ne $Name) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if (-not (Test-Rect $rect)) { continue }
+        if ($rect.Y -lt $windowRect.Y -or ($rect.Y + $rect.Height) -gt ($windowRect.Y + $windowRect.Height)) { continue }
+        if ($rect.X -lt $windowRect.X -or ($rect.X + $rect.Width) -gt ($windowRect.X + $windowRect.Width)) { continue }
+        return $element
+    }
+    return $null
+}
+
+function Switch-StatsTab { param($Window, [string]$Name, [int]$TimeoutSec = 20)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $tab = Find-VisibleTabItem -Window $Window -Name $Name
+        if ($tab) {
+            Invoke-Element $tab | Out-Null
+            Start-Sleep -Seconds 2
+            return $true
+        }
         Start-Sleep -Milliseconds 400
     }
     return $false
@@ -454,8 +499,8 @@ try {
     $ledgerId = ''
     $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 5
 
-    # ================= 1/8 建仓 =================
-    Write-Host "`n[stock] 1/8 建仓 $code × $buyLots 手 @ $buyPrice"
+    # ================= 1/10 建仓 =================
+    Write-Host "`n[stock] 1/10 建仓 $code × $buyLots 手 @ $buyPrice"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票')) '打开「股票」页'
     Start-Sleep -Seconds 3
     Assert-True (Switch-StockSub -Window $window -Name '持仓') '切到「持仓」子功能（建仓按钮在工具栏）'
@@ -556,8 +601,8 @@ try {
             "买入资金变动 = -(成交额 + 手续费)（$($buyRecord.amount_change)）"
     }
 
-    # ================= 2/8 界面展示（建仓之后）=================
-    Write-Host "`n[stock] 2/8 界面展示：持仓卡片与成交记录"
+    # ================= 2/10 界面展示（建仓之后）=================
+    Write-Host "`n[stock] 2/10 界面展示：持仓卡片与成交记录"
     $cardText = $null
     $deadline = (Get-Date).AddSeconds(20)
     do {
@@ -584,12 +629,12 @@ try {
     Assert-True (Switch-StockSub -Window $window -Name '持仓') '切回「持仓」（减仓/清仓按钮在详情区）'
     Start-Sleep -Seconds 3
 
-    # ================= 3/8 编辑成交（改成交价 → 费用/成本/资金链重算）=================
+    # ================= 3/10 编辑成交（改成交价 → 费用/成本/资金链重算）=================
     # 成交记录表每行的「编辑」按钮（在持仓详情区，所以这时必须还有持仓）。
     # ⚠ 两个坑：① 这个账本里**还有种子数据**的同代码成交（界面只显示当前轮次那笔，数据库查询会一起捞出来），
     # 所以"我们的成交"用与 1/5 相同的口径认：同类型里 created_at 最新的那一笔；
     # ② 编辑弹窗的输入框**预填后名字就是值**（不是占位符），必须按 Y 序取 Edit，不能按名字找。
-    Write-Host "`n[stock] 3/8 编辑成交：把建仓价从 $buyPrice 改成 101"
+    Write-Host "`n[stock] 3/10 编辑成交：把建仓价从 $buyPrice 改成 101"
     $orderTrade = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
     Assert-True ([bool]$orderTrade) '编辑前能认到我们的建仓成交（该类型最新一笔）'
     if ($orderTrade) {
@@ -654,8 +699,8 @@ try {
             "编辑后资金记录按新价重放（存在变动 = $expectedChange 的记录，实际 $($ourFundsAfterEdit.Count) 条）"
     }
 
-    # ================= 4/8 删除委托（整笔回放）→ 重新建仓 =================
-    Write-Host "`n[stock] 4/8 删除整笔委托 → 再建仓（好继续验减仓/清仓）"
+    # ================= 4/10 删除委托（整笔回放）→ 重新建仓 =================
+    Write-Host "`n[stock] 4/10 删除整笔委托 → 再建仓（好继续验减仓/清仓）"
     $ourBuyFundIds = @(if ($editedTrade) {
             $expected = -(([int64]$editedTrade.amount) + ([int64]$editedTrade.fee))
             Get-FundRecords -LedgerId $ledgerId | Where-Object { ([int64]$_.amount_change) -eq $expected } |
@@ -701,7 +746,7 @@ try {
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     Assert-True ([bool]$posRebuilt -and $posRebuilt.quantity -eq 300) "重建仓后持仓回到 300 股（实际 $(if ($posRebuilt) { $posRebuilt.quantity } else { 'n/a' })）"
 
-    # ================= 5/8 减仓 → 清仓 =================
+    # ================= 5/10 减仓 → 清仓 =================
     # 详情区的「减仓/清仓」现在真的能点开了（见文件顶部那条缺陷说明）。
     Write-Host "`n[stock] 3/3 减仓 1 手 @ $reducePrice → 清仓 2 手 @ $closePrice"
 
@@ -826,7 +871,7 @@ try {
             }
         }
     }
-    # ================= 6/8 交易费用设置：改完费率，**新委托立刻按新费率计费** =================
+    # ================= 6/10 交易费用设置：改完费率，**新委托立刻按新费率计费** =================
     # ⚠ 费用设置的编辑入口**在股票页的「设置」子功能**（原来在「应用设置 → 股票」分栏，
     # 已随股票设置整体迁进股票页；股票页的其他子功能只读取它来估费，不渲染表单）。
     # 费用设置的 UI 单位：佣金费率是**万分之**（÷10000 落库）、最低佣金是**元**（转分）、
@@ -834,7 +879,7 @@ try {
     #   佣金 = max(round(委托总额×费率), 最低佣金)（**整笔委托只收一次**）；
     #   买入 = 佣金 + 过户费(沪市)；卖出 = 佣金 + 印花税 + 过户费(沪市)（印花税只卖出收）；
     #   多笔成交时印花税/过户费**逐笔取整再相加**（各笔自己进整到分），下面这几笔都是单笔成交。
-    Write-Host "`n[stock] 6/8 费用设置（股票 → 设置）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
+    Write-Host "`n[stock] 6/10 费用设置（股票 → 设置）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
     Assert-True (Switch-StockSub -Window $window -Name '设置') '切到「设置」子功能（费用设置在这里）'
     Start-Sleep -Seconds 2
     Assert-True ([bool](Wait-Element -Root $window -Name '佣金费率' -TimeoutSec 15)) '设置子功能出现费用表单'
@@ -898,12 +943,38 @@ try {
         Assert-True (([int64]$feeSellTrade.fee) -eq 1344) `
             "卖出费用 = 120 + 1200 + 24 = 1344 分（实际 $($feeSellTrade.fee)）"
     }
-    # ================= 7/8 账户：利息归本（支取 / 利息归本 / 追加本金）+ 资金记录翻页 =================
+    # ================= 7/10 统计：分栏页签（统计 / 明细）+ 逐笔结算明细的页脚 =================
+    # 这一页原来把「结算统计 + 曲线 + 逐笔明细」竖向摞在一屏里（整页滚动）；
+    # 现在拆成两个**各自填满内容区**的分栏，明细走分页。锁两条链路：
+    #   ① 工具栏左侧的页签是 TabItem，切到「明细」要渲染出明细表（按 Button 找会静默失败）；
+    #   ② 页脚要有「共 N 条」与分页控件 —— 并且切回「统计」时曲线面板还在。
+    Write-Host "`n[stock] 7/10 统计：分栏页签（统计 / 明细）+ 逐笔结算明细"
+    Assert-True (Switch-StockSub -Window $window -Name '统计') '切到「统计」子功能'
+    Start-Sleep -Seconds 3
+    Assert-True ([bool](Wait-Element -Root $window -Name '结算统计' -TimeoutSec 20)) `
+        '「统计」分栏出现「结算统计」面板'
+
+    Assert-True (Switch-StatsTab -Window $Window -Name '明细') '找到并点开「明细」页签'
+    Start-Sleep -Seconds 2
+    Assert-True ([bool](Wait-Element -Root $window -Name '逐笔结算明细' -TimeoutSec 15)) `
+        '「明细」分栏出现「逐笔结算明细」表格'
+    $detailFooter = Get-Elements $window | ForEach-Object { [string]$_.Current.Name } |
+        Where-Object { $_ -match '^共 \d+ 条$' } | Select-Object -First 1
+    Assert-True ([bool]$detailFooter) "明细分栏页脚有「共 N 条」（实际 '$detailFooter'）"
+    Assert-True ([bool](Wait-Element -Root $window -Name '下一页' -TimeoutSec 10)) `
+        '明细分栏有分页控件（「下一页」）'
+
+    Assert-True (Switch-StatsTab -Window $Window -Name '统计') '切回「统计」页签'
+    Start-Sleep -Seconds 2
+    Assert-True ([bool](Wait-Element -Root $window -Name '统计曲线' -TimeoutSec 15)) `
+        '「统计」分栏出现「统计曲线」'
+
+    # ================= 8/10 账户：利息归本（支取 / 利息归本 / 追加本金）+ 资金记录翻页 =================
     # 两条要求都落在这里：
     #   ① 「利息归本」按钮在「支取」与「追加本金」**中间**，金额要显示在账户页指标区；
     #   ② 可用现金要加上利息归本（本金口径不变）；
     #   ③ 资金记录分页的上下页必须真的换一批数据（修的是"页码动了、表格不动"）。
-    Write-Host "`n[stock] 7/8 账户：利息归本 + 资金记录翻页"
+    Write-Host "`n[stock] 8/10 账户：利息归本 + 资金记录翻页"
     Assert-True (Switch-StockSub -Window $window -Name '账户') '切到「账户」子功能'
     Start-Sleep -Seconds 3
 
@@ -1016,13 +1087,127 @@ try {
     } while (-not $restored -and (Get-Date) -lt $deadline)
     Assert-True $restored "「上一页」回到第 1 页的同一批数据（实际 $($backDates.Count) 行）"
 
-    # ================= 8/8 重置股票数据：清空股票侧、**不动记账数据** =================
-    Write-Host "`n[stock] 8/8 重置股票数据（股票 → 设置 → 重置）"
+    # ================= 9/10 操作记录与回滚 =================
+    # 三条要求都锁在这里：
+    #   ① 每次正向操作记一条（本步用它验「追加本金」这一种形状）；
+    #   ② 「查看记录」弹窗列出这些记录；
+    #   ③ 「回滚」**先预演再确认**，确认后才落库，并把那条记录弹掉。
+    # 这一步**净效果为零**（刚追加的本金又被回滚掉），所以后面的「重置」断言照旧。
+    Write-Host "`n[stock] 9/10 操作记录与回滚（股票 → 设置 → 查看记录 / 回滚）"
+    $accountBeforeRollback = Get-ExpectedAccount -LedgerId $ledgerId
+    $fundsBeforeRollback = @(Get-FundRecords -LedgerId $ledgerId)
+    $rollbackCents = 100000 # 1000 元
+
+    # ---- ① 做一次正向操作：追加本金 ----
+    Assert-True (Switch-StockSub -Window $window -Name '账户') '切到「账户」子功能（追加本金在这里）'
+    Start-Sleep -Seconds 3
+    $addPrincipal = Wait-VisibleButton -Window $window -Name '追加本金' -TimeoutSec 15
+    Assert-True ([bool]$addPrincipal) '找到工具栏的「追加本金」'
+    if ($addPrincipal) { Invoke-Element $addPrincipal | Out-Null }
+    Start-Sleep -Seconds 1
+    Assert-True ([bool](Wait-Element -Root $window -Name '追加金额' -TimeoutSec 10)) `
+        '「追加本金」弹窗已打开（金额项是「追加金额」）'
+    Assert-True (Set-InputByPaste -Window $window -Name '请输入金额' -Text '1000') '填入追加金额 1000'
+    Start-Sleep -Milliseconds 500
+    # 确认键文案是「追加」（与工具栏入口「追加本金」不同名，不会撞）
+    $addOk = Wait-VisibleButton -Window $window -Name '追加' -TimeoutSec 10 -Last
+    Assert-True ([bool]$addOk) '找到弹窗里的「追加」确认键'
+    if ($addOk) { Invoke-Element $addOk | Out-Null }
+    Start-Sleep -Seconds 4
+
+    $accountAfterAdd = Get-ExpectedAccount -LedgerId $ledgerId
+    Assert-True ($accountAfterAdd.Principal -eq ($accountBeforeRollback.Principal + $rollbackCents)) `
+        "追加后本金 +$rollbackCents 分（实际 $($accountAfterAdd.Principal)）"
+
+    $opsAfterAdd = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_operation' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $ledgerId } | Sort-Object { [int64]$_.created_at })
+    Assert-True ($opsAfterAdd.Count -ge 1) "操作记录落库（$($opsAfterAdd.Count) 条）"
+    $newestOp = $null
+    if ($opsAfterAdd.Count -ge 1) {
+        $newestOp = $opsAfterAdd[$opsAfterAdd.Count - 1]
+        Assert-True ($newestOp.action -eq '追加本金') "最新一条是「追加本金」（实际 $($newestOp.action)）"
+        Assert-True ($newestOp.kind -eq 'fund') "kind = fund（实际 $($newestOp.kind)）"
+        Assert-True ($newestOp.detail -eq '¥1000.00') "摘要 ¥1000.00（实际 $($newestOp.detail)）"
+        Assert-True (-not [string]::IsNullOrEmpty($newestOp.target_id)) 'target_id 指向那次操作建出的资金记录'
+    }
+    if ($newestOp) {
+        $targetRows = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_fund_record' -OutDir $OutDir |
+            Where-Object { $_.id -eq $newestOp.target_id })
+        Assert-True ($targetRows.Count -eq 1) 'target_id 指向的资金记录确实在库里'
+    }
+
+    # ---- ② 「查看记录」弹窗 ----
+    Assert-True (Switch-StockSub -Window $window -Name '设置') '切到「设置」子功能'
+    Start-Sleep -Seconds 3
+    # 设置页那张卡片的**说明文案**里也有「追加本金」四个字，但它是整句（精确名不同），
+    # 所以这里用**精确名**计数：弹窗没开时应当一个都没有。
+    Assert-True (@(Find-All -Root $window -Name '追加本金').Count -eq 0) `
+        '弹窗未打开时，页面上没有以「追加本金」为名的元素（说明下面命中的确实在弹窗里）'
+    $viewRecords = Wait-VisibleButton -Window $window -Name '查看记录' -TimeoutSec 15
+    Assert-True ([bool]$viewRecords) '设置页有「查看记录」按钮'
+    if ($viewRecords) { Invoke-Element $viewRecords | Out-Null }
+    $recordsShown = $false
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        Start-Sleep -Milliseconds 400
+        $recordsShown = @(Find-All -Root $window -Name '追加本金').Count -gt 0
+    } while (-not $recordsShown -and (Get-Date) -lt $deadline)
+    Assert-True $recordsShown '「查看记录」弹窗里出现刚做的「追加本金」'
+    Assert-True ([bool](Wait-Like -Root $window -Pattern '最多保留最近 10 次操作' -TimeoutSec 10)) `
+        '弹窗里说明保留上限'
+    $closeRecords = Wait-VisibleButton -Window $window -Name '关闭' -TimeoutSec 10 -ClassPart 'ui-btn'
+    Assert-True ([bool]$closeRecords) '只读弹窗有「关闭」'
+    if ($closeRecords) { Invoke-Element $closeRecords | Out-Null }
+    Start-Sleep -Seconds 1
+    Assert-True (@(Find-All -Root $window -Name '追加本金').Count -eq 0) '关闭后弹窗内容消失'
+
+    # ---- ③ 「回滚」：预演（不落库）→ 确认 → 真的撤销 ----
+    $rollbackButton = Wait-VisibleButton -Window $window -Name '回滚' -TimeoutSec 15
+    Assert-True ([bool]$rollbackButton) '设置页有「回滚」按钮'
+    if ($rollbackButton) { Invoke-Element $rollbackButton | Out-Null }
+    Assert-True ([bool](Wait-Element -Root $window -Name '确认回滚' -TimeoutSec 15)) `
+        '回滚确认框已打开（确认键「确认回滚」）'
+    Assert-True ([bool](Wait-Like -Root $window -Pattern '将撤销最新一次操作' -TimeoutSec 10)) `
+        '确认框写明要撤销哪一次操作'
+    # 预演是资金类操作 → 不影响任何轮次（这句话由预演结果给出，不是界面写死的）
+    Assert-True ([bool](Find-Like -Root $window -Pattern '不会影响任何一轮的复盘')) `
+        '确认框说明该操作不影响轮次复盘'
+    # 预演绝不落库：确认框还开着，本金与资金记录都必须还是「追加后」的样子
+    $stillAfterAdd = Get-ExpectedAccount -LedgerId $ledgerId
+    Assert-True ($stillAfterAdd.Principal -eq $accountAfterAdd.Principal) `
+        '预演不落库：确认框打开时本金仍是追加后的值'
+    Assert-True (@(Get-FundRecords -LedgerId $ledgerId).Count -eq ($fundsBeforeRollback.Count + 1)) `
+        '预演不落库：资金记录仍是追加后的条数'
+
+    $confirmRollback = Wait-VisibleButton -Window $window -Name '确认回滚' -TimeoutSec 10
+    Assert-True ([bool]$confirmRollback) '找到「确认回滚」'
+    if ($confirmRollback) { Invoke-Element $confirmRollback | Out-Null }
+    Start-Sleep -Seconds 4
+
+    $accountRestored = Get-ExpectedAccount -LedgerId $ledgerId
+    Assert-True ($accountRestored.Principal -eq $accountBeforeRollback.Principal) `
+        "回滚后本金还原（$($accountRestored.Principal) 分）"
+    Assert-True ($accountRestored.Available -eq $accountBeforeRollback.Available) `
+        "回滚后可用现金还原（$($accountRestored.Available) 分）"
+    $fundsAfterRollback = @(Get-FundRecords -LedgerId $ledgerId)
+    Assert-True ($fundsAfterRollback.Count -eq $fundsBeforeRollback.Count) `
+        "回滚后资金记录条数还原（$($fundsAfterRollback.Count) 条）"
+    $opsAfterRollback = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_operation' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $ledgerId })
+    Assert-True ($opsAfterRollback.Count -eq ($opsAfterAdd.Count - 1)) `
+        "回滚把那条记录弹掉了（$($opsAfterAdd.Count) → $($opsAfterRollback.Count)）"
+    if ($newestOp) {
+        $leftover = @($opsAfterRollback | Where-Object { $_.id -eq $newestOp.id })
+        Assert-True ($leftover.Count -eq 0) '被回滚的那条记录已不在库里'
+    }
+
+    # ================= 10/10 重置股票数据：清空股票侧、**不动记账数据** =================
+    Write-Host "`n[stock] 10/10 重置股票数据（股票 → 设置 → 重置）"
     $recordsBeforeReset = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     $stockTables = @(
         'tbl_billadm_stock_account', 'tbl_billadm_stock_position', 'tbl_billadm_stock_trade',
         'tbl_billadm_stock_trade_round', 'tbl_billadm_stock_trade_history', 'tbl_billadm_stock_fund_record',
-        'tbl_billadm_stock_fee_setting', 'tbl_billadm_stock_trade_tag_setting'
+        'tbl_billadm_stock_fee_setting', 'tbl_billadm_stock_trade_tag_setting', 'tbl_billadm_stock_operation'
     )
     $stockRowsBefore = 0
     foreach ($table in $stockTables) {
@@ -1047,11 +1232,13 @@ try {
     if ($confirmReset) { Invoke-Element $confirmReset | Out-Null }
     Start-Sleep -Seconds 4
 
-    # 交易类表重置后必须是空的；**费用设置与交易标签这两张表会被界面立刻"重新拉一遍"
-    # 而按默认值重建**（设置子功能 `do_reset` 之后 load_fee/load_tags，与代码注释一致），
-    # 所以对这两张表断言的是"回到默认值"，而不是"没有行"。
+    # 交易类表重置后必须是空的（含「操作记录」—— 重置清空股票侧时它也必须一起清，
+    # 否则会留下指向已删委托/资金记录的陈旧记录）；**费用设置与交易标签这两张表会被界面
+    # 立刻"重新拉一遍"而按默认值重建**（设置子功能 `do_reset` 之后 load_fee/load_tags，
+    # 与代码注释一致），所以对这两张表断言的是"回到默认值"，而不是"没有行"。
     foreach ($table in @('tbl_billadm_stock_account', 'tbl_billadm_stock_position', 'tbl_billadm_stock_trade',
-            'tbl_billadm_stock_trade_round', 'tbl_billadm_stock_trade_history', 'tbl_billadm_stock_fund_record')) {
+            'tbl_billadm_stock_trade_round', 'tbl_billadm_stock_trade_history', 'tbl_billadm_stock_fund_record',
+            'tbl_billadm_stock_operation')) {
         $left = @(Read-Table -Repo $repo -Workspace $ws -Table $table -OutDir $OutDir | Where-Object { $_.ledger_id -eq $ledgerId }).Count
         Assert-True ($left -eq 0) "重置后 $table 里该账本已无数据（实际 $left 行）"
     }
@@ -1081,4 +1268,4 @@ try {
 }
 
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
-Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓 → 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 重置股票数据（不动记账数据）"
+Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓 → 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 统计分栏页签 → 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 操作记录与回滚（预演不落库 + 撤销后本金/资金记录还原）→ 重置股票数据（不动记账数据）"

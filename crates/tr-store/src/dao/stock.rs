@@ -19,8 +19,8 @@ use rusqlite::{params, params_from_iter, Connection};
 
 use tr_domain::consts;
 use tr_domain::models::{
-    StockAccount, StockFeeSetting, StockFundRecord, StockPosition, StockTrade, StockTradeHistory,
-    StockTradeRound, StockTradeTagSetting,
+    StockAccount, StockFeeSetting, StockFundRecord, StockOperation, StockPosition, StockTrade,
+    StockTradeHistory, StockTradeRound, StockTradeTagSetting,
 };
 
 pub struct StockDao;
@@ -41,12 +41,16 @@ const HISTORY_COLUMNS: &str = "id, ledger_id, stock_code, stock_name, created_at
 const ROUND_COLUMNS: &str =
     "id, ledger_id, stock_code, history_id, round_no, opened_at, closed_at, \
      tag, review, created_at";
+const OPERATION_COLUMNS: &str = "id, ledger_id, kind, action, detail, target_id, created_at";
+
+/// 每个账本保留的操作记录条数上限（超出的最旧记录在写入时丢弃）。
+pub const STOCK_OPERATION_LIMIT: i64 = 10;
 
 /// 「未挂接轮次」的判定片段（`round_id` 为空串或 NULL），常量拼接，值仍走占位符。
 const UNATTACHED_ROUND_SQL: &str = "(round_id = '' OR round_id IS NULL)";
 
 /// 重置时清空的股票表（这个顺序是有意的：避免外键/触发器顺序差异）。
-const STOCK_TABLES: [&str; 8] = [
+const STOCK_TABLES: [&str; 9] = [
     "tbl_billadm_stock_fund_record",
     "tbl_billadm_stock_fee_setting",
     "tbl_billadm_stock_trade_tag_setting",
@@ -54,6 +58,7 @@ const STOCK_TABLES: [&str; 8] = [
     "tbl_billadm_stock_trade_round",
     "tbl_billadm_stock_trade_history",
     "tbl_billadm_stock_position",
+    "tbl_billadm_stock_operation",
     "tbl_billadm_stock_account",
 ];
 
@@ -259,6 +264,30 @@ impl StockDao {
             [ledger_id],
             fund_from_row,
         )
+    }
+
+    /// 按 id 取一条资金记录；不存在返回 `QueryReturnedNoRows`。
+    ///
+    /// 回滚「追加本金 / 支取 / 利息归本」时要先读到它才能决定怎么撤（见 `tr-service` 的
+    /// `rollback_latest`）：`event_type` 决定要不要动 `principal`，`amount_change` 是要还原的额度。
+    pub fn get_fund_record(conn: &Connection, id: &str) -> rusqlite::Result<StockFundRecord> {
+        conn.query_row(
+            &format!(
+                "SELECT {FUND_COLUMNS} FROM tbl_billadm_stock_fund_record WHERE id = ?1 \
+                 ORDER BY id LIMIT 1"
+            ),
+            [id],
+            fund_from_row,
+        )
+    }
+
+    /// 按 id 删一条资金记录（回滚资金类操作；调用方随后要 `recalculate_cash_chain`）。
+    pub fn delete_fund_record(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM tbl_billadm_stock_fund_record WHERE id = ?1",
+            [id],
+        )?;
+        Ok(())
     }
 
     /// 资金记录分页（`page` 从 1 起，不做边界钳制）。
@@ -927,6 +956,88 @@ impl StockDao {
         }
     }
 
+    // ---------- 操作记录（回滚用） ----------
+
+    /// 新增一条操作记录，并把该账本裁剪到最近 [`STOCK_OPERATION_LIMIT`] 条。
+    ///
+    /// **`created_at` 单调递增**：与 `create_fund_record` 同一条 idiom —— 秒级时间戳在同一秒内
+    /// 会并列，而「最新一次操作」完全依赖这个顺序，并列时排序会落到随机 UUID 上、不确定。
+    /// 所以取 `MAX(now, 本账本已有最大值 + 1)`。
+    ///
+    /// 裁剪与插入在**同一次调用**里完成：调用方都在事务中，超限的旧记录随本次操作一起提交/回滚。
+    pub fn create_operation(conn: &Connection, operation: &StockOperation) -> rusqlite::Result<()> {
+        let max_existing: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(created_at), 0) FROM tbl_billadm_stock_operation \
+             WHERE ledger_id = ?1",
+            [&operation.ledger_id],
+            |row| row.get(0),
+        )?;
+        let created_at = crate::util::now_unix().max(max_existing + 1);
+        conn.execute(
+            "INSERT INTO tbl_billadm_stock_operation \
+             (id, ledger_id, kind, action, detail, target_id, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                operation.id,
+                operation.ledger_id,
+                operation.kind,
+                operation.action,
+                operation.detail,
+                operation.target_id,
+                created_at,
+            ],
+        )?;
+        // 只留最新的 N 条；`created_at` 严格递增，所以"更旧的"就是 created_at 更小的那些
+        conn.execute(
+            "DELETE FROM tbl_billadm_stock_operation \
+              WHERE ledger_id = ?1 AND id NOT IN (\
+                    SELECT id FROM tbl_billadm_stock_operation WHERE ledger_id = ?1 \
+                     ORDER BY created_at DESC, id DESC LIMIT ?2)",
+            params![operation.ledger_id, STOCK_OPERATION_LIMIT],
+        )?;
+        Ok(())
+    }
+
+    /// 操作记录列表：最新的在前。
+    pub fn list_operations(
+        conn: &Connection,
+        ledger_id: &str,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<StockOperation>> {
+        let mut statement = conn.prepare(&format!(
+            "SELECT {OPERATION_COLUMNS} FROM tbl_billadm_stock_operation WHERE ledger_id = ?1 \
+             ORDER BY created_at DESC, id DESC LIMIT ?2"
+        ))?;
+        let rows = statement
+            .query_map(params![ledger_id, limit], operation_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 最新一条操作记录；没有记录时返回 `QueryReturnedNoRows`。
+    pub fn latest_operation(
+        conn: &Connection,
+        ledger_id: &str,
+    ) -> rusqlite::Result<StockOperation> {
+        conn.query_row(
+            &format!(
+                "SELECT {OPERATION_COLUMNS} FROM tbl_billadm_stock_operation WHERE ledger_id = ?1 \
+                 ORDER BY created_at DESC, id DESC LIMIT 1"
+            ),
+            [ledger_id],
+            operation_from_row,
+        )
+    }
+
+    /// 删一条操作记录（回滚成功后把它弹掉）。
+    pub fn delete_operation(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM tbl_billadm_stock_operation WHERE id = ?1",
+            [id],
+        )?;
+        Ok(())
+    }
+
     // ---------- 删除与重置 ----------
 
     /// 「重置」：在**单个事务**里清空某账本的全部股票表。
@@ -989,6 +1100,18 @@ fn fund_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockFundRecord> {
         net_pnl: row.get(7)?,
         remark: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
         created_at: row.get(9)?,
+    })
+}
+
+fn operation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockOperation> {
+    Ok(StockOperation {
+        id: row.get(0)?,
+        ledger_id: row.get(1)?,
+        kind: row.get(2)?,
+        action: row.get(3)?,
+        detail: row.get(4)?,
+        target_id: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+        created_at: row.get(6)?,
     })
 }
 

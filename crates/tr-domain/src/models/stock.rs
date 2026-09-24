@@ -254,6 +254,32 @@ pub struct StockTradeTagSetting {
     pub updated_at: i64,
 }
 
+/// 可回滚的操作记录（每个账本最多保留最新 10 条）。
+/// 表 `tbl_billadm_stock_operation`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockOperation {
+    #[serde(rename = "id")]
+    pub id: String,
+    #[serde(rename = "ledgerId")]
+    pub ledger_id: String,
+    /// [`tr_domain::consts::STOCK_OP_KIND_FUND`] / [`tr_domain::consts::STOCK_OP_KIND_ORDER`]
+    #[serde(rename = "kind")]
+    pub kind: String,
+    /// 操作名（追加本金 / 支取 / 利息归本 / 建仓 / 加仓 / 减仓 / 清仓）—— 固定文案，改动即影响界面
+    #[serde(rename = "action")]
+    pub action: String,
+    /// 展示摘要（金额 / 股票与手数）
+    #[serde(rename = "detail")]
+    pub detail: String,
+    /// 撤销目标：资金类 = 资金记录 id，委托类 = `order_id`
+    #[serde(rename = "targetId")]
+    pub target_id: String,
+    /// 录入时间（Unix 秒，**单调递增**：同一秒内的多条也能定序，与资金记录同一套 idiom）
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

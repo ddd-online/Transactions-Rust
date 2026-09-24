@@ -70,6 +70,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20260920_diary_ledger_scope",
         apply: diary_ledger_scope,
     },
+    Migration {
+        id: "20260925_stock_operation_log",
+        apply: stock_operation_log,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -262,12 +266,34 @@ fn diary_ledger_scope(conn: &Connection) -> MigrateResult {
     .map_err(stringify)
 }
 
+/// 股票「操作记录」表：把早期工作空间补上 `tbl_billadm_stock_operation`（用于回滚最近一次操作）。
+///
+/// 老库没有这张表（那时还没有回滚功能），所以是**纯新增**：不碰任何既有表、不回填数据
+/// —— 历史操作无法凭空重建，回滚从升级之后开始可用。
+///
+/// ⚠ 这里的 DDL 必须与 `fixtures/schema/fresh.sql` 里那条**逐字节相同**：
+/// 升级出来的库与新建的库在 `.schema` 层面要完全一致，否则两条建库路径会分叉。
+fn stock_operation_log(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_stock_operation").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE TABLE `tbl_billadm_stock_operation` (`id` text,`ledger_id` varchar(36) DEFAULT \"\",`kind` varchar(16) NOT NULL DEFAULT \"\",`action` varchar(32) NOT NULL DEFAULT \"\",`detail` varchar(200) NOT NULL DEFAULT \"\",`target_id` varchar(36) DEFAULT \"\",`created_at` integer NOT NULL,PRIMARY KEY (`id`));",
+        )
+        .map_err(stringify)?;
+    }
+    if !index_exists(conn, "idx_tbl_billadm_stock_operation_ledger").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE INDEX `idx_tbl_billadm_stock_operation_ledger` ON `tbl_billadm_stock_operation`(`ledger_id`,`created_at`);",
+        )
+        .map_err(stringify)?;
+    }
+    Ok(())
+}
+
 // ==================================================================== 小工具
 
 fn stringify(error: rusqlite::Error) -> String {
     error.to_string()
 }
-
 fn table_exists(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -446,6 +472,75 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 股票「操作记录」：老库（没有这张表、也没有登记行）升级后表与索引都在，且重复应用无副作用。
+    ///
+    /// 这条迁移是**纯新增**，所以除了结构之外还要证明两件事：
+    /// ① 它不碰别的表（拿一张已有表的行数与内容做前后对比）；
+    /// ② 真正建出来的 `.schema` 与基线一致 —— 用 `create_fresh` 出来的库比对 SQL 文本。
+    #[test]
+    fn stock_operation_migration_adds_the_table_without_touching_others() {
+        let dir = temp_dir("stock-operation");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        // 降级成"还没有操作记录表"的老格式
+        conn.execute_batch(
+            "DROP INDEX idx_tbl_billadm_stock_operation_ledger;
+             DROP TABLE tbl_billadm_stock_operation;
+             DELETE FROM tbl_billadm_schema_migration WHERE id = '20260925_stock_operation_log';",
+        )
+        .unwrap();
+        assert!(!table_exists(&conn, "tbl_billadm_stock_operation").unwrap());
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(applied, vec!["20260925_stock_operation_log".to_string()]);
+
+        assert!(table_exists(&conn, "tbl_billadm_stock_operation").unwrap());
+        assert!(index_exists(&conn, "idx_tbl_billadm_stock_operation_ledger").unwrap());
+        assert!(pending(&conn).unwrap().is_empty());
+        crate::schema::validate_current(&conn).unwrap();
+
+        // 表结构与新建库逐字节一致（升级库与新建库不允许分叉）
+        let migrated: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tbl_billadm_stock_operation'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let fresh: String = fresh_conn()
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tbl_billadm_stock_operation'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migrated, fresh);
+
+        // 别的东西一个都没动
+        let ledgers: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tbl_billadm_ledger", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(ledgers, 1);
+        assert_eq!(
+            conn.query_row(
+                "SELECT name FROM tbl_billadm_ledger WHERE id = 'l1'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "账本"
+        );
+
+        // 重复应用：无待应用迁移、不再备份、表还在
+        let again = apply_all(&mut conn, &dir).unwrap();
+        assert!(again.is_empty());
+        assert!(table_exists(&conn, "tbl_billadm_stock_operation").unwrap());
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -14,8 +14,8 @@
 //! | [`position_view`] | 持仓卡片 + 行情面板 + 本轮复盘 + 下单弹窗 + 成交表 + 影响预演；工具栏 = 建仓 |
 //! | [`edit_modal`] / [`impact_modal`] | 编辑成交 / 删除委托 + 影响预演确认 |
 //! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签（无工具栏） |
-//! | [`statistics_view`] | 结算统计 + 自绘 SVG 曲线 + 逐笔结算明细；工具栏 = 区间/笔数/标签筛选 + 刷新 |
-//! | [`settings_view`] | 交易标签 + 交易费用设置 + 重置股票数据；工具栏 = 保存 |
+//! | [`statistics_view`] | 结算统计 + 自绘 SVG 曲线（统计）/ 逐笔结算明细分页（明细）；工具栏 = 分栏页签 + 区间/笔数/标签筛选 |
+//! | [`settings_view`] | 交易标签 + 交易费用设置 + 操作记录（查看 / 回滚）+ 重置股票数据 |
 //! | 状态组织 | 本文件直接持有信号（不引入 store；与其余页面一致） |
 //!
 //! 切子功能会**重建**该子功能的视图（信号随组件 owner 一起释放），因此来回切会重新拉数据 ——
@@ -47,9 +47,10 @@ use std::collections::BTreeSet;
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
 use tr_domain::dto::{
-    StockFundRecordDto, StockFundRecordPage, StockOverviewDto, StockPositionDto,
-    StockStatisticsDto, StockStatisticsPointDto, StockTradeDto, StockTradeHistoryDetailDto,
-    StockTradeHistoryDto, StockTradeHistorySummaryDto, StockTradeImpactDto, StockTradeRoundDto,
+    StockFundRecordDto, StockFundRecordPage, StockOperationDto, StockOperationRollbackPreviewDto,
+    StockOverviewDto, StockPositionDto, StockStatisticsDto, StockStatisticsPointDto, StockTradeDto,
+    StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
+    StockTradeImpactDto, StockTradeImpactRoundDto, StockTradeRoundDto,
 };
 use tr_domain::fee::{compute_order_fee, is_shanghai_code, is_valid_stock_code};
 use tr_domain::models::StockFeeSetting;
@@ -59,7 +60,7 @@ use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, DatePicker, Empty,
     FeaturePage, Form, FormItem, FormLayout, Input, LineChart, Modal, ModalSize, Pagination,
-    Segmented, SegmentedOption, Select, SelectOption, Textarea, Tooltip,
+    Segmented, SegmentedOption, Select, SelectOption, TabItem, TabPane, Tabs, Textarea, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::format::{self, lots_of};
@@ -85,7 +86,7 @@ pub enum StockSub {
     Trade,
     /// 统计：结算统计 + 曲线 + 逐笔结算明细（原「交易统计」分栏）
     Statistics,
-    /// 设置：交易费用 / 交易标签 / 重置股票数据
+    /// 设置：交易费用 / 交易标签 / 操作记录与回滚 / 重置股票数据
     Setting,
 }
 
@@ -206,12 +207,19 @@ struct ImpactPrompt {
 thread_local! {
     static STATS_DEDUPE: std::cell::RefCell<(String, Option<String>)> =
         const { std::cell::RefCell::new((String::new(), None)) };
-    /// 最近一次成功取到的统计（跨视图重建保留）
+    /// 最近一次成功取到的统计（跨视图重建保留）。
+    ///
+    /// **它是缓存，不是真相**：只在切账本与筛选变化时更新，而数据可能在别处被改掉
+    /// （下单 / 改成交 / 减仓 / 清仓 / 重置股票数据）。所以 `统计` 视图每次挂载都会
+    /// **复核一次**（见 ledger Effect 的 `!switched` 分支）；复核回来若与手上的值一致，
+    /// 就不写信号 —— 否则整块图表会重建、入场动画重播。
     static STATS_DATA: std::cell::RefCell<Option<StockStatisticsDto>> =
         const { std::cell::RefCell::new(None) };
     /// 是否有统计请求在飞行中（跨视图重建保留）
     static STATS_LOADING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// 标签下拉的选项（跨视图重建保留，否则每次重建都要重新拉一次）
+    /// 标签下拉的选项（跨视图重建保留，否则每次重建都要重新拉一次）。
+    /// 与 `STATS_DATA` 同一条口径：同样是缓存，挂载时随数据一起复核
+    /// （交易标签可以在「设置」子功能里被改掉）。
     static STATS_TAGS: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// **已经为哪个账本初始化过**。
@@ -240,12 +248,18 @@ fn reset_stats_cache() {
     STATS_TAGS.with(|tags| tags.borrow_mut().clear());
 }
 
-/// 这次统计请求要不要真的发出去（纯函数，便于单测）。
+/// 这次统计请求要不要真的发出去（纯函数）。
 ///
-/// 返回 `true` 表示"发"，并把 `in_flight` 置为当前键；同一份键**已经请求过**、
-/// 或**正在飞行中**时返回 `false`。
+/// 返回 `true` 表示"发"，并把 `in_flight` 置为当前键。
+/// * 同一份键**已经请求过**（`state.0`）→ `false`，结果就在手上，不必再算一遍；
+/// * `force` = **复核缓存**（见下面 ledger Effect 的 `!switched` 分支）：无视"已经请求过"，
+///   但仍然**不重复发一份正在飞行中的同键请求**（`state.1`）—— 来回切子功能时那份请求
+///   还在路上，再发一次只是让服务端把同一条结算序列重算一遍。
 fn stats_request_needed(state: &mut (String, Option<String>), key: &str, force: bool) -> bool {
-    if force || (state.0 != key && state.1.as_deref() != Some(key)) {
+    if state.1.as_deref() == Some(key) {
+        return false;
+    }
+    if force || state.0 != key {
         state.0 = key.to_string();
         state.1 = Some(key.to_string());
         return true;
@@ -377,6 +391,9 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
     // 每次成功加载后从服务端 DTO 回写，用户点击时再触发查询。
     let fund_page_signal = RwSignal::new(1_i32);
     let records_loading = RwSignal::new(false);
+    // 资金记录为空时表格里只有一行空态：给它一个钩子类，好让表格撑满表格区、
+    // 空态在表头与底栏之间垂直居中（见 stock.css 的 `.stock-table-wrap--empty`）。
+    let funds_empty = Signal::derive(move || fund_page.get().items.is_empty());
     let fee_settings = RwSignal::new(Option::<StockFeeSetting>::None);
     let mutating = RwSignal::new(false);
 
@@ -713,7 +730,7 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
                     <div class="stock-panel__head">
                         <h4 class="stock-panel__title">"资金变化记录"</h4>
                     </div>
-                    <div class="stock-table-wrap">
+                    <div class="stock-table-wrap" class:stock-table-wrap--empty=funds_empty>
                         <table class="stock-table">
                             <thead>
                                 <tr>
@@ -1924,7 +1941,7 @@ fn start_delete_order(
                         lots,
                         format::amount(amount),
                         count,
-                        removed_rounds_text(&preview),
+                        removed_rounds_text(&preview.removed_rounds),
                     ),
                     // 删除时只需要 orderId
                     trade: Some(StockTradeDto {
@@ -1940,18 +1957,20 @@ fn start_delete_order(
     });
 }
 
-/// 影响预演里的「失效轮次」段落固定文案（改动即影响界面）。
-fn removed_rounds_text(impact: &StockTradeImpactDto) -> String {
-    if impact.removed_rounds.is_empty() {
+/// 「失效轮次」段落固定文案（改动即影响界面）。
+///
+/// 两个调用点共用同一份文案：编辑/删除成交的影响预演（[`impact_summary`]）与
+/// 回滚确认框（回滚清仓/减仓会让轮次不再成立，该轮的复盘与标签随之丢失）。
+fn removed_rounds_text(removed_rounds: &[StockTradeImpactRoundDto]) -> String {
+    if removed_rounds.is_empty() {
         return "不会影响任何一轮的复盘。".to_string();
     }
-    let numbers = impact
-        .removed_rounds
+    let numbers = removed_rounds
         .iter()
         .map(|round| round.round_no.to_string())
         .collect::<Vec<_>>()
         .join("、");
-    let loses_review = impact.removed_rounds.iter().any(|round| round.has_review);
+    let loses_review = removed_rounds.iter().any(|round| round.has_review);
     if loses_review {
         format!("第 {numbers} 轮不再成立，该轮复盘会一并丢失。")
     } else {
@@ -1973,7 +1992,7 @@ fn impact_summary(
     );
     format!(
         "{position}\n持仓、资金记录、轮次与统计都会按新数据重算。\n{}",
-        removed_rounds_text(impact)
+        removed_rounds_text(&impact.removed_rounds)
     )
 }
 
@@ -3445,15 +3464,49 @@ impl Metric {
     }
 }
 
-/// 统计子功能：结算统计面板 + 曲线 + 逐笔结算明细。
+/// 统计子功能的两个分栏（工具栏左侧 `Tabs` 的 key，固定文案，改动即影响界面）。
+const STATS_TAB_SUMMARY: &str = "summary";
+const STATS_TAB_DETAIL: &str = "detail";
+
+/// 逐笔结算明细的默认每页条数（界面侧分页，理由见 [`statistics_view`]）。
+const STATS_DETAIL_PAGE_SIZE: i32 = 20;
+
+/// 统计子功能：工具栏左侧两个分栏（**统计** / **明细**），右侧是**两个分栏共用**的筛选组。
 ///
-/// 筛选组（区间 / 最近 N 笔 / 标签）与「刷新」是**页面级操作**，放在工具栏里；
-/// 内容区只留结果（指标、曲线、明细表）。工具栏在三种内容态（加载中 / 空态 / 有数据）下
-/// 都渲染 —— 否则空态会把筛选入口一起藏掉。
+/// * **统计**：结算统计（已实现盈亏 + 6 个累计口径指标）+ 统计曲线。
+/// * **明细**：逐笔结算明细表，按结算日期倒序、分页。
+///
+/// ## 两个分栏都填满内容区（这一页不再整页滚动）
+///
+/// 高度链是：`.page-content` → `.stock-body` → `.stock-statistics` → `.ui-tab-pane`
+/// → `.stock-panel`，每一级都必须 `flex: 1; min-height: 0`（见 `stock.css` 的子功能四）。
+/// 分栏内部再把"剩下的高度"给需要它的那一块：
+/// 统计 → 曲线（图例之外全部给它，图表按画布实测尺寸重画 SVG）；
+/// 明细 → 表格区（纵向/横向都在这块里滚）+ 页脚贴分栏底边。
+///
+/// ## 分页为什么在界面侧切
+///
+/// 每个统计点都是"截至该笔"的**累计口径**（累计盈亏 / 胜率 / 平均盈亏 / 最大回撤），
+/// 必须由整条时序算出来 —— 服务端无论分不分页都得全量计算一遍。所以后端一次给全量
+/// （`points`），界面只切展示：翻页是瞬时的，两个分栏也共用同一份数据（`STATS_DATA`），
+/// 不会为翻页反复重算整条序列。数据量级是"清仓轮次数"，界面侧承载没有压力。
+///
+/// ## 缓存与复核（`STATS_DATA` / `STATS_TAGS`）
+///
+/// 这两份缓存跨视图重建保留，让人切走再切回来时**立刻**看到上一份结果。但统计的输入
+/// 分布在别的子功能里（下单 / 改成交 / 减仓 / 清仓 / 重置在账户·持仓·设置，交易标签在设置），
+/// 所以每次挂载都**复核一次**：缓存先渲染，请求回来若与缓存一致则**不写信号**
+/// （避免图表重建、入场动画重播），不一致才换掉。去重键见 `stats_request_needed`。
+///
+/// ## 其余约定
+///
+/// 筛选组（区间 / 最近 N 笔 / 标签）是**页面级操作**，放工具栏右侧、两个分栏共用；
+/// 工具栏在三种内容态（加载中 / 空态 / 有数据）下都渲染 —— 否则空态会把筛选入口一起藏掉。
 fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
     let stats = RwSignal::new(STATS_DATA.with(|data| data.borrow().clone()));
     let loading = RwSignal::new(STATS_LOADING.with(|loading| loading.get()));
+    let tab = RwSignal::new(STATS_TAB_SUMMARY.to_string());
     let metric = RwSignal::new(Metric::TotalPnl.label().to_string());
     let filter_mode = RwSignal::new("all".to_string());
     let range_start = RwSignal::new(String::new());
@@ -3468,6 +3521,10 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     // 选项从**模块级缓存**起手：视图重建（切子功能再切回来）时下拉不会空掉，
     // 也就不必为了填它而重新拉一次标签（那次重新拉正是过去自激循环的一环）。
     let tags = RwSignal::new(STATS_TAGS.with(|tags| tags.borrow().clone()));
+    // 明细分栏的分页状态（界面侧分页，见本函数文档注释）；每页条数走共享的
+    // `Pagination` 下拉，默认值在 `STATS_DETAIL_PAGE_SIZE` 里（属于 `PAGE_SIZE_OPTIONS`）。
+    let detail_page = RwSignal::new(1_i32);
+    let detail_page_size = RwSignal::new(STATS_DETAIL_PAGE_SIZE);
 
     let apply_filter = move |force: bool| {
         let ledger_id = stores.current_ledger_id.get_untracked();
@@ -3505,7 +3562,13 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                 Ok(data) => {
                     // 数据落到**模块级缓存**：视图被重建后新挂载的那份也能拿到
                     STATS_DATA.with(|slot| *slot.borrow_mut() = Some(data.clone()));
-                    stats.set(Some(data));
+                    // 信号**只在值真的变了时写**。`RwSignal::set` 同值也会通知，而统计页每次
+                    // "从别的子功能切回来"都会复核一次缓存（见 ledger Effect 的 `!switched`
+                    // 分支）—— 同值通知会重建整块图表、**入场动画重播**（正是过去
+                    // "曲线一直在闪"的那个症状）。复核回来一模一样就什么都不做。
+                    if stats.get_untracked().as_ref() != Some(&data) {
+                        stats.set(Some(data));
+                    }
                 }
                 Err(error) => {
                     notify_error("查询交易统计失败", &error);
@@ -3568,6 +3631,15 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             stats.set(STATS_DATA.with(|data| data.borrow().clone()));
             loading.set(STATS_LOADING.with(|flag| flag.get()));
             tags.set(STATS_TAGS.with(|tags| tags.borrow().clone()));
+            // 缓存**先显示、再复核**：`STATS_DATA` / `STATS_TAGS` 只在切账本与筛选变化时更新，
+            // 而用户可能刚在别的子功能里下过单 / 改过成交 / 减过仓 / 清过仓 / 重置过股票数据 /
+            // 改过交易标签 —— 手上这份就是那一轮之前的（真实缺陷：清仓后切到统计，刚清的那笔
+            // 不在里面，得改一次筛选才刷出来）。
+            // 复核一次的成本是一次只读聚合查询，比让人看到旧数字便宜得多。
+            // 不用"改动点打脏标记"：那要求每个改动处都记得上报，漏一个就静默回到同一个坑里，
+            // 而挂载时复核**在构造上不可能漏**（代价只是没改动时也查一次，见下面的去重）。
+            load_tags();
+            apply_filter(true);
             return;
         }
         // 账本切换（或首次进入）：清掉上一个账本的缓存
@@ -3587,6 +3659,33 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
         apply_filter(false);
     });
 
+    // 明细的页码：筛选条件或每页条数一变就回到第 1 页；数据变少时（切到笔数更少的筛选）
+    // 把页码收敛到末页，避免停在一个不存在的页码上显示空表。
+    // 页码一律用 `get_untracked` 读 —— 否则"本 Effect 写页码"会把自己再触发一次。
+    Effect::new(move |prev: Option<(String, i32)>| {
+        let key = format!(
+            "{}|{}|{}|{}|{}",
+            filter_mode.get(),
+            range_start.get(),
+            range_end.get(),
+            recent.get(),
+            tag_filter.get(),
+        );
+        let size = detail_page_size.get().max(1);
+        let total = stats.get().map(|data| data.points.len()).unwrap_or(0) as i32;
+        let pages = ((total + size - 1) / size).max(1);
+        let reset = prev
+            .as_ref()
+            .map(|prev| prev.0 != key || prev.1 != size)
+            .unwrap_or(true);
+        if reset {
+            detail_page.set(1);
+        } else if detail_page.get_untracked() > pages {
+            detail_page.set(pages);
+        }
+        (key, size)
+    });
+
     let is_filtered = move || {
         (filter_mode.get() == "range" && !range_start.get().is_empty())
             || (filter_mode.get() == "recent" && recent.get() > 0)
@@ -3595,13 +3694,43 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
 
     let latest_point = move || stats.get().and_then(|data| data.points.last().cloned());
 
-    // 版心两块：工具栏（筛选组 + 刷新）/ 内容区（结算统计结果）
+    // 明细表的数据源：结算点按日期**倒序**（最近一笔在最上面），再按页切片。
+    // "倒序"是为了让人一进明细分栏就先看到最近的结算 —— 曲线仍按**时序**画（正序）。
+    let detail_rows = move || {
+        let mut points = stats.get().map(|data| data.points).unwrap_or_default();
+        points.reverse();
+        points
+    };
+    let detail_total = move || detail_rows().len() as i32;
+    let detail_total_pages = Signal::derive(move || {
+        let size = detail_page_size.get().max(1);
+        ((detail_total() + size - 1) / size).max(1)
+    });
+    let detail_page_rows = move || {
+        let size = detail_page_size.get().max(1) as usize;
+        let page = detail_page.get().max(1) as usize;
+        detail_rows()
+            .into_iter()
+            .skip((page - 1) * size)
+            .take(size)
+            .collect::<Vec<_>>()
+    };
+
+    // 版心两块：工具栏（左侧分栏页签 + 右侧筛选组）/ 内容区（两个分栏各自填满内容区）
     //
     // ⚠ 筛选组**不能吃剩余宽度**：`stock-toolbar` 是 flex 行，给筛选组 `flex: 1` 时
-    // 它会先把宽度占满，把「刷新」压成一个窄按钮（实测按钮变形）。这里靠
-    // `margin-left: auto` 把「刷新」顶到右边，两边各按内容宽度排（见 stock.css）。
+    // 它会先把宽度占满，把左边的页签挤成一条。这里靠 `margin-left: auto` 把筛选组
+    // 顶到右边，两边各按内容宽度排（见 stock.css）。
     let toolbar = view! {
         <div class="stock-toolbar">
+            <Tabs
+                active=tab
+                items=vec![
+                    TabItem::new(STATS_TAB_SUMMARY, "统计"),
+                    TabItem::new(STATS_TAB_DETAIL, "明细"),
+                ]
+                class="stock-tabs"
+            />
             <div class="stock-statistics__filters">
                 <Segmented
                     value=filter_mode
@@ -3671,380 +3800,334 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     let content = view! {
         <div class="stock-body">
         <div class="stock-statistics">
+            <TabPane active=tab key=STATS_TAB_SUMMARY class="stock-statistics__pane">
             {move || {
-                let Some(data) = stats.get() else {
+                if stats.get().is_none() {
                     return view! {
                         <div class="stock-empty">
                             {move || if loading.get() { "正在加载…" } else { "暂无统计" }}
                         </div>
                     }
                         .into_any();
-                };
-                if data.round_count == 0 && !is_filtered() {
+                }
+                // 没有"最新一笔"就说明当前集合里一笔结算都没有：未筛选时是"还没清过仓"，
+                // 筛选中则是筛选没命中 —— 两种文案分开说，别让人以为记录丢了。
+                let Some(latest) = latest_point() else {
+                    let filtered = is_filtered();
                     return view! {
-                        // `--empty`：只给这一个面板"填满分栏"的放行（见 stock.css）。
-                        // 有数据时 `.stock-panel` 必须保持内容高，不能被 flex 分配高度。
-                        <div class="stock-panel stock-panel--empty">
-                            <div class="stock-empty">
-                                <Empty
-                                    title="还没有结算记录"
-                                    description="股票清仓后，这一轮从建仓到清仓会生成一笔结算；完成第一笔结算后即可看到统计与曲线。"
-                                />
-                            </div>
+                        <div class="stock-empty">
+                            <Empty
+                                title=if filtered { "当前筛选下暂无结算记录" } else { "还没有结算记录" }
+                                description=if filtered {
+                                    "换一个时间区间、笔数或标签再试。"
+                                } else {
+                                    "股票清仓后，这一轮从建仓到清仓会生成一笔结算；完成第一笔结算后即可看到统计与曲线。"
+                                }
+                            />
                         </div>
                     }
                         .into_any();
-                }
+                };
+                let filtered = is_filtered();
                 view! {
                     <div class="stock-panel">
                         <div class="stock-panel__head">
                             <h4 class="stock-panel__title">"结算统计"</h4>
                         </div>
 
-                        {move || {
-                            let Some(latest) = latest_point() else {
-                                return view! {
-                                    <div class="stock-empty">
-                                        "当前筛选下暂无结算记录"
-                                    </div>
-                                }
-                                    .into_any();
-                            };
-                            let filtered = is_filtered();
-                            view! {
-                                <div class="stock-stats-overview">
-                                    <div class="stock-stats-overview__lead">
-                                        <span class="stock-stats-overview__label">"已实现盈亏"</span>
-                                        <span class=format!(
-                                            "stock-stats-overview__value {}",
-                                            format::pnl_class(latest.total_pnl),
-                                        )>{format::signed_yuan(latest.total_pnl)}</span>
-                                        <span class="stock-stats-overview__sub">
-                                            {format!(
-                                                "截至 {} · 第 {} 笔结算{}",
-                                                format_timestamp(latest.closed_at, "YYYY-MM-DD"),
-                                                latest.sequence,
-                                                if filtered { "（筛选内）" } else { "" },
-                                            )}
-                                        </span>
-                                    </div>
-                                    <div class="stock-stats-overview__kpis">
-                                        <StatKpi
-                                            label="胜率".to_string()
-                                            value=Signal::derive(move || {
-                                                format::rate_text(latest.win_rate)
-                                            })
-                                            class=Signal::derive(String::new)
-                                            sub=Signal::derive(move || {
-                                                format!(
-                                                    "{} 胜 · {} 负",
-                                                    latest.win_count, latest.loss_count,
-                                                )
-                                            })
-                                        />
-                                        <StatKpi
-                                            label="实际盈亏比".to_string()
-                                            value=Signal::derive(move || {
-                                                format::ratio_text(latest.pnl_ratio)
-                                            })
-                                            class=Signal::derive(String::new)
-                                            sub=Signal::derive(|| "盈利均值 ÷ 亏损均值".to_string())
-                                        />
-                                        <StatKpi
-                                            label="期望值".to_string()
-                                            value=Signal::derive(move || {
-                                                format::signed_yuan(latest.expectancy)
-                                            })
-                                            class=Signal::derive(move || {
-                                                format::pnl_class(latest.expectancy).to_string()
-                                            })
-                                            sub=Signal::derive(|| "每笔均值".to_string())
-                                        />
-                                        <StatKpi
-                                            label="最大回撤".to_string()
-                                            value=Signal::derive(move || {
-                                                format::rate_text(latest.max_drawdown_pct)
-                                            })
-                                            class=Signal::derive(move || {
-                                                if latest.max_drawdown_pct > 0.0 {
-                                                    "amount-expense".to_string()
-                                                } else {
-                                                    String::new()
-                                                }
-                                            })
-                                            sub=Signal::derive(move || {
-                                                format!(
-                                                    "从高点回落 ¥{}",
-                                                    format::amount(latest.max_drawdown.max(0)),
-                                                )
-                                            })
-                                        />
-                                        <StatKpi
-                                            label="平均盈利".to_string()
-                                            value=Signal::derive(move || {
-                                                if latest.avg_win > 0 {
-                                                    format!("¥{}", format::amount(latest.avg_win))
-                                                } else {
-                                                    "—".to_string()
-                                                }
-                                            })
-                                            class=Signal::derive(move || {
-                                                if latest.avg_win > 0 {
-                                                    "amount-income".to_string()
-                                                } else {
-                                                    String::new()
-                                                }
-                                            })
-                                            sub=Signal::derive(move || {
-                                                format!("{} 笔盈利", latest.win_count)
-                                            })
-                                        />
-                                        <StatKpi
-                                            label="平均亏损".to_string()
-                                            value=Signal::derive(move || {
-                                                if latest.avg_loss > 0 {
-                                                    format!("-¥{}", format::amount(latest.avg_loss))
-                                                } else {
-                                                    "—".to_string()
-                                                }
-                                            })
-                                            class=Signal::derive(move || {
-                                                if latest.avg_loss > 0 {
-                                                    "amount-expense".to_string()
-                                                } else {
-                                                    String::new()
-                                                }
-                                            })
-                                            sub=Signal::derive(move || {
-                                                format!("{} 笔亏损", latest.loss_count)
-                                            })
-                                        />
-
-                                    </div>
-                                </div>
-
-                                <div class="stock-chart-block">
-                                    <div class="stock-panel__head">
-                                        <h4 class="stock-panel__title">"统计曲线"</h4>
-                                        <Segmented
-                                            value=metric
-                                            options={
-                                                Metric::ALL
-                                                    .iter()
-                                                    .map(|item| SegmentedOption::same(item.label()))
-                                                    .collect::<Vec<_>>()
-                                            }
-                                            on_change=UnsyncCallback::new(move |label: String| {
-                                                // `Segmented` 的值就是指标文案，这里反查回枚举
-                                                if let Some(found) = Metric::ALL
-                                                    .iter()
-                                                    .find(|item| item.label() == label)
-                                                {
-                                                    metric.set(found.label().to_string());
-                                                }
-                                            })
-                                        />
-                                    </div>
-                                    {move || {
-                                        let Some(data) = stats.get() else {
-                                            return ().into_any();
-                                        };
-                                        let selected = Metric::ALL
-                                            .iter()
-                                            .find(|item| item.label() == metric.get())
-                                            .copied()
-                                            .unwrap_or(Metric::TotalPnl);
-                                        let categories = data
-                                            .points
-                                            .iter()
-                                            .map(|point| {
-                                                format!(
-                                                    "第{}笔 {}",
-                                                    point.sequence,
-                                                    format_timestamp(point.closed_at, "MM-DD"),
-                                                )
-                                            })
-                                            .collect::<Vec<_>>();
-                                        let values = data
-                                            .points
-                                            .iter()
-                                            .map(|point| selected.value(point).round() as i64)
-                                            .collect::<Vec<_>>();
-                                        let color = match selected {
-                                            Metric::AvgWin | Metric::WinRate | Metric::PnlRatio => {
-                                                "var(--transactions-color-expense)"
-                                            }
-                                            Metric::AvgLoss | Metric::MaxDrawdown => {
-                                                "var(--transactions-color-income)"
-                                            }
-                                            _ => {
-                                                let last = values.last().copied().unwrap_or(0);
-                                                if last >= 0 {
-                                                    "var(--transactions-color-expense)"
-                                                } else {
-                                                    "var(--transactions-color-income)"
-                                                }
-                                            }
-                                        };
-                                        let config = ChartConfig::default()
-                                            .height(320)
-                                            .value_kind(selected.kind())
-                                            .y_title("金额（元）");
-                                        let config = if selected.has_reference() {
-                                            config.reference(0)
+                        <div class="stock-stats-overview">
+                            <div class="stock-stats-overview__lead">
+                                <span class="stock-stats-overview__label">"已实现盈亏"</span>
+                                <span class=format!(
+                                    "stock-stats-overview__value {}",
+                                    format::pnl_class(latest.total_pnl),
+                                )>{format::signed_yuan(latest.total_pnl)}</span>
+                                <span class="stock-stats-overview__sub">
+                                    {format!(
+                                        "截至 {} · 第 {} 笔结算{}",
+                                        format_timestamp(latest.closed_at, "YYYY-MM-DD"),
+                                        latest.sequence,
+                                        if filtered { "（筛选内）" } else { "" },
+                                    )}
+                                </span>
+                            </div>
+                            <div class="stock-stats-overview__kpis">
+                                <StatKpi
+                                    label="胜率".to_string()
+                                    value=Signal::derive(move || {
+                                        format::rate_text(latest.win_rate)
+                                    })
+                                    class=Signal::derive(String::new)
+                                    sub=Signal::derive(move || {
+                                        format!(
+                                            "{} 胜 · {} 负",
+                                            latest.win_count, latest.loss_count,
+                                        )
+                                    })
+                                />
+                                <StatKpi
+                                    label="实际盈亏比".to_string()
+                                    value=Signal::derive(move || {
+                                        format::ratio_text(latest.pnl_ratio)
+                                    })
+                                    class=Signal::derive(String::new)
+                                    sub=Signal::derive(|| "盈利均值 ÷ 亏损均值".to_string())
+                                />
+                                <StatKpi
+                                    label="期望值".to_string()
+                                    value=Signal::derive(move || {
+                                        format::signed_yuan(latest.expectancy)
+                                    })
+                                    class=Signal::derive(move || {
+                                        format::pnl_class(latest.expectancy).to_string()
+                                    })
+                                    sub=Signal::derive(|| "每笔均值".to_string())
+                                />
+                                <StatKpi
+                                    label="最大回撤".to_string()
+                                    value=Signal::derive(move || {
+                                        format::rate_text(latest.max_drawdown_pct)
+                                    })
+                                    class=Signal::derive(move || {
+                                        if latest.max_drawdown_pct > 0.0 {
+                                            "amount-expense".to_string()
                                         } else {
-                                            config
-                                        };
-                                        view! {
-                                            <LineChart
-                                                categories=Signal::derive(move || categories.clone())
-                                                series=Signal::derive(move || {
-                                                    vec![ChartSeries::new(
-                                                        selected.label(),
-                                                        color,
-                                                        values.clone(),
-                                                    )]
-                                                })
-                                                config=config
-                                            />
+                                            String::new()
                                         }
-                                            .into_any()
-                                    }}
-                                </div>
+                                    })
+                                    sub=Signal::derive(move || {
+                                        format!(
+                                            "从高点回落 ¥{}",
+                                            format::amount(latest.max_drawdown.max(0)),
+                                        )
+                                    })
+                                />
+                                <StatKpi
+                                    label="平均盈利".to_string()
+                                    value=Signal::derive(move || {
+                                        if latest.avg_win > 0 {
+                                            format!("¥{}", format::amount(latest.avg_win))
+                                        } else {
+                                            "—".to_string()
+                                        }
+                                    })
+                                    class=Signal::derive(move || {
+                                        if latest.avg_win > 0 {
+                                            "amount-income".to_string()
+                                        } else {
+                                            String::new()
+                                        }
+                                    })
+                                    sub=Signal::derive(move || {
+                                        format!("{} 笔盈利", latest.win_count)
+                                    })
+                                />
+                                <StatKpi
+                                    label="平均亏损".to_string()
+                                    value=Signal::derive(move || {
+                                        if latest.avg_loss > 0 {
+                                            format!("-¥{}", format::amount(latest.avg_loss))
+                                        } else {
+                                            "—".to_string()
+                                        }
+                                    })
+                                    class=Signal::derive(move || {
+                                        if latest.avg_loss > 0 {
+                                            "amount-expense".to_string()
+                                        } else {
+                                            String::new()
+                                        }
+                                    })
+                                    sub=Signal::derive(move || {
+                                        format!("{} 笔亏损", latest.loss_count)
+                                    })
+                                />
+                            </div>
+                        </div>
 
-                                    <div class="stock-chart-block">
-                                    <div class="stock-panel__head">
-                                        <h4 class="stock-panel__title">"逐笔结算明细"</h4>
-                                        <span class="stock-panel__hint">
-                                            "按结算日期倒序；每一行 = 结算到该笔时的累计结果"
-                                        </span>
-                                    </div>
-                                    <div class="stock-table-wrap">
-                                        <table class="stock-table stock-table--stats">
-                                            <thead>
-                                                <tr>
-                                                    <th class="is-center">"结算点"</th>
-                                                    <th class="is-center">"结算日期"</th>
-                                                    <th class="is-center">"标签"</th>
-                                                    <th class="is-center">"本笔盈亏"</th>
-                                                    <th class="is-center">"累计盈亏"</th>
-                                                    <th class="is-center">"胜负"</th>
-                                                    <th class="is-center">"胜率"</th>
-                                                    <th class="is-center">"平均盈利"</th>
-                                                    <th class="is-center">"平均亏损"</th>
-                                                    <th class="is-center">"实际盈亏比"</th>
-                                                    <th class="is-center">"期望值"</th>
-                                                    <th class="is-center">"最大回撤"</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {move || {
-                                                    let mut points = stats
-                                                        .get()
-                                                        .map(|data| data.points)
-                                                        .unwrap_or_default();
-                                                    points.reverse();
-                                                    points
-                                                        .into_iter()
-                                                        .map(|point| {
-                                                            let is_latest = latest_point()
-                                                                .map(|latest| {
-                                                                    latest.sequence == point.sequence
-                                                                })
-                                                                .unwrap_or(false);
-                                                            view! {
-                                                                <tr class:is-latest=is_latest>
-                                                                    <td class="is-center">
-                                                                        <div class="stock-stats-point">
-                                                                            <span>
-                                                                                {format!("第 {} 笔", point.sequence)}
-                                                                            </span>
-                                                                            <span class="stock-stats-point__sub">
-                                                                                {format!(
-                                                                                    "{} 第 {} 轮",
-                                                                                    point.stock_name,
-                                                                                    point.stock_round_no,
-                                                                                )}
-                                                                            </span>
-                                                                        </div>
-                                                                    </td>
-                                                                    <td class="is-center stock-mono">
-                                                                        {format_timestamp(point.closed_at, "YYYY-MM-DD")}
-                                                                    </td>
-                                                                    <td class="is-center">
-                                                                        <span class="stock-cell-tag">
-                                                                            {point.tag.clone()}
-                                                                        </span>
-                                                                    </td>
-                                                                    <td class="is-right stock-mono">
-                                                                        {format!(
-                                                                            "{} {}",
-                                                                            format::signed_yuan(point.pnl),
-                                                                            format::rate_text(point.pnl_rate),
-                                                                        )}
-                                                                    </td>
-                                                                    <td class="is-right">
-                                                                        <span class=format!(
-                                                                            "stock-amount {}",
-                                                                            format::pnl_class(point.total_pnl),
-                                                                        )>{format::signed_yuan(point.total_pnl)}</span>
-                                                                    </td>
-                                                                    <td class="is-center">
-                                                                        {format!(
-                                                                            "{} 胜 {} 负",
-                                                                            point.win_count,
-                                                                            point.loss_count,
-                                                                        )}
-                                                                    </td>
-                                                                    <td class="is-center">
-                                                                        {format::rate_text(point.win_rate)}
-                                                                    </td>
-                                                                    <td class="is-right">
-                                                                        {if point.avg_win > 0 {
-                                                                            format!("¥{}", format::amount(point.avg_win))
-                                                                        } else {
-                                                                            "—".to_string()
-                                                                        }}
-                                                                    </td>
-                                                                    <td class="is-right">
-                                                                        {if point.avg_loss > 0 {
-                                                                            format!("-¥{}", format::amount(point.avg_loss))
-                                                                        } else {
-                                                                            "—".to_string()
-                                                                        }}
-                                                                    </td>
-                                                                    <td class="is-center">
-                                                                        {format::ratio_text(point.pnl_ratio)}
-                                                                    </td>
-                                                                    <td class="is-right">
-                                                                        <span class=format!(
-                                                                            "stock-amount {}",
-                                                                            format::pnl_class(point.expectancy),
-                                                                        )>{format::signed_yuan(point.expectancy)}</span>
-                                                                    </td>
-                                                                    <td class="is-center">
-                                                                        {format!(
-                                                                            "{} ¥{}",
-                                                                            format::rate_text(point.max_drawdown_pct),
-                                                                            format::amount(point.max_drawdown),
-                                                                        )}
-                                                                    </td>
-                                                                </tr>
-                                                            }
-                                                        })
-                                                        .collect_view()
-                                                }}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            }
-                                .into_any()
-                        }}
+                        <div class="stock-chart-block">
+                            <div class="stock-panel__head">
+                                <h4 class="stock-panel__title">"统计曲线"</h4>
+                                <Segmented
+                                    value=metric
+                                    options={
+                                        Metric::ALL
+                                            .iter()
+                                            .map(|item| SegmentedOption::same(item.label()))
+                                            .collect::<Vec<_>>()
+                                    }
+                                    on_change=UnsyncCallback::new(move |label: String| {
+                                        // `Segmented` 的值就是指标文案，这里反查回枚举
+                                        if let Some(found) = Metric::ALL
+                                            .iter()
+                                            .find(|item| item.label() == label)
+                                        {
+                                            metric.set(found.label().to_string());
+                                        }
+                                    })
+                                />
+                            </div>
+                            <div class="stock-chart-block__body">
+                            {move || {
+                                let Some(data) = stats.get() else {
+                                    return ().into_any();
+                                };
+                                let selected = Metric::ALL
+                                    .iter()
+                                    .find(|item| item.label() == metric.get())
+                                    .copied()
+                                    .unwrap_or(Metric::TotalPnl);
+                                let categories = data
+                                    .points
+                                    .iter()
+                                    .map(|point| {
+                                        format!(
+                                            "第{}笔 {}",
+                                            point.sequence,
+                                            format_timestamp(point.closed_at, "MM-DD"),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+                                let values = data
+                                    .points
+                                    .iter()
+                                    .map(|point| selected.value(point).round() as i64)
+                                    .collect::<Vec<_>>();
+                                let color = match selected {
+                                    Metric::AvgWin | Metric::WinRate | Metric::PnlRatio => {
+                                        "var(--transactions-color-expense)"
+                                    }
+                                    Metric::AvgLoss | Metric::MaxDrawdown => {
+                                        "var(--transactions-color-income)"
+                                    }
+                                    _ => {
+                                        let last = values.last().copied().unwrap_or(0);
+                                        if last >= 0 {
+                                            "var(--transactions-color-expense)"
+                                        } else {
+                                            "var(--transactions-color-income)"
+                                        }
+                                    }
+                                };
+                                let config = ChartConfig::default()
+                                    .height(320)
+                                    .value_kind(selected.kind())
+                                    .y_title("金额（元）");
+                                let config = if selected.has_reference() {
+                                    config.reference(0)
+                                } else {
+                                    config
+                                };
+                                view! {
+                                    <LineChart
+                                        categories=Signal::derive(move || categories.clone())
+                                        series=Signal::derive(move || {
+                                            vec![ChartSeries::new(
+                                                selected.label(),
+                                                color,
+                                                values.clone(),
+                                            )]
+                                        })
+                                        config=config
+                                    />
+                                }
+                                    .into_any()
+                            }}
+                            </div>
+                        </div>
                     </div>
                 }
                     .into_any()
             }}
+            </TabPane>
+
+            <TabPane active=tab key=STATS_TAB_DETAIL class="stock-statistics__pane">
+            {move || {
+                if stats.get().is_none() {
+                    return view! {
+                        <div class="stock-empty">
+                            {move || if loading.get() { "正在加载…" } else { "暂无统计" }}
+                        </div>
+                    }
+                        .into_any();
+                }
+                // 按结算日期**倒序**（最近一笔在最上面）；分页在界面侧切，
+                // 理由见 `statistics_view` 的文档注释（累计口径必须整条算出来）。
+                let rows = detail_page_rows();
+                let empty = rows.is_empty();
+                let latest_sequence = latest_point().map(|latest| latest.sequence);
+                view! {
+                    <div class="stock-panel">
+                        <div class="stock-panel__head">
+                            <h4 class="stock-panel__title">"逐笔结算明细"</h4>
+                            <span class="stock-panel__hint">
+                                "按结算日期倒序；每一行 = 结算到该笔时的累计结果"
+                            </span>
+                        </div>
+                        <div class="stock-table-wrap" class:stock-table-wrap--empty=empty>
+                            <table class="stock-table stock-table--stats">
+                                <thead>
+                                    <tr>
+                                        <th class="is-center">"结算点"</th>
+                                        <th class="is-center">"结算日期"</th>
+                                        <th class="is-center">"标签"</th>
+                                        <th class="is-center">"本笔盈亏"</th>
+                                        <th class="is-center">"累计盈亏"</th>
+                                        <th class="is-center">"胜负"</th>
+                                        <th class="is-center">"胜率"</th>
+                                        <th class="is-center">"平均盈利"</th>
+                                        <th class="is-center">"平均亏损"</th>
+                                        <th class="is-center">"实际盈亏比"</th>
+                                        <th class="is-center">"期望值"</th>
+                                        <th class="is-center">"最大回撤"</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {if empty {
+                                        view! {
+                                            <tr>
+                                                <td colspan="12">
+                                                    <Empty
+                                                        title="当前筛选下暂无结算记录"
+                                                        description="放宽时间区间、笔数或标签即可看到逐笔明细。"
+                                                    />
+                                                </td>
+                                            </tr>
+                                        }
+                                            .into_any()
+                                    } else {
+                                        rows
+                                            .into_iter()
+                                            .map(|point| {
+                                                let is_latest = latest_sequence
+                                                    == Some(point.sequence);
+                                                statistics_detail_row(point, is_latest)
+                                            })
+                                            .collect_view()
+                                            .into_any()
+                                    }}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="stock-panel__footer">
+                            <span class="stock-panel__total">
+                                {move || format!("共 {} 条", detail_total())}
+                            </span>
+                            // 没有数据时不渲染分页控件（只剩一个禁用态的「1」很吵）；
+                            // 注意别在 `view!` 的属性里写 `>`，它会被当成标签结束符
+                            <Show when=move || detail_total().is_positive()>
+                                <Pagination
+                                    page=detail_page
+                                    total_pages=detail_total_pages
+                                    page_size=detail_page_size
+                                />
+                            </Show>
+                        </div>
+                    </div>
+                }
+                    .into_any()
+            }}
+            </TabPane>
         </div>
         </div>
     }
@@ -4058,6 +4141,76 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             toolbar=toolbar
             content=content
         />
+    }
+    .into_any()
+}
+
+/// 逐笔结算明细表的一行（统计 → 明细分栏）。
+///
+/// 一行展示的是**结算到该笔时的累计结果**（累计口径由服务端按整条时序算好，
+/// 见 `tr-service/src/stock_statistics.rs`），界面只负责排版与语义色。
+/// `is_latest` 标记当前集合的最后一笔（面板里那串大数的来源）。
+fn statistics_detail_row(point: StockStatisticsPointDto, is_latest: bool) -> AnyView {
+    view! {
+        <tr class:is-latest=is_latest>
+            <td class="is-center">
+                <div class="stock-stats-point">
+                    <span>{format!("第 {} 笔", point.sequence)}</span>
+                    <span class="stock-stats-point__sub">
+                        {format!("{} 第 {} 轮", point.stock_name, point.stock_round_no)}
+                    </span>
+                </div>
+            </td>
+            <td class="is-center stock-mono">
+                {format_timestamp(point.closed_at, "YYYY-MM-DD")}
+            </td>
+            <td class="is-center">
+                <span class="stock-cell-tag">{point.tag.clone()}</span>
+            </td>
+            <td class="is-right stock-mono">
+                {format!(
+                    "{} {}",
+                    format::signed_yuan(point.pnl),
+                    format::rate_text(point.pnl_rate),
+                )}
+            </td>
+            <td class="is-right">
+                <span class=format!(
+                    "stock-amount {}",
+                    format::pnl_class(point.total_pnl),
+                )>{format::signed_yuan(point.total_pnl)}</span>
+            </td>
+            <td class="is-center">{format!("{} 胜 {} 负", point.win_count, point.loss_count)}</td>
+            <td class="is-center">{format::rate_text(point.win_rate)}</td>
+            <td class="is-right">
+                {if point.avg_win > 0 {
+                    format!("¥{}", format::amount(point.avg_win))
+                } else {
+                    "—".to_string()
+                }}
+            </td>
+            <td class="is-right">
+                {if point.avg_loss > 0 {
+                    format!("-¥{}", format::amount(point.avg_loss))
+                } else {
+                    "—".to_string()
+                }}
+            </td>
+            <td class="is-center">{format::ratio_text(point.pnl_ratio)}</td>
+            <td class="is-right">
+                <span class=format!(
+                    "stock-amount {}",
+                    format::pnl_class(point.expectancy),
+                )>{format::signed_yuan(point.expectancy)}</span>
+            </td>
+            <td class="is-center">
+                {format!(
+                    "{} ¥{}",
+                    format::rate_text(point.max_drawdown_pct),
+                    format::amount(point.max_drawdown),
+                )}
+            </td>
+        </tr>
     }
     .into_any()
 }
@@ -4092,7 +4245,7 @@ const TRANSFER_TOOLTIP: &str = "买卖双向收取，仅沪市（60/68 开头）
 /// 交易标签最多保存数量（上限 20）。
 const MAX_STOCK_TAGS: usize = 20;
 
-/// 设置子功能：交易标签 + 交易费用设置 + 重置股票数据。
+/// 设置子功能：交易标签 + 交易费用设置 + 操作记录（查看 / 回滚）+ 重置股票数据。
 ///
 /// 这是原「应用设置 → 股票」整块迁进来的（它属于股票事务，不属于应用配置）：
 /// 费用设置与标签都是**按账本**存的，放在这里与下单、复盘、统计同屏更顺手。
@@ -4113,6 +4266,17 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     let tags_loading = RwSignal::new(false);
     let tags_saving = RwSignal::new(false);
     let new_tag = RwSignal::new(String::new());
+
+    // ---- 操作记录 / 回滚 ----
+    // 最多保留的条数（与后端 `STOCK_OPERATION_LIMIT` 同口径；界面只用于说明文案）
+    const OPERATION_LIMIT_TEXT: &str = "最多保留最近 10 次操作";
+    let operations = RwSignal::new(Vec::<StockOperationDto>::new());
+    let operations_loading = RwSignal::new(false);
+    // 「查看记录」弹窗
+    let records_open = RwSignal::new(false);
+    // 「回滚」确认弹窗：预演结果（要撤销哪一次 + 会失效的轮次）
+    let rollback_preview = RwSignal::new(Option::<StockOperationRollbackPreviewDto>::None);
+    let rolling_back = RwSignal::new(false);
 
     // ---- 重置 ----
     let confirm_open = RwSignal::new(false);
@@ -4141,6 +4305,83 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                 Ok(setting) => fill_fee_form(&setting),
                 Err(error) => notify_error("读取费用设置失败", &error),
             }
+        });
+    };
+
+    // ---- 操作记录 ----
+    let load_operations = move |ledger_id: String| {
+        if ledger_id.is_empty() {
+            operations.set(Vec::new());
+            return;
+        }
+        operations_loading.set(true);
+        leptos::task::spawn_local(async move {
+            match api::stock::operation_list(&ledger_id).await {
+                Ok(list) => operations.set(list),
+                Err(error) => notify_error("读取操作记录失败", &error),
+            }
+            operations_loading.set(false);
+        });
+    };
+
+    // 「查看记录」：先确保拿到最新的一份（本页挂载时已经拉过，这里只是刷新）
+    let open_records = move || {
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().error("请先选择工作空间", None);
+            return;
+        }
+        records_open.set(true);
+        load_operations(ledger_id);
+    };
+
+    // 「回滚」：**先预演再确认**（回滚清仓会连带移除该轮次与它的复盘，不可恢复）
+    let open_rollback = move || {
+        if rolling_back.get_untracked() {
+            return;
+        }
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().error("请先选择工作空间", None);
+            return;
+        }
+        rolling_back.set(true);
+        leptos::task::spawn_local(async move {
+            match api::stock::operation_preview(&ledger_id).await {
+                Ok(preview) => rollback_preview.set(Some(preview)),
+                Err(error) => notify_error("回滚预演失败", &error),
+            }
+            rolling_back.set(false);
+        });
+    };
+
+    let do_rollback = move || {
+        if rolling_back.get_untracked() {
+            return;
+        }
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().error("请先选择工作空间", None);
+            return;
+        }
+        rolling_back.set(true);
+        leptos::task::spawn_local(async move {
+            let reload = ledger_id.clone();
+            match api::stock::operation_rollback(&ledger_id).await {
+                Ok(result) => {
+                    rollback_preview.set(None);
+                    if result.skipped {
+                        // 目标已被别的改动删掉：只把记录弹掉，没有实际回滚
+                        Notifier::global()
+                            .warning(format!("「{}」已不存在，已跳过", result.action), None);
+                    } else {
+                        Notifier::global().success(format!("已回滚「{}」", result.action), None);
+                    }
+                    load_operations(reload);
+                }
+                Err(error) => notify_error("回滚失败", &error),
+            }
+            rolling_back.set(false);
         });
     };
 
@@ -4331,11 +4572,27 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
         });
     };
 
-    // 账本变化 → 重新加载费用设置与交易标签
+    // 确认框正文（多行，用 `white-space: pre-wrap` 的 `.stock-impact__text` 渲染）
+    let rollback_body = move || {
+        let Some(preview) = rollback_preview.get() else {
+            return String::new();
+        };
+        format!(
+            "将撤销最新一次操作「{}」（{}）。\n{}\n资金记录、轮次与统计都会按新数据重算。\n回滚后不能撤销。",
+            preview.action,
+            preview.detail,
+            // 与「编辑/删除成交」的影响预演同一份文案：没有失效轮次时明说「不会影响」，
+            // 让人一眼知道这次回滚不会丢复盘。
+            removed_rounds_text(&preview.removed_rounds),
+        )
+    };
+
+    // 账本变化 → 重新加载费用设置、交易标签与操作记录
     Effect::new(move |_: Option<()>| {
         let ledger_id = stores.current_ledger_id.get();
         load_fee(ledger_id.clone());
-        load_tags(ledger_id);
+        load_tags(ledger_id.clone());
+        load_operations(ledger_id);
     });
 
     let tag_empty_text = move || {
@@ -4524,6 +4781,39 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                     </Show>
                 </div>
 
+                // ---- 操作记录 / 回滚 ----
+                // 一行两个**同级**动作：左边看一眼记录，右边撤销最新一次。
+                // 危险语义不放在按钮颜色上（两者是同一行的两种动作），而是放在确认框的确认键上。
+                <div class="st-card">
+                    <div class="st-card-info">
+                        <span class="st-card-title">"操作记录"</span>
+                        <span class="st-card-desc">
+                            "追加本金 / 支取 / 利息归本 / 建仓 / 加仓 / 减仓 / 清仓 各记一条，最多保留最近 10 条；回滚撤销最新一次操作。"
+                        </span>
+                    </div>
+                    <div class="st-card-action">
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            disabled=Signal::derive(move || {
+                                no_ledger() || operations.get().is_empty()
+                            })
+                            on_click=move |_| open_records()
+                        >
+                            "查看记录"
+                        </Button>
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            loading=rolling_back
+                            disabled=Signal::derive(move || {
+                                no_ledger() || operations.get().is_empty()
+                            })
+                            on_click=move |_| open_rollback()
+                        >
+                            "回滚"
+                        </Button>
+                    </div>
+                </div>
+
                 // ---- 重置 ----
                 <div class="st-card">
                     <div class="st-card-info">
@@ -4558,6 +4848,85 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                 <p class="st-modal-text">
                     "将清空当前账本的账户本金、持仓、交易记录、资金记录、费用设置与交易标签。此操作不可恢复，确定继续吗？"
                 </p>
+            </Modal>
+
+            // 「查看记录」：只读列表（`footer=false` —— 只读弹窗不需要确认键，
+            // 关闭入口用底部的「关闭」按钮 + header 的 ×，不用「取消/确认」两个语义都不对的键）
+            <Modal
+                open=records_open
+                title="操作记录"
+                size=ModalSize::Medium
+                footer=false
+                on_close=move || records_open.set(false)
+            >
+                {move || {
+                    let list = operations.get();
+                    if list.is_empty() {
+                        return view! {
+                            <p class="page-hint">"还没有可回滚的操作。"</p>
+                        }
+                            .into_any();
+                    }
+                    view! {
+                        <div class="stock-op-list">
+                            {list
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, operation)| {
+                                    let is_latest = index == 0;
+                                    view! {
+                                        <div class="stock-op-item">
+                                            <div class="stock-op-item__head">
+                                                <span class="stock-op-item__action">
+                                                    {operation.action.clone()}
+                                                </span>
+                                                <Show when=move || is_latest>
+                                                    <span class="stock-op-item__badge">"最新"</span>
+                                                </Show>
+                                                <span class="stock-op-item__time">
+                                                    {format_timestamp(
+                                                        operation.created_at,
+                                                        "MM-DD HH:mm",
+                                                    )}
+                                                </span>
+                                            </div>
+                                            <span class="stock-op-item__detail">
+                                                {operation.detail.clone()}
+                                            </span>
+                                        </div>
+                                    }
+                                })
+                                .collect_view()}
+                        </div>
+                    }
+                        .into_any()
+                }}
+                <p class="page-hint">
+                    {format!("{OPERATION_LIMIT_TEXT}；「回滚」只撤销最新那一条。")}
+                </p>
+                <div class="stock-op-actions">
+                    <Button
+                        variant=ButtonVariant::Secondary
+                        on_click=move |_| records_open.set(false)
+                    >
+                        "关闭"
+                    </Button>
+                </div>
+            </Modal>
+
+            // 「回滚」确认框：复用编辑/删除成交那套「失效轮次」文案（回滚清仓会丢复盘）
+            <Modal
+                open=Signal::derive(move || rollback_preview.get().is_some())
+                title="回滚操作"
+                size=ModalSize::Small
+                ok_text="确认回滚"
+                cancel_text="取消"
+                ok_danger=true
+                ok_loading=rolling_back
+                on_close=move || rollback_preview.set(None)
+                on_ok=move || do_rollback()
+            >
+                <p class="stock-impact__text">{move || rollback_body()}</p>
             </Modal>
         </div>
         </div>

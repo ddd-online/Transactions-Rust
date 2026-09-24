@@ -34,6 +34,7 @@ const LEDGER_CASCADE: &[&str] = &[
     "DELETE FROM tbl_billadm_stock_trade_history WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_position WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_account WHERE ledger_id = ?1",
+    "DELETE FROM tbl_billadm_stock_operation WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_ledger WHERE id = ?1",
 ];
 
@@ -211,6 +212,9 @@ mod tests {
              (id, ledger_id, stock_code, stock_name, quantity, total_cost, realized_pnl, review, created_at, updated_at) \
              VALUES (?2, ?1, '600519', '贵州茅台', 100, 10000, 0, '', 1, 1)",
             "INSERT INTO tbl_billadm_stock_account (id, ledger_id, principal, created_at, updated_at) VALUES (?2, ?1, 0, 1, 1)",
+            "INSERT INTO tbl_billadm_stock_operation \
+             (id, ledger_id, kind, action, detail, target_id, created_at) \
+             VALUES (?2, ?1, 'fund', '追加本金', '', '', 1)",
         ];
 
         {

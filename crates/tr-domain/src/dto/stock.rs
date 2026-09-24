@@ -393,6 +393,52 @@ pub struct StockTradeHistorySummaryDto {
     pub total_pnl_rate: f64,
 }
 
+/// 一条可回滚的操作记录（列表用；`kind` 与 `targetId` 是内部字段，不对外暴露）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockOperationDto {
+    #[serde(rename = "id")]
+    pub id: String,
+    /// 操作名（固定文案：追加本金 / 支取 / 利息归本 / 建仓 / 加仓 / 减仓 / 清仓）
+    #[serde(rename = "action")]
+    pub action: String,
+    /// 展示摘要（如 `¥5,000.00`、`贵州茅台 600519 · 3 手 · ¥30,000.00`）
+    #[serde(rename = "detail")]
+    pub detail: String,
+    /// 录入时间（Unix 秒）
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+}
+
+/// 回滚预演：要撤销的那次操作 + 它会带来的影响。
+///
+/// 「失效轮次」沿用编辑/删除成交那一套（[`StockTradeImpactRoundDto`]）：
+/// 回滚清仓/减仓会让该轮次不再成立，轮次上的复盘与标签随之丢失 —— 确认框要先把这件事说清楚。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockOperationRollbackPreviewDto {
+    /// 要撤销的操作名（无记录时为空串）
+    #[serde(rename = "action")]
+    pub action: String,
+    #[serde(rename = "detail")]
+    pub detail: String,
+    /// 会因此失效的轮次（复盘随之丢失）；资金类操作恒为空
+    #[serde(rename = "removedRounds")]
+    pub removed_rounds: Vec<StockTradeImpactRoundDto>,
+}
+
+/// 回滚结果。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockOperationRollbackDto {
+    /// 被撤销的操作名
+    #[serde(rename = "action")]
+    pub action: String,
+    /// 撤销目标已被别的改动删除 → 只把记录弹掉，没有实际回滚
+    #[serde(rename = "skipped")]
+    pub skipped: bool,
+}
+
 /// 交易统计总览：本金 + 逐笔结算统计点。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

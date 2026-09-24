@@ -19,7 +19,8 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::Datelike;
 use tr_domain::consts;
 use tr_domain::dto::{
-    round_pnl, StockFundRecordDto, StockFundRecordPage, StockNameDto, StockOverviewDto,
+    round_pnl, StockFundRecordDto, StockFundRecordPage, StockNameDto, StockOperationDto,
+    StockOperationRollbackDto, StockOperationRollbackPreviewDto, StockOverviewDto,
     StockPositionDto, StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto,
     StockTradeHistorySummaryDto, StockTradeImpactDto, StockTradeImpactRoundDto,
     StockTradeTagSettingDto,
@@ -27,11 +28,11 @@ use tr_domain::dto::{
 use tr_domain::error::AppError;
 use tr_domain::fee;
 use tr_domain::models::{
-    StockAccount, StockFeeSetting, StockFundRecord, StockPosition, StockTrade, StockTradeHistory,
-    StockTradeRound, StockTradeTagSetting,
+    StockAccount, StockFeeSetting, StockFundRecord, StockOperation, StockPosition, StockTrade,
+    StockTradeHistory, StockTradeRound, StockTradeTagSetting,
 };
 use tr_store::dao::is_not_found;
-use tr_store::dao::stock::StockDao;
+use tr_store::dao::stock::{StockDao, STOCK_OPERATION_LIMIT};
 use tr_store::Workspace;
 
 use crate::error::db;
@@ -143,6 +144,56 @@ pub(crate) fn parse_strict_date(date: &str) -> Option<(i32, u32, u32)> {
     let day: u32 = date[8..10].parse().ok()?;
     let date = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
     Some((date.year(), date.month(), date.day()))
+}
+
+// ---------- 操作记录（回滚用） ----------
+
+/// 记一次可回滚的操作（在调用方的事务里调用，与操作同生共死）。
+///
+/// 八个可回滚操作只有两种形状，`kind` 就是这两种形状的判别式：
+/// * [`consts::STOCK_OP_KIND_FUND`]  —— 新建了一条资金记录，`target_id` = 资金记录 id；
+/// * [`consts::STOCK_OP_KIND_ORDER`] —— 新建了一个委托，`target_id` = `order_id`。
+///
+/// `action` 是**固定文案**（追加本金 / 支取 / 利息归本 / 建仓 / 加仓 / 减仓 / 清仓），
+/// 与资金记录的 `event_text` 同一性质：改动即影响界面。
+/// `detail` 是展示摘要（金额或股票与手数），列表弹窗直接显示。
+///
+/// 每个账本只保留最新 `STOCK_OPERATION_LIMIT` 条（裁剪在 DAO 里随插入一起做）。
+fn log_operation(
+    conn: &rusqlite::Connection,
+    ledger_id: &str,
+    kind: &str,
+    action: &str,
+    detail: String,
+    target_id: &str,
+) -> ServiceResult<()> {
+    let operation = StockOperation {
+        id: tr_store::util::new_uuid(),
+        ledger_id: ledger_id.to_string(),
+        kind: kind.to_string(),
+        action: action.to_string(),
+        detail,
+        target_id: target_id.to_string(),
+        created_at: 0,
+    };
+    db(StockDao::create_operation(conn, &operation))?;
+    Ok(())
+}
+
+/// 金额摘要（分 → `¥1,234.56`）。
+fn amount_detail(amount: i64) -> String {
+    format!("¥{}", tr_domain::money::cents_to_yuan(amount))
+}
+
+/// 委托类操作的固定文案（与界面上的交易类型标签同一套词）。
+fn trade_operation_label(trade_type: &str) -> &'static str {
+    match trade_type {
+        consts::STOCK_TRADE_OPEN => "建仓",
+        consts::STOCK_TRADE_ADD => "加仓",
+        consts::STOCK_TRADE_REDUCE => "减仓",
+        consts::STOCK_TRADE_CLOSE => "清仓",
+        _ => "交易",
+    }
 }
 
 // ---------- 账户 / 费用设置 / 标签设置 ----------
@@ -323,6 +374,14 @@ pub fn add_principal_at_date(
             created_at: 0,
         };
         db(StockDao::create_fund_record(conn, &record))?;
+        log_operation(
+            conn,
+            ledger_id,
+            consts::STOCK_OP_KIND_FUND,
+            "追加本金",
+            amount_detail(amount),
+            &record.id,
+        )?;
         Ok(())
     }) {
         tracing::error!(
@@ -399,6 +458,14 @@ pub fn add_withdraw_at_date(
             created_at: 0,
         };
         db(StockDao::create_fund_record(conn, &record))?;
+        log_operation(
+            conn,
+            ledger_id,
+            consts::STOCK_OP_KIND_FUND,
+            "支取",
+            amount_detail(amount),
+            &record.id,
+        )?;
         Ok(())
     }) {
         tracing::error!(
@@ -466,6 +533,14 @@ pub fn add_interest_at_date(
             created_at: 0,
         };
         db(StockDao::create_fund_record(conn, &record))?;
+        log_operation(
+            conn,
+            ledger_id,
+            consts::STOCK_OP_KIND_FUND,
+            "利息归本",
+            amount_detail(amount),
+            &record.id,
+        )?;
         Ok(())
     }) {
         tracing::error!(
@@ -1150,6 +1225,17 @@ pub fn create_trade_order(
         for trade in &trades {
             db(StockDao::create_trade(conn, trade))?;
         }
+        log_operation(
+            conn,
+            ledger_id,
+            consts::STOCK_OP_KIND_ORDER,
+            trade_operation_label(trade_type),
+            format!(
+                "{stock_name} {stock_code} · {total_lots} 手 · {}",
+                amount_detail(total_amount)
+            ),
+            &order_id,
+        )?;
         Ok(())
     }) {
         tracing::error!(
@@ -2429,6 +2515,163 @@ fn fund_record_after(a: &StockFundRecord, b: &StockFundRecord) -> bool {
         return a.created_at > b.created_at;
     }
     a.id > b.id
+}
+
+// ==================================================================== 操作记录与回滚
+
+/// 目标不存在（404）。
+///
+/// 回滚时用它区分两种失败：目标被别的改动带走了（**跳过**，把记录弹掉）与真的出错（原样上报）。
+fn is_missing_target(error: &ServiceError) -> bool {
+    matches!(error, ServiceError::App(app) if app.status == 404)
+}
+
+/// 某账本的操作记录（最新的在前，最多 [`STOCK_OPERATION_LIMIT`] 条）。
+pub fn list_operations(
+    workspace: &Workspace,
+    ledger_id: &str,
+) -> ServiceResult<Vec<StockOperationDto>> {
+    let conn = workspace.connection();
+    let rows = db(StockDao::list_operations(
+        &conn,
+        ledger_id,
+        STOCK_OPERATION_LIMIT,
+    ))?;
+    Ok(rows
+        .into_iter()
+        .map(|operation| StockOperationDto {
+            id: operation.id,
+            action: operation.action,
+            detail: operation.detail,
+            created_at: operation.created_at,
+        })
+        .collect())
+}
+
+/// 回滚预演：要撤销的是哪一次操作、会不会让某些轮次失效（复盘随之丢失）。
+///
+/// 与 [`preview_trade_change`] 同一手法：委托类操作在事务里**真的执行撤销**、比对前后的轮次索引，
+/// 最后返回哨兵错误 [`ERR_PREVIEW_ROLLBACK`] 强制回滚 —— **预演绝不落库**。
+/// 资金类操作没有轮次影响，只回填操作名与摘要。
+pub fn preview_rollback(
+    workspace: &Workspace,
+    ledger_id: &str,
+) -> ServiceResult<StockOperationRollbackPreviewDto> {
+    let mut preview: Option<StockOperationRollbackPreviewDto> = None;
+    let result = workspace.transaction(|conn| {
+        let operation = match StockDao::latest_operation(conn, ledger_id) {
+            Ok(operation) => operation,
+            Err(error) if is_not_found(&error) => {
+                return Err::<(), ServiceError>(AppError::bad_request("没有可回滚的操作").into());
+            }
+            Err(error) => return Err(ServiceError::Database(error)),
+        };
+        let mut preview_for_call = StockOperationRollbackPreviewDto {
+            action: operation.action.clone(),
+            detail: operation.detail.clone(),
+            removed_rounds: Vec::new(),
+        };
+        if operation.kind == consts::STOCK_OP_KIND_ORDER {
+            let before = round_meta_index(conn, ledger_id)?;
+            // 目标可能已经被别的改动删掉了（例如手动删除整笔委托）：那不是错误，
+            // 实际回滚会走"跳过"路径，预演里也就没有失效轮次
+            if delete_trade_order_tx(conn, ledger_id, &operation.target_id).is_ok() {
+                let after = round_meta_index(conn, ledger_id)?;
+                for (key, meta) in &before {
+                    if !after.contains_key(key) {
+                        preview_for_call.removed_rounds.push(meta.clone());
+                    }
+                }
+                preview_for_call.removed_rounds.sort_by(|left, right| {
+                    left.stock_code
+                        .cmp(&right.stock_code)
+                        .then(left.round_no.cmp(&right.round_no))
+                });
+            }
+        }
+        preview = Some(preview_for_call);
+        // 哨兵错误：强制回滚，预演绝不落库
+        Err(ServiceError::Internal(ERR_PREVIEW_ROLLBACK.to_string()))
+    });
+
+    if let Err(error) = result {
+        let rollback = matches!(&error, ServiceError::Internal(msg) if msg == ERR_PREVIEW_ROLLBACK);
+        if !rollback {
+            return Err(error);
+        }
+    }
+    preview.ok_or_else(|| AppError::bad_request("没有可回滚的操作").into())
+}
+
+/// 回滚最新一次操作（撤销成功后把它从记录里弹掉）。
+///
+/// 撤销就是两个"逆操作"，不引入快照：
+/// * **委托类** → [`delete_trade_order_tx`]：删掉该委托的全部成交后重放持仓 / 轮次 / 资金记录；
+/// * **资金类** → 删掉那条资金记录；「追加本金」还要把 `principal` 减回去，最后重算现金链。
+///
+/// **目标已不存在**不算失败：把记录弹掉并返回 `skipped = true`。否则一条指向空气的记录会永远
+/// 卡在栈顶，之后每一次回滚都失败。
+///
+/// 回滚本身**不产生新记录**：它是弹栈，不是新的正向操作（否则"回滚"就成了可回滚的操作）。
+pub fn rollback_latest(
+    workspace: &Workspace,
+    ledger_id: &str,
+) -> ServiceResult<StockOperationRollbackDto> {
+    let mut outcome: Option<StockOperationRollbackDto> = None;
+    if let Err(error) = workspace.transaction(|conn| {
+        let operation = match StockDao::latest_operation(conn, ledger_id) {
+            Ok(operation) => operation,
+            Err(error) if is_not_found(&error) => {
+                return Err(AppError::bad_request("没有可回滚的操作").into());
+            }
+            Err(error) => return Err(ServiceError::Database(error)),
+        };
+
+        let mut skipped = false;
+        match operation.kind.as_str() {
+            consts::STOCK_OP_KIND_ORDER => {
+                if let Err(error) = delete_trade_order_tx(conn, ledger_id, &operation.target_id) {
+                    if is_missing_target(&error) {
+                        skipped = true;
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
+            consts::STOCK_OP_KIND_FUND => {
+                match StockDao::get_fund_record(conn, &operation.target_id) {
+                    Ok(record) => {
+                        // 追加本金动过本金口径，撤销时要改回去（额度就是这条记录的 amount_change）
+                        if record.event_type == consts::STOCK_EVENT_ADD_PRINCIPAL {
+                            let account = get_or_create_account_in(conn, ledger_id)?;
+                            // `max(0)` 是防御式的：追加本金只会把本金抬高，理论上取不到负值
+                            let restored = (account.principal - record.amount_change).max(0);
+                            db(StockDao::update_account_principal(
+                                conn, ledger_id, restored,
+                            ))?;
+                        }
+                        db(StockDao::delete_fund_record(conn, &operation.target_id))?;
+                        recalculate_cash_chain(conn, ledger_id)?;
+                    }
+                    Err(error) if is_not_found(&error) => skipped = true,
+                    Err(error) => return Err(ServiceError::Database(error)),
+                }
+            }
+            // 未知 kind（理论上不会出现）：只弹记录，不做任何撤销
+            _ => skipped = true,
+        }
+
+        db(StockDao::delete_operation(conn, &operation.id))?;
+        outcome = Some(StockOperationRollbackDto {
+            action: operation.action.clone(),
+            skipped,
+        });
+        Ok(())
+    }) {
+        tracing::error!("回滚股票操作失败, ledger: {}, err: {}", ledger_id, error);
+        return Err(error);
+    }
+    outcome.ok_or_else(|| ServiceError::Internal("回滚后未取到结果".into()))
 }
 
 #[cfg(test)]
@@ -6063,6 +6306,456 @@ mod tests {
         assert_eq!(page.page_size, 100, "page_size 上限为 100");
         // 第二页已越过 12 条记录（100/页），返回空页
         assert!(page.items.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ==================================================================== 操作记录与回滚
+
+    /// 股票侧「库内容指纹」：各表行数 + 轮次的标签/复盘 + 本金。
+    ///
+    /// 用来断言「预演绝不落库」——只比对行数不够（改写复盘也看得见），所以把轮次元数据也带上。
+    fn stock_fingerprint(workspace: &Workspace) -> String {
+        let conn = workspace.connection();
+        let mut out = String::new();
+        for table in [
+            "tbl_billadm_stock_account",
+            "tbl_billadm_stock_position",
+            "tbl_billadm_stock_trade",
+            "tbl_billadm_stock_trade_round",
+            "tbl_billadm_stock_trade_history",
+            "tbl_billadm_stock_fund_record",
+            "tbl_billadm_stock_operation",
+        ] {
+            let rows: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            out.push_str(&format!("{table}={rows};"));
+        }
+        let mut statement = conn
+            .prepare(
+                "SELECT id, round_no, tag, review FROM tbl_billadm_stock_trade_round ORDER BY id",
+            )
+            .unwrap();
+        let rounds: Vec<String> = statement
+            .query_map([], |row| {
+                Ok(format!(
+                    "{}:{}:{}:{}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        out.push_str(&rounds.join("|"));
+        let principal: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(principal), 0) FROM tbl_billadm_stock_account",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        out.push_str(&format!(";principal={principal}"));
+        out
+    }
+
+    /// 某账本的资金记录条数。
+    fn fund_record_count(workspace: &Workspace) -> i64 {
+        db(StockDao::count_fund_records(
+            &workspace.connection(),
+            TEST_LEDGER_ID,
+        ))
+        .unwrap()
+    }
+
+    /// 某账本某只股票的持仓（行不存在时归零）。
+    fn position_of(workspace: &Workspace, code: &str) -> (i64, i64) {
+        match StockDao::get_position(&workspace.connection(), TEST_LEDGER_ID, code) {
+            Ok(position) => (position.quantity, position.total_cost),
+            Err(error) if is_not_found(&error) => (0, 0),
+            Err(error) => panic!("读持仓失败: {error}"),
+        }
+    }
+
+    #[test]
+    fn rollback_undoes_add_principal_and_pops_the_log() {
+        let (workspace, dir) = workspace("op-rollback-principal");
+        seed_principal(&workspace, 1_000_000);
+        let before = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+
+        add_principal(&workspace, TEST_LEDGER_ID, 50_000).unwrap();
+        let after = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(after.principal, before.principal + 50_000);
+        assert_eq!(after.available_cash, before.available_cash + 50_000);
+        assert_eq!(fund_record_count(&workspace), 1);
+
+        let operations = list_operations(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].action, "追加本金");
+        assert_eq!(operations[0].detail, "¥500.00");
+        assert!(operations[0].created_at > 0);
+        assert!(!operations[0].id.is_empty());
+
+        let result = rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(result.action, "追加本金");
+        assert!(!result.skipped, "目标在，不该走跳过路径");
+
+        let restored = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(restored.principal, before.principal, "本金要还原");
+        assert_eq!(restored.available_cash, before.available_cash, "现金要还原");
+        assert_eq!(fund_record_count(&workspace), 0, "那条资金记录要删掉");
+        assert!(list_operations(&workspace, TEST_LEDGER_ID)
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rollback_undoes_withdraw_and_interest_without_touching_principal() {
+        let (workspace, dir) = workspace("op-rollback-fund-kinds");
+        seed_principal(&workspace, 1_000_000);
+        let principal = get_overview(&workspace, TEST_LEDGER_ID).unwrap().principal;
+
+        add_interest(&workspace, TEST_LEDGER_ID, 12_345).unwrap();
+        let after_interest = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(after_interest.principal, principal, "利息不改本金");
+        assert_eq!(
+            list_operations(&workspace, TEST_LEDGER_ID).unwrap()[0].action,
+            "利息归本"
+        );
+
+        rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
+        let restored = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(
+            restored.available_cash,
+            after_interest.available_cash - 12_345
+        );
+        assert_eq!(restored.principal, principal, "回滚利息也不改本金");
+        assert_eq!(fund_record_count(&workspace), 0);
+
+        add_withdraw(&workspace, TEST_LEDGER_ID, 5_000).unwrap();
+        let after_withdraw = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(
+            list_operations(&workspace, TEST_LEDGER_ID).unwrap()[0].action,
+            "支取"
+        );
+
+        rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
+        let restored = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(
+            restored.available_cash,
+            after_withdraw.available_cash + 5_000
+        );
+        assert_eq!(restored.principal, principal);
+        assert_eq!(fund_record_count(&workspace), 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rollback_undoes_a_trade_order() {
+        let (workspace, dir) = workspace("op-rollback-order");
+        seed_principal(&workspace, 10_000_000);
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            10_000,
+            3,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(position_of(&workspace, TEST_CODE).0, 300);
+        assert_eq!(fund_record_count(&workspace), 1, "买入会记一条资金记录");
+
+        let operations = list_operations(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].action, "建仓");
+        assert_eq!(operations[0].detail, "浦发银行 600000 · 3 手 · ¥30000.00");
+
+        let result = rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(result.action, "建仓");
+        assert!(!result.skipped);
+
+        assert_eq!(position_of(&workspace, TEST_CODE), (0, 0), "持仓要回到零");
+        assert_eq!(fund_record_count(&workspace), 0, "买卖资金记录随之消失");
+        assert!(
+            db(StockDao::list_trades(
+                &workspace.connection(),
+                TEST_LEDGER_ID,
+                TEST_CODE
+            ))
+            .unwrap()
+            .is_empty(),
+            "成交也要一并消失"
+        );
+        assert!(list_operations(&workspace, TEST_LEDGER_ID)
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rollback_pops_one_operation_at_a_time() {
+        let (workspace, dir) = workspace("op-rollback-stack");
+        seed_principal(&workspace, 10_000_000);
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            10_000,
+            3,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_REDUCE,
+            12_000,
+            1,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(position_of(&workspace, TEST_CODE).0, 200);
+
+        let operations = list_operations(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(operations.len(), 2);
+        assert_eq!(operations[0].action, "减仓", "最新的在前");
+        assert_eq!(operations[1].action, "建仓");
+
+        // 第一次回滚撤销「减仓」：持仓回到 300，记录只剩「建仓」
+        let first = rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(first.action, "减仓");
+        assert_eq!(position_of(&workspace, TEST_CODE).0, 300);
+        let left = list_operations(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].action, "建仓");
+
+        // 第二次回滚撤销「建仓」：持仓归零，记录清空
+        let second = rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(second.action, "建仓");
+        assert_eq!(position_of(&workspace, TEST_CODE), (0, 0));
+        assert!(list_operations(&workspace, TEST_LEDGER_ID)
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn operation_log_keeps_only_the_newest_ten() {
+        let (workspace, dir) = workspace("op-log-cap");
+        seed_principal(&workspace, 10_000_000);
+        for index in 1..=11 {
+            add_principal(&workspace, TEST_LEDGER_ID, index * 100).unwrap();
+        }
+
+        let operations = list_operations(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(operations.len(), 10, "最多留 10 条");
+        assert_eq!(operations[0].detail, "¥11.00", "最新一条在最前");
+        assert_eq!(operations[9].detail, "¥2.00", "留下的是第 2..11 次");
+        assert!(
+            !operations.iter().any(|item| item.detail == "¥1.00"),
+            "最旧的那条（第 1 次）已经被裁掉"
+        );
+
+        // 裁剪掉的只是记录：本金仍然是 11 次追加的总和
+        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(overview.principal, 10_000_000 + (1..=11).sum::<i64>() * 100);
+
+        // 回滚一次只撤销最新那条（第 11 次 = ¥11.00）
+        let result = rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(result.action, "追加本金");
+        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(overview.principal, 10_000_000 + (1..=10).sum::<i64>() * 100);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rollback_without_operations_is_a_bad_request() {
+        let (workspace, dir) = workspace("op-rollback-empty");
+        seed_principal(&workspace, 1_000_000);
+
+        let error = rollback_latest(&workspace, TEST_LEDGER_ID)
+            .unwrap_err()
+            .into_app_error();
+        assert_eq!(error.status, 400);
+        assert_eq!(error.msg, "没有可回滚的操作");
+
+        let error = preview_rollback(&workspace, TEST_LEDGER_ID)
+            .unwrap_err()
+            .into_app_error();
+        assert_eq!(error.status, 400);
+        assert_eq!(error.msg, "没有可回滚的操作");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rollback_skips_when_the_target_is_already_gone() {
+        let (workspace, dir) = workspace("op-rollback-skipped");
+        seed_principal(&workspace, 10_000_000);
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            10_000,
+            3,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+
+        // 用「删除整笔委托」把目标拿掉：这不是一次被记录的操作，记录因此指向空气
+        let order_id = list_trades(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap()[0]
+            .order_id
+            .clone();
+        delete_trade_order(&workspace, TEST_LEDGER_ID, &order_id).unwrap();
+
+        let result = rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(result.action, "建仓");
+        assert!(result.skipped, "目标不在 → 跳过而不是报错");
+        assert!(
+            list_operations(&workspace, TEST_LEDGER_ID)
+                .unwrap()
+                .is_empty(),
+            "记录要弹掉，否则一条死记录会把栈顶卡住"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rollback_preview_lists_lost_rounds_and_never_writes() {
+        let (workspace, dir) = workspace("op-preview");
+        seed_principal(&workspace, 10_000_000);
+        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 10_000, 12_000);
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        let round_id = detail.rounds[0].id.clone();
+        update_round_review(&workspace, TEST_LEDGER_ID, &round_id, "本轮复盘原文").unwrap();
+
+        let operations_before = list_operations(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(operations_before.len(), 2, "建仓 + 清仓");
+        let fingerprint = stock_fingerprint(&workspace);
+
+        let preview = preview_rollback(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(preview.action, "清仓");
+        assert_eq!(preview.removed_rounds.len(), 1);
+        assert_eq!(preview.removed_rounds[0].round_no, 1);
+        assert!(
+            preview.removed_rounds[0].has_review,
+            "这一轮写了复盘，确认框要说得出来"
+        );
+
+        // 预演绝不落库：行数、轮次标签/复盘、本金一个都没动，记录也没被弹掉
+        assert_eq!(stock_fingerprint(&workspace), fingerprint);
+        assert_eq!(
+            list_operations(&workspace, TEST_LEDGER_ID).unwrap().len(),
+            operations_before.len()
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reset_clears_the_operation_log() {
+        let (workspace, dir) = workspace("op-reset-clears-log");
+        seed_principal(&workspace, 1_000_000);
+        add_principal(&workspace, TEST_LEDGER_ID, 50_000).unwrap();
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            10_000,
+            1,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            list_operations(&workspace, TEST_LEDGER_ID).unwrap().len(),
+            2
+        );
+
+        reset_data(&workspace, TEST_LEDGER_ID).unwrap();
+        assert!(
+            list_operations(&workspace, TEST_LEDGER_ID)
+                .unwrap()
+                .is_empty(),
+            "重置必须把操作记录一起清掉，否则会留下指向已删数据的陈旧记录"
+        );
+        // 清干净之后回滚是明确的 400，而不是拿着陈旧 target 去删别的东西
+        assert_eq!(
+            rollback_latest(&workspace, TEST_LEDGER_ID)
+                .unwrap_err()
+                .into_app_error()
+                .msg,
+            "没有可回滚的操作"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rollback_of_close_removes_the_round_and_its_review() {
+        let (workspace, dir) = workspace("op-rollback-close");
+        seed_principal(&workspace, 10_000_000);
+        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 10_000, 12_000);
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        let round_id = detail.rounds[0].id.clone();
+        update_round_review(&workspace, TEST_LEDGER_ID, &round_id, "本轮复盘原文").unwrap();
+
+        let result = rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(result.action, "清仓");
+        assert!(!result.skipped);
+
+        // 清仓被撤销后该轮次不再成立：轮次行随之消失（这正是确认框要说明的"复盘会丢"）
+        assert!(
+            db(StockDao::list_trade_rounds(
+                &workspace.connection(),
+                TEST_LEDGER_ID
+            ))
+            .unwrap()
+            .is_empty(),
+            "轮次不再成立"
+        );
+        assert_eq!(
+            position_of(&workspace, TEST_CODE).0,
+            1000,
+            "回到清仓之前的持仓"
+        );
+        assert_eq!(
+            list_operations(&workspace, TEST_LEDGER_ID).unwrap()[0].action,
+            "建仓",
+            "栈里只剩「建仓」"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
