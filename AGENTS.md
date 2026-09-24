@@ -196,6 +196,9 @@ pwsh -File fixtures/ui-update-restore.ps1
   先设 `$env:HTTPS_PROXY='http://127.0.0.1:7890'`、`$env:HTTP_PROXY='http://127.0.0.1:7890'`、
   `$env:CARGO_NET_RETRY='10'`、`$env:CARGO_HTTP_TIMEOUT='120'`；索引拉取偶发中断就重复跑 `cargo metadata`
   （已缓存条目会累积）。
+  **git 也一样会间歇性连不上 GitHub**（`Recv failure: Connection was reset` / `Couldn't connect to server`，
+  实测同一个 push 直连失败、走代理立刻成功）：失败时用一次性的
+  `git -c http.proxy=http://127.0.0.1:7890 push origin main`，别把它写进仓库配置。
 - **不要用 PowerShell 管道接 cargo 输出**（`cargo … | Select-Object -Last N`）：管道缓冲写满会让 cargo 阻塞假死。
   一律 `*> 文件`。
 - **`NO_COLOR=1` 会让 trunk 直接报错**（`invalid value '1' for '--no-color'`）：调 trunk 前 `Remove-Item Env:NO_COLOR`。
