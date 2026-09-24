@@ -26,8 +26,13 @@
 //!
 //! ## 分工：charts-rs 画什么、叠层画什么
 //!
-//! * charts-rs：网格、Y 轴刻度与轴线、X 轴类目标签、图例、折线与面积填充、数据点；
+//! * charts-rs：网格、Y 轴刻度与轴线、X 轴类目标签、折线与面积填充、数据点；
 //! * HTML/SVG 叠层：悬停竖线、命中点、tooltip、参考线。
+//!
+//! 两处**在它生成的 SVG 上做定点改写**（它没暴露对应开关）：
+//!
+//! * 数据点改实心（[`solid_dots`]）；
+//! * 面积填充的基线挪到 0 轴（[`anchor_fill_at_zero`]，它只肯闭到绘图区底边）。
 //!
 //! 叠层需要"每个类目的像素坐标"，而 charts-rs 不暴露布局 —— 但它会为每个数据点画
 //! `<circle>`（`Symbol::Circle`），所以渲染后**从 DOM 读回**这些圆心即可拿到精确几何。
@@ -37,6 +42,14 @@
 //!
 //! 数据为空、全为 0、只有 1 个类目、极值相等等边界都不 panic（charts-rs 对退化数据
 //! 也不 panic，已用探针实测）：读 DOM 失败时叠层直接不画，不吞异常也不 unwrap。
+//!
+//! ## 这些 `#[cfg(test)]` 怎么才算真的跑了
+//!
+//! 本 crate 只编译到 wasm32（`lib.rs` 顶部 `#![cfg(target_arch = "wasm32")]`），所以 native 上
+//! `cargo test -p tr-ui --lib` **一条都不会执行** —— 它们是给人看的规格说明。要真跑就把函数的
+//! **原文**抽出来配桩在 native 上执行：现成做法见 `fixtures/chart-tests.ps1`
+//! （把 Y 轴范围与填充基线的函数抽进一个 rustc 能编的小程序里跑，其中填充基线用 **charts-rs
+//! 真实输出的 SVG** 做定点断言）。别只信自己脑补的期望值 —— 它抓到过一条写错的断言。
 
 use leptos::prelude::*;
 use leptos::web_sys;
@@ -168,8 +181,11 @@ impl ChartConfig {
 const FALLBACK_WIDTH: f64 = 720.0;
 /// X 轴标签最小间距（px，按渲染像素算）
 const X_LABEL_MIN_GAP: f64 = 56.0;
-/// Y 轴分段数（段数 + 1 = 刻度条数）
+/// Y 轴分段数（段数 + 1 = 刻度条数）。**只在算不出"大整数"范围时兜底**，
+/// 正常路径由 [`nice_axis_range`] 给出段数（见那里的注释）。
 const Y_SPLITS: usize = 4;
+/// Y 轴最多分几段（= 最多 6 条刻度）。再密就压过折线本身了。
+const Y_AXIS_MAX_SPLITS: usize = 5;
 /// 数据点半径
 const POINT_RADIUS: f32 = 2.5;
 /// 入场动画时长（ms）
@@ -649,6 +665,11 @@ fn build_chart(
     // ---- Y 轴 ----
     // charts-rs 的模板只有两档：`{c}` 会缩写（38.5k）、`{t}` 是千分位全值（38,500）。
     // 记账场景必须看全值，所以用 `{t}`；百分比再补一个 `%`。
+    //
+    // ⚠ 它的 `{t}` 对**负数不分组**（`charts/util.rs::thousands_format_float` 开头
+    // `if value < 1000.0 { return format_float(value) }` 把负数全挡进了这条分支），
+    // 所以同一根轴上会同时出现 `50,000` 与 `-50000`。已知、未修：改它得动上游
+    // （它只给了模板字符串这一个口子，没有"自定义格式化函数"）。
     if let Some(axis) = chart.y_axis_configs.first_mut() {
         axis.axis_split_number = Y_SPLITS;
         axis.axis_font_color = token_color("--transactions-color-text-secondary");
@@ -660,9 +681,172 @@ fn build_chart(
             ChartValueKind::Money | ChartValueKind::Count => "{t}".to_string(),
         });
     }
+    // **范围由我们自己定**（刻度值因此永远是大整数、跨零时 0 在正中）：把 min/max/splits
+    // 一起写死，charts-rs 就不会再走它那套"按数量级把步长往上取整"的阶梯。
+    // 写进**每一条** Y 轴配置：多轴时它们共用同一套网格，范围必须一致。
+    let (data_min, data_max) = display_range(series, categories.len(), config.value_kind);
+    let axis_range = nice_axis_range(data_min, data_max);
+    if let Some((min, max, splits)) = axis_range {
+        for axis in chart.y_axis_configs.iter_mut() {
+            axis.axis_min = Some(min as f32);
+            axis.axis_max = Some(max as f32);
+            axis.axis_split_number = splits;
+        }
+    }
 
-    let svg = chart.svg().unwrap_or_default();
+    let svg = anchor_fill_at_zero(chart.svg().unwrap_or_default(), axis_range);
     solid_dots(svg, &palette)
+}
+
+/// 面积填充 path 的判据：**只有它带 `fill-opacity`**（折线是 `fill="none" stroke="…"`，
+/// 数据点是 `<circle>`，背景是 `<rect>`）。
+const FILL_OPACITY_ATTR: &str = "fill-opacity";
+/// SVG path 元素的起始标记
+const SVG_PATH_OPEN: &str = "<path ";
+
+/// 把面积填充的基线从"绘图区底边"挪到 **0 轴**。
+///
+/// charts-rs 的 `StraightLineFill` 只会把折线闭到绘图区底边（`charts/base.rs` 里写死
+/// `bottom: axis_height`），于是数据**既有正又有负**时，负的那一段会被填成"从折线一路铺到图底"
+/// 的大色块 —— 看着像一路亏到底，读不出"亏了多少 / 又涨回来多少"。
+/// 记账图里"面积"的语义是**相对 0 的盈亏**，基线必须落在 0 轴上：正的往上长、负的往下长。
+///
+/// charts-rs 没暴露这个基线，所以在生成好的 SVG 上做一次**定点改写**。填充 path 的形状是固定的
+/// "折线各点 + 三个收尾点"（`L (last.x, bottom) L (first.x, bottom) L first`，见
+/// `StraightLineFill::svg_with_grad_seen`），把其中**前两个**收尾点的 y 换成 0 轴的 y 即可。
+/// 跨零的那一段不用特殊处理：多边形自己按 nonzero 规则填充，结果就是标准的"以 0 为基线"的面积图。
+///
+/// 0 轴的 y 由几何反推：`charts-rs` 的映射是 `y = H × (1 − (v − min) / (max − min))`
+/// （`util.rs::get_offset_height`，H 为绘图区高度），而填充的基线 y 正是 `margin.top + H`，
+/// 所以 `y(0) = bottom + (bottom − margin.top) × min / (max − min)`。
+/// `margin.top` 就是 [`MARGIN`]，且绘图区顶边确实落在它上面 —— 本组件始终把 charts-rs 的
+/// 标题/副标题置空、自带图例关闭（图例是自绘 HTML），它不会再往顶部塞东西。
+///
+/// 只在**我们自己的范围真的生效**（`axis_range` 有值）且算出的 0 轴落在绘图区内时才改写；
+/// 否则原样返回（宁可保持现状，也不画一条位置错的基线）。
+fn anchor_fill_at_zero(svg: String, axis_range: Option<(f64, f64, usize)>) -> String {
+    let Some((min, max, _splits)) = axis_range else {
+        return svg;
+    };
+    if !(max > min) {
+        return svg;
+    }
+    let mut out = String::with_capacity(svg.len());
+    let mut rest = svg.as_str();
+    while let Some(start) = rest.find(SVG_PATH_OPEN) {
+        let (head, tail) = rest.split_at(start);
+        out.push_str(head);
+        let Some(end) = tail.find("/>") else {
+            out.push_str(tail);
+            return out;
+        };
+        let (tag, after) = tail.split_at(end + 2);
+        out.push_str(&rewrite_fill_baseline(tag, min, max).unwrap_or_else(|| tag.to_string()));
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 把一条填充 path 的收尾基线挪到 0 轴；不是填充 path（或结构不是预期的那三个收尾点）时返回
+/// `None`，调用方保持原样。
+fn rewrite_fill_baseline(tag: &str, min: f64, max: f64) -> Option<String> {
+    if !tag.contains(FILL_OPACITY_ATTR) {
+        return None;
+    }
+    let points = path_points(attr_value(tag, "d")?)?;
+    // 折线各点之后固定跟三个收尾点：(last.x, bottom) (first.x, bottom) first
+    if points.len() < 4 {
+        return None;
+    }
+    let bottom = points[points.len() - 3].1;
+    let height = bottom - f64::from(MARGIN);
+    if !(height > 0.0) {
+        return None;
+    }
+    let zero = bottom + height * min / (max - min);
+    let top = f64::from(MARGIN);
+    // 0 在 [min, max] 内 ⇒ 0 轴必定落在绘图区内；落在外面说明几何假设不成立（别画错基线）
+    if !zero.is_finite() || zero < top - 0.5 || zero > bottom + 0.5 {
+        return None;
+    }
+
+    let mut parts = Vec::with_capacity(points.len());
+    for (index, (x, y)) in points.iter().enumerate() {
+        let action = if index == 0 { "M" } else { "L" };
+        let y = if index + 3 >= points.len() {
+            // 最后三个点：前两个是基线端点，第三个回到首点（保持原样）
+            if index == points.len() - 1 {
+                *y
+            } else {
+                zero
+            }
+        } else {
+            *y
+        };
+        parts.push(format!("{action} {} {}", fmt_coord(*x), fmt_coord(y)));
+    }
+    replace_attr(tag, "d", &parts.join(" "))
+}
+
+/// 解析 `StraightLineFill` 生成的 path（只有 `M`/`L`，每个命令后面固定一个 x,y 对）。
+///
+/// 只接受**单段**路径：charts-rs 只在数据里有空洞时才会拆成多段（多个 `M`），
+/// 那时"最后三个点"就不再是收尾基线了，宁可放弃改写也不要改错。
+fn path_points(d: &str) -> Option<Vec<(f64, f64)>> {
+    if d.matches("M ").count() != 1 {
+        return None;
+    }
+    let mut numbers = Vec::new();
+    for token in d.split_whitespace() {
+        if token == "M" || token == "L" {
+            continue;
+        }
+        numbers.push(token.parse::<f64>().ok()?);
+    }
+    if numbers.len() % 2 != 0 {
+        return None;
+    }
+    let points: Vec<(f64, f64)> = numbers
+        .chunks_exact(2)
+        .map(|pair| (pair[0], pair[1]))
+        .collect();
+    // 只有"每个命令恰好一个坐标对"的写法才能这样配对，`H`/`V`/`C` 之类必须放弃改写
+    let commands = d.matches("M ").count() + d.matches("L ").count();
+    if commands != points.len() {
+        return None;
+    }
+    Some(points)
+}
+
+/// charts-rs 写坐标的格式（`format_float`：一位小数，`.0` 去掉）
+fn fmt_coord(value: f64) -> String {
+    let mut text = format!("{value:.1}");
+    if text.ends_with(".0") {
+        text.truncate(text.len() - 2);
+    }
+    text
+}
+
+/// 取 SVG 元素里某个属性的值（`name="…"`）
+fn attr_value<'a>(element: &'a str, name: &str) -> Option<&'a str> {
+    let key = format!("{name}=\"");
+    let start = element.find(&key)? + key.len();
+    let end = element[start..].find('"')? + start;
+    Some(&element[start..end])
+}
+
+/// 替换 SVG 元素里某个属性的值，其余字节原样保留
+fn replace_attr(element: &str, name: &str, value: &str) -> Option<String> {
+    let key = format!("{name}=\"");
+    let start = element.find(&key)?;
+    let value_start = start + key.len();
+    let value_end = element[value_start..].find('"')? + value_start;
+    let mut out = String::with_capacity(element.len() + value.len());
+    out.push_str(&element[..value_start]);
+    out.push_str(value);
+    out.push_str(&element[value_end..]);
+    Some(out)
 }
 
 /// 数据点改成**实心**。
@@ -760,6 +944,92 @@ fn display_value(value: i64, kind: ChartValueKind) -> f32 {
             .unwrap_or(0.0),
         ChartValueKind::Percent | ChartValueKind::Count => value as f32,
     }
+}
+
+/// 全部序列的显示值范围（与 charts-rs 自己算范围的口径一致：只看数据点）。
+fn display_range(series: &[ChartSeries], slots: usize, kind: ChartValueKind) -> (f64, f64) {
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for item in series {
+        for slot in 0..slots {
+            let value = f64::from(display_value(
+                item.data.get(slot).copied().unwrap_or(0),
+                kind,
+            ));
+            min = min.min(value);
+            max = max.max(value);
+        }
+    }
+    if !min.is_finite() || !max.is_finite() {
+        return (0.0, 0.0);
+    }
+    (min, max)
+}
+
+/// "大整数"步长阶梯：`1 / 2 / 5 × 10^k`（… 500 / 1000 / 2000 / 5000 / 10000 …），升序。
+///
+/// 从比数据量级低两档起步（数据是几万元时从百位起步），往上给 12 档 —— 足够覆盖到
+/// `f32` 能表示的极端值；[`nice_axis_range`] 取其中第一个"段数够用"的。
+fn nice_steps(scale: f64) -> impl Iterator<Item = f64> {
+    let start_power = if scale.is_finite() && scale > 0.0 {
+        scale.log10().floor() as i32 - 2
+    } else {
+        0
+    };
+    (start_power..=start_power + 12).flat_map(|power| {
+        let base = 10_f64.powi(power);
+        [1.0, 2.0, 5.0].into_iter().map(move |factor| factor * base)
+    })
+}
+
+/// Y 轴范围：刻度必须是**大整数**，并且**跨零时 0 落在正中**。
+///
+/// 返回 `(min, max, splits)`；刻度就是 `min + i × (max - min) / splits`。
+///
+/// 为什么自己算而不用 charts-rs 的默认：它那套"把步长往上取整"的阶梯按数量级分档
+/// （`< 10000` 的步长按 100 取整），于是 `36000 ÷ 4 = 9000` 会被抬成 9100/9500/9600 之类，
+/// 刻度就变成 9,500 / 19,000 / 28,500 —— 读图时得先做除法。这里只从
+/// [`nice_steps`]（1/2/5 × 10^k）里挑步长，刻度因此永远是可心算的数。
+///
+/// 挑法是**能满足段数上限的最小步长**（网格尽量细），所以代价是：数据最大值恰好落在刻度上时，
+/// 那一档因为"上界必须严格大于数据"要多出一段，可能撞上段数上限而让位给粗一档的步长
+/// （如数据 `0..5000` 给的是 0/2000/4000/6000，而不是 0/1000/…/6000）。
+///
+/// 0 居中的规则：数据**跨零**时范围取成上下对称的 `±half` 且段数取**偶数**，
+/// 于是 `i = splits / 2` 那条刻度正好是 0 —— 涨与跌从同一条基准线读，
+/// 而不是各自从图的上下边缘起算。
+///
+/// 算不出（数据非有限、或极端量级下 6 段都放不下）时返回 `None`，
+/// 交给 charts-rs 自己决定（见调用点的兜底）。
+fn nice_axis_range(data_min: f64, data_max: f64) -> Option<(f64, f64, usize)> {
+    let scale = data_min.abs().max(data_max.abs()).max(data_max - data_min);
+    for step in nice_steps(scale) {
+        let (min, max) = if data_min < 0.0 && data_max > 0.0 {
+            let mut half_units = (data_min.abs().max(data_max) / step).ceil().max(1.0);
+            // 上界必须**严格**大于数据最大值：charts-rs 只在 `axis_max > 数据最大值` 时才认这个
+            // 自定义上界，否则它退回自己那套阶梯（等于白算）。用 f32 比较（它就是 f32），
+            // 所以可能要多抬一格。
+            while (half_units * step) as f32 <= data_max as f32 {
+                half_units += 1.0;
+            }
+            let half = half_units * step;
+            (-half, half)
+        } else {
+            // 不跨零：整段对齐到步长的整数倍；全正的数据从 0 起算（与 charts-rs 的默认一致）
+            let low = if data_min > 0.0 { 0.0 } else { data_min };
+            let low_units = (low / step).floor();
+            let mut high_units = (low.max(data_max) / step).ceil();
+            while (high_units * step) as f32 <= data_max as f32 {
+                high_units += 1.0;
+            }
+            (low_units * step, high_units * step)
+        };
+        let splits = ((max - min) / step).round();
+        if splits.is_finite() && splits >= 1.0 && splits <= Y_AXIS_MAX_SPLITS as f64 {
+            return Some((min, max, splits as usize));
+        }
+    }
+    None
 }
 
 // ==================================================================== 叠层几何
@@ -1529,5 +1799,188 @@ mod tests {
         assert_eq!(geometry.points_at(1).len(), 1);
         // 1.00 元 → y=90，3.00 元 → y=70 ⇒ 2.00 元（200 分）→ y=80
         assert_eq!(geometry.y_of(200), Some(80.0));
+    }
+
+    // ---------------------------------------------------------------- Y 轴范围
+
+    /// 把范围展开成刻度（与 charts-rs 的取法一致：`min + i × (max-min)/splits`）。
+    fn ticks(min: f64, max: f64, splits: usize) -> Vec<f64> {
+        let step = (max - min) / splits as f64;
+        (0..=splits).map(|i| min + step * i as f64).collect()
+    }
+
+    #[test]
+    fn axis_ticks_are_round_numbers_for_positive_money() {
+        // 用户报的那张图：月支出最高约 3.6 万 —— 以前是 9,500 / 19,000 / 28,500 / 38,000
+        let (min, max, splits) = nice_axis_range(0.0, 36_000.0).unwrap();
+        assert_eq!(
+            ticks(min, max, splits),
+            vec![0.0, 10_000.0, 20_000.0, 30_000.0, 40_000.0]
+        );
+    }
+
+    #[test]
+    fn axis_zero_sits_in_the_middle_when_data_crosses_zero() {
+        // 跨零：上下对称 + 偶数段 → 正中那条刻度就是 0
+        let (min, max, splits) = nice_axis_range(-3_000.0, 3_000.0).unwrap();
+        assert_eq!((-min, max), (4_000.0, 4_000.0), "必须上下对称");
+        assert_eq!(splits % 2, 0, "段数必须是偶数，0 才会落在刻度上");
+        assert_eq!(
+            ticks(min, max, splits),
+            vec![-4_000.0, -2_000.0, 0.0, 2_000.0, 4_000.0]
+        );
+
+        // 不对称时按"离 0 更远的那一侧"取对称范围，0 仍在正中
+        let (min, max, splits) = nice_axis_range(-1_000.0, 5_000.0).unwrap();
+        assert_eq!((-min, max), (10_000.0, 10_000.0));
+        assert_eq!(
+            ticks(min, max, splits),
+            vec![-10_000.0, -5_000.0, 0.0, 5_000.0, 10_000.0]
+        );
+
+        // 只到 0（不跨零）时**不**做对称：从 0 起算即可。
+        // 这里顺带钉住"上界那格"的代价：数据最大值 5000 恰好是 1000 的整数倍，而自定义上界
+        // 必须**严格**大于它，于是 1000 的步长要 6 段（0…6000）—— 超过 5 段的上限，
+        // 这一档只能让位给 2000 的步长（宁可网格粗一档，也不超段数）。
+        let (min, max, splits) = nice_axis_range(0.0, 5_000.0).unwrap();
+        assert_eq!(
+            ticks(min, max, splits),
+            vec![0.0, 2_000.0, 4_000.0, 6_000.0]
+        );
+    }
+
+    #[test]
+    fn axis_range_covers_the_data_and_keeps_a_strict_upper_bound() {
+        // charts-rs 只在 `axis_max > 数据最大值` 时才认这个自定义上界，否则退回它自己的阶梯；
+        // 数据最大值恰好落在刻度上时（36000 是 1000 的整数倍）也必须抬一格。
+        for (data_min, data_max) in [
+            (0.0, 36_000.0),
+            (0.0, 40_000.0),
+            (0.0, 0.0),
+            (-3_000.0, 3_000.0),
+            (-1_000.0, 5_000.0),
+            (-900.0, -100.0),
+            (0.0, 100.0),
+            (0.0, 2.5),
+            (4_000.0, 4_000.0),
+            (12_345.67, 98_765.43),
+        ] {
+            let (min, max, splits) = nice_axis_range(data_min, data_max)
+                .unwrap_or_else(|| panic!("算不出范围: {data_min}..{data_max}"));
+            assert!(min <= data_min, "{min} 没盖住下界 {data_min}");
+            assert!(
+                (max as f32) > (data_max as f32),
+                "{max} 没有严格大于上界 {data_max}"
+            );
+            assert!(splits >= 1 && splits <= Y_AXIS_MAX_SPLITS);
+            // 每条刻度都是步长的整数倍（也就是"大整数"）
+            let step = (max - min) / splits as f64;
+            for value in ticks(min, max, splits) {
+                let units = value / step;
+                assert!(
+                    (units - units.round()).abs() < 1e-6,
+                    "刻度 {value} 不是步长 {step} 的整数倍"
+                );
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- 面积填充基线
+
+    /// **charts-rs 1.0.0 的真实输出**（裁剪版）：把 [`build_chart`] 的配置抄进一个基于 charts-rs 的
+    /// 小程序、打印 `svg()` 得到（900×320、Y 轴 -100000..100000 共 4 段、数据 -20000 / -5000 / 60000）。
+    /// 升级 charts-rs 后要照这个配置重新抓一份 —— 下面的基线改写依赖它的 path 结构。
+    /// 关键几何：绘图区顶边 y=8（= [`MARGIN`]）、
+    /// 底边 y=286，0 刻度在 y=147（正中那条网格线）。
+    /// 填充 path 的结构就是这里要锁住的东西：折线各点之后固定跟三个收尾点。
+    const PROBE_SVG: &str = r##"<svg width="900" height="320" viewBox="0 0 900 320" xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="900" height="320" fill="#FFFFFF"/><g stroke="#E0E6F2"><line stroke-width="1" x1="64" y1="8" x2="858" y2="8"/><line stroke-width="1" x1="64" y1="147" x2="858" y2="147"/><line stroke-width="1" x1="64" y1="286" x2="858" y2="286"/></g><path d="M 196.3 174.8 L 461 153.9 L 725.7 63.6 L 725.7 286 L 196.3 286 L 196.3 174.8" fill="#5470C6" fill-opacity="0.4"/><g><path d="M 196.3 174.8 L 461 153.9 L 725.7 63.6" stroke-width="2" fill="none" stroke="#5470C6"/><circle cx="196.3" cy="174.8" r="2.5" stroke-width="2" stroke="#5470C6" fill="none"/></g></svg>"##;
+
+    /// 从改写后的 SVG 里取填充 path 的 `d`
+    fn fill_path_d(svg: &str) -> String {
+        let tag = svg
+            .split(SVG_PATH_OPEN)
+            .find(|part| part.contains(FILL_OPACITY_ATTR))
+            .expect("SVG 里应该有填充 path");
+        attr_value(tag, "d")
+            .expect("填充 path 必须有 d")
+            .to_string()
+    }
+
+    #[test]
+    fn fill_baseline_moves_to_the_zero_axis() {
+        // 跨零：填充的两个收尾点必须落在 0 刻度（y=147）上，折线各点与"回到首点"保持不变
+        let svg = anchor_fill_at_zero(PROBE_SVG.to_string(), Some((-100_000.0, 100_000.0, 4)));
+        assert_eq!(
+            fill_path_d(&svg),
+            "M 196.3 174.8 L 461 153.9 L 725.7 63.6 L 725.7 147 L 196.3 147 L 196.3 174.8"
+        );
+        // 折线 path 与数据点圆**一个字节都不许动**（它们同样以 `<path `/`<circle` 开头）
+        assert!(svg.contains(
+            r#"<path d="M 196.3 174.8 L 461 153.9 L 725.7 63.6" stroke-width="2" fill="none""#
+        ));
+        assert!(svg.contains(r#"<circle cx="196.3" cy="174.8" r="2.5""#));
+        // 网格线与其余部分原样
+        assert!(svg.contains(r#"<line stroke-width="1" x1="64" y1="147" x2="858" y2="147"/>"#));
+        assert_eq!(
+            svg.len(),
+            PROBE_SVG.len(),
+            "只该改数字，不该改变长度以外的结构"
+        );
+    }
+
+    #[test]
+    fn fill_baseline_is_untouched_when_zero_is_an_edge_of_the_axis() {
+        // 全正：0 就在绘图区底边 —— 基线本来就在 0 上，改写结果必须与原来一致
+        let positive = anchor_fill_at_zero(PROBE_SVG.to_string(), Some((0.0, 40_000.0, 4)));
+        assert_eq!(fill_path_d(&positive), fill_path_d(PROBE_SVG));
+
+        // 全负：0 在绘图区**顶边**（y=8），面积应该向上长
+        let negative = anchor_fill_at_zero(PROBE_SVG.to_string(), Some((-1_000.0, 0.0, 5)));
+        assert_eq!(
+            fill_path_d(&negative),
+            "M 196.3 174.8 L 461 153.9 L 725.7 63.6 L 725.7 8 L 196.3 8 L 196.3 174.8"
+        );
+    }
+
+    #[test]
+    fn fill_baseline_is_left_alone_without_a_trustworthy_axis() {
+        // 没有我们自己的范围（`nice_axis_range` 兜底失败）⇒ 不知道 0 在哪儿，不许动
+        assert_eq!(
+            anchor_fill_at_zero(PROBE_SVG.to_string(), None),
+            PROBE_SVG.to_string()
+        );
+        // 退化范围同样不动
+        assert_eq!(
+            anchor_fill_at_zero(PROBE_SVG.to_string(), Some((1.0, 1.0, 4))),
+            PROBE_SVG.to_string()
+        );
+        // 多段路径（数据有空洞时 charts-rs 会拆段）「最后三个点是基线」不再成立 ⇒ 宁可不动
+        let multi = PROBE_SVG.replace(
+            "L 725.7 63.6 L 725.7 286",
+            "L 725.7 63.6 M 461 100 L 725.7 286",
+        );
+        assert_eq!(
+            anchor_fill_at_zero(multi.clone(), Some((-100_000.0, 100_000.0, 4))),
+            multi
+        );
+    }
+
+    #[test]
+    fn zero_axis_geometry_agrees_with_the_data_points() {
+        // 基线的 y 是**反推**出来的（`bottom + H×min/(max−min)`），这里拿探针 SVG 里的
+        // 数据点做交叉验证：-20000 → y=174.8、60000 → y=63.6 定出的映射，0 必须落在同一条 0 轴上。
+        let (y_a, v_a) = (174.8_f64, -20_000.0_f64);
+        let (y_b, v_b) = (63.6_f64, 60_000.0_f64);
+        let from_points = y_a + (0.0 - v_a) * (y_b - y_a) / (v_b - v_a);
+        let svg = anchor_fill_at_zero(PROBE_SVG.to_string(), Some((-100_000.0, 100_000.0, 4)));
+        let baseline: f64 = fill_path_d(&svg)
+            .split_whitespace()
+            .filter_map(|token| token.parse::<f64>().ok())
+            .nth(7) // 第 4 个点的 y（收尾基线）
+            .expect("d 里应该有 8 个数");
+        assert!(
+            (baseline - from_points).abs() < 0.5,
+            "反推的 0 轴 {baseline} 与数据点定出的 {from_points} 不一致"
+        );
     }
 }

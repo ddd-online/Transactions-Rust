@@ -46,9 +46,12 @@ cargo xtask dump <dir> --table tbl_billadm_stock_trade
 （拖拽排序、窗口几何、图片上传、日记导入导出、股票全生命周期等）。
 每个脚本的用途与用法见 `AGENTS.md` 的「常用命令」。
 
+例外：`chart-tests.ps1` **不驱动界面** —— 它把 `chart.rs` 里 wasm-only 的单元测试抽出来在 native 上
+跑一遍（`cargo test -p tr-ui` 跑不到它们），所以不 dot-source `lib/TrUia.ps1`。
+
 ## `lib/TrUia.ps1`（共享 UIA 底座）
 
-所有 `fixtures/*.ps1` 共用**同一份**界面自动化底座：`fixtures/lib/TrUia.ps1`。
+所有**驱动界面的** `fixtures/*.ps1`（`chart-tests.ps1` 除外）共用**同一份**界面自动化底座：`fixtures/lib/TrUia.ps1`。
 每个脚本在 `param()` 之后（`$ErrorActionPreference = 'Stop'` 之后）dot-source 它：
 
 ```powershell
