@@ -533,6 +533,16 @@ Select-String -Path src-tauri\src\updater.rs,crates\tr-ui\src\pages\settings.rs,
 `src-tauri/tauri.conf.json`（`Cargo.toml` 的 workspace 与 `src-tauri` 两处也要同步）；应用内更新读 release 的
 `tag_name` 与首个 `.exe` 资产的 `digest`。许可证以仓库根 `LICENSE` 为准（Apache-2.0）。
 
+**发布页的说明**：`release.ps1` 用 `gh release create --generate-notes`，而 GitHub 对**直接 push 的提交**
+（没有 PR）只会生成一行 `Full Changelog` 链接 —— 想给正文就自己填：
+`gh release edit vX.Y.Z --notes-file <CHANGELOG 对应小节 + 安装包名 + compare 链接>`（只改元数据，不动资产；
+改完照例 `gh release view --json assets` 回读一次 digest）。
+
+**`clean.ps1` 会连 `target\` 一起删**，而护栏用的工作空间就在里面（`target\ws-rust` 给 `ui-smoke`、
+`target\smoke\ws-write` 给 `ui-shots` 与 `close-behavior`）。所以"发布前跑全量护栏"要在 `clean` **之前**做，
+或者 clean 之后先补种 `cargo xtask seed target\ws-rust` 与 `cargo xtask seed target\smoke\ws-write` ——
+否则这三个脚本会因为「工作空间里没有 transactions.db」直接红（是环境问题，别去改代码）。
+
 **踩过的坑：发布资产可能是上一版的安装包**：0.2.0 的 release 资产其实是 0.1.0 的安装包（两个 release 的资产
 字节数与 `sha256` 一模一样，用户装完看到的还是 0.1.0 的界面）。根因是 `cargo tauri build` 不清
 `target\release\bundle\nsis\`，上一版遗留的 `Transactions_0.1.0_x64-setup.exe` 与新的并排存在，而旧脚本用
