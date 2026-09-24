@@ -95,16 +95,39 @@ fn cost_basis_of(total_cost: i64, shares: i64, quantity: i64) -> i64 {
 
 // ---------- 日期工具 ----------
 
-/// Unix 秒 → `YYYY-MM-DD`。
+/// Unix 秒 → `YYYY-MM-DD`，**按宿主（进程所在机器）本地时区**。
 ///
-/// 按 **UTC** 格式化，
-/// 与 `strftime(_, _, 'unixepoch')` 的 UTC 口径一致。
+/// 这里刻意不用 UTC：股票域的时间戳只表达到「日」（界面只让用户选日期，
+/// `tr-ui` 的 `time::ymd_to_seconds` 把它落在**本地 00:00**），
+/// 而本地 00:00 在东区换算成 UTC 是**前一天**——按 UTC 取日期会得到"早一天"的
+/// 资金记录日期（用户报过：8 月 24 日清仓，资金变化列表显示 8 月 22 日）。
+/// 本地日期对"时间戳落在当天哪个时刻"不敏感（00:00 与 12:00 都落在同一天），
+/// 所以 0.6.0 之前写入的本地 00:00 记录与之后写入的都会取到用户选的那一天。
+///
+/// 与界面同一口径：`tr-ui::time::format_timestamp` 用的也是宿主本地时区
+/// （后端进程与 WebView 在同一台机器上）。
+///
+/// 注意与「记账」域的区别：那边的时间戳统一落在**本地 12:00**
+/// （`transactions.rs::combine_date_and_time`），所以按 UTC 分桶（`strftime(..., 'unixepoch')`）
+/// 也落在同一天；股票域的时间戳是本地 00:00，只能按本地取日期。
 pub fn unix_to_date(timestamp: i64) -> String {
     match chrono::DateTime::from_timestamp(timestamp, 0) {
-        Some(datetime) => datetime.format("%Y-%m-%d").to_string(),
+        Some(datetime) => datetime
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string(),
         // 超出 chrono 可表示范围的极端值：退回 Unix 纪元当天，避免 panic
         None => "1970-01-01".to_string(),
     }
+}
+
+/// `YYYY-MM-DD` → 后一天（解析失败返回 `None`）。
+///
+/// 只给旧数据订正用（判断"记录日期是否恰好早一天"）。
+fn day_after(date: &str) -> Option<String> {
+    let (year, month, day) = parse_strict_date(date)?;
+    let next = chrono::NaiveDate::from_ymd_opt(year, month, day)?.succ_opt()?;
+    Some(next.format("%Y-%m-%d").to_string())
 }
 
 /// 当前日期 `YYYY-MM-DD`。
@@ -2517,6 +2540,86 @@ fn fund_record_after(a: &StockFundRecord, b: &StockFundRecord) -> bool {
     a.id > b.id
 }
 
+// ==================================================================== 旧数据订正
+
+/// 订正旧版本（≤ 0.6.0）写下的买卖资金记录日期，返回**被重放的账本数**。
+///
+/// 旧版本的资金记录日期按 UTC 取（见 [`unix_to_date`] 的注释），而委托时间戳是本地 00:00：
+/// 东区（UTC+8）算出来比用户选的那天**早一天**。这个错位不止"日期显示错"——它还会让
+/// **下一笔**记录在现金链里认不到它：`recalculate_cash_chain` 取的是
+/// 「(日期, 创建时间, ID) 最大一条」的余额，被倒填日期的买/卖记录不是最大那条，
+/// 于是它的金额被跳过，可用现金偏大（用户真实数据上偏了一笔建仓的钱）。
+///
+/// 订正方式不是去改那一个日期字符串，而是**重放**：日期与现金链一起按当前口径重算。
+/// 触发条件是**可证明的**，不看宿主时区、也不看不认识的形状：
+///
+/// * 找出该记录的对应委托（同账本、同买卖方向、股票名出现在 `event_text` 里、
+///   `created_at` 相差 ≤ 2 秒——资金记录与成交在同一个事务里写入，正常时间戳相等，
+///   DAO 的严格递增最多把它挪后 1 秒）；
+/// * 候选委托必须**都落在同一天**（多笔成交同一委托，或匹配到多条候选就跳过）；
+/// * 那一天的本地日期必须**恰好是记录日期 + 1 天**。
+///
+/// 于是：当前版本写入的记录（日期 = 委托的本地日期）永远不触发；
+/// 宿主在 UTC 或西区时旧记录本来就没错（本地 00:00 落在同一天）→ 什么都不做。
+/// 匹配不到、或有歧义就**跳过**——宁可不动，也不猜。
+///
+/// 幂等：重放后日期等于委托的本地日期，条件不再成立。可以每次打开工作空间都跑一遍。
+pub fn repair_legacy_trade_fund_dates(workspace: &Workspace) -> ServiceResult<usize> {
+    workspace.transaction(|conn| {
+        let mut repaired = 0_usize;
+        for ledger_id in db(StockDao::list_trade_fund_ledger_ids(conn))? {
+            if !has_legacy_trade_fund_date(conn, &ledger_id)? {
+                continue;
+            }
+            // 重放会把该账本的买卖资金记录按当前口径全部重建（日期 + 现金链 + 持仓 / 轮次）
+            rebuild_trades(conn, &ledger_id)?;
+            tracing::info!("股票资金记录日期已按本地时区订正（账本 {ledger_id}）");
+            repaired += 1;
+        }
+        Ok(repaired)
+    })
+}
+
+/// 该账本是否存在「日期比对应委托的本地日期早一天」的买卖资金记录。
+fn has_legacy_trade_fund_date(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult<bool> {
+    let records = db(StockDao::list_fund_records_in_insert_order(conn, ledger_id))?;
+    let has_trade_record = records.iter().any(|record| {
+        record.event_type == consts::STOCK_EVENT_BUY
+            || record.event_type == consts::STOCK_EVENT_SELL
+    });
+    if !has_trade_record {
+        return Ok(false);
+    }
+
+    let trades = db(StockDao::list_all_trades_asc(conn, ledger_id))?;
+    for record in &records {
+        let is_buy_record = record.event_type == consts::STOCK_EVENT_BUY;
+        if !is_buy_record && record.event_type != consts::STOCK_EVENT_SELL {
+            continue;
+        }
+        let mut dates: Vec<String> = Vec::new();
+        for trade in &trades {
+            if trade.stock_name.is_empty()
+                || is_buy(&trade.trade_type) != is_buy_record
+                || !record.event_text.contains(&trade.stock_name)
+                || trade.created_at.abs_diff(record.created_at) > 2
+            {
+                continue;
+            }
+            let date = unix_to_date(trade.trade_time);
+            if !dates.contains(&date) {
+                dates.push(date);
+            }
+        }
+        // 候选必须唯一（歧义就跳过），且恰好比记录日期晚一天
+        if dates.len() == 1 && day_after(&record.record_date).as_deref() == Some(dates[0].as_str())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 // ==================================================================== 操作记录与回滚
 
 /// 目标不存在（404）。
@@ -4700,6 +4803,149 @@ mod tests {
         );
         // 1100000 + 佣金 500 + 过户费 11 = 1100511
         assert_eq!(balance_of(consts::STOCK_EVENT_BUY), 15_000_000 - 1_100_511);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---------- 日期口径与旧数据订正 ----------
+
+    /// 本地时间串 → Unix 秒。用 SQLite 的 `'utc'` 修饰符（输入当本地时间、输出 UTC），
+    /// 与界面 `new Date(y, m - 1, d)` 同一口径，且不受 chrono 的夏令时歧义影响。
+    fn local_seconds(conn: &rusqlite::Connection, local: &str) -> i64 {
+        conn.query_row(
+            "SELECT CAST(strftime('%s', ?1, 'utc') AS INTEGER)",
+            [local],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    /// 某账本里某类事件的资金记录（按 id 取第一条；测试数据里每类只有一条）。
+    fn fund_record_of(
+        workspace: &Workspace,
+        event_type: &str,
+    ) -> tr_domain::models::StockFundRecord {
+        let conn = workspace.connection();
+        StockDao::list_fund_records_in_insert_order(&conn, TEST_LEDGER_ID)
+            .unwrap()
+            .into_iter()
+            .find(|record| record.event_type == event_type)
+            .unwrap_or_else(|| panic!("未找到 {event_type} 资金记录"))
+    }
+
+    /// 回归用户报的那个现象：**按本地 00:00 落库的时间戳必须取到当天**。
+    ///
+    /// 界面只让用户选日期（`tr-ui::time::ymd_to_seconds` → 本地 00:00），而资金记录的日期
+    /// 由服务层从 `trade_time` 反算：以前按 UTC 反算，东八区 8 月 24 日 00:00 = UTC 8 月 23 日 16:00，
+    /// 于是"8 月 24 日清仓"在资金变化列表里显示成 8 月 22 日（先在成交时间上差一天，再被 UTC 又拉早一天）。
+    #[test]
+    fn unix_to_date_uses_the_host_local_day() {
+        let (workspace, dir) = workspace("local-date");
+        let conn = workspace.connection();
+
+        let midnight = local_seconds(&conn, "2026-08-24 00:00:00");
+        assert_eq!(
+            unix_to_date(midnight),
+            "2026-08-24",
+            "本地 00:00 的时间戳必须取到当天（按 UTC 会取到前一天）"
+        );
+        // 改成中午落点也必须落在同一天：口径是"本地日期"，与当天的哪个时刻无关
+        let noon = local_seconds(&conn, "2026-08-24 12:00:00");
+        assert_eq!(unix_to_date(noon), "2026-08-24");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 旧版本写下的 UTC 日期要被订正：日期回到委托的本地日期，**现金链也重新连上**。
+    ///
+    /// 构造的是用户真实数据里那个形状：本金记在 8-20，建仓委托也是 8-20（旧版本把它的资金记录
+    /// 写成 8-19），随后 8-21 清仓——清仓插入时"最新一条"是 8-20 的本金记录，
+    /// 于是那条被倒填的建仓记录在链上被跳过，可用现金偏大一笔建仓的钱。
+    #[test]
+    fn repair_legacy_trade_fund_dates_fixes_date_and_cash_chain() {
+        let (workspace, dir) = workspace("repair-legacy-dates");
+
+        add_principal_at_date(&workspace, TEST_LEDGER_ID, 10_000_000, "2026-08-20").unwrap();
+        let buy_time = local_seconds(&workspace.connection(), "2026-08-20 00:00:00");
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            1000,
+            10,
+            buy_time,
+            "",
+            "",
+        )
+        .unwrap();
+
+        // 旧版本的写法：日期按 UTC 取 ⇒ 东区写成前一天
+        let buy_record = fund_record_of(&workspace, consts::STOCK_EVENT_BUY);
+        assert_eq!(buy_record.record_date, "2026-08-20", "当前版本应直接写对");
+        workspace
+            .connection()
+            .execute(
+                "UPDATE tbl_billadm_stock_fund_record SET record_date = '2026-08-19' WHERE id = ?1",
+                [&buy_record.id],
+            )
+            .unwrap();
+
+        // 清仓：余额从 8-20 的本金记录接上，**跳过** 8-19 的建仓 ⇒ 可用现金虚高
+        let sell_time = local_seconds(&workspace.connection(), "2026-08-21 00:00:00");
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            1100,
+            10,
+            sell_time,
+            "",
+            "",
+        )
+        .unwrap();
+
+        let principal = fund_record_of(&workspace, consts::STOCK_EVENT_ADD_PRINCIPAL);
+        let sell = fund_record_of(&workspace, consts::STOCK_EVENT_SELL);
+        assert_eq!(
+            sell.cash_balance,
+            principal.cash_balance + sell.amount_change,
+            "订正前：清仓的余额跳过了被倒填的建仓（这正是可用现金虚高的原因）"
+        );
+
+        assert_eq!(
+            repair_legacy_trade_fund_dates(&workspace).unwrap(),
+            1,
+            "应重放 1 个账本"
+        );
+
+        let buy = fund_record_of(&workspace, consts::STOCK_EVENT_BUY);
+        let sell = fund_record_of(&workspace, consts::STOCK_EVENT_SELL);
+        assert_eq!(
+            buy.record_date, "2026-08-20",
+            "建仓记录日期回到委托的本地日期"
+        );
+        assert_eq!(sell.record_date, "2026-08-21", "清仓记录日期不受影响");
+        assert_eq!(
+            buy.cash_balance,
+            principal.cash_balance + buy.amount_change,
+            "订正后：建仓接在本金之后"
+        );
+        assert_eq!(
+            sell.cash_balance,
+            buy.cash_balance + sell.amount_change,
+            "订正后：清仓接在建仓之后（链不再跳过它）"
+        );
+
+        // 幂等：日期已经等于委托的本地日期，不再满足"早一天"，所以不会重复重放
+        assert_eq!(
+            repair_legacy_trade_fund_dates(&workspace).unwrap(),
+            0,
+            "再跑一遍不应重放"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

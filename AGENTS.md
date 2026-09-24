@@ -477,6 +477,23 @@ pwsh -File fixtures/ui-update-restore.ps1
   这两个换算函数的行为是硬契约（含负号、`.5` 输入）。
 - **时间戳语义**：`transaction_at`、`trade_time` 等是 Unix 秒；`%Y-%m` 这类分桶在 SQL 里用
   `strftime(..., 'unixepoch')` 完成，不要在 Rust 侧重算。
+  两个域把"只选到日"的时间戳落在**不同的时刻**，各自配一种取日期的口径，别混：
+  * 记账域落在**本地 12:00**（`transactions.rs::combine_date_and_time`）→ 按 UTC 分桶也落在同一天；
+  * 股票域落在**本地 00:00**（`tr-ui::time::ymd_to_seconds`）→ 服务层必须按**宿主本地时区**取日期
+    （`tr_service::stock::unix_to_date` 用 `chrono::Local`）。按 UTC 取会得到**前一天**：东八区的
+    `2026-08-24 00:00` = UTC `08-23 16:00`，于是"8 月 24 日清仓"在资金变化列表里显示成 8 月 22 日
+    （用户报的缺陷）。本地日期对"时间戳落在当天哪个时刻"不敏感，00:00 与 12:00 都对。
+  * 连带坑：被写成**前一天**的资金记录会在现金链里被跳过 —— `recalculate_cash_chain` 取的是
+    「(日期, 创建时间, ID) 最大一条」的余额，倒填的那条不是最大那条，它的金额就不进链 ⇒ **可用现金虚高**
+    （用户真实数据上正好虚高了一笔建仓的钱）。这条规则对**任何**倒填的买卖记录都成立（例：先记今天的本金、
+    再补录上月的历史成交，第三笔的余额会跳过那笔建仓）——**已知、未修**：改它等于改资金链口径，
+    要连 `recalculate_cash_chain` 的逐条规则与相关断言一起动。旧数据由 `stock::repair_legacy_trade_fund_dates` 订正：
+    外壳打开工作空间时跑一次，只有"记录日期恰好比对应委托的本地日期早一天"（按方向 + 股票名 + `created_at`
+    相差 ≤ 2 秒匹配委托，候选有歧义就跳过）才触发**重放**，日期与现金链一起重算；当前版本写的数据永不满足
+    这个条件，所以幂等。回归：`cargo test -p tr-service` 的 `unix_to_date_uses_the_host_local_day` 与
+    `repair_legacy_trade_fund_dates_fixes_date_and_cash_chain`、`fixtures/ui-stock.ps1` 第 1 步
+    （日期选择器选**上个月的 24 号**（必然翻一次「上一月」）→ 选择器文案 / `trade_time` 的本地日期 /
+    资金记录 `record_date` / 账户页「资金变化记录 → 日期」列 四处一致）。
 - **数据库结构变更只走迁移引擎**：`transactions.db` 不存在时用 `fixtures/schema/fresh.sql` 建库（当前格式）；
   已存在时先由 `tr-store/src/migrations.rs` 的迁移引擎按 `tbl_billadm_schema_migration` 登记表升级，再按当前格式
   只读校验（`schema::validate_current`）。校验不通过（比已知格式更早且没有对应迁移）时明确拒绝，用户可见文案是

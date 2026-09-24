@@ -18,6 +18,11 @@
 #   * 重置股票数据：清空该账本股票侧全部表，而**记账数据与账本本身不动**；
 #     费用设置/交易标签会被界面"重新拉一遍"按默认值重建 —— 对这两张表断言的是"回到默认值"
 #   * 资金记录：`cash_balance` 恒等于 `principal + Σ amount_change`（不变量，逐步校验）
+#   * 日期口径：委托时间只表达到"日"（界面把它落在本地 00:00）。建仓时用日期选择器选**上个月的 24 号**
+#     （必然要翻一次「上一月」），断言四层一致：选择器文案、`trade_time` 的本地日期、
+#     **资金记录的 `record_date`**、以及账户页「资金变化记录 → 日期」列。
+#     最后那一条是用户报的缺陷：服务层原来按 UTC 反算日期，东八区会早一天
+#     ——"8 月 24 日清仓，资金变化列表显示 8 月 22 日"（先在成交时间上差一天、再被 UTC 拉早一天）。
 #   * 统计：子功能内的分栏页签（统计 / 明细）在 UIA 里是 **TabItem**（不是 Button，按 Button 找
 #     会静默失败）；「明细」分栏渲染逐笔结算明细表 + 页脚的「共 N 条」与分页控件。
 #     这一页原来把「结算统计 + 曲线 + 逐笔明细」竖向摞在一屏（整页滚动），现在两个分栏
@@ -305,6 +310,50 @@ function Switch-StockSub { param($Window, [string]$Name, [int]$TimeoutSec = 20)
     return $false
 }
 
+# 在「委托时间」里选一个**具体日期**（可跨月）：点开日期选择器 → 翻到目标月 → 点那一天。
+#
+# 委托时间只表达到"日"（界面 `time::ymd_to_seconds` 把它落在**本地 00:00**），所以这条链有两层，
+# 两层的判据都要落在库上：
+#   ① 选中的是哪一天 —— 触发器文案（本函数返回它）；
+#   ② 落库/显示的是哪一天 —— `trade_time` 的本地日期 + 资金记录的 `record_date`（调用方断言）。
+# 用户报的正是 ② 错了（"8 月 24 日清仓，资金变化列表显示 8 月 22 日"）。
+function Select-TradeDate { param($Window, [datetime]$Date)
+    $deadline = (Get-Date).AddSeconds(10)
+    $trigger = $null
+    do {
+        $trigger = Find-DateTrigger -Window $Window
+        if (-not $trigger) { Start-Sleep -Milliseconds 400 }
+    } while (-not $trigger -and (Get-Date) -lt $deadline)
+    if (-not $trigger) { Write-Host '    找不到「委托时间」的日期触发器' -ForegroundColor DarkYellow; return '' }
+    Invoke-Element $trigger | Out-Null
+    Start-Sleep -Milliseconds 600
+
+    # 面板默认停在当前值所在月（今天），目标月不同就翻过去（跨年也走这条）
+    $title = "$($Date.Year)年$($Date.Month)月"
+    $deadline = (Get-Date).AddSeconds(10)
+    while (-not (Find-First $Window $title) -and (Get-Date) -lt $deadline) {
+        $nav = Wait-VisibleButton -Window $Window -Name '上一月' -TimeoutSec 5 -ClassPart 'ui-date-picker__nav'
+        if (-not $nav) { break }
+        Invoke-Element $nav | Out-Null
+        Start-Sleep -Milliseconds 600
+    }
+    Assert-True ([bool](Find-First $Window $title)) "日期面板翻到 $title"
+
+    $cell = $null
+    $deadline = (Get-Date).AddSeconds(8)
+    do {
+        $cell = Find-DateCell -Window $Window -Day $Date.Day
+        if (-not $cell) { Start-Sleep -Milliseconds 300 }
+    } while (-not $cell -and (Get-Date) -lt $deadline)
+    if (-not $cell) { Write-Host "    没找到已渲染的第 $($Date.Day) 天" -ForegroundColor DarkYellow; return '' }
+    Click-Element $cell | Out-Null
+    Start-Sleep -Milliseconds 800
+    $after = Find-DateTrigger -Window $Window
+    $value = if ($after) { $after.Current.Name } else { '' }
+    Write-Host "    委托时间 → '$value'"
+    return $value
+}
+
 # 统计子功能**内**的分栏页签（统计 / 明细）：UIA 里是 `TabItem`（用 SelectionItemPattern），
 # 按 Button 找只会静默失败（这条坑 AGENTS.md 里记着）。判据与 `Find-VisibleButton` 同口径：
 # 关掉 offscreen、矩形有效、且落在窗口内 —— 同名页签在另一个分栏里不会同时存在，
@@ -409,7 +458,7 @@ function Get-ModalEdits { param($Window, [string]$ModalTitle)
     return @($edits | Sort-Object Y | ForEach-Object { $_.Element })
 }
 function Add-Position {
-    param($Window, [string]$Code, [string]$Name, [string]$Price, [string]$Lots)
+    param($Window, [string]$Code, [string]$Name, [string]$Price, [string]$Lots, [datetime]$Date)
     $opened = $false
     for ($attempt = 1; $attempt -le 3 -and -not $opened; $attempt++) {
         Invoke-Element (Wait-Element -Root $Window -Name '建仓') | Out-Null
@@ -434,6 +483,11 @@ function Add-Position {
     Set-Value (Wait-Element -Root $Window -Name '成交价（元/股）') $Price | Out-Null
     $lotsInput = Wait-EditLike -Root $Window -Pattern '手数'
     if ($lotsInput) { Set-Value $lotsInput $Lots | Out-Null }
+    # 传了日期就选它（不传则用弹窗默认的今天）：委托时间影响轮次的 opened_at，
+    # 重建现场时必须与第 1 步选的是同一天，否则"轮次 opened_at = 建仓成交时间"会红。
+    if ($PSBoundParameters.ContainsKey('Date')) {
+        Select-TradeDate -Window $Window -Date $Date | Out-Null
+    }
     Start-Sleep -Milliseconds 800
     $buttons = Find-All $Window '建仓'
     if ($buttons.Count -gt 0) { Invoke-Element $buttons[$buttons.Count - 1] | Out-Null }
@@ -567,6 +621,18 @@ try {
     $lotsInput = Wait-EditLike -Root $window -Pattern '手数'
     Assert-True ([bool]$lotsInput) '找到「手数」输入框'
     Assert-True (Set-Value $lotsInput $buyLots) "填入手数 $buyLots"
+
+    # ---- 委托时间：选一个**不是今天**的日期 ----
+    # 弹窗默认就是今天，选今天等于没测日期选择器。取**上个月的 24 号**：既与今天不同、
+    # 又必然要翻一次「上一月」（用户报的正是"选 8 月 24 日"这种跨月选择），而且晚于种子数据的
+    # 最晚一天（2026-04-20 —— 建仓日期若早于已有记录，那条记录会在现金链里被跳过，
+    # 那是另一个缺陷的形状，不该混进这一步）。
+    $today = (Get-Date).Date
+    $tradeDate = [datetime]::new($today.Year, $today.Month, 24).AddMonths(-1)
+    $wantDate = $tradeDate.ToString('yyyy-MM-dd')
+    $picked = Select-TradeDate -Window $window -Date $tradeDate
+    Assert-True ($picked -eq $wantDate) "委托时间选中 $wantDate（实际 '$picked'）"
+
     Start-Sleep -Milliseconds 800
     $buyButtons = Find-All $window '建仓'
     if ($buyButtons.Count -gt 0) { Invoke-Element $buyButtons[$buyButtons.Count - 1] | Out-Null }
@@ -586,6 +652,10 @@ try {
         Assert-True ($openTrade.amount -eq 3000000) "成交额 = 100 元 × 300 股 = 3,000,000 分（实际 $($openTrade.amount)）"
         Assert-True ($openTrade.fee -gt 0) "手续费已计算（$($openTrade.fee) 分）"
         Assert-True ([int64]$openTrade.created_at -ge $startedAt) "这笔成交确实是本次操作写进去的"
+        # 委托时间只表达到"日"：落库后**本地日期**必须还是用户选的那天（旧版本这里是对的，
+        # 错的是服务层随后按 UTC 反算资金记录的日期 —— 下一段断言就盯它）
+        $localDate = [DateTimeOffset]::FromUnixTimeSeconds([int64]$openTrade.trade_time).LocalDateTime.ToString('yyyy-MM-dd')
+        Assert-True ($localDate -eq $wantDate) "成交 trade_time 的本地日期 = 选的 $wantDate（实际 $localDate）"
     }
     $position = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir | Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     Assert-True ([bool]$position) "库里出现持仓（$code）"
@@ -599,7 +669,20 @@ try {
         $buyRecord = $fundsAfterBuy[$fundsAfterBuy.Count - 1]
         Assert-True ([int64]$buyRecord.amount_change -eq -([int64]$openTrade.amount + [int64]$openTrade.fee)) `
             "买入资金变动 = -(成交额 + 手续费)（$($buyRecord.amount_change)）"
+        # **用户报的那个缺陷**：资金记录的日期以前按 UTC 取（东八区 = 前一天），
+        # 于是"8 月 24 日清仓"在资金变化列表里显示成 8 月 22 日。
+        Assert-True ($buyRecord.record_date -eq $wantDate) `
+            "资金变化记录的日期 = 委托日期 $wantDate（实际 $($buyRecord.record_date)）"
     }
+
+    # ---- 界面上的「资金变化记录 → 日期」也要显示选的日期（用户看到的就是这一列）----
+    # 这一步只看一条：此刻本账本最新的资金记录就是刚建仓那条，必定在第 1 页。
+    Assert-True (Switch-StockSub -Window $window -Name '账户') '切到「账户」核对资金变化记录的日期'
+    Start-Sleep -Seconds 3
+    $rowDates = Get-FundRowDates -Window $window
+    Assert-True ($rowDates -contains $wantDate) "「资金变化记录」里显示 $wantDate（实际 $($rowDates -join ', ')）"
+    Assert-True (Switch-StockSub -Window $window -Name '持仓') '切回「持仓」继续'
+    Start-Sleep -Seconds 2
 
     # ================= 2/10 界面展示（建仓之后）=================
     Write-Host "`n[stock] 2/10 界面展示：持仓卡片与成交记录"
@@ -739,8 +822,8 @@ try {
     $survivors = @($ourBuyFundIds | Where-Object { $fundIdsAfterDelete -contains $_ })
     Assert-True ($survivors.Count -eq 0) "删除委托后我们那条资金记录也被回放掉了（残留 $($survivors.Count) 条）"
 
-    # 重新建仓，供 5/5 的减仓/清仓使用
-    Assert-True (Add-Position -Window $window -Code $code -Name $name -Price $buyPrice -Lots $buyLots) '重新建仓 3 手 @ 100'
+    # 重新建仓，供 5/5 的减仓/清仓使用（**沿用第 1 步选的委托日期**：轮次的 opened_at 就是它）
+    Assert-True (Add-Position -Window $window -Code $code -Name $name -Price $buyPrice -Lots $buyLots -Date $tradeDate) '重新建仓 3 手 @ 100'
     Start-Sleep -Seconds 2
     $posRebuilt = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
@@ -1268,4 +1351,4 @@ try {
 }
 
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
-Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓 → 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 统计分栏页签 → 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 操作记录与回滚（预演不落库 + 撤销后本金/资金记录还原）→ 重置股票数据（不动记账数据）"
+Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓（日期选择器选前天 → 选择器文案 / trade_time 本地日期 / 资金记录日期 / 账户页日期列 四处一致）→ 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 统计分栏页签 → 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 操作记录与回滚（预演不落库 + 撤销后本金/资金记录还原）→ 重置股票数据（不动记账数据）"

@@ -440,6 +440,18 @@ pub fn workspace_open(
         .update(|config| config.workspace_dir = raw.to_string());
     tracing::info!("工作空间已打开: {}", raw);
 
+    // 旧版本按 UTC 取股票资金记录的日期（东区比委托日期早一天，见 tr_service::stock::unix_to_date），
+    // 打开工作空间时做一次**可证明的**订正：只有日期确实比对应委托的本地日期早一天的记录才触发重放。
+    // **失败不影响打开**（整个订正在一个事务里，失败即回滚、数据保持原样）：它只是一次数据订正，
+    // 不该让用户连工作空间都打不开。
+    if let Ok(workspace) = ipc_state.workspace() {
+        match tr_service::stock::repair_legacy_trade_fund_dates(&workspace) {
+            Ok(0) => {}
+            Ok(count) => tracing::info!("已订正 {count} 个账本的股票资金记录日期"),
+            Err(error) => tracing::warn!("订正股票资金记录日期失败（工作空间照常打开）: {error}"),
+        }
+    }
+
     let _ = app.emit(EVENT_WORKSPACE_CHANGED, raw.to_string());
 
     // 从初始化窗口发起的"选目录"：打开成功后立刻换成主窗口。

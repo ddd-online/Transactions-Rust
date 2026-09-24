@@ -22,7 +22,8 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
 ] }
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip"] }
-# 日期换算：严格的日期/月份解析，与 strftime(..., 'unixepoch') 的 UTC 口径一致
+# 日期换算：严格的日期/月份解析 + `unix_to_date`（股票域按**宿主本地时区**取日期，
+# 与界面 `time::format_timestamp` 同口径 —— 见 stock.rs 的注释；默认 features 带 `clock`，`Local` 就是它）
 chrono = "0.4"
 serde_json = "1.0.151"
 

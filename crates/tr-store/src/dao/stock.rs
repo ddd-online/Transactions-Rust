@@ -383,6 +383,24 @@ impl StockDao {
         Ok(records)
     }
 
+    /// 有「买入 / 卖出」资金记录的账本 id（去重）。
+    ///
+    /// 只给数据订正用：`repair_legacy_trade_fund_dates` 要按账本重放，
+    /// 而**只有买卖记录才可能带旧版本的 UTC 日期**（本金 / 支取 / 利息归本的日期由界面给字符串）。
+    pub fn list_trade_fund_ledger_ids(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+        let mut statement = conn.prepare(
+            "SELECT DISTINCT ledger_id FROM tbl_billadm_stock_fund_record \
+             WHERE event_type IN (?1, ?2) ORDER BY ledger_id ASC",
+        )?;
+        let ids = statement
+            .query_map(
+                params![consts::STOCK_EVENT_BUY, consts::STOCK_EVENT_SELL],
+                |row| row.get(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
     /// 清空买卖产生的资金记录，保留本金 / 追加 / 支取记录。
     pub fn delete_trade_fund_records(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
         conn.execute(
