@@ -36,6 +36,8 @@
 //!    判定见 [`shift_period`]。
 //! 8. **同步到其他账本**：IPC 里没有 sync 命令，界面复制一份 DTO（换目标账本、清空 id
 //!    让后端生成新 id），源记录保留。
+//! 9. **同步气泡的收起**：开关挂在图标按钮本身、不是外层 `<span>` —— 挂外层会让面板内的每次
+//!    点击冒泡上来把面板**再打开一次**；选中目标账本与点面板以外的任何地方都立即收起。
 //!
 //! ## 关键纪律
 //!
@@ -827,6 +829,7 @@ fn row_view(
     // 同一份字符串要进多个闭包时，每个闭包各持一份克隆
     let record_id = record.transaction_id.clone();
     let record_id_click = record.transaction_id.clone();
+    let record_id_backdrop = record.transaction_id.clone();
     let record_id_disabled = record.transaction_id.clone();
     let record_id_spinning = record.transaction_id.clone();
 
@@ -916,23 +919,24 @@ fn row_view(
 
                     // 3. 同步到其他账本（点击展开账本列表）
                     <crate::components::ui::Tooltip title="同步到其他账本">
-                        <span
-                            class="tr-sync"
-                            on:click=move |_| {
-                                sync_popover_id.update(|current| {
-                                    if *current == record_id_click {
-                                        current.clear();
-                                    } else {
-                                        *current = record_id_click.clone();
-                                    }
-                                });
-                            }
-                        >
+                        <span class="tr-sync">
                             <crate::components::ui::IconButton
                                 label="同步到其他账本"
                                 disabled=Signal::derive(move || {
                                     syncing_id.get() == record_id_disabled
                                 })
+                                // 开关必须挂在按钮自己身上：面板就在同一个 `<span>` 里，把开关挂在外层
+                                // 会让面板内的每一次点击都冒泡上去**再把面板打开一次** —— 这正是
+                                // "点了账本名却关不掉、得再点一次图标"的原因。
+                                on_click=move |_| {
+                                    sync_popover_id.update(|current| {
+                                        if *current == record_id_click {
+                                            current.clear();
+                                        } else {
+                                            *current = record_id_click.clone();
+                                        }
+                                    });
+                                }
                             >
                                 <span
                                     class="tr-sync-icon"
@@ -981,6 +985,16 @@ fn row_view(
                             </div>
                         </span>
                     </crate::components::ui::Tooltip>
+
+                    // 3b. 点面板以外的任何地方都收起（与下拉 / 日期选择同一套 `.ui-select__backdrop`：
+                    // fixed 铺满视口、z-index 低于面板，所以不会挡住面板自身的点击）。
+                    // ⚠ 必须挂在 `Tooltip` **外面**：`Tooltip` 的气泡是纯 CSS `:hover` 驱动，
+                    // 铺满视口的遮罩留在它里面会让面板一打开就"顺带"把提示气泡也悬停出来。
+                    <Show when=move || sync_popover_id.get() == record_id_backdrop>
+                        {crate::components::ui::backdrop(UnsyncCallback::new(move |()| {
+                            sync_popover_id.set(String::new())
+                        }))}
+                    </Show>
 
                     // 4. 删除（不显示取消按钮）
                     <crate::components::ui::Popconfirm

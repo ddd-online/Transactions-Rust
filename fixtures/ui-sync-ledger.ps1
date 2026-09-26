@@ -39,6 +39,30 @@ $ws = [System.IO.Path]::GetFullPath($Workspace)
 
 $failures = New-Object System.Collections.Generic.List[string]
 
+# 同步面板里的账本项（`.tr-sync-item`）。按**类名**找，不按名字：账本名在别处也会出现
+# （账本切换器里就有当前账本的名字），而"面板关掉了没有"这件事只有面板项本身说了算。
+# 逐个 try/catch：UIA 枚举期间元素可能已被重渲染摘掉，读 `Current` 会抛 ElementNotAvailable。
+function Get-SyncPanelItems { param($Window)
+    $items = New-Object System.Collections.Generic.List[object]
+    foreach ($element in @(Get-Elements $Window)) {
+        try { $class = $element.Current.ClassName } catch { continue }
+        if ($class -like '*tr-sync-item*') { $items.Add($element) }
+    }
+    # ⚠ 不要写 `return , $items.ToArray()`：那会把空数组也包成一个元素，
+    # 于是调用方的 `@(...).Count` **永远 ≥ 1**，"面板关掉了"这条断言会恒假红。
+    return $items.ToArray()
+}
+
+# 轮询等"面板项全没了"（关掉是异步渲染，不能只看一次）。
+function Wait-SyncPanelClosed { param($Window, [int]$TimeoutSec = 8)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        if (@(Get-SyncPanelItems -Window $Window).Count -eq 0) { return $true }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    return (@(Get-SyncPanelItems -Window $Window).Count -eq 0)
+}
+
 # ---- 播种（默认每次重播；种子里有两个账本，同步才有目标）----
 if (-not $explicitWorkspace) {
     if (Test-Path $ws) { Remove-Item $ws -Recurse -Force }
@@ -105,13 +129,28 @@ try {
     Click-Element $syncButton | Out-Null
     Start-Sleep -Seconds 2
 
-    # 面板里列出的是"其他账本"的名字；点它即触发同步
+    # 面板里列出的是"其他账本"的名字
     $targetButton = Wait-Element -Root $window -Name $target.name -TimeoutSec 10
     Assert-True ([bool]$targetButton) "同步面板里出现目标账本「$($target.name)」"
-    if ($targetButton) {
-        Invoke-Element $targetButton | Out-Null
-    }
+
+    # ---- 回归 A：点面板以外的地方 → 面板自动收起 ----
+    # 缺陷背景（用户报的）：开关挂在外层 `<span>` 上，面板内/外任何一次点击冒泡上来都会
+    # 把面板**再打开一次**，于是只有"再点一次同步图标"才关得掉。这里先用"点别的地方"验。
+    Assert-True (@(Get-SyncPanelItems -Window $window).Count -ge 1) '同步面板已打开（面板项可见）'
+    $outsideCell = Wait-Like -Root $window -Pattern $description -TimeoutSec 10
+    Assert-True ([bool]$outsideCell) '找到源记录所在行（用它当「面板以外的地方」）'
+    if ($outsideCell) { Click-Element $outsideCell | Out-Null }
+    Assert-True (Wait-SyncPanelClosed -Window $window) '点面板以外的地方 → 同步面板自动收起'
+
+    # ---- 回归 B：点账本名 → 触发同步，且面板**当场**收起 ----
+    $syncButton = Find-RowButton -Window $window -RowText $description -ButtonName '同步到其他账本'
+    Assert-True ([bool]$syncButton) '重新打开同步面板（再点一次图标）'
+    if ($syncButton) { Click-Element $syncButton | Out-Null }
+    $targetButton = Wait-Element -Root $window -Name $target.name -TimeoutSec 10
+    Assert-True ([bool]$targetButton) "面板里能再看到目标账本「$($target.name)」"
+    if ($targetButton) { Invoke-Element $targetButton | Out-Null }
     Start-Sleep -Seconds 4
+    Assert-True (Wait-SyncPanelClosed -Window $window) '点账本名后同步面板当场收起（不用再点一次图标）'
 
     # ================= 3/3 断言：目标账本多了一份副本、源记录原样保留 =================
     Write-Host "`n[sync] 3/3 校验落库结果"
