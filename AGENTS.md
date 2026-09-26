@@ -571,3 +571,15 @@ Select-String -Path src-tauri\src\updater.rs,crates\tr-ui\src\pages\settings.rs,
 安装包与便携版都必须落盘成功，否则非零退出。**别只信退出码，也别按"第一个匹配"取产物**：发布前用
 `fixtures/ui-about.ps1` 对着产物核一次自报版本号，发布后再 `gh release view <tag> --json assets` 核对 `digest`
 与本地 `Get-FileHash` 一致（同一个 digest 出现在两个 tag 下就是发错了）。
+
+## AI 工具（Codex）
+
+本项目用 Codex 开发，约定：
+
+- 项目级 skill 在 `.agents/skills/`（Codex 从仓库根向下扫这个名字的目录）：`impeccable`（界面设计，含设计
+  检测 hook）与 `humanizer-zh`（中文去 AI 味）。它们属本机安装、**不入库**（见 `.gitignore`），换机重装即可。
+- 设计检测 hook 在 `.codex/hooks.json`（`PostToolUse` 扫当次改动、`Stop` 做深扫），命令走
+  `.agents/skills/impeccable/scripts/impeccable[.cmd]`，skill 不存在时静默跳过。首次使用要在 Codex 里用
+  `/hooks` 信任一次；命令用仓库根相对路径，故请在仓库根启动会话。
+- 界面设计与审查的裁决标准仍是 `DESIGN.md` 加 `.impeccable/surfaces/` 的表面简报；动界面之前按 `impeccable`
+  的 Setup 第 1 步跑一次 `impeccable context`。

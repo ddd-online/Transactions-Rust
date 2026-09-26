@@ -31,10 +31,11 @@ transactions.log
 *.swp
 Thumbs.db
 
-# 本机安装的 AI 编码工具 skill（`npx impeccable install` 等）；
-# 含 vendored JS/数据（约 2 MB），与「界面无 Node、不 vendor JS 库」的约定不符，故不入库。
-/.dsh/
+# 本机安装的 AI 编码工具 skill：Codex 扫的就是 `/.agents/skills/` 这个名字的目录；
+# 含 vendored JS/数据（约 2 MB），与「界面无 Node、不 vendor JS 库」的约定不符，故不入库；换机重装即可。
 /.agents/
+
+# Codex 项目级配置（.codex/hooks.json 等）体积小且是本项目自己的，**入库**，故不在此排除。
 
 # impeccable 的本地验证截图（设计契约 .impeccable/surfaces/ 保留）
 /.impeccable/review/
