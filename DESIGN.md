@@ -213,7 +213,7 @@ Letter-spacing is tokenised per role — `--transactions-tracking-display` (−0
 
 ## Layout
 
-The spacing scale is 8px-based (2 / 4 / 8 / 12 / 16 / 24 / 32 / 48). The app shell fixes a 48px header, 56px left rail, and 44px footer with 20px content padding. Data surfaces use either auto-filling card grids (`minmax(340px, 1fr)`, 24px gap) or fixed-sidebar layouts (280px rail + fluid main column). Multi-column pages stack to a single column at ≤1080px; wider three-column layouts collapse at ≤1365px.
+The spacing scale is 8px-based (2 / 4 / 8 / 12 / 16 / 24 / 32 / 48). The app shell fixes a 48px top band, a 200px navigation sidebar, a 56px sub-function rail, and a 44px footer; page content insets are 16px (full-bleed tables take 0 and pad their own cells). Data surfaces use either auto-filling card grids (`minmax(340px, 1fr)`, 24px gap) or fixed-sidebar layouts (280px rail + fluid main column). Multi-column pages stack to a single column at ≤1080px; wider three-column layouts collapse at ≤1365px. The window has no minimum size — the breakpoints above carry narrow widths, so they must stay live.
 
 ## Elevation & Depth
 

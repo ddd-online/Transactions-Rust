@@ -311,10 +311,34 @@
     flex-direction: column;
   }
 
-  /* 窄宽度下改为上下两段：分隔靠间距，回到"区域之间"的节奏 */
+  /* 窄宽度下左栏变成**一条横向带**：主动作按内容宽度、图表项横排换行。
+   * 只把方向倒过来（原来这里只有 `flex: 0 0 auto` + 下内边距）会得到：
+   * 「新增图表」被拉成一条 1200px 的通栏蓝条、4 个图表项竖着再吃掉近 200px，
+   * 图表与「曲线配置」被顶到半屏以下。分隔线也跟着从竖改横。 */
   .da-sidebar {
     flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    padding-right: 0;
     padding-bottom: var(--transactions-space-region);
+    border-right: 0;
+    border-bottom: 1px solid var(--transactions-color-divider);
+    overflow: visible;
+  }
+
+  /* 图表项自己占一行（`1 1 100%`），横排换行 */
+  .da-list {
+    flex: 1 1 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--transactions-space-xs);
+  }
+
+  /* 「新增图表」是 `block=true`（竖排时它要通栏撑满 220px 侧栏）——
+   * 换成横排后必须收回内容宽度，否则就是一条 1200px 的蓝条。 */
+  .da-sidebar > .ui-btn--block {
+    width: auto;
   }
 
   .da-chart__body {

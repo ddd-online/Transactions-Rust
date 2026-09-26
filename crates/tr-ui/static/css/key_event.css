@@ -1,7 +1,8 @@
 /* ============================================
  * 事件页（`/key_event_view`）
  * 取值全部走 `--transactions-*` 令牌。
- * 布局：工具栏（年份导航）+ 三栏（280px 事件列表 / 自适应详情卡 / 280px 关联消费记录）。
+ * 布局：工具栏（年份导航）+ 三栏（事件列表 / 自适应详情卡 / 关联消费记录；
+ * 两侧宽度跟着窗口在 200~280px / 180~280px 之间收放，见 `.key-event-body`）。
  * 右栏可收起（`is-rail-collapsed`）：栏宽归 0、竖线隐去，中栏吃满；把手一直骑在竖线上。
  * ============================================ */
 
@@ -38,14 +39,16 @@
  * 内边距下放给各栏自己（`.key-event-body` 不再吃统一内边距），
  * 左右轨的底色与竖线才能从版心顶贯通到底。 */
 .key-event-body {
-  /* 右轨宽度只有这一个来源：网格第三列与收起把手的落点都用它 */
-  --key-event-rail-w: 280px;
+  /* 右轨宽度只有这一个来源：网格第三列与收起把手的落点都用它。
+   * 宽度跟着窗口走（宽屏 280 封顶、窄窗收到 180 下限）：事件这页有三栏，
+   * 两侧写死 280 时窗口一窄，先被挤掉的是中间的详情 —— 正文才是这一页的主角。 */
+  --key-event-rail-w: clamp(180px, 19vw, 280px);
   /* 收起/展开的时长：网格列宽与把手的位移用同一条，竖直方向的 `visibility` 也按它延迟 */
   --key-event-rail-dur: 220ms;
   flex: 1;
   position: relative;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) var(--key-event-rail-w);
+  grid-template-columns: clamp(200px, 20vw, 280px) minmax(0, 1fr) var(--key-event-rail-w);
   gap: 0;
   min-height: 0;
   overflow: hidden;
@@ -56,7 +59,7 @@
 /* 收起右栏：第三列归 0。中栏自己会把这部分宽度吃掉（`1fr`），
  * 所以不需要给中栏写任何"展开动画"，宽度只有一个动因。 */
 .key-event-body.is-rail-collapsed {
-  grid-template-columns: 280px minmax(0, 1fr) 0px;
+  grid-template-columns: clamp(200px, 20vw, 280px) minmax(0, 1fr) 0px;
 }
 
 /* 中间详情栏：纸的底色，留出内容内边距（**顶部为 0**：详情紧贴工具栏底边线） */
@@ -748,7 +751,7 @@
 .key-event-linked__tags {
   display: flex;
   flex-wrap: nowrap;
-  gap: 3px;
+  gap: var(--transactions-space-xs);
   flex-shrink: 0;
 }
 
@@ -853,14 +856,14 @@
 }
 
 .upload-progress-bar .progress-summary {
-  margin-bottom: 10px;
+  margin-bottom: var(--transactions-space-sm);
 }
 
 .upload-progress-bar .summary-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: var(--transactions-space-xs);
 }
 
 .upload-progress-bar .summary-text {
@@ -902,7 +905,7 @@
 .upload-progress-bar .file-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: var(--transactions-space-2xs);
   max-height: 280px;
   overflow-y: auto;
 }
@@ -911,7 +914,7 @@
   display: flex;
   align-items: center;
   gap: var(--transactions-space-sm);
-  padding: 6px 8px;
+  padding: var(--transactions-space-xs) var(--transactions-space-sm);
   border-radius: var(--transactions-radius-sm);
 }
 
@@ -957,7 +960,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--transactions-space-xs);
 }
 
 .upload-progress-bar .file-name {
@@ -1011,7 +1014,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 8px 0;
+  padding: var(--transactions-space-sm) var(--transactions-space-sm) 0;
   gap: var(--transactions-space-sm);
 }
 
@@ -1027,7 +1030,7 @@
 
 .upload-progress-bar .error-btns {
   display: flex;
-  gap: 6px;
+  gap: var(--transactions-space-sm);
   flex-shrink: 0;
 }
 

@@ -676,7 +676,7 @@
  * 它从标题栏下面开始（标题栏横跨整宽，见 `.page-region`），上下内边距与工具栏同档。 */
 .page-rail {
   flex-shrink: 0;
-  width: 56px;
+  width: var(--transactions-size-rail-width);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -811,8 +811,9 @@
  *     ├─ .page-toolbar     工具栏（本页的操作：时间范围 / 年份 / 页签 ……）
  *     └─ 内容              表格 / 图表 / 面板
  *
- * 三者共用同一条左/右边界：左簇与下方内容的左边缘齐平、右簇与右边缘齐平
- * （`.page` 统一给 24px 内边距，工具栏与内容都不再各自缩进）。
+ * 三者共用同一条左/右边界：左簇与下方内容的左边缘齐平、右簇与右边缘齐平。
+ * 横向 16px 由 `.page-toolbar` / `.page-footer-bar` 自己给，**`.page` 不给内边距**
+ * （见下面 `.page` 那条注释）；内容容器再各自保留自己的内边距（贴边型 0 / 卡片型 16）。
  *
  * `-webkit-app-region: drag` 让页头与工具栏的空白处可以拖动窗口；
  * 里面的按钮必须写 `no-drag`（下面的 `> *` 规则统一兜住）。

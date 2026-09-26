@@ -136,20 +136,14 @@
 
 .ct-column-count {
   flex-shrink: 0;
-  padding: 1px 6px;
+  padding: var(--transactions-space-2xs) var(--transactions-space-sm);
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-secondary);
   background-color: var(--transactions-color-minor-background);
   border-radius: var(--transactions-radius-full);
 }
 
-/* 栏头按钮：图标 + 文案 */
-.ct-add-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
+/* 栏头按钮的图标（`.ct-add-btn` 是 `.ui-btn`，排布与图标↔文案的 8px 间距都由它给） */
 .ct-add-btn-icon {
   display: inline-flex;
   width: 14px;
@@ -231,7 +225,7 @@
 /* 记录数徽标（`.item-badge`）：有记录数时才出现 */
 .ct-item-badge {
   flex-shrink: 0;
-  padding: 1px 5px;
+  padding: var(--transactions-space-2xs) var(--transactions-space-sm);
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-secondary);
   background-color: var(--transactions-color-minor-background);

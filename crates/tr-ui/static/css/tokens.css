@@ -164,11 +164,15 @@
   --transactions-space-2xl: 32px;
   --transactions-space-3xl: 48px;
 
-  /* ---------- Layout（$layout-sizes） ---------- */
-  --transactions-size-header-height: 48px;
-  --transactions-size-sider-width: 56px;
+  /* ---------- Layout（$layout-sizes） ----------
+   * 这里原来还有 `header-height: 48px` / `sider-width: 56px` / `content-padding: 20px` 三条
+   * （从 Ant 的令牌表搬来的），值与现有骨架对不上、全仓零引用，已删：
+   *   * 顶部那条带用下文的 `size-top-band`（同为 48px，含义是"两侧共用的顶部容器"）；
+   *   * 侧栏宽是上面的 `size-sidebar`（200px）—— 56px 那条只对得上子功能图标条；
+   *   * 内容内边距由各页自己的容器给（贴边型 0 / 卡片型 16px），没有全局的 20px。 */
   --transactions-size-footer-height: 44px;
-  --transactions-size-content-padding: 20px;
+  /* 子功能图标条宽度（`.page-rail`）。**不是侧边栏**：侧栏宽是 `size-sidebar`。 */
+  --transactions-size-rail-width: 56px;
 
   /* ---------- Border radius（$border-radius） ---------- */
   --transactions-radius-sm: 6px;
