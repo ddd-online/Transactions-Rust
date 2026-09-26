@@ -109,9 +109,8 @@ pwsh -File build/build.ps1
 cargo xtask seed target\tests\dev-ws
 
 # ② 拉起 dev 窗口：trunk serve(:16000) + dev 外壳（配置目录也是独立的）
-#    改完 .rs/.css 脚本会给窗口发 Ctrl+R 刷新，并把窗口截图到 -ShotDir
-pwsh -File fixtures/dev-hot.ps1 -Trunk -Launch `
-    -Workspace target\tests\dev-ws -ShotDir target\tests\dev-shot\out
+#    改完 .rs/.css 脚本会给窗口发 Ctrl+R 刷新（加 -ShotDir <dir> 还能顺手截图）
+pwsh -File fixtures/dev-hot.ps1 -Trunk -Launch -Workspace target\tests\dev-ws
 
 # ③ 只看某个页面（不重建、不重启）：点侧栏 + 等页面真切过去 + 截图
 pwsh -File fixtures/dev-shot.ps1 -Page 股票        # -AllPages 逐页截
