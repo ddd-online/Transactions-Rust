@@ -153,12 +153,15 @@ if ($targets.Count -eq 0) {
 }
 
 function Test-PageLoaded {
-    # 页面已切换的判据：同名的**页面标题**出现在窗口顶部的**内容区**（不是侧栏）。
+    # 页面已切换的判据（两条，任一成立即可）：
     #
-    # ⚠ 这里不能简单地"按名字找一个元素、再看它靠不靠左"：侧栏导航项与页面标题**同名**
-    # （「消费记录」既是侧栏条目也是标题），而侧栏条目本来就靠左，于是切换失败时判定也会通过 ——
-    # 实测就抓出过"请求消费记录、截图却是数据分析"。
-    # 正确判据：取同名元素里**最靠右**的那个（标题在内容区；侧栏条目在最左），并确认它在窗口顶部。
+    # ① 内容区顶部有一条**同名**的页面标题：侧栏导航项与页面标题可能同名，所以取同名元素里
+    #    **最靠右**的那个（标题在内容区、侧栏条目在最左），并要求它落在窗口顶部那条带里、
+    #    且离窗口左边 > 260px（侧栏宽 200 + 余量）—— 只"按名字找一个"会拿侧栏条目误判成已切换
+    #    （实测抓出过"请求消费记录、截图却是数据分析"）。
+    # ② 外壳标题栏的 `Transactions-<页面>`：页面身份现在由侧栏当前项 + 这一行给出，
+    #    多数页面**不再**渲染同名的大标题 —— 只留判据 ① 时「记账 / 股票 / 事件 / 日记 /
+    #    应用设置」永远判失败（实测：页面其实切过去了，只是这一行标志没找到）。
     param($Window, [string]$PageName)
     $win = $Window.Current.BoundingRectangle
     $best = $null
@@ -169,8 +172,14 @@ function Test-PageLoaded {
         if (($r.Y - $win.Y) -gt 120) { continue }                      # 必须在窗口顶部那条带里
         if (-not $best -or $r.X -gt $best.X) { $best = $r }            # 取最靠右的同名元素 = 内容区标题
     }
-    if (-not $best) { return $false }
-    return (($best.X - $win.X) -gt 260)                                # 侧栏宽 200 + 余量
+    if ($best -and (($best.X - $win.X) -gt 260)) { return $true }
+    foreach ($el in @(Find-All $Window "Transactions-$PageName")) {
+        $r = $el.Current.BoundingRectangle
+        if ($el.Current.IsOffscreen -or $r.Width -le 0 -or $r.Height -le 0) { continue }
+        if (($r.Y - $win.Y) -gt 120) { continue }
+        if ((($r.X - $win.X) -gt 260)) { return $true }
+    }
+    return $false
 }
 
 # 子功能的标志控件出现了吗？
