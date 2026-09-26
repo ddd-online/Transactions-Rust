@@ -331,6 +331,12 @@ textarea,
  *   tr-rise-in  —— 面板与消息进场（弹窗/抽屉/下拉/气泡/通知），4px 落位；
  *   tr-settle   —— 内容区落位：整块内容进来一次（每次切页/切子功能），8px 落位
  *                  （"数据自己落定"那一拍是曲线描线，见 DESIGN.md「Motion」）。
+ *
+ * ⚠ **位移一律从"上/外侧"来**（`translateY(-8px)` → `none`），不要写成 +8px：
+ * 进场的元素常常正好等于容器高度（`.page-content > *` 就是 `flex: 1`），
+ * 往下平移会让它在 `overflow: auto` 的容器里多出可滚动高度 → 右侧闪出一条滚动条
+ * （自定义滚动条还占 6px 宽，顺带横向抖一下；渲染被节流时那一帧甚至会被留在合成层上，
+ * 看着像"滚动条不走了"）。往上平移则只会在容器顶部被裁掉几像素，**不产生滚动高度**。
  * 三者都不写 `animation-fill-mode: both`：默认态就是终态，动画没跑成也不会把内容藏起来。
  * ============================================ */
 
@@ -347,7 +353,7 @@ textarea,
 @keyframes tr-rise-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(-4px);
   }
 
   to {
@@ -359,7 +365,7 @@ textarea,
 @keyframes tr-settle {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(-8px);
   }
 
   to {

@@ -237,11 +237,11 @@ Motion here is structural, not decorative: it says where a surface came from, th
 
 | Beat | Applies to | Travel | Duration |
 |---|---|---|---|
-| **Enter** | panels and messages: modal, drawer, select / popconfirm / date-time panels, notices | 4px (drawer 24px sideways) | 200ms (`--transactions-transition-enter`) |
-| **Settle** | the whole content area when a page or sub-function lands — once per mount, never per section | 8px | 320ms (`--transactions-transition-settle`) |
+| **Enter** | panels and messages: modal, drawer, select / popconfirm / date-time panels, notices | arrives from 4px above (drawer 24px from the side) | 200ms (`--transactions-transition-enter`) |
+| **Settle** | the whole content area when a page or sub-function lands — once per mount, never per section | arrives from 8px above | 320ms (`--transactions-transition-settle`) |
 | **Draw the data** | the self-drawn chart's line and area draw (charts-rs `AnimationConfig`, 620ms + 60ms delay) | — | the surface's one authored moment |
 
-**The Two Kinds of Arrival.** Masks and backdrops only fade (`tr-fade-in`, opacity alone) — a full-screen layer that moves reads as the window moving. Panels and messages rise 4px (`tr-rise-in`); a whole content area settles 8px (`tr-settle`). Both keyframes end at their natural state and use no fill-mode, so content is visible even if the animation never runs.
+**The Two Kinds of Arrival.** Masks and backdrops only fade (`tr-fade-in`, opacity alone) — a full-screen layer that moves reads as the window moving. Panels and messages arrive from 4px above (`tr-rise-in`); a whole content area settles from 8px above (`tr-settle`). Both keyframes end at their natural state and use no fill-mode, so content is visible even if the animation never runs. Arrival is always **from above or from outside**: entering elements are routinely exactly as tall as their container, so travelling down would add scrollable height to an `overflow: auto` parent and flash a scrollbar on the right edge.
 
 **The Press Rule.** Desktop clicks have no native press feedback, so buttons, icon buttons and both navigations sink 1px within the 150ms feedback band (`--transactions-transition-fast`). Hover, selected, and switch-handle transitions keep their existing timings. Nothing animates a layout-driving property; the two documented exceptions remain the sub-function rail's `grid-template-columns` collapse and the progress bar's width.
 
