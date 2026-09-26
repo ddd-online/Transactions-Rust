@@ -5281,7 +5281,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tr-domain"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5289,7 +5289,7 @@ dependencies = [
 
 [[package]]
 name = "tr-ipc"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5302,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "tr-service"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5319,7 +5319,7 @@ dependencies = [
 
 [[package]]
 name = "tr-store"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "r2d2",
  "r2d2_sqlite",
@@ -5332,7 +5332,7 @@ dependencies = [
 
 [[package]]
 name = "tr-ui"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "charts-rs",
  "console_error_panic_hook",
@@ -5410,7 +5410,7 @@ dependencies = [
 
 [[package]]
 name = "transactions"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -6486,7 +6486,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "rusqlite",
  "serde_json",
