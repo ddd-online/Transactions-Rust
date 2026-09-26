@@ -24,6 +24,35 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
 
+# 右栏（关联交易）把手：点到**状态真的变了**为止，两种点法都试。
+#
+# 这一条原先偶发红（收起没生效 / 展开没生效各见过一次），两个成因各修一半：
+#   * 真实鼠标点在**别的窗口**上：脚本在后台跑时测试窗口被盖住，点三次都白点
+#     （实测截图：窗口右半边被 Codex 窗口压着，把手正好在压着的区域里）→ 先置前台再点；
+#   * `InvokePattern` 对**刚渲染出来**的元素有时不生效（AGENTS 记过：dev-shot 切侧栏
+#     因此改用真实鼠标）→ 真实鼠标之后再用它兜底一次。
+# 判据落在配置与重启上，随便红一次都很误导，所以这里重试到状态真的变了为止。
+function Set-RailCollapsed {
+    param($Window, [bool]$Collapsed, [int]$Tries = 3)
+    $from = if ($Collapsed) { '收起关联交易' } else { '展开关联交易' }
+    $to = if ($Collapsed) { '展开关联交易' } else { '收起关联交易' }
+    for ($i = 1; $i -le $Tries; $i++) {
+        $handle = Wait-Element -Root $Window -Name $from -TimeoutSec 6
+        if (-not $handle) {
+            # 已经是目标状态（上一次点生效了，只是名字变化比断言慢）
+            if (Wait-Element -Root $Window -Name $to -TimeoutSec 2) { return $true }
+            continue
+        }
+        [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 250
+        Click-Element $handle | Out-Null
+        if (Wait-Element -Root $Window -Name $to -TimeoutSec 4) { return $true }
+        Invoke-Element $handle | Out-Null
+        if (Wait-Element -Root $Window -Name $to -TimeoutSec 4) { return $true }
+    }
+    return $false
+}
+
 $repo = Split-Path -Parent $PSScriptRoot
 $explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
@@ -246,11 +275,7 @@ try {
     # 现在偏好写进配置文件（`keyEventLinkedOpen`），判据落在**磁盘 + 重启**上。
     Write-Host "[ke] 4/4 右栏（关联交易）偏好：收起 → 写配置 → 换页保持 → 重启仍保持"
     $configPath = Join-Path $smokeHome '.transactions.json'
-    $collapse = Wait-Element -Root $window -Name '收起关联交易' -TimeoutSec 10
-    Assert-True ([bool]$collapse) '找到右栏收起把手'
-    if ($collapse) { Invoke-Element $collapse | Out-Null }
-    Start-Sleep -Seconds 2
-    Assert-True ([bool](Wait-Element -Root $window -Name '展开关联交易' -TimeoutSec 6)) `
+    Assert-True (Set-RailCollapsed -Window $window -Collapsed $true) `
         '收起后把手变成「展开关联交易」'
     $savedConfig = Get-Content $configPath -Raw | ConvertFrom-Json
     Assert-True ($savedConfig.keyEventLinkedOpen -eq $false) `
@@ -287,9 +312,7 @@ try {
             '重启后右栏仍是收起的（偏好被记住）'
 
         # 反向也要落盘：展开后配置写回 true（别只验一个方向）
-        $expand = Wait-Element -Root $window -Name '展开关联交易' -TimeoutSec 5
-        if ($expand) { Invoke-Element $expand | Out-Null }
-        Start-Sleep -Seconds 2
+        Assert-True (Set-RailCollapsed -Window $window -Collapsed $false) '再展开后把手变回「收起关联交易」'
         $restoredConfig = Get-Content $configPath -Raw | ConvertFrom-Json
         Assert-True ($restoredConfig.keyEventLinkedOpen -eq $true) `
             "再展开后写回 true（实际 '$($restoredConfig.keyEventLinkedOpen)'）"
