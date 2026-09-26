@@ -30,7 +30,24 @@ $smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)
 if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) { throw "拒绝把临时 HOME 指到真实用户目录" }
 if (-not (Test-Path $smokeHome)) { New-Item -ItemType Directory -Force -Path $smokeHome | Out-Null }
 $ws = [System.IO.Path]::GetFullPath($Workspace)
-if (-not (Test-Path (Join-Path $ws 'transactions.db'))) { throw "工作空间里没有 transactions.db: $ws" }
+# 工作空间**自己播种**（与 window-bounds / ui-* 同款）：三个场景都只是"写配置 → 启动 →
+# 点关闭按钮"，配置里的 `workspaceDir` 指向这里，所以它必须是一份能打开的库。
+# 以前这里是"没有 db 就 throw"，于是 `build\clean.ps1` 之后（target\ 被清掉）全量档
+# 必然在这一步红 —— 而其余护栏都会自己播种，全量档本该能直接跑起来。
+if (-not (Test-Path (Join-Path $ws 'transactions.db'))) {
+    $seedDir = Split-Path -Parent $ws
+    New-Item -ItemType Directory -Force -Path $seedDir | Out-Null
+    if (Test-Path $ws) { Remove-Item $ws -Recurse -Force }
+    Push-Location $repo
+    & cargo -q xtask seed $ws *> (Join-Path $seedDir 'seed.log')
+    $seedExit = $LASTEXITCODE
+    Pop-Location
+    if ($seedExit -ne 0) {
+        Get-Content (Join-Path $seedDir 'seed.log') -Tail 8
+        throw "播种失败（exit=$seedExit）"
+    }
+    Write-Host "[close] 播种工作空间: $ws" -ForegroundColor Cyan
+}
 
 Add-Type -TypeDefinition @'
 using System;
@@ -219,4 +236,3 @@ if ($failures.Count -gt 0) {
 }
 Write-Host "`n[close] ✅ 三种关闭行为都符合预期" -ForegroundColor Green
 exit 0
-
