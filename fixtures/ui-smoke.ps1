@@ -12,7 +12,7 @@
 #
 # 用法（pwsh 7；需要 release 产物，debug 构建不会内嵌界面）：
 #   cargo build --release -p transactions
-#   pwsh -File fixtures/ui-smoke.ps1 -Workspace target\ws-rust
+#   pwsh -File fixtures/ui-smoke.ps1 -Workspace target\tests\ui-smoke\out\ws
 #   pwsh -File fixtures/ui-smoke.ps1 -Workspace <ws> -Discover     # 导出每页的元素清单，用来维护下面的标记表
 #
 # 隔离：和 smoke.ps1 一样用临时 USERPROFILE 启动，不会碰你真实的配置文件。
@@ -34,10 +34,12 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
 
 $repo = Split-Path -Parent $PSScriptRoot
+# ⚠ 必须在这里先记下"调用方是否显式给了 -Workspace"（下面马上会给它赋默认值，之后再判就恒为真）
+$explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
-if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\smoke\home-ui' }
-if (-not $OutDir) { $OutDir = Join-Path $repo 'target\ui-smoke' }
-if (-not $Workspace) { $Workspace = Join-Path $repo 'target\ws-rust' }
+if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\tests\ui-smoke\home' }
+if (-not $OutDir) { $OutDir = Join-Path $repo 'target\tests\ui-smoke\out' }
+if (-not $Workspace) { $Workspace = Join-Path $repo 'target\tests\ui-smoke\out\ws' }
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 
@@ -48,7 +50,17 @@ if ($smokeHome -eq [System.IO.Path]::GetFullPath($env:USERPROFILE)) {
 if (-not (Test-Path $smokeHome)) { New-Item -ItemType Directory -Force -Path $smokeHome | Out-Null }
 
 $ws = [System.IO.Path]::GetFullPath($Workspace)
-if (-not (Test-Path (Join-Path $ws 'transactions.db'))) { throw "工作空间里没有 transactions.db: $ws" }
+
+# ---- 播种：没显式给 -Workspace 就重新播种一份干净基线；显式给了只补齐缺失的库，不动调用方的数据 ----
+if (-not $explicitWorkspace -and (Test-Path $ws)) { Remove-Item $ws -Recurse -Force }
+if (-not (Test-Path (Join-Path $ws 'transactions.db'))) {
+    Push-Location $repo
+    & cargo -q xtask seed $ws *> (Join-Path $OutDir 'seed.log')
+    $seedExit = $LASTEXITCODE
+    Pop-Location
+    if ($seedExit -ne 0) { Get-Content (Join-Path $OutDir 'seed.log') -Tail 8; throw "播种失败（exit=$seedExit）" }
+    Write-Host "[ui-smoke] 播种工作空间: $ws" -ForegroundColor Cyan
+}
 
 $exeFull = [System.IO.Path]::GetFullPath($Exe)
 $sameExe = Get-Process -Name transactions -ErrorAction SilentlyContinue | Where-Object {

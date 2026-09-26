@@ -9,7 +9,7 @@
 # 做法：把被测函数的**原文**（连注释一起）抽出来，配几个桩类型（`ChartSeries` / `display_value`
 # / MARGIN / Y_AXIS_MAX_SPLITS）拼成一个 rustc 直接能编的小程序，在 native 上执行。
 # 抽查的是原文而不是复制品 —— 函数一改，这里跑的就是改后的代码；函数被改名/删掉则直接报错。
-# 生成的代码落在 `target\chart-harness\`（不入库），失败时以非零码退出：
+# 生成的代码落在 `target\tests\chart-tests\`（不入库），失败时以非零码退出：
 # 断言写错或算法回归都会当场 panic（这套脚手架真抓到过一条我脑补错的期望值）。
 #
 # 新增被测函数时：把函数名加进下面的 $fns（常量加进 $consts），并在生成的 main 里加一行调用。
@@ -101,7 +101,7 @@ fn main() {
 }
 '@
 
-$dir = Join-Path $repo 'target\chart-harness'
+$dir = Join-Path $repo 'target\tests\chart-tests'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $mainRs = Join-Path $dir 'main.rs'
 ($header + ($parts -join "`n") + $main) | Set-Content -Path $mainRs -Encoding utf8

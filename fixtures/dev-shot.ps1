@@ -7,8 +7,8 @@
 #   这一步只是把当前窗口画到 PNG，耗时 ~1 秒。
 #
 # 用法（pwsh 7）：
-#   pwsh -File fixtures\dev-shot.ps1                       # 抓当前页面 → target\dev-shots\current.png
-#   pwsh -File fixtures\dev-shot.ps1 -Page 股票            # 先切页再抓 → target\dev-shots\股票.png
+#   pwsh -File fixtures\dev-shot.ps1                       # 抓当前页面 → target\tests\dev-shot\out\current.png
+#   pwsh -File fixtures\dev-shot.ps1 -Page 股票            # 先切页再抓 → target\tests\dev-shot\out\股票.png
 #   pwsh -File fixtures\dev-shot.ps1 -Page 持仓            # 子功能也能直接指定（走左侧图标条）
 #   pwsh -File fixtures\dev-shot.ps1 -AllPages             # 5 个顶级功能 + 9 个子功能各抓一张
 #   pwsh -File fixtures\dev-shot.ps1 -OutDir target\look    # 换输出目录
@@ -33,7 +33,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
-if (-not $OutDir) { $OutDir = Join-Path $repo 'target\dev-shots' }
+if (-not $OutDir) { $OutDir = Join-Path $repo 'target\tests\dev-shot\out' }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 Add-Type -TypeDefinition @'

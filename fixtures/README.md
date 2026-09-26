@@ -40,14 +40,47 @@ cargo xtask dump <dir> --table tbl_billadm_stock_trade
 人工冒烟：`cargo xtask seed <dir>` 后把 `~/.transactions-dev.json` 的 `workspaceDir` 指向该目录，
 再 `cargo tauri dev`（详见 AGENTS.md 的端口注意事项）。
 
-## `*.ps1`（端到端护栏）
+## 测试分层（`test.ps1` 是唯一入口）
 
-真机启动应用并用 UI Automation 驱动界面，逐个页面验证渲染、写入闭环与各条已知缺陷的回归
-（拖拽排序、窗口几何、图片上传、日记导入导出、股票全生命周期等）。
-每个脚本的用途与用法见 `AGENTS.md` 的「常用命令」。
+| 档位 | 命令 | 含义 |
+|---|---|---|
+| 单元档 | `pwsh -File fixtures/test.ps1 -Unit <分组>` | 改某个功能时跑的相关测试：`core`（fmt / clippy / design-audit / contract-audit）+ 该功能的包单测与界面护栏；`-Unit changed` 按 git 改动自动挑 |
+| 全量档 | `pwsh -File fixtures/test.ps1 -All` | 发布前跑：先构建（trunk + `cargo build --release --features tauri/custom-protocol`），再跑全部静态检查、Rust 单测、schema-diff、chart-tests 与 20 个界面/外壳护栏 |
 
-例外：`chart-tests.ps1` **不驱动界面** —— 它把 `chart.rs` 里 wasm-only 的单元测试抽出来在 native 上
-跑一遍（`cargo test -p tr-ui` 跑不到它们），所以不 dot-source `lib/TrUia.ps1`。
+```powershell
+pwsh -File fixtures/test.ps1 -List                       # 分组与步骤的权威清单
+pwsh -File fixtures/test.ps1 -Unit diary                 # 单元档
+pwsh -File fixtures/test.ps1 -Unit changed -DryRun       # 按改动挑，只看计划
+pwsh -File fixtures/test.ps1 -All -SkipBuild -SkipNetwork
+```
+
+- 分组、步骤、以及「改动 → 分组」的映射都写在 `fixtures/test.ps1`（`$Groups` / `$Steps` / `$PathMap`）。
+  **新增护栏必须同时登记 `$Steps` 与所属 `$Groups`**，否则 `-All` 会漏掉它。
+- 目录约定（`target/` 顶层只留给 cargo 自己的目录）：
+
+  ```
+  target/tests/<脚本名>/home          一次性 USERPROFILE（应用看到的"用户目录"）
+  target/tests/<脚本名>/out           该护栏的产物：截图、seed.log、以及 out/ws 里的测试数据库
+  target/tests/_runs/<时间>-<档位>/   每次运行的日志 + summary.md / summary.json
+  ```
+
+- 界面护栏一律**自己播种**工作空间：没显式给 `-Workspace` 就先删掉再 `cargo -q xtask seed`（干净基线），
+  显式给了就只补齐缺失的库。
+- 每个脚本都能单独跑，也都支持 `-Exe` / `-SmokeHome` / `-Workspace` / `-OutDir` 覆盖；默认 `-Exe`
+  一律是 `target\release\transactions.exe`（要核验 `build\` 里的打包产物时显式传 `-Exe`）。
+- 例外：`chart-tests.ps1` **不驱动界面** —— 它把 `chart.rs` 里 wasm-only 的单元测试抽出来在 native 上跑
+  一遍（`cargo test -p tr-ui` 跑不到它们），所以不 dot-source `lib/TrUia.ps1`。
+
+## 加一个新护栏的步骤
+
+1. 脚本放 `fixtures/ui-<功能>.ps1`（界面）或 `fixtures/<外壳 / 审计>.ps1`，开头 dot-source `lib/TrUia.ps1`；
+2. 三个默认值按上面的目录约定写：`$SmokeHome = ...\target\tests\<脚本名>\home`、`$OutDir = ...\out`、
+   `$Workspace = ...\out\ws`（并保留 `-Exe` / `-SmokeHome` / `-Workspace` / `-OutDir` 覆盖参数）；
+3. 前导样板用共享版：`Initialize-TrSmokeHome` → 播种 → `Assert-NoRepoInstance` → `Start-App`，
+   收尾用 `Stop-TrApp`（见 `ui-crud.ps1` 的播种段与 `window-bounds.ps1` 的收尾）；
+4. 断言落在**库或磁盘**上（`Read-Table` / 文件哈希 / 配置内容），不要只断言"元素存在 / 点到了"；
+5. 在 `fixtures/test.ps1` 里加 `$Steps` 条目、登记进 `$Groups`，必要时补 `$PathMap` 规则；
+6. `pwsh -File fixtures/test.ps1 -Unit <分组>` 跑一遍，确认它出现在汇总里且是"通过"。
 
 ## `lib/TrUia.ps1`（共享 UIA 底座）
 

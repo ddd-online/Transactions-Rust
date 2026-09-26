@@ -10,7 +10,7 @@
 # 用法（pwsh 7）：
 #   pwsh -File fixtures/dev-hot.ps1                      # 只热更新：需要你已经在跑 cargo tauri dev
 #   pwsh -File fixtures/dev-hot.ps1 -Launch              # 顺便拉起 dev 外壳（不启动 trunk，用现有服务）
-#   pwsh -File fixtures/dev-hot.ps1 -Launch -Workspace target\smoke\ws-dev
+#   pwsh -File fixtures/dev-hot.ps1 -Launch -Workspace target\tests\dev-hot\out\ws
 #   pwsh -File fixtures/dev-hot.ps1 -Trunk               # 连 trunk serve 也一起管（全自动）
 #   pwsh -File fixtures/dev-hot.ps1 -PollMs 300          # 盯得更勤（默认 500ms）
 #
@@ -20,7 +20,7 @@
 #
 # 注意：
 #   * `NO_COLOR=1` 会让 trunk 直接报错（`invalid value '1' for '--no-color'`），脚本会先清掉它；
-#   * `-Launch` / `-Trunk` 用独立配置文件（`-SmokeHome`，默认 target\smoke\home-hot），
+#   * `-Launch` / `-Trunk` 用独立配置文件（`-SmokeHome`，默认 target\tests\dev-hot\home），
 #     **不碰**真实的 `~/.transactions-dev.json`；
 #   * 刷新会丢掉界面状态（打开的弹窗、填了一半的表单），这是整页 reload 的固有代价。
 
@@ -46,8 +46,8 @@ $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
 if (-not $Exe) { $Exe = Join-Path $repo 'target\debug\transactions.exe' }
-if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\smoke\home-hot' }
-if (-not $TrunkLog) { $TrunkLog = Join-Path $repo 'target\trunk-hot.log' }
+if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\tests\dev-hot\home' }
+if (-not $TrunkLog) { $TrunkLog = Join-Path $repo 'target\tests\dev-hot\trunk.log' }
 
 Add-Type -TypeDefinition @'
 using System;

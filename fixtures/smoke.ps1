@@ -32,7 +32,7 @@ param(
     [string]$WorkspaceRoot,
     [ValidateSet('all', 'configured', 'first-run')][string]$Case = 'all',
     [int]$StartupTimeoutSec = 45,
-    # 直接用一个既有工作空间（例如 target\ws-rust）：
+    # 直接用一个既有工作空间（例如 target\tests\smoke\ws）：
     # 这样冒烟就不依赖 `cargo xtask seed` 当前是否可用（xtask 可能正被改动）。
     [string]$Workspace
 )
@@ -43,7 +43,7 @@ $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
-if (-not $WorkspaceRoot) { $WorkspaceRoot = Join-Path $repo 'target\smoke' }
+if (-not $WorkspaceRoot) { $WorkspaceRoot = Join-Path $repo 'target\tests\smoke' }
 if (-not (Test-Path $WorkspaceRoot)) { New-Item -ItemType Directory -Force -Path $WorkspaceRoot | Out-Null }
 
 # 关键设计：给被启动的进程换一个**临时 USERPROFILE**（`config.rs` 的 `home_dir()` 先读它），

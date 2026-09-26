@@ -27,8 +27,8 @@ $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
-if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\bounds-smoke\home' }
-if (-not $OutDir) { $OutDir = Join-Path $repo 'target\bounds-smoke' }
+if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\tests\window-bounds\home' }
+if (-not $OutDir) { $OutDir = Join-Path $repo 'target\tests\window-bounds\out' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
 

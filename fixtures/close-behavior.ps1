@@ -21,9 +21,9 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
 
 $repo = Split-Path -Parent $PSScriptRoot
-if (-not $Exe) { $Exe = Join-Path $repo 'build\target\transactions.exe' }
-if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\smoke\home-close' }
-if (-not $Workspace) { $Workspace = Join-Path $repo 'target\smoke\ws-write' }
+if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
+if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\tests\close-behavior\home' }
+if (-not $Workspace) { $Workspace = Join-Path $repo 'target\tests\close-behavior\out\ws' }
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe" }
 
 $smokeHome = [System.IO.Path]::GetFullPath($SmokeHome)

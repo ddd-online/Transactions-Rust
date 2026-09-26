@@ -26,8 +26,8 @@ $repo = Split-Path -Parent $PSScriptRoot
 # 之后再判断就恒为"给了"，于是永远不重新播种（AGENTS.md 里记过的坑）。
 $explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
-if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\crud-smoke\home' }
-if (-not $OutDir) { $OutDir = Join-Path $repo 'target\crud-smoke' }
+if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\tests\ui-crud\home' }
+if (-not $OutDir) { $OutDir = Join-Path $repo 'target\tests\ui-crud\out' }
 if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }

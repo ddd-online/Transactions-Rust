@@ -32,8 +32,8 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
-if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\features-smoke\home' }
-if (-not $OutDir) { $OutDir = Join-Path $repo 'target\features-smoke' }
+if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\tests\ui-features\home' }
+if (-not $OutDir) { $OutDir = Join-Path $repo 'target\tests\ui-features\out' }
 if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions --features tauri/custom-protocol）" }

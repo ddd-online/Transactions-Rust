@@ -47,7 +47,13 @@ cargo xtask migrate <workspace-dir>               # 升级到当前格式（升�
 cargo xtask seed <workspace-dir>                  # 新建并播种一份示例数据（人工冒烟用）
 cargo xtask dump <workspace-dir> [--table <name>] # 只读导出业务表为规范化 JSON（排障/回归对比）
 
-# 护栏（前两个不启动界面；下面每个都可以加 -Workspace <ws> / -Exe <exe> / -OutDir <dir>）
+# 测试统一入口（推荐从这里跑；分组与步骤以 fixtures/test.ps1 为唯一事实来源）
+pwsh -File fixtures/test.ps1 -List                 # 列出功能分组与全部步骤
+pwsh -File fixtures/test.ps1 -Unit stock           # 单元档：改了某功能 → 跑相关测试（逗号分隔可给多个）
+pwsh -File fixtures/test.ps1 -Unit changed         # 按 git 改动自动挑分组（永远带上 core）
+pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：构建 + 全部护栏
+
+# 单个护栏（迭代/排查时直接用；每个都支持 -Exe/-Workspace/-OutDir 覆盖）
 pwsh -File fixtures/design-audit.ps1              # 设计令牌
 pwsh -File fixtures/contract-audit.ps1            # 界面 api/*.rs 请求结构体 vs tr-ipc
 pwsh -File fixtures/smoke.ps1
@@ -74,6 +80,10 @@ pwsh -File fixtures/ui-features.ps1
 pwsh -File fixtures/ui-update-restore.ps1
 ```
 
+> 产物约定：所有测试产物都在 `target\tests\` 下 —— `target\tests\<脚本名>\{home,out,ws}` 是各护栏自己的
+> 工作目录（可随手删，脚本会自己重建/播种），每次运行的日志与汇总在 `target\tests\_runs\<时间>-<档位>\`。
+> `target\` 顶层只应出现 cargo 自己的目录（`debug` / `release` / `wasm32-unknown-unknown` / …）。
+
 护栏各自管什么（一律真的启动应用、用 UI Automation 或真实鼠标键盘驱动；**断言落在库/磁盘上**，
 不落在"点到了没有"）：
 
@@ -85,7 +95,7 @@ pwsh -File fixtures/ui-update-restore.ps1
 - `ui-smoke`：逐个点开 5 个顶级功能 + 9 个子功能（记账 4：记录/分析/标签/模板；股票 5：账户/持仓/记录/统计/设置）
   并断言内容渲染；`-WriteFlow` 还在工作空间副本里通过界面记一笔；`-Discover` 导出每页元素清单
   （用来维护脚本顶部的页面标记表）。
-- `ui-shots`：抓窗口位图断言每页非空白 + 比较浅/深色平均亮度，14 张 PNG 落 `target\ui-shots\` 供人工验收。
+- `ui-shots`：抓窗口位图断言每页非空白 + 比较浅/深色平均亮度，14 张 PNG 落 `target\tests\ui-shots\out\` 供人工验收。
   补 UIA 的盲区（UIA 看不见"被裁掉/没画出来"）。
 - `ui-drag`：真实鼠标（按下 → 20 段移动 → 抬起）把第 1 个分类拖到第 3 位，断言顺序变化 + `sort_order`
   落库 + 界面同步 + 重进页面仍一致。
@@ -144,10 +154,10 @@ pwsh -File fixtures/ui-update-restore.ps1
 改 `crates/tr-ui` 下的 `.rs` / `.css` 走 dev 服务 + 热更新（一轮 5~10 秒）。`build/build-ui.ps1` +
 `cargo build --release` 是最终验收/发布用的（实测约 4 分钟，其中 release 链接 2m40s），迭代期别用。
 
-1. 起一次（之后一直开着）：`pwsh -File fixtures/dev-hot.ps1 -Trunk -Launch -Workspace <ws> -ShotDir target\dev-shots`
+1. 起一次（之后一直开着）：`pwsh -File fixtures/dev-hot.ps1 -Trunk -Launch -Workspace <ws> -ShotDir target\tests\dev-shot\out`
    它拉起 `trunk serve`（:16000）+ dev 外壳（`target\debug`，走 `devUrl`）+ 盯 trunk 日志；trunk 重建完就给窗口
    发 `Ctrl+R`（trunk 的自动刷新信号浏览器吃、Tauri 的 WebView2 不吃，但 WebView2 吃键盘刷新，实测 0.8s）；
-   带 `-ShotDir` 时把刷新后的窗口存成 `target\dev-shots\current.png`。
+带 `-ShotDir` 时把刷新后的窗口存成 `target\tests\dev-shot\out\current.png`。
 2. 只看某页/全部页面（不重建、不重启）：`pwsh -File fixtures/dev-shot.ps1 -Page 股票` 或 `-AllPages`。
    它用真实鼠标点侧栏并**轮询确认页面真切过去了**再截图。
 3. 需要「内嵌界面的 release 产物」（端到端护栏、发布）才做完整构建：
@@ -155,38 +165,46 @@ pwsh -File fixtures/ui-update-restore.ps1
    `cargo build --release -p transactions --features tauri/custom-protocol`。
 
 边界：改 `src-tauri/`（外壳）不适用热更新，要 `cargo tauri dev` 重启；`-Launch` / `-Trunk` 用独立配置目录
-（`target\smoke\home-hot`），不碰真实的 `~/.transactions-dev.json`。**不给 `-Workspace` 就沿用配置里已有的
+（`target\tests\dev-hot\home`），不碰真实的 `~/.transactions-dev.json`。**不给 `-Workspace` 就沿用配置里已有的
 工作空间**（早期版本会把它写空 → 外壳进首启动流程、只开 600×560 初始化窗口，主循环要的侧栏「记账」永远不出现，
 最后只看到一句"没找到主窗口"）。`NO_COLOR` 由脚本自己清掉。
 
-## 只跑受影响的测试（默认）
+## 测试：单元档与全量档
 
-**默认不跑全量**（十几个 fixture 全跑要十几分钟，换不到新信息）：按改动范围挑，只有大改动才全跑。
+两档都由 `fixtures/test.ps1` 驱动 —— **分组与步骤的唯一事实来源是这个脚本**（`$Groups` / `$Steps` /
+`$PathMap`），本文件只讲原则，不再维护一份容易抄错的表格。
 
-| 改了哪里 | 跑哪个脚本 |
-|---|---|
-| 记账 · 记录（记一笔 / 编辑 / 排序 / 筛选 / 模板） | `ui-transactions` |
-| 记账 · 分析 / 标签 / 模板 | `ui-crud` |
-| 记账 · 标签拖拽排序 | `ui-drag` |
-| 事件页 | `ui-key-event`；涉及关联交易卡 → `ui-link-event` |
-| 日记页 | `ui-diary-edit`、`ui-diary-ledger`；导入导出 → `ui-diary-io` |
-| 股票页（任意子功能 / 费用 / 标签 / 下单 / 清仓） | `ui-stock` |
-| 应用设置（通用 / 功能开关 / 日记配置 / 关于软件） | `ui-proxy`（代理）、`ui-about`（关于）、`ui-features`（开关） |
-| 图片上传 / 资产协议 | `ui-upload` |
-| 侧栏 / 外壳 / 窗口（窗口几何、关闭行为、首启动） | `window-bounds`、`close-behavior`、`smoke` |
-| 建库 / 迁移 / schema | `cargo xtask schema-diff`、`migrate-workspace`、`cargo test -p tr-store` |
+```powershell
+pwsh -File fixtures/test.ps1 -Unit stock            # 单元档：改了某功能 → 跑相关测试
+pwsh -File fixtures/test.ps1 -Unit stock,diary      # 多个分组
+pwsh -File fixtures/test.ps1 -Unit changed          # 按 git 改动自动挑（永远带 core）
+pwsh -File fixtures/test.ps1 -All                   # 全量档：构建 + 全部护栏（发布前）
+pwsh -File fixtures/test.ps1 -All -SkipBuild -SkipNetwork
+pwsh -File fixtures/test.ps1 -List                  # 看分组与步骤
+```
 
+- **单元档**（`-Unit <分组>`）= 改某个功能时该跑的相关测试：`core`（`fmt` / `clippy` / `design-audit` /
+  `contract-audit`，每次必跑的四条便宜的）＋ 该功能的 Rust 包单测与该功能的界面护栏。分组名：
+  `domain` / `store` / `service` / `ipc` / `ui` / `chart` / `schema` / `accounting` / `category-tag` /
+  `analysis` / `templates` / `key-event` / `diary` / `stock` / `settings` / `assets` / `shell` /
+  `ui-kit` / `update`（`-List` 里逐条列了每个分组包含哪些步骤）。
+- **全量档**（`-All`）= 发布前跑：先 `build-ui` + `build-app`（release + custom-protocol，界面护栏用的就是它），
+  再按序跑全部静态检查、Rust 单测、`schema-diff`、`chart-tests` 与 20 个界面/外壳护栏。
+  `-SkipBuild` 复用现有产物；`ui-stock` / `ui-update-restore` 依赖外网，离线时加 `-SkipNetwork`（跳过算"跳过"不算失败）。
+- **结果落盘**：`target\tests\_runs\<时间>-<档位>\`（`summary.md` / `summary.json` + 每步一个 `.log`），
+  失败会打印日志尾部并以非零码退出。
+- **界面护栏要求"没有别的实例在跑"**（单实例插件会让测试窗口起不来）：`test.ps1` 在第一个 e2e 步骤前统一
+  检查并直接报错（列出 PID 与路径）；确实要跳过用 `-KeepRunning`。
 - **共享代码会扩大范围**：`components/ui/` 下的组件（`Modal`、`Popconfirm`、`Button`、`Table`、`chart`…）、
-  `shell.rs`、`store.rs`、`fixtures/lib/TrUia.ps1` —— 改这些至少跑覆盖到的 2~3 个脚本（例：改 `Modal`
-  宽度档位 → `ui-transactions` / `ui-stock` / `ui-smoke` / `ui-crud` / `ui-key-event`）。
+  `shell.rs`、`store.rs`、全局 CSS —— 改这些至少跑覆盖到的 2~3 个脚本（例：改 `Modal` 宽度档位 →
+  `ui-transactions` / `ui-stock` / `ui-smoke` / `ui-crud` / `ui-key-event`）；`fixtures/lib/TrUia.ps1`
+  按"全量"处理（`$PathMap` 里就是这么写的）。
 - **连带效果算进影响面**：一个 fixture 里的检查可能由**别处**触发（如 `ui-upload` 最后一步要删事件，
-  所以改「删除事件」就得带上它）。
+  所以改「删除事件」就得带上它）—— 新增/改动护栏时，把这类依赖写进 `$Groups` 的注释里。
 - **什么时候才跑全量**：① 动 `fixtures/lib/TrUia.ps1` / 公共组件 / 外壳；② 一次改动跨 3 个以上页面；
   ③ 合并或发布前；④ 长时间没跑过（不确定基线还绿不绿）。
-- **每次必跑的三条便宜的**：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、
-  `pwsh -File fixtures/design-audit.ps1`（改界面再加 `cargo check -p tr-ui --target wasm32-unknown-unknown`）。
-  单测按包挑（`cargo test -p tr-store` 之类），不必每次跑全部包。改 `components/ui/chart.rs` 的纯函数
-  （Y 轴范围 / 填充基线）时加跑 `pwsh -File fixtures/chart-tests.ps1`。
+- 单独排查时仍可直接跑某个脚本，但**别漏了 `core` 那四条**；`fixtures/*.ps1` 一律自带
+  `-Exe` / `-Workspace` / `-OutDir` 覆盖参数，默认值都在 `target\tests\<脚本名>\` 下。
 
 ## 本机环境注意事项（踩过的坑）
 
@@ -266,7 +284,7 @@ pwsh -File fixtures/ui-update-restore.ps1
     `name='DevTools - …'`），按应用进程号枚举永远看不到，要扫全系统顶层窗口按名字/类名筛。
   两类框的路径输入框 `AutomationId` 不同：选文件 = 1148（`文件名(N):` 组合框）、选目录 = 1152（`文件夹(F):`
   编辑框）。选文件时回车 = 「打开」；选目录时回车只是进入该目录，必须点「选择文件夹」，且只接受已存在的目录。
-- **填进原生对话框的路径必须是绝对路径**：选目录框按自己的"当前目录"解析相对路径（传 `-OutDir target\pkg-diary`
+- **填进原生对话框的路径必须是绝对路径**：选目录框按自己的"当前目录"解析相对路径（传 `-OutDir target\tests\ui-diary-io\out\pkg-diary`
   就落到了别处）；同理，被启动进程按**它自己的 cwd** 解析 `-workspace` 这类参数。所有 fixture 入口都做
   `GetFullPath` 归一化（`-OutDir` 在内），`Select-Directory` 里另有 `IsPathRooted` 断言兜底，
   调 `xtask dump` 时把 cargo 的 stderr 收进异常（原来写 `2>$null`，只剩一句"dump 失败"）。
@@ -558,10 +576,9 @@ Select-String -Path src-tauri\src\updater.rs,crates\tr-ui\src\pages\settings.rs,
 `gh release edit vX.Y.Z --notes-file <CHANGELOG 对应小节 + 安装包名 + compare 链接>`（只改元数据，不动资产；
 改完照例 `gh release view --json assets` 回读一次 digest）。
 
-**`clean.ps1` 会连 `target\` 一起删**，而护栏用的工作空间就在里面（`target\ws-rust` 给 `ui-smoke`、
-`target\smoke\ws-write` 给 `ui-shots` 与 `close-behavior`）。所以"发布前跑全量护栏"要在 `clean` **之前**做，
-或者 clean 之后先补种 `cargo xtask seed target\ws-rust` 与 `cargo xtask seed target\smoke\ws-write` ——
-否则这三个脚本会因为「工作空间里没有 transactions.db」直接红（是环境问题，别去改代码）。
+**`clean.ps1` 会连 `target\` 一起删**，而护栏的工作空间与产物都在 `target\tests\` 下。现在每个界面护栏
+都自己播种（缺 `transactions.db` 就跑 `cargo -q xtask seed`），所以 clean 之后直接跑
+`fixtures/test.ps1 -All` 会自己重建，不再需要手工补种；只是**全量档会因此变慢**（每个脚本都要重新播种一份）。
 
 **踩过的坑：发布资产可能是上一版的安装包**：0.2.0 的 release 资产其实是 0.1.0 的安装包（两个 release 的资产
 字节数与 `sha256` 一模一样，用户装完看到的还是 0.1.0 的界面）。根因是 `cargo tauri build` 不清

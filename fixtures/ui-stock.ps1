@@ -67,8 +67,8 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)
 if (-not $Exe) { $Exe = Join-Path $repo 'target\release\transactions.exe' }
-if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\stock-smoke\home' }
-if (-not $OutDir) { $OutDir = Join-Path $repo 'target\stock-smoke' }
+if (-not $SmokeHome) { $SmokeHome = Join-Path $repo 'target\tests\ui-stock\home' }
+if (-not $OutDir) { $OutDir = Join-Path $repo 'target\tests\ui-stock\out' }
 if (-not $Workspace) { $Workspace = Join-Path $OutDir 'ws' }
 
 if (-not (Test-Path $Exe)) { throw "找不到可执行文件: $Exe（先跑 cargo build --release -p transactions）" }
