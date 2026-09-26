@@ -160,9 +160,9 @@ textarea,
 .statistics-footer-item-label {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-caption);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--transactions-tracking-label);
   color: var(--transactions-color-text-secondary);
   margin: 0;
 }
@@ -170,9 +170,9 @@ textarea,
 .statistics-footer-item-value {
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-body);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--transactions-tracking-amount);
   margin: 0;
 }
 
@@ -202,7 +202,7 @@ textarea,
 .modal-form-label {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-section);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   color: var(--transactions-color-text-major);
   margin: 0 0 var(--transactions-space-sm) 0;
 }
@@ -218,7 +218,7 @@ textarea,
 .page-title {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-caption);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   color: var(--transactions-color-text-secondary);
   margin: 0;
   min-width: 0;
@@ -266,9 +266,9 @@ textarea,
 .table-wrapper thead > tr > th {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-caption);
-  font-weight: 600;
+  font-weight: var(--transactions-weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--transactions-tracking-label);
   background-color: var(--transactions-color-minor-background);
   color: var(--transactions-color-text-secondary);
   text-align: left;
@@ -295,7 +295,7 @@ textarea,
 .amount {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .amount-income {

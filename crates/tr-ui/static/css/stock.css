@@ -130,17 +130,22 @@
 .stock-mono {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .stock-amount {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   font-weight: var(--transactions-weight-medium);
 }
 
 .stock-amount--large {
   font-size: var(--transactions-size-text-display);
   font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-tight);
+  /* 金额在 display 档按 DESIGN.md 收到 −0.03em */
+  letter-spacing: var(--transactions-tracking-amount-xl);
 }
 
 .stock-ellipsis {
@@ -374,6 +379,8 @@
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-title-sm);
   font-variant-numeric: tabular-nums;
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-amount-lg);
   color: var(--transactions-color-text-major);
 }
 
@@ -523,12 +530,14 @@
 .stock-position-card__value {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   color: var(--transactions-color-text-major);
 }
 
 .stock-position-card__rate {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .stock-detail__head {
@@ -549,6 +558,9 @@
 .stock-detail__name {
   font-size: var(--transactions-size-text-title-sm);
   font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-display);
+  text-wrap: balance;
   color: var(--transactions-color-text-major);
 }
 
@@ -589,6 +601,7 @@
 .stock-quote__value {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   color: var(--transactions-color-text-major);
 }
 
@@ -704,6 +717,7 @@
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-body-sm);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   text-align: right;
   color: var(--transactions-color-text-major);
 }
@@ -742,6 +756,7 @@
 .stock-summary-row__value {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   color: var(--transactions-color-text-major);
   text-align: right;
 }
@@ -848,6 +863,7 @@
 .stock-summary-cell__value {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   color: var(--transactions-color-text-major);
 }
 
@@ -938,6 +954,7 @@
 .stock-history-card__value {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   color: var(--transactions-color-text-disabled);
 }
 
@@ -1026,6 +1043,7 @@
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-caption);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 /* ---------------- 子功能五：设置 ---------------- */
@@ -1076,6 +1094,7 @@
   margin-left: auto;
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-tertiary);
   white-space: nowrap;
@@ -1151,6 +1170,8 @@
   font-size: var(--transactions-size-text-display-sm);
   font-weight: var(--transactions-weight-semibold);
   font-variant-numeric: tabular-nums;
+  line-height: var(--transactions-height-tight);
+  letter-spacing: var(--transactions-tracking-amount-xl);
 }
 
 .stock-stats-overview__sub {
@@ -1181,6 +1202,8 @@
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-title-sm);
   font-variant-numeric: tabular-nums;
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-amount-lg);
   color: var(--transactions-color-text-major);
 }
 
@@ -1338,11 +1361,13 @@
 
 .stock-position-card__value {
   text-align: right;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .stock-position-card__rate {
   text-align: right;
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 /* ★ 持仓子功能的包装层：必须是可伸缩的弹性列。
@@ -1454,6 +1479,7 @@
 .stock-history-card__value {
   font-size: var(--transactions-size-text-body-sm);
   color: var(--transactions-color-text-secondary);
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 /* 卡上最该被看见的数：盈亏金额 */
@@ -1463,6 +1489,7 @@
   font-size: var(--transactions-size-text-body);
   font-weight: var(--transactions-weight-semibold);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 /* 轮次 / 日期那行是脚注：压低一档，别与卡名抢 */

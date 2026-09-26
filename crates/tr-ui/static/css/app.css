@@ -398,7 +398,7 @@
 .nav-btn.active {
   background-color: var(--transactions-color-active-bg);
   color: var(--transactions-color-primary);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 .nav-btn:focus-visible {
@@ -408,7 +408,7 @@
 
 /* 次级导航按钮 —— 设置等工具项，视觉降权 */
 .nav-btn-secondary .nav-btn-icon {
-  font-size: 16px;
+  font-size: 16px; /* impeccable-disable-line design-system-font-size -- 图标方框尺寸，不是文字角色 */
 }
 
 .nav-btn-secondary .nav-btn-text {
@@ -586,7 +586,7 @@
 .notice-notification__title {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body);
-  font-weight: 600;
+  font-weight: var(--transactions-weight-semibold);
   color: var(--transactions-color-text-major);
   margin: 0;
 }
@@ -1010,7 +1010,7 @@
   border-color: var(--transactions-color-primary);
   background-color: var(--transactions-color-active-bg);
   color: var(--transactions-color-primary);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 .tr-pagination__item:disabled {
@@ -1053,13 +1053,14 @@
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-secondary);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .tr-cell-type {
   font-size: var(--transactions-size-text-caption);
-  font-weight: 600;
+  font-weight: var(--transactions-weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--transactions-tracking-label);
 }
 
 .tr-cell-type.type-income {
@@ -1096,9 +1097,9 @@
 .tr-cell-price {
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-body);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .tr-cell-price.price-income {
@@ -1159,7 +1160,10 @@
 .empty-guide-title {
   font-family: var(--transactions-font-display);
   font-size: var(--transactions-size-text-title-sm);
-  font-weight: 600;
+  font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-display);
+  text-wrap: balance;
   color: var(--transactions-color-text-major);
   margin: 0;
 }

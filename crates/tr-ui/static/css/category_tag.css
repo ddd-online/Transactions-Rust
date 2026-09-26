@@ -25,7 +25,7 @@
   padding: 0 var(--transactions-space-md);
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body-sm);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   color: var(--transactions-color-text-secondary);
   background-color: var(--transactions-color-major-background);
   border: 1px solid var(--transactions-color-divider);
@@ -127,7 +127,7 @@
 
 .ct-column-title {
   font-size: var(--transactions-size-text-body);
-  font-weight: 600;
+  font-weight: var(--transactions-weight-semibold);
   color: var(--transactions-color-text-major);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -194,7 +194,7 @@
 
 .ct-list-item.is-active {
   background-color: var(--transactions-color-active-bg);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 /* 拖拽手柄（Title「拖动排序」）；`.ui-drag-item` 自带 grab 光标，

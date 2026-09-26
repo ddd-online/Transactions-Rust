@@ -147,6 +147,13 @@
   --transactions-height-normal: 1.6;
   --transactions-height-relaxed: 1.8;
 
+  /* 字距（DESIGN.md 的 display / label / amount 三个角色各一档；文与正文不调字距） */
+  --transactions-tracking-display: -0.015em;
+  --transactions-tracking-label: 0.04em;
+  --transactions-tracking-amount: -0.01em;
+  --transactions-tracking-amount-lg: -0.02em;
+  --transactions-tracking-amount-xl: -0.03em;
+
   /* ---------- Spacing（$spacing，8px 基准） ---------- */
   --transactions-space-2xs: 2px;
   --transactions-space-xs: 4px;

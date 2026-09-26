@@ -223,7 +223,7 @@
 }
 
 .diary-editor__empty-icon {
-  font-size: 32px;
+  font-size: 32px; /* impeccable-disable-line design-system-font-size -- 空态图标方框尺寸，不是文字角色 */
   opacity: 0.6;
 }
 
@@ -333,6 +333,7 @@
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-disabled);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   white-space: nowrap;
 }
 

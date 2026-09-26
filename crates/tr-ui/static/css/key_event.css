@@ -26,7 +26,8 @@
   font-size: var(--transactions-size-text-display-sm);
   font-weight: var(--transactions-weight-semibold);
   color: var(--transactions-color-text-major);
-  line-height: 32px;
+  line-height: var(--transactions-height-tight);
+  letter-spacing: var(--transactions-tracking-display);
   font-variant-numeric: tabular-nums;
 }
 
@@ -721,6 +722,7 @@
   font-size: var(--transactions-size-text-body);
   font-weight: var(--transactions-weight-semibold);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   flex-shrink: 0;
 }
 
@@ -1036,6 +1038,22 @@
   color: var(--transactions-color-text-major);
   line-height: var(--transactions-height-relaxed);
   word-break: break-word;
+  text-wrap: pretty;
+}
+
+/* 长文的**行长**封顶 75ch（≈41 汉字）：再宽就不是"读"而是"扫"了。
+ * 只封正文块，表格 / 图片 / 分隔线仍按容器宽度铺开。 */
+.md-body > p,
+.md-body > ul,
+.md-body > ol,
+.md-body > blockquote,
+.md-body > h1,
+.md-body > h2,
+.md-body > h3,
+.md-body > h4,
+.md-body > h5,
+.md-body > h6 {
+  max-width: 75ch;
 }
 
 .md-body > *:first-child {
@@ -1047,19 +1065,26 @@
 }
 
 .md-body h1 {
-  font-size: 1.6em;
+  font-size: var(--transactions-size-text-title);
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-display);
+  text-wrap: balance;
   margin: 1em 0 0.5em;
-  font-weight: var(--transactions-weight-bold);
+  font-weight: var(--transactions-weight-semibold);
 }
 
 .md-body h2 {
-  font-size: 1.35em;
+  font-size: var(--transactions-size-text-title-sm);
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-display);
+  text-wrap: balance;
   margin: 0.9em 0 0.45em;
   font-weight: var(--transactions-weight-semibold);
 }
 
 .md-body h3 {
-  font-size: 1.15em;
+  font-size: var(--transactions-size-text-section);
+  text-wrap: balance;
   margin: 0.8em 0 0.4em;
   font-weight: var(--transactions-weight-semibold);
 }
@@ -1068,6 +1093,7 @@
 .md-body h5,
 .md-body h6 {
   font-size: 1em;
+  text-wrap: balance;
   margin: 0.7em 0 0.35em;
   font-weight: var(--transactions-weight-semibold);
 }

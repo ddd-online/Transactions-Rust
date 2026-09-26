@@ -149,6 +149,9 @@
   margin: 0;
   font-size: var(--transactions-size-text-title);
   font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-display);
+  text-wrap: balance;
   color: var(--transactions-color-text-major);
 }
 
@@ -245,6 +248,7 @@
   font-size: var(--transactions-size-text-caption);
   font-weight: var(--transactions-weight-semibold);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   color: var(--transactions-color-text-major);
 }
 

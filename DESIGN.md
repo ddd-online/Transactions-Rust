@@ -202,6 +202,15 @@ Eight natural tones give each ledger a stable identity: forest #4a8e70, amber #c
 
 **The Mono Money Rule.** Every monetary amount renders in JetBrains Mono with `font-variant-numeric: tabular-nums` and slightly negative letter-spacing. Never typeset money in the body face.
 
+### Tracking tokens
+
+Letter-spacing is tokenised per role — `--transactions-tracking-display` (−0.015em, display/title text),
+`--transactions-tracking-label` (+0.04em, uppercase labels), and the amount ladder
+`--transactions-tracking-amount` (−0.01em) / `-amount-lg` (−0.02em, money at title size) /
+`-amount-xl` (−0.03em, money at display size). Prose takes no tracking. Line heights are tokens too:
+`--transactions-height-tight` (display 1.2) / `-snug` (title 1.4) / `-normal` (body, label 1.6) /
+`-relaxed` (long-form prose 1.8).
+
 ## Layout
 
 The spacing scale is 8px-based (2 / 4 / 8 / 12 / 16 / 24 / 32 / 48). The app shell fixes a 48px header, 56px left rail, and 44px footer with 20px content padding. Data surfaces use either auto-filling card grids (`minmax(340px, 1fr)`, 24px gap) or fixed-sidebar layouts (280px rail + fluid main column). Multi-column pages stack to a single column at ≤1080px; wider three-column layouts collapse at ≤1365px.

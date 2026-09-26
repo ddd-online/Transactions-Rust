@@ -18,7 +18,7 @@
   justify-content: center;
   gap: var(--transactions-space-sm);
   font-family: var(--transactions-font-body);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   border-radius: var(--transactions-radius-md);
   box-shadow: none;
   transition: all var(--transactions-transition-fast);
@@ -517,7 +517,7 @@
 .ui-select__option.is-selected {
   background-color: var(--transactions-color-active-bg);
   color: var(--transactions-color-primary);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 .ui-select__empty {
@@ -596,7 +596,10 @@
 .ui-modal__title {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-title-sm);
-  font-weight: 600;
+  font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-display);
+  text-wrap: balance;
   color: var(--transactions-color-text-major);
   margin: 0;
 }
@@ -660,31 +663,31 @@
 .ui-tag--income {
   background-color: var(--transactions-color-income-tint);
   color: var(--transactions-color-income);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 .ui-tag--expense {
   background-color: var(--transactions-color-expense-tint);
   color: var(--transactions-color-expense);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 .ui-tag--transfer {
   background-color: var(--transactions-color-transfer-tint);
   color: var(--transactions-color-transfer);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 .ui-tag--outlier {
   background-color: var(--transactions-color-outlier-tint);
   color: var(--transactions-color-outlier);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 .ui-tag--primary {
   background-color: var(--transactions-color-primary-tint);
   color: var(--transactions-color-primary);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 /* ============================================
@@ -778,7 +781,7 @@
 .ui-empty__title {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-section);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   color: var(--transactions-color-text-major);
   margin: 0;
 }
@@ -935,7 +938,7 @@
   gap: var(--transactions-space-2xs);
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body-sm);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   color: var(--transactions-color-text-major);
 }
 
@@ -1073,7 +1076,7 @@
 .ui-segmented__item.is-active {
   background-color: var(--transactions-color-major-background);
   color: var(--transactions-color-primary);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   box-shadow: var(--transactions-shadow-sm);
 }
 
@@ -1190,7 +1193,7 @@
 .ui-popconfirm__title {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   color: var(--transactions-color-text-major);
   line-height: var(--transactions-height-snug);
 }
@@ -1323,7 +1326,7 @@
   margin: 0 0 var(--transactions-space-sm) 0;
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   color: var(--transactions-color-text-major);
 }
 
@@ -1372,7 +1375,10 @@
   margin: 0;
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-title-sm);
-  font-weight: 600;
+  font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-display);
+  text-wrap: balance;
   color: var(--transactions-color-text-major);
 }
 
@@ -1567,6 +1573,7 @@
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-secondary);
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 /* ============================================
@@ -1605,6 +1612,7 @@
   white-space: nowrap;
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-body-sm);
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .ui-date-picker__value.is-placeholder {
@@ -1669,7 +1677,7 @@
   color: var(--transactions-color-text-major);
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   cursor: pointer;
 }
 
@@ -1707,6 +1715,7 @@
   font-size: var(--transactions-size-text-caption);
   cursor: pointer;
   transition: all var(--transactions-transition-fast);
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .ui-date-picker__cell:hover {
@@ -1729,7 +1738,7 @@
 .ui-date-picker__cell.is-selected {
   background-color: var(--transactions-color-primary);
   color: var(--transactions-color-text-inverse);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
 }
 
 .ui-date-picker__cell:focus-visible {
@@ -1895,6 +1904,7 @@
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-caption);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   cursor: pointer;
   transition: border-color var(--transactions-transition-fast);
 }
@@ -1947,7 +1957,7 @@
 .ui-time__panel-title {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body-sm);
-  font-weight: 500;
+  font-weight: var(--transactions-weight-medium);
   color: var(--transactions-color-text-major);
 }
 
@@ -2204,6 +2214,7 @@
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-caption);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   color: var(--transactions-color-text-major);
 }
 

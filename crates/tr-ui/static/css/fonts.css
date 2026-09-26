@@ -18,6 +18,10 @@
  * `<link data-trunk rel="copy-dir" href="static/fonts" />` 拷出来的 `dist/fonts/`。
  * ============================================ */
 
+/* impeccable-disable overused-font -- Inter / JetBrains Mono 是 DESIGN.md 钉下来的
+ * 既定身份（UI 用 Inter、所有金额用 JetBrains Mono + tabular-nums），自托管 latin 子集；
+ * 不按"这个字脸太流行"换掉产品已经确认的字体。 */
+
 /* ---- Inter ---- */
 @font-face {
   font-family: 'Inter';

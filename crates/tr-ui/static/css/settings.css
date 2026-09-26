@@ -107,7 +107,9 @@
 .st-card-title {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body);
-  font-weight: var(--transactions-weight-medium);
+  /* 块标题统一 600（分类标签的列头、日记的「日记列表」都是 600）：500 与下面
+   * 12px/400 的说明只差一档，读起来分不出「标题」和「说明」 */
+  font-weight: var(--transactions-weight-semibold);
   color: var(--transactions-color-text-major);
 }
 
@@ -191,7 +193,7 @@
 .st-summary-title {
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body-sm);
-  font-weight: var(--transactions-weight-medium);
+  font-weight: var(--transactions-weight-semibold);
   color: var(--transactions-color-text-major);
   margin-bottom: var(--transactions-space-sm);
 }
@@ -219,6 +221,7 @@
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-secondary);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .st-bar-track {
@@ -302,6 +305,7 @@
   min-width: 0;
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -458,7 +462,7 @@
   margin: 0;
   font-family: var(--transactions-font-body);
   font-size: var(--transactions-size-text-body);
-  font-weight: var(--transactions-weight-medium);
+  font-weight: var(--transactions-weight-semibold);
   color: var(--transactions-color-text-major);
 }
 
@@ -632,6 +636,7 @@
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-tertiary);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
 }
 
 .st-update-success .st-update-text,
