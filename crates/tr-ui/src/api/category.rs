@@ -7,40 +7,21 @@
 //!
 //! `type` 为空串或 `"all"` 表示不过滤。
 
-use serde::Serialize;
 use tr_domain::dto::{
     CategoryDto, CreateCategoryRequest, InitializeCategoriesResponse, UpdateCategorySortRequest,
 };
+use tr_domain::wire::{CategoryDeleteRequest, CategoryListRequest, InitializeCategoriesRequest};
 
 use crate::ipc::{self, IpcError};
 
-use super::LedgerIdRequest;
-
 /// `"all"`（与 `type`/`transactionType` 的不过滤语义一致）。
 pub const ALL: &str = "all";
-
-#[derive(Debug, Serialize)]
-struct ListRequest {
-    #[serde(rename = "type")]
-    transaction_type: String,
-    #[serde(rename = "ledgerId")]
-    ledger_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DeleteRequest {
-    name: String,
-    #[serde(rename = "type")]
-    transaction_type: String,
-    #[serde(rename = "ledgerId")]
-    ledger_id: String,
-}
 
 /// 查询分类（含每个分类的记录数）。`ledger_id` 为空时后端返回空数组（不报错）。
 pub async fn list(transaction_type: &str, ledger_id: &str) -> Result<Vec<CategoryDto>, IpcError> {
     ipc::call(
         "category_list",
-        ListRequest {
+        CategoryListRequest {
             transaction_type: transaction_type.to_string(),
             ledger_id: ledger_id.to_string(),
         },
@@ -66,7 +47,7 @@ pub async fn create(ledger_id: &str, name: &str, transaction_type: &str) -> Resu
 pub async fn delete(name: &str, transaction_type: &str, ledger_id: &str) -> Result<(), IpcError> {
     ipc::call_void(
         "category_delete",
-        DeleteRequest {
+        CategoryDeleteRequest {
             name: name.to_string(),
             transaction_type: transaction_type.to_string(),
             ledger_id: ledger_id.to_string(),
@@ -98,7 +79,7 @@ pub async fn update_sort(
 pub async fn initialize(ledger_id: &str) -> Result<InitializeCategoriesResponse, IpcError> {
     ipc::call(
         "category_initialize",
-        LedgerIdRequest {
+        InitializeCategoriesRequest {
             ledger_id: ledger_id.to_string(),
         },
     )

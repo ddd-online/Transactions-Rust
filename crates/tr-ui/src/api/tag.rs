@@ -3,27 +3,10 @@
 //! 与分类域同构，但查询参数名是 `categoryTransactionType`（分类域是 `type`）——照抄
 //! `crates/tr-ipc/src/commands/tag.rs`，不要"顺手统一"。
 
-use serde::Serialize;
 use tr_domain::dto::{CreateTagRequest, TagDto, UpdateTagSortRequest};
+use tr_domain::wire::{TagDeleteRequest, TagListRequest};
 
 use crate::ipc::{self, IpcError};
-
-#[derive(Debug, Serialize)]
-struct ListRequest {
-    #[serde(rename = "categoryTransactionType")]
-    category_transaction_type: String,
-    #[serde(rename = "ledgerId")]
-    ledger_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DeleteRequest {
-    name: String,
-    #[serde(rename = "categoryTransactionType")]
-    category_transaction_type: String,
-    #[serde(rename = "ledgerId")]
-    ledger_id: String,
-}
 
 /// 查询标签（含每个标签的记录数）。`ledger_id` 为空时后端返回空数组（不报错）。
 pub async fn list(
@@ -32,7 +15,7 @@ pub async fn list(
 ) -> Result<Vec<TagDto>, IpcError> {
     ipc::call(
         "tag_list",
-        ListRequest {
+        TagListRequest {
             category_transaction_type: category_transaction_type.to_string(),
             ledger_id: ledger_id.to_string(),
         },
@@ -66,7 +49,7 @@ pub async fn delete(
 ) -> Result<(), IpcError> {
     ipc::call_void(
         "tag_delete",
-        DeleteRequest {
+        TagDeleteRequest {
             name: name.to_string(),
             category_transaction_type: category_transaction_type.to_string(),
             ledger_id: ledger_id.to_string(),

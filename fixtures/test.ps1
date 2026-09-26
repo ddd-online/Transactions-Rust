@@ -67,11 +67,10 @@ $Steps = [ordered]@{
     'build-ui'          = @{ Title='构建界面（trunk，跳过 wasm-opt）';                Kind='pwsh';  Script='build\build-ui.ps1'; Needs='none' }
     'build-app'         = @{ Title='构建外壳（release + custom-protocol）';           Kind='cargo'; Args=@('build','--release','-p','transactions','--features','tauri/custom-protocol'); Needs='none' }
 
-    # ---- 每次必跑的三条便宜的（+ 契约审计）----
+    # ---- 每次必跑的三条便宜的 ----
     'fmt'               = @{ Title='cargo fmt --check';                              Kind='cargo'; Args=@('fmt','--check'); Needs='none' }
     'clippy'            = @{ Title='cargo clippy --all-targets -D warnings';         Kind='cargo'; Args=@('clippy','--all-targets','--','-D','warnings'); Needs='none' }
     'design-audit'      = @{ Title='设计令牌审计（tokens.css 之外的硬编码色）';      Kind='pwsh';  Script='fixtures\design-audit.ps1'; Needs='none' }
-    'contract-audit'    = @{ Title='IPC 入参契约审计（界面 ↔ tr-ipc）';              Kind='pwsh';  Script='fixtures\contract-audit.ps1'; Needs='none' }
 
     # ---- Rust 单元测试（按包）----
     'test-domain'       = @{ Title='cargo test -p tr-domain';                        Kind='cargo'; Args=@('test','-p','tr-domain'); Needs='none' }
@@ -111,11 +110,11 @@ $Steps = [ordered]@{
 # ---------------------------------------------------------------- 功能分组（单元档）
 # 一处改动 → 该跑哪些步骤。新增护栏脚本时必须同时登记进某个分组（见 -List 与 AGENTS.md）。
 $Groups = [ordered]@{
-    'core'         = @('fmt', 'clippy', 'design-audit', 'contract-audit')
+    'core'         = @('fmt', 'clippy', 'design-audit')
     'domain'       = @('test-domain')
     'store'        = @('test-store', 'schema-diff')
     'service'      = @('test-service')
-    'ipc'          = @('test-ipc', 'contract-audit')
+    'ipc'          = @('test-ipc')
     'ui'           = @('check-ui-wasm', 'design-audit')
     'chart'        = @('chart-tests')
     'schema'       = @('schema-diff', 'migrate-workspace')
@@ -232,7 +231,7 @@ function Resolve-Changed {
     if ($ignored.Count -gt 0) {
         Write-Host ('（以下改动不是测试步骤，已忽略：' + ($ignored -join ', ') + '）') -ForegroundColor DarkGray
     }
-    # 每轮必跑的四条便宜的（fmt / clippy / design-audit / contract-audit）永远带上
+    # 每轮必跑的三条便宜的（fmt / clippy / design-audit）永远带上
     $hit.Add('core')
     return @($hit | Sort-Object -Unique)
 }

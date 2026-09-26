@@ -6,40 +6,12 @@
 //! `key_event_upsert` 是"有则更新、无则插入"，返回日期；`title` / `content` / `color`
 //! 可选（缺省按空串处理）。
 
-use serde::Serialize;
 use tr_domain::models::{KeyEvent, KeyEventImage};
+use tr_domain::wire::{
+    IdRequest, KeyEventDateRequest, KeyEventImageAddRequest, KeyEventUpsertRequest, YearRequest,
+};
 
 use crate::ipc::{self, IpcError};
-
-use super::IdRequest;
-
-#[derive(Debug, Serialize)]
-struct YearRequest {
-    year: String,
-    ledger_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DateRequest {
-    date: String,
-    ledger_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct UpsertRequest {
-    ledger_id: String,
-    date: String,
-    title: String,
-    content: String,
-    color: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ImageAddRequest {
-    date: String,
-    ledger_id: String,
-    data: String,
-}
 
 /// 某年的全部事件。
 pub async fn list_by_year(year: &str, ledger_id: &str) -> Result<Vec<KeyEvent>, IpcError> {
@@ -69,7 +41,7 @@ pub async fn dates_by_year(year: &str, ledger_id: &str) -> Result<Vec<String>, I
 pub async fn get(date: &str, ledger_id: &str) -> Result<KeyEvent, IpcError> {
     ipc::call(
         "key_event_get",
-        DateRequest {
+        KeyEventDateRequest {
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),
         },
@@ -87,12 +59,12 @@ pub async fn upsert(
 ) -> Result<String, IpcError> {
     ipc::call(
         "key_event_upsert",
-        UpsertRequest {
+        KeyEventUpsertRequest {
             ledger_id: ledger_id.to_string(),
             date: date.to_string(),
-            title: title.to_string(),
-            content: content.to_string(),
-            color: color.to_string(),
+            title: Some(title.to_string()),
+            content: Some(content.to_string()),
+            color: Some(color.to_string()),
         },
     )
     .await
@@ -102,7 +74,7 @@ pub async fn upsert(
 pub async fn delete(date: &str, ledger_id: &str) -> Result<(), IpcError> {
     ipc::call_void(
         "key_event_delete",
-        DateRequest {
+        KeyEventDateRequest {
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),
         },
@@ -114,7 +86,7 @@ pub async fn delete(date: &str, ledger_id: &str) -> Result<(), IpcError> {
 pub async fn images_list(date: &str, ledger_id: &str) -> Result<Vec<KeyEventImage>, IpcError> {
     ipc::call(
         "key_event_images_list",
-        DateRequest {
+        KeyEventDateRequest {
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),
         },
@@ -126,10 +98,10 @@ pub async fn images_list(date: &str, ledger_id: &str) -> Result<Vec<KeyEventImag
 pub async fn image_add(date: &str, ledger_id: &str, data: &str) -> Result<KeyEventImage, IpcError> {
     ipc::call(
         "key_event_image_add",
-        ImageAddRequest {
+        KeyEventImageAddRequest {
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),
-            data: data.to_string(),
+            data: Some(data.to_string()),
         },
     )
     .await

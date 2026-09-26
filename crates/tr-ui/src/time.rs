@@ -86,16 +86,12 @@ pub fn now_seconds() -> i64 {
 ///
 /// 解析失败返回 `None`（调用方决定提示文案）。
 pub fn ymd_to_seconds(input: &str) -> Option<i64> {
-    let trimmed = input.trim();
-    let mut parts = trimmed.split('-');
-    let year: u32 = parts.next()?.parse().ok()?;
-    let month: u32 = parts.next()?.parse().ok()?;
-    let day: u32 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let (year, month, day) = split_ymd(input)?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
     // 0 基月份 + 本地时区
-    let date = js_sys::Date::new_with_year_month_day(year, month as i32 - 1, day as i32);
+    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32);
     Some((date.get_time() / 1000.0) as i64)
 }
 
@@ -125,39 +121,21 @@ const WEEKDAY_CN: [&str; 7] = [
 ///
 /// 解析失败时原样返回输入（不 panic）。
 pub fn format_ymd_cn(input: &str) -> String {
-    let trimmed = input.trim();
-    let mut parts = trimmed.split('-');
-    let (Some(year), Some(month), Some(day)) = (parts.next(), parts.next(), parts.next()) else {
-        return input.to_string();
-    };
-    let (Ok(year), Ok(month), Ok(day)) = (
-        year.parse::<u32>(),
-        month.parse::<u32>(),
-        day.parse::<u32>(),
-    ) else {
-        return input.to_string();
-    };
     // 去掉前导零：月 / 日
-    format!("{year}年{month}月{day}日")
+    match split_ymd(input) {
+        Some((year, month, day)) => format!("{year}年{month}月{day}日"),
+        None => input.to_string(),
+    }
 }
 
 /// `YYYY-MM-DD` → 星期中文名（中文 locale）。
 ///
 /// 解析失败返回空串。
 pub fn weekday_cn(input: &str) -> String {
-    let trimmed = input.trim();
-    let mut parts = trimmed.split('-');
-    let (Some(year), Some(month), Some(day)) = (parts.next(), parts.next(), parts.next()) else {
+    let Some((year, month, day)) = split_ymd(input) else {
         return String::new();
     };
-    let (Ok(year), Ok(month), Ok(day)) = (
-        year.parse::<u32>(),
-        month.parse::<u32>(),
-        day.parse::<u32>(),
-    ) else {
-        return String::new();
-    };
-    let date = js_sys::Date::new_with_year_month_day(year, month as i32 - 1, day as i32);
+    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32);
     WEEKDAY_CN
         .get(date.get_day() as usize)
         .copied()

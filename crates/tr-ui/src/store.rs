@@ -66,7 +66,7 @@ impl AppStores {
             workspace_dir: RwSignal::new(String::new()),
             statistics: RwSignal::new(BTreeMap::new()),
             appearance: RwSignal::new(APPEARANCE_SYSTEM.to_string()),
-            enabled_features: RwSignal::new(FeatureFlags::all_enabled()),
+            enabled_features: RwSignal::new(FeatureFlags::defaults()),
             key_event_linked_open: RwSignal::new(true),
         }
     }

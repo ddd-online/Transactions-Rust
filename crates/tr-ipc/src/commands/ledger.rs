@@ -10,22 +10,16 @@
 //! 缺失 `name` 必须报 `name在请求体中不存在`；因此这里把 `name` 声明为 `Option<String>` 后手工校验，
 //! 保持同一文案（若直接声明为 `String`，serde 会在进入函数体前失败，文案就变了）。
 
-use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::consts;
 use tr_domain::dto::LedgerDto;
 use tr_domain::error::AppError;
+use tr_domain::wire::{CreateLedgerRequest, IdRequest, LedgerListRequest, UpdateLedgerRequest};
 use tr_service::ledger;
 
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
-
-#[derive(Debug, Deserialize)]
-pub struct LedgerListRequest {
-    #[serde(default)]
-    pub id: String,
-}
 
 /// 列出一个、多个或全部账本。
 #[tauri::command]
@@ -58,14 +52,6 @@ pub fn ledger_list(
     Ok(ledgers.iter().map(LedgerDto::from).collect())
 }
 
-#[derive(Debug, Deserialize)]
-pub struct CreateLedgerRequest {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-}
-
 /// 新建账本，返回新账本 ID。
 #[tauri::command]
 pub fn ledger_create(state: State<'_, AppState>, req: CreateLedgerRequest) -> ApiResult<String> {
@@ -79,14 +65,9 @@ pub fn ledger_create(state: State<'_, AppState>, req: CreateLedgerRequest) -> Ap
     Ok(id)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LedgerIdRequest {
-    pub id: String,
-}
-
 /// 查询单个账本；不存在返回 404。
 #[tauri::command]
-pub fn ledger_get(state: State<'_, AppState>, req: LedgerIdRequest) -> ApiResult<LedgerDto> {
+pub fn ledger_get(state: State<'_, AppState>, req: IdRequest) -> ApiResult<LedgerDto> {
     if req.id.is_empty() {
         return Err(ApiError::from(AppError::bad_request("missing ledger id")));
     }
@@ -94,15 +75,6 @@ pub fn ledger_get(state: State<'_, AppState>, req: LedgerIdRequest) -> ApiResult
     let found = ledger::query_ledger_by_id(&workspace, &req.id)
         .map_err(|error| ApiError::from(AppError::not_found(error.to_string())))?;
     Ok(LedgerDto::from(&found))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateLedgerRequest {
-    pub id: String,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
 }
 
 /// 修改账本名称与描述。
@@ -128,7 +100,7 @@ pub fn ledger_update(state: State<'_, AppState>, req: UpdateLedgerRequest) -> Ap
 
 /// 删除账本及其全部业务数据。
 #[tauri::command]
-pub fn ledger_delete(state: State<'_, AppState>, req: LedgerIdRequest) -> ApiResult<()> {
+pub fn ledger_delete(state: State<'_, AppState>, req: IdRequest) -> ApiResult<()> {
     if req.id.is_empty() {
         return Err(ApiError::from(AppError::bad_request("missing ledger id")));
     }

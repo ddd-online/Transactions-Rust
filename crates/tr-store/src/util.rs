@@ -1,4 +1,6 @@
-//! 通用工具：UUID 生成等。
+//! 通用工具：UUID 生成与时间戳。
+//!
+//! 与字符/文本有关的小工具在 `tr_domain::util`（界面也要用同一份计数规则）。
 
 /// 生成 UUID v4 字符串（标准带连字符的小写十六进制格式，长度 36）。
 /// 用于所有主键：账本、交易、模板、关键事件、图片、股票交易与轮次。
@@ -15,17 +17,6 @@ pub fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// Unicode 字符数（不是字节数）。
-/// 用于日记字数与关键事件标题截断——两者都必须按字符计。
-pub fn char_count(text: &str) -> i64 {
-    text.chars().count() as i64
-}
-
-/// 按**字符**截断到最多 `max` 个字符（按 Unicode 标量值截断，不会切开多字节字符）。
-pub fn truncate_chars(text: &str, max: usize) -> String {
-    text.chars().take(max).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,18 +31,6 @@ mod tests {
         assert_eq!(parts.len(), 5);
         assert_eq!(parts[0].len(), 8);
         assert_eq!(parts[4].len(), 12);
-    }
-
-    #[test]
-    fn char_count_counts_characters_not_bytes() {
-        assert_eq!(char_count("中文abc"), 5);
-        assert_eq!(char_count(""), 0);
-    }
-
-    #[test]
-    fn truncate_chars_never_splits_a_character() {
-        assert_eq!(truncate_chars("关键事件标题", 4), "关键事件");
-        assert_eq!(truncate_chars("ab", 5), "ab");
     }
 
     #[test]

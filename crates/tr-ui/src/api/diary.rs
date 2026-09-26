@@ -14,42 +14,21 @@
 //! 这里刻意**不用** `api/mod.rs` 里那个 camelCase 的 `LedgerIdRequest`，否则字段名对不上）。
 //! 导出只导指定账本，导入落到指定账本。
 
-use serde::Serialize;
 use tr_domain::dto::{
     DiaryExportRequest, DiaryExportResult, DiaryScanResponse, DiaryUpsertRequest,
 };
 use tr_domain::models::{DiaryDateItem, DiaryEntry};
+use tr_domain::wire::{
+    DiaryDateRequest, DiaryImportFileRequest, DiaryLedgerRequest, DiaryScanRequest,
+};
 
 use crate::ipc::{self, IpcError};
-
-#[derive(Debug, Serialize)]
-struct LedgerRequest {
-    ledger_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DateRequest {
-    date: String,
-    ledger_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ScanRequest {
-    directory: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ImportFileRequest {
-    path: String,
-    date: String,
-    ledger_id: String,
-}
 
 /// 某账本有日记的日期列表（倒序，含字数与心情）。
 pub async fn list_dates(ledger_id: &str) -> Result<Vec<DiaryDateItem>, IpcError> {
     ipc::call(
         "diary_list_dates",
-        LedgerRequest {
+        DiaryLedgerRequest {
             ledger_id: ledger_id.to_string(),
         },
     )
@@ -60,7 +39,7 @@ pub async fn list_dates(ledger_id: &str) -> Result<Vec<DiaryDateItem>, IpcError>
 pub async fn get(date: &str, ledger_id: &str) -> Result<DiaryEntry, IpcError> {
     ipc::call(
         "diary_get",
-        DateRequest {
+        DiaryDateRequest {
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),
         },
@@ -91,7 +70,7 @@ pub async fn upsert(
 pub async fn delete(date: &str, ledger_id: &str) -> Result<(), IpcError> {
     ipc::call_void(
         "diary_delete",
-        DateRequest {
+        DiaryDateRequest {
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),
         },
@@ -103,7 +82,7 @@ pub async fn delete(date: &str, ledger_id: &str) -> Result<(), IpcError> {
 pub async fn import_scan(directory: &str) -> Result<DiaryScanResponse, IpcError> {
     ipc::call(
         "diary_import_scan",
-        ScanRequest {
+        DiaryScanRequest {
             directory: directory.to_string(),
         },
     )
@@ -114,7 +93,7 @@ pub async fn import_scan(directory: &str) -> Result<DiaryScanResponse, IpcError>
 pub async fn import_file(path: &str, date: &str, ledger_id: &str) -> Result<DiaryEntry, IpcError> {
     ipc::call(
         "diary_import_file",
-        ImportFileRequest {
+        DiaryImportFileRequest {
             path: path.to_string(),
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),

@@ -20,10 +20,12 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
 
+use tr_domain::wire::{
+    UpdateCheckResponse, UpdateDownloadRequest, UpdateDownloadStatus, UpdateResponse,
+};
 use tr_ipc::ApiResult;
 
 use crate::commands::internal;
@@ -60,65 +62,6 @@ pub struct UpdaterState {
     percent: Arc<AtomicU32>,
     /// 最近一次上报的速度文案
     speed: Arc<Mutex<String>>,
-}
-
-/// `update_download_status` 的返回：界面用它恢复下载状态。
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct UpdateDownloadStatus {
-    /// 是否有下载正在跑
-    pub active: bool,
-    /// 已经下载好、正在等待安装（`%TEMP%` 里那份文件还在）
-    #[serde(rename = "downloaded")]
-    pub downloaded: bool,
-    pub percent: u32,
-    pub speed: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct UpdateCheckResponse {
-    #[serde(rename = "hasUpdate")]
-    pub has_update: bool,
-    #[serde(rename = "latestVersion")]
-    pub latest_version: String,
-    #[serde(rename = "downloadUrl")]
-    pub download_url: String,
-    /// 形如 `sha256:...`（GitHub release asset 的 digest）
-    #[serde(rename = "digest")]
-    pub digest: String,
-    #[serde(rename = "body")]
-    pub body: String,
-    #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct UpdaterResponse {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl UpdaterResponse {
-    fn ok() -> Self {
-        Self {
-            success: true,
-            error: None,
-        }
-    }
-
-    fn failed(message: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            error: Some(message.into()),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateDownloadRequest {
-    pub url: String,
-    #[serde(default)]
-    pub digest: Option<String>,
 }
 
 /// 建立带全局超时的 agent（与 `tr-service::quote` 用同一套 ureq 配置方式）。
@@ -273,12 +216,12 @@ pub async fn update_download(
     app: AppHandle,
     state: State<'_, UpdaterState>,
     req: UpdateDownloadRequest,
-) -> ApiResult<UpdaterResponse> {
+) -> ApiResult<UpdateResponse> {
     let key = request_key(&req.url, req.digest.as_deref());
     {
         let mut active = state.active.lock().expect("更新状态锁中毒");
         if active.is_some() {
-            return Ok(UpdaterResponse::failed("already_downloading"));
+            return Ok(UpdateResponse::failed("already_downloading"));
         }
         *active = Some(key);
     }
@@ -296,13 +239,13 @@ async fn run_download(
     app: &AppHandle,
     state: &State<'_, UpdaterState>,
     req: UpdateDownloadRequest,
-) -> ApiResult<UpdaterResponse> {
+) -> ApiResult<UpdateResponse> {
     // URL 白名单：仅允许 GitHub 域名（防止界面被注入后下载任意地址）
     let Some(host) = url_host(&req.url) else {
-        return Ok(UpdaterResponse::failed("无效的下载地址"));
+        return Ok(UpdateResponse::failed("无效的下载地址"));
     };
     if !host.ends_with("github.com") && !host.ends_with("objects.githubusercontent.com") {
-        return Ok(UpdaterResponse::failed("下载地址不在白名单内"));
+        return Ok(UpdateResponse::failed("下载地址不在白名单内"));
     }
 
     let cancel = Arc::clone(&state.cancel);
@@ -326,12 +269,12 @@ async fn run_download(
                 EVENT_COMPLETE,
                 serde_json::json!({ "filePath": path.to_string_lossy() }),
             );
-            Ok(UpdaterResponse::ok())
+            Ok(UpdateResponse::ok())
         }
-        Err(message) if message == CANCELLED => Ok(UpdaterResponse::failed("cancelled")),
+        Err(message) if message == CANCELLED => Ok(UpdateResponse::failed("cancelled")),
         Err(message) => {
             let _ = app.emit(EVENT_ERROR, serde_json::json!({ "message": message }));
-            Ok(UpdaterResponse::failed(message))
+            Ok(UpdateResponse::failed(message))
         }
     }
 }
@@ -372,10 +315,7 @@ pub fn update_cancel(state: State<'_, UpdaterState>) -> ApiResult<()> {
 
 /// 打开已下载的安装包并退出应用（给安装器留出启动时间后再退出）。
 #[tauri::command]
-pub fn update_install(
-    app: AppHandle,
-    state: State<'_, UpdaterState>,
-) -> ApiResult<UpdaterResponse> {
+pub fn update_install(app: AppHandle, state: State<'_, UpdaterState>) -> ApiResult<UpdateResponse> {
     let path = state
         .downloaded_path
         .lock()
@@ -383,7 +323,7 @@ pub fn update_install(
         .clone();
 
     let Some(path) = path.filter(|path| path.exists()) else {
-        return Ok(UpdaterResponse::failed("安装文件不存在"));
+        return Ok(UpdateResponse::failed("安装文件不存在"));
     };
 
     use tauri_plugin_opener::OpenerExt;
@@ -392,7 +332,7 @@ pub fn update_install(
         .open_path(path.to_string_lossy().to_string(), None::<&str>)
     {
         tracing::error!("update:install error: {error}");
-        return Ok(UpdaterResponse::failed(error.to_string()));
+        return Ok(UpdateResponse::failed(error.to_string()));
     }
 
     // 给安装器一点启动时间后退出：安装器需要独占替换程序文件
@@ -401,7 +341,7 @@ pub fn update_install(
         std::thread::sleep(Duration::from_millis(600));
         handle.exit(0);
     });
-    Ok(UpdaterResponse::ok())
+    Ok(UpdateResponse::ok())
 }
 
 /// 取消标记对应的错误文本（与界面约定一致）。

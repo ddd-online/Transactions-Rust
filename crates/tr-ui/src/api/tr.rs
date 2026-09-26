@@ -13,31 +13,12 @@
 //! | `tr_unlink` | `{ transaction_id }`（**snake_case**） |
 //! | `tr_linked_by_date` | `{ date, ledger_id }`（**snake_case**） |
 
-use serde::Serialize;
 use tr_domain::dto::{
     ChartQueryRequest, ChartQueryResponse, TrQueryCondition, TrQueryResult, TransactionRecordDto,
 };
+use tr_domain::wire::{IdRequest, LinkRequest, LinkedByDateRequest, UnlinkRequest};
 
 use crate::ipc::{self, IpcError};
-
-use super::IdRequest;
-
-#[derive(Debug, Serialize)]
-struct LinkRequest {
-    transaction_id: String,
-    date: String,
-}
-
-#[derive(Debug, Serialize)]
-struct UnlinkRequest {
-    transaction_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct LinkedByDateRequest {
-    date: String,
-    ledger_id: String,
-}
 
 /// 构造一份"第 `page` 页、每页 `page_size` 条"的默认查询条件。
 ///

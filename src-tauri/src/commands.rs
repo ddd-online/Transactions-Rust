@@ -15,18 +15,22 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 use tr_domain::error::AppError;
 use tr_domain::proxy::ProxySetting;
+use tr_domain::wire::{
+    AppInfoRequest, AssetUrlRequest, ConfigSnapshot, DevToolsToggleRequest, DialogOpenRequest,
+    DialogOpenResponse, FeatureFlags, FileSaveRequest, FileSaveResponse, ProxyDetectResponse,
+    SetAppearanceRequest, SetCloseBehaviorRequest, SetFeatureRequest, SetKeyEventLinkedOpenRequest,
+    WindowControlRequest, WorkspaceDirRequest,
+};
 use tr_ipc::{ApiError, ApiResult, AppState};
 
 use crate::assets;
 use crate::config::{
-    home_dir, ConfigStore, FeatureFlags, APPEARANCE_SYSTEM, CLOSE_BEHAVIOR_QUIT,
-    CLOSE_BEHAVIOR_TRAY,
+    home_dir, ConfigStore, APPEARANCE_SYSTEM, CLOSE_BEHAVIOR_QUIT, CLOSE_BEHAVIOR_TRAY,
 };
 use crate::logging::LogSinks;
 use crate::shell;
@@ -83,11 +87,6 @@ where
 
 // ---------------------------------------------------------------- 窗口控制
 
-#[derive(Debug, Deserialize)]
-pub struct WindowControlRequest {
-    pub action: String,
-}
-
 /// 自绘标题栏的三个按钮。关闭走 [`shell::request_close`]（含"关闭行为"处理）。
 #[tauri::command]
 pub fn window_control(
@@ -119,11 +118,6 @@ pub fn window_control(
 
 // ------------------------------------------------------------ 应用信息
 
-#[derive(Debug, Deserialize)]
-pub struct AppInfoRequest {
-    pub field: String,
-}
-
 #[tauri::command]
 pub fn app_info(
     app: AppHandle,
@@ -141,16 +135,6 @@ pub fn app_info(
 
 // ------------------------------------------------------------ 资产 URL
 
-#[derive(Debug, Deserialize)]
-pub struct AssetUrlRequest {
-    /// 界面（`tr-ui/src/api/desktop.rs`）按 camelCase 发送 `filePath`。
-    /// 这曾经是个**静默失效**的契约错位：这里只认 `file_path`，serde 直接报
-    /// "missing field `file_path`"，于是 `asset_url` 必然失败、关键事件图片全都显示不出来。
-    /// 与同族的 `file_save_image.relativePath` / `DialogOpenResponse.filePaths` 保持一致用 camelCase。
-    #[serde(rename = "filePath", alias = "file_path")]
-    pub file_path: String,
-}
-
 /// 把数据库里的相对路径转成 `<img src>` 可用 URL。
 #[tauri::command]
 pub fn asset_url(req: AssetUrlRequest) -> ApiResult<String> {
@@ -158,29 +142,6 @@ pub fn asset_url(req: AssetUrlRequest) -> ApiResult<String> {
 }
 
 // ------------------------------------------------------------ 配置读写
-
-#[derive(Debug, Serialize)]
-pub struct ConfigSnapshot {
-    #[serde(rename = "workspaceDir")]
-    pub workspace_dir: String,
-    #[serde(rename = "closeBehavior")]
-    pub close_behavior: String,
-    #[serde(rename = "appearance")]
-    pub appearance: String,
-    #[serde(rename = "configPath")]
-    pub config_path: String,
-    #[serde(rename = "isDev")]
-    pub is_dev: bool,
-    /// 代理设置（`mode` / `url`）；界面「通用设置 → 代理」直接编辑它
-    #[serde(rename = "proxy")]
-    pub proxy: ProxySetting,
-    /// 功能开关；界面「功能开关」分栏直接编辑它（缺省 = 全开）
-    #[serde(rename = "features")]
-    pub features: FeatureFlags,
-    /// 事件页右栏（关联交易）是否展开（缺省 = 展开）；界面在开合时写回
-    #[serde(rename = "keyEventLinkedOpen")]
-    pub key_event_linked_open: bool,
-}
 
 #[tauri::command]
 pub fn config_get(state: State<'_, DesktopState>) -> ApiResult<ConfigSnapshot> {
@@ -208,11 +169,6 @@ pub fn config_get(state: State<'_, DesktopState>) -> ApiResult<ConfigSnapshot> {
     })
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SetCloseBehaviorRequest {
-    pub behavior: String,
-}
-
 /// 关闭行为只接受 quit / tray / 空（空表示首次询问）。
 #[tauri::command]
 pub fn config_set_close_behavior(
@@ -229,11 +185,6 @@ pub fn config_set_close_behavior(
         .config
         .update(|config| config.close_behavior = req.behavior);
     Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SetAppearanceRequest {
-    pub appearance: String,
 }
 
 /// 外观：持久化 + 应用到所有窗口（驱动 `prefers-color-scheme`）。
@@ -259,16 +210,6 @@ pub fn config_set_appearance(
 }
 
 // ------------------------------------------------------------ 功能开关
-
-#[derive(Debug, Deserialize)]
-pub struct SetFeatureRequest {
-    /// 功能名：`accounting` / `stock` / `keyEvent` / `diary`。
-    ///
-    /// 是**硬契约**（界面 `api::desktop::FeatureFlags` 与 `shell::Page::feature_key` 两边都按它写），
-    /// 未知名一律拒绝而不是静默忽略 —— 静默忽略会表现成"开关点了没反应"。
-    pub feature: String,
-    pub enabled: bool,
-}
 
 /// 功能开关：某个顶级功能是否在侧边栏出现。
 ///
@@ -303,12 +244,6 @@ pub fn config_set_feature(
 }
 
 // ------------------------------------------------------------ 事件页右栏偏好
-
-#[derive(Debug, Deserialize)]
-pub struct SetKeyEventLinkedOpenRequest {
-    /// 事件页右栏（关联交易）展开 = true，收起 = false。
-    pub open: bool,
-}
 
 /// 事件页右栏（关联交易列表）展开还是收起：写配置并返回落盘后的值。
 ///
@@ -355,18 +290,6 @@ pub fn config_set_proxy(
     Ok(setting)
 }
 
-/// `proxy_detect` 的返回：探测到的地址 + 来源 + 一句给用户看的说明。
-#[derive(Debug, Serialize)]
-pub struct ProxyDetectResponse {
-    /// 会用到的代理地址（空串 = 直连）
-    pub url: String,
-    /// env / system / manual / none
-    pub source: String,
-    /// 系统是否配置了 PAC 自动配置脚本（本版本不解析）
-    pub pac: bool,
-    pub message: String,
-}
-
 /// 「检测」按钮：按**当前设置**报告最终会用哪个代理（只读：不写配置、不改系统设置）。
 #[tauri::command]
 pub fn proxy_detect(state: State<'_, DesktopState>) -> ApiResult<ProxyDetectResponse> {
@@ -384,12 +307,6 @@ pub fn proxy_detect(state: State<'_, DesktopState>) -> ApiResult<ProxyDetectResp
 #[tauri::command]
 pub fn workspace_get(state: State<'_, DesktopState>) -> ApiResult<String> {
     Ok(state.config.snapshot().workspace_dir)
-}
-
-#[derive(Debug, Deserialize)]
-pub struct WorkspaceDirRequest {
-    #[serde(rename = "workspaceDir")]
-    pub workspace_dir: String,
 }
 
 /// 只记录目录（等价 `workspace:set`），不打开数据库。
@@ -524,27 +441,6 @@ pub fn workspace_init(
 
 // ------------------------------------------------------------ 对话框
 
-#[derive(Debug, Default, Deserialize)]
-pub struct DialogOpenRequest {
-    #[serde(default)]
-    pub title: Option<String>,
-    /// 界面发的是 `defaultPath`（camelCase）。之前只认 `default_path`，因为字段带
-    /// `#[serde(default)]`，错误不会冒出来——只是"打开对话框时不会定位到当前工作空间"，
-    /// 属于最难发现的那种静默降级。保留 snake_case 作为别名。
-    #[serde(default, rename = "defaultPath", alias = "default_path")]
-    pub default_path: Option<String>,
-}
-
-/// 返回形状：`{ canceled, filePaths, error? }`。
-#[derive(Debug, Serialize)]
-pub struct DialogOpenResponse {
-    pub canceled: bool,
-    #[serde(rename = "filePaths")]
-    pub file_paths: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 /// 文件夹对话框的兜底起始目录：用户主目录（正常一定存在）；
 /// 万一它也不存在（一次性 HOME 的冒烟/测试环境），退回程序所在目录。
 fn dialog_fallback_directory() -> PathBuf {
@@ -596,29 +492,12 @@ pub async fn dialog_open(app: AppHandle, req: DialogOpenRequest) -> ApiResult<Di
     })
 }
 
-#[derive(Debug, Deserialize)]
-pub struct FileSaveRequest {
-    #[serde(rename = "relativePath")]
-    pub relative_path: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct FileSaveResponse {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub canceled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl FileSaveResponse {
-    /// 失败信封（`canceled` 缺省，序列化时不出现在 JSON 里）。
-    fn failed(message: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            canceled: None,
-            error: Some(message.into()),
-        }
+/// 失败信封（`canceled` 缺省，序列化时不出现在 JSON 里）。
+fn save_failed(message: impl Into<String>) -> FileSaveResponse {
+    FileSaveResponse {
+        success: false,
+        canceled: None,
+        error: Some(message.into()),
     }
 }
 
@@ -630,19 +509,19 @@ pub async fn file_save_image(
     req: FileSaveRequest,
 ) -> ApiResult<FileSaveResponse> {
     let Ok(workspace) = ipc_state.workspace() else {
-        return Ok(FileSaveResponse::failed("未打开工作空间"));
+        return Ok(save_failed("未打开工作空间"));
     };
 
     let assets_root = workspace.assets_directory();
     let Ok(root) = assets_root.canonicalize() else {
-        return Ok(FileSaveResponse::failed("源文件不存在"));
+        return Ok(save_failed("源文件不存在"));
     };
     // 防路径遍历：解析后必须仍位于 assets 目录内
     let Ok(source) = assets_root.join(&req.relative_path).canonicalize() else {
-        return Ok(FileSaveResponse::failed("源文件不存在"));
+        return Ok(save_failed("源文件不存在"));
     };
     if !source.starts_with(&root) {
-        return Ok(FileSaveResponse::failed("非法文件路径"));
+        return Ok(save_failed("非法文件路径"));
     }
 
     let default_name = source
@@ -690,11 +569,6 @@ pub async fn file_save_image(
 #[tauri::command]
 pub fn devtools_get_state(window: WebviewWindow) -> ApiResult<bool> {
     Ok(window.is_devtools_open())
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DevToolsToggleRequest {
-    pub enabled: bool,
 }
 
 /// 返回操作后的真实状态，并广播给界面校正开关。
@@ -777,9 +651,8 @@ mod tests {
         }
     }
 
-    /// `config_get` 的返回体是界面手抄的（`tr-ui/src/api/desktop.rs` 的 `ConfigSnapshot`），
-    /// 而契约审计只比对**请求**结构体（命令没有 `req` 形参就比不到）——这条单测补上响应侧：
-    /// 键名一旦改名，界面会静默读不到（`#[serde(default)]` 兜底成默认值），必须在这里锁住。
+    /// `config_get` 的返回键名是数据契约（配置由别的版本写、界面按这些键读）：
+    /// 改名的后果是界面静默读不到（`#[serde(default)]` 兜底成默认值），必须在这里锁住。
     #[test]
     fn config_snapshot_serializes_the_documented_keys() {
         let snapshot = ConfigSnapshot {
@@ -815,12 +688,12 @@ mod tests {
         );
         assert_eq!(value["proxy"]["mode"], "manual");
         assert_eq!(value["proxy"]["url"], "http://127.0.0.1:7890");
-        // 功能开关的键名也是契约（界面 `api::desktop::FeatureFlags` 手抄了它）
+        // 功能开关的键名也是契约（界面共用 `tr_domain::wire::FeatureFlags`）
         assert_eq!(value["features"]["accounting"], true);
         assert_eq!(value["features"]["stock"], true);
         assert_eq!(value["features"]["keyEvent"], true);
         assert_eq!(value["features"]["diary"], true);
-        // 事件页右栏偏好同样是契约（界面 `api::desktop::ConfigSnapshot` 手抄了它）
+        // 事件页右栏偏好同样是契约（界面共用 `tr_domain::wire::ConfigSnapshot`）
         assert_eq!(value["keyEventLinkedOpen"], false);
     }
 

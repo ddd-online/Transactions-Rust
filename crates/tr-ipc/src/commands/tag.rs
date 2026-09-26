@@ -8,24 +8,15 @@
 //!
 //! 缺参数时的错误文案是 `missing required parameters`（400），**改动即破坏契约**。
 
-use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::dto::{CreateTagRequest, TagDto, UpdateTagSortRequest};
 use tr_domain::error::AppError;
+use tr_domain::wire::{TagDeleteRequest, TagListRequest};
 use tr_service::tag;
 
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct TagListRequest {
-    #[serde(rename = "categoryTransactionType")]
-    pub category_transaction_type: String,
-    #[serde(rename = "ledgerId")]
-    pub ledger_id: String,
-}
 
 /// 查询标签并补齐每个标签的记录数。`ledgerId` 为空时返回空数组，不报错。
 #[tauri::command]
@@ -61,17 +52,6 @@ pub fn tag_create(state: State<'_, AppState>, req: CreateTagRequest) -> ApiResul
         &req.category_transaction_type,
     )?;
     Ok(())
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct TagDeleteRequest {
-    /// 参数 `name`
-    pub name: String,
-    #[serde(rename = "categoryTransactionType")]
-    pub category_transaction_type: String,
-    #[serde(rename = "ledgerId")]
-    pub ledger_id: String,
 }
 
 /// 删除标签（连带清理交易记录上的该标签关联）。

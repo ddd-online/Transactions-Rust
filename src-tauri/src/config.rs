@@ -10,6 +10,8 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tr_domain::proxy::ProxySetting;
+// 功能开关（`features`）与 IPC 的 `config_get` / `config_set_feature` 共用同一份定义。
+use tr_domain::wire::FeatureFlags;
 
 /// 生产配置文件名（用户数据契约，不可更改）。
 pub const CONFIG_FILE: &str = ".transactions.json";
@@ -22,69 +24,6 @@ pub const CLOSE_BEHAVIOR_TRAY: &str = "tray";
 
 /// 外观取值。
 pub const APPEARANCE_SYSTEM: &str = "system";
-
-/// 功能开关：**哪些顶级功能在侧边栏出现**（「应用设置 → 功能开关」）。
-///
-/// 四个开关对应侧边栏里除「设置」之外的四个顶级功能（见 `tr-ui` 的 `shell::Page`）。
-/// 「设置」本身**不可关闭**：关了就没有界面能再打开它，用户会被锁死。
-///
-/// **默认全开**：`#[serde(default)]` + 字段级默认值都是 `true`，所以
-/// 老配置文件里没有 `features` 这个键时，四个功能照常显示（缺少个别字段同理）。
-/// 配置里存的是 `features: { accounting, stock, keyEvent, diary }`。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FeatureFlags {
-    /// 记账（记录 / 分析 / 标签 / 模板）
-    pub accounting: bool,
-    /// 股票
-    pub stock: bool,
-    /// 事件
-    #[serde(rename = "keyEvent")]
-    pub key_event: bool,
-    /// 日记
-    pub diary: bool,
-}
-
-impl Default for FeatureFlags {
-    fn default() -> Self {
-        Self::defaults()
-    }
-}
-
-impl FeatureFlags {
-    /// 默认全开（新增功能时也按"开"处理）。
-    pub const fn defaults() -> Self {
-        Self {
-            accounting: true,
-            stock: true,
-            key_event: true,
-            diary: true,
-        }
-    }
-
-    /// 按开关名读取；未知名返回 `None`（调用方据此拒绝请求，不做猜测）。
-    pub fn get(&self, feature: &str) -> Option<bool> {
-        Some(match feature {
-            "accounting" => self.accounting,
-            "stock" => self.stock,
-            "keyEvent" => self.key_event,
-            "diary" => self.diary,
-            _ => return None,
-        })
-    }
-
-    /// 按开关名写入；未知名**不写入**并返回 `false`。
-    pub fn set(&mut self, feature: &str, enabled: bool) -> bool {
-        match feature {
-            "accounting" => self.accounting = enabled,
-            "stock" => self.stock = enabled,
-            "keyEvent" => self.key_event = enabled,
-            "diary" => self.diary = enabled,
-            _ => return false,
-        }
-        true
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

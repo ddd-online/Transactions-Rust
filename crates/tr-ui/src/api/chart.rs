@@ -3,24 +3,16 @@
 //! 图表 DTO 是 camelCase（`chartId` / `ledgerId` / `chartType` / `isPreset` / `sortOrder`）。
 //! `chart_delete` 的入参字段名是 `chartId`（命令同时接受 `id`，这里统一发送 `chartId`）。
 
-use serde::Serialize;
 use tr_domain::dto::{ChartDto, CreateChartRequest, UpdateChartRequest};
+use tr_domain::wire::{ChartIdRequest, ChartListRequest};
 
 use crate::ipc::{self, IpcError};
-
-use super::LedgerIdRequest;
-
-#[derive(Debug, Serialize)]
-struct IdRequest {
-    #[serde(rename = "chartId")]
-    chart_id: String,
-}
 
 /// 列出某账本的全部图表（后端会先补齐预设图表）。
 pub async fn list(ledger_id: &str) -> Result<Vec<ChartDto>, IpcError> {
     ipc::call(
         "chart_list",
-        LedgerIdRequest {
+        ChartListRequest {
             ledger_id: ledger_id.to_string(),
         },
     )
@@ -41,7 +33,7 @@ pub async fn update(request: UpdateChartRequest) -> Result<ChartDto, IpcError> {
 pub async fn delete(chart_id: &str) -> Result<(), IpcError> {
     ipc::call_void(
         "chart_delete",
-        IdRequest {
+        ChartIdRequest {
             chart_id: chart_id.to_string(),
         },
     )

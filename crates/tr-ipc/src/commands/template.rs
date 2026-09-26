@@ -10,11 +10,11 @@
 //! 模板校验文案（`模板名称不能为空` / `invalid transaction type: xxx` / `分类不能为空`）
 //! 由服务层给出，状态码 500（普通 error 的兜底）。
 
-use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::dto::TransactionTemplateDto;
 use tr_domain::error::AppError;
+use tr_domain::wire::{TemplateIdRequest, TemplateListRequest, TemplateSortRequest};
 use tr_service::transaction_template;
 
 use crate::error::{ApiError, ApiResult};
@@ -29,13 +29,6 @@ pub fn template_create(
     let workspace = state.workspace()?;
     let template_id = transaction_template::create(&workspace, &req)?;
     Ok(template_id)
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct TemplateListRequest {
-    #[serde(rename = "ledgerId")]
-    pub ledger_id: String,
 }
 
 /// 列出某账本的全部模板。
@@ -55,14 +48,6 @@ pub fn template_list(
     )?)
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct TemplateIdRequest {
-    /// 模板 ID（同时接受 `templateId`，方便界面侧沿用 DTO 命名）
-    #[serde(alias = "templateId")]
-    pub id: String,
-}
-
 /// 删除模板。
 #[tauri::command]
 pub fn template_delete(state: State<'_, AppState>, req: TemplateIdRequest) -> ApiResult<()> {
@@ -73,18 +58,6 @@ pub fn template_delete(state: State<'_, AppState>, req: TemplateIdRequest) -> Ap
     let workspace = state.workspace()?;
     transaction_template::delete_by_id(&workspace, &req.id)?;
     Ok(())
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct TemplateSortRequest {
-    /// 模板 ID（同时接受 `templateId`）
-    #[serde(alias = "templateId")]
-    pub id: String,
-    #[serde(rename = "ledgerId")]
-    pub ledger_id: String,
-    #[serde(rename = "sortOrder")]
-    pub sort_order: i32,
 }
 
 /// 更新模板排序号。

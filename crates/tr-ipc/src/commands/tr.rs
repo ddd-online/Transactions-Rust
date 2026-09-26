@@ -3,13 +3,13 @@
 //! 入参形状是固定契约（注意 `link`/`unlink` 用的是 **snake_case**
 //! ——请求体里取 `transaction_id`；其余对象用 DTO 的原始字段名）。
 
-use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::dto::{
     ChartQueryRequest, ChartQueryResponse, TrQueryCondition, TrQueryResult, TransactionRecordDto,
 };
 use tr_domain::error::AppError;
+use tr_domain::wire::{IdRequest, LinkRequest, LinkedByDateRequest, UnlinkRequest};
 use tr_service::transaction_record;
 
 use crate::error::{ApiError, ApiResult};
@@ -72,14 +72,9 @@ pub fn tr_batch_create(
     Ok(transaction_record::batch_create_tr(&workspace, &req)?)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct TransactionIdRequest {
-    pub id: String,
-}
-
 /// 删除记录及其标签关联。
 #[tauri::command]
-pub fn tr_delete(state: State<'_, AppState>, req: TransactionIdRequest) -> ApiResult<()> {
+pub fn tr_delete(state: State<'_, AppState>, req: IdRequest) -> ApiResult<()> {
     if req.id.is_empty() {
         return Err(ApiError::from(AppError::bad_request(
             "missing transaction id",
@@ -87,12 +82,6 @@ pub fn tr_delete(state: State<'_, AppState>, req: TransactionIdRequest) -> ApiRe
     }
     let workspace = state.workspace()?;
     Ok(transaction_record::delete_tr_by_id(&workspace, &req.id)?)
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LinkRequest {
-    pub transaction_id: String,
-    pub date: String,
 }
 
 /// 关联到关键事件，返回日期。
@@ -108,11 +97,6 @@ pub fn tr_link(state: State<'_, AppState>, req: LinkRequest) -> ApiResult<String
     Ok(req.date)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct UnlinkRequest {
-    pub transaction_id: String,
-}
-
 /// 解除关联，返回记录 ID。
 #[tauri::command]
 pub fn tr_unlink(state: State<'_, AppState>, req: UnlinkRequest) -> ApiResult<String> {
@@ -124,12 +108,6 @@ pub fn tr_unlink(state: State<'_, AppState>, req: UnlinkRequest) -> ApiResult<St
     let workspace = state.workspace()?;
     transaction_record::unlink_from_key_event(&workspace, &req.transaction_id)?;
     Ok(req.transaction_id)
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LinkedByDateRequest {
-    pub date: String,
-    pub ledger_id: String,
 }
 
 /// 某天已关联的记录（含标签）。

@@ -25,7 +25,6 @@
 //! `stock_overview` / `stock_positions` / `stock_trades` / `stock_history` 等
 //! 在 P6-b 已全部接入（见下方「股票页」一节）。
 
-use serde::Serialize;
 use tr_domain::dto::{
     StockFundRecordPage, StockNameDto, StockOperationDto, StockOperationRollbackDto,
     StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockStatisticsDto,
@@ -33,28 +32,18 @@ use tr_domain::dto::{
     StockTradeImpactDto, StockTradeTagSettingDto,
 };
 use tr_domain::models::StockFeeSetting;
+use tr_domain::wire::{
+    LedgerIdRequest, StockAmountDateRequest, StockFeeSettingsRequest, StockFundRecordsRequest,
+    StockNameRequest, StockPositionReviewRequest, StockRoundReviewRequest, StockRoundTagRequest,
+    StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
+    StockTradesRequest,
+};
+
+/// 一笔委托内的一笔成交明细（价格单位：**元**，后端负责 ×100）。
+pub use tr_domain::wire::TradeFillRequest;
 
 use crate::ipc::{self, IpcError};
-
-#[derive(Debug, Serialize)]
-struct LedgerIdRequest {
-    pub ledger_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct FeeSettingsRequest {
-    pub ledger_id: String,
-    pub commission_rate: f64,
-    pub min_commission: f64,
-    pub stamp_duty_rate: f64,
-    pub transfer_fee_rate: f64,
-}
-
-#[derive(Debug, Serialize)]
-struct TagSettingsRequest {
-    pub ledger_id: String,
-    pub tags: Vec<String>,
-}
 
 /// 读取费用设置（不存在时后端按默认值创建并返回）。
 pub async fn fee_settings_get(ledger_id: &str) -> Result<StockFeeSetting, IpcError> {
@@ -77,13 +66,13 @@ pub async fn fee_settings_put(
 ) -> Result<StockFeeSetting, IpcError> {
     ipc::call(
         "stock_fee_settings_put",
-        FeeSettingsRequest {
+        StockFeeSettingsRequest {
             ledger_id: ledger_id.to_string(),
-            commission_rate,
+            commission_rate: Some(commission_rate),
             // 后端该字段虽然是 `Option<f64>`，但语义是"分"，整数照传即可
-            min_commission: min_commission as f64,
-            stamp_duty_rate,
-            transfer_fee_rate,
+            min_commission: Some(min_commission as f64),
+            stamp_duty_rate: Some(stamp_duty_rate),
+            transfer_fee_rate: Some(transfer_fee_rate),
         },
     )
     .await
@@ -107,7 +96,7 @@ pub async fn tag_settings_put(
 ) -> Result<StockTradeTagSettingDto, IpcError> {
     ipc::call(
         "stock_tag_settings_put",
-        TagSettingsRequest {
+        StockTagSettingsRequest {
             ledger_id: ledger_id.to_string(),
             tags,
         },
@@ -128,127 +117,8 @@ pub async fn reset(ledger_id: &str) -> Result<bool, IpcError> {
 
 // ================================================================ 股票页
 //
-// P6-b 接入。字段名逐字照抄 `crates/tr-ipc/src/commands/stock.rs`：
-// 请求全 snake_case，响应全 camelCase（DTO 里已 rename）。
-
-#[derive(Debug, Serialize)]
-struct AmountRequest {
-    pub ledger_id: String,
-    /// 金额（**分**）
-    pub amount: i64,
-    /// 发生日期 `YYYY-MM-DD`（空串表示今天）
-    pub date: String,
-}
-
-/// `stock_fund_records` 的分页参数。
-///
-/// 后端同时接受数字与数字字符串（`QueryNumber`），这里发数字：
-/// `serde_wasm_bindgen` 对 `Option<i64>` 的 `None` 会写成 `undefined`，
-/// 后端的 `#[serde(default)]` + `Option` 会把它当"没传"（与不传字段等价）。
-#[derive(Debug, Serialize)]
-struct FundRecordsRequest {
-    pub ledger_id: String,
-    pub page: Option<i64>,
-    pub page_size: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-struct PositionReviewRequest {
-    pub ledger_id: String,
-    pub code: String,
-    pub review: String,
-}
-
-#[derive(Debug, Serialize)]
-struct TradesRequest {
-    pub ledger_id: String,
-    pub stock_code: String,
-}
-
-/// 一笔委托内的一笔成交明细（价格单位：**元**，后端负责 ×100）。
-#[derive(Debug, Clone, Copy, Serialize)]
-pub struct TradeFillInput {
-    pub price: f64,
-    pub lots: i64,
-}
-
-impl TradeFillInput {
-    pub fn new(price: f64, lots: i64) -> Self {
-        Self { price, lots }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct TradeCreateRequest {
-    pub ledger_id: String,
-    pub stock_code: String,
-    pub stock_name: String,
-    pub trade_type: String,
-    pub trade_time: i64,
-    pub remark: String,
-    pub tag: String,
-    pub fills: Vec<TradeFillInput>,
-}
-
-#[derive(Debug, Serialize)]
-struct TradeUpdateRequest {
-    pub ledger_id: String,
-    pub id: String,
-    /// 成交价（**元**）
-    pub price: f64,
-    pub lots: i64,
-    pub trade_time: i64,
-}
-
-#[derive(Debug, Serialize)]
-struct OrderDeleteRequest {
-    pub ledger_id: String,
-    /// 后端字段名就是 `order_id`（snake_case）
-    pub order_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct TradeImpactRequest {
-    pub ledger_id: String,
-    /// `update_trade` | `delete_order`
-    pub action: String,
-    pub trade_id: String,
-    pub order_id: String,
-    /// 成交价（**元**）
-    pub price: f64,
-    pub lots: i64,
-    pub trade_time: i64,
-}
-
-#[derive(Debug, Serialize)]
-struct RoundReviewRequest {
-    pub ledger_id: String,
-    pub id: String,
-    pub review: String,
-}
-
-#[derive(Debug, Serialize)]
-struct RoundTagRequest {
-    pub ledger_id: String,
-    pub id: String,
-    pub tag: String,
-}
-
-#[derive(Debug, Serialize)]
-struct StatisticsRequest {
-    pub ledger_id: String,
-    pub start_month: String,
-    pub end_month: String,
-    /// 只发正整数；`None` 表示不筛选（后端对非法值会报 `recent 必须为正整数`）
-    pub recent: Option<i64>,
-    pub tag: String,
-}
-
-#[derive(Debug, Serialize)]
-struct StockNameRequest {
-    pub stock_code: String,
-}
-
+// P6-b 接入。请求全 snake_case，响应全 camelCase（DTO 里已 rename）；
+// 所有请求类型来自 `tr_domain::wire`，与命令面共用同一份定义。
 /// 账户总览（本金 / 可用现金 / 持仓市值 / 总资产 / 已实现 / 浮动盈亏 / 行情失败数）。
 pub async fn overview(ledger_id: &str) -> Result<StockOverviewDto, IpcError> {
     ipc::call(
@@ -268,9 +138,9 @@ pub async fn principal_add(
 ) -> Result<StockOverviewDto, IpcError> {
     ipc::call(
         "stock_principal_add",
-        AmountRequest {
+        StockAmountDateRequest {
             ledger_id: ledger_id.to_string(),
-            amount,
+            amount: Some(amount),
             date: date.to_string(),
         },
     )
@@ -285,9 +155,9 @@ pub async fn interest_add(
 ) -> Result<StockOverviewDto, IpcError> {
     ipc::call(
         "stock_interest_add",
-        AmountRequest {
+        StockAmountDateRequest {
             ledger_id: ledger_id.to_string(),
-            amount,
+            amount: Some(amount),
             date: date.to_string(),
         },
     )
@@ -302,9 +172,9 @@ pub async fn withdraw(
 ) -> Result<StockOverviewDto, IpcError> {
     ipc::call(
         "stock_withdraw",
-        AmountRequest {
+        StockAmountDateRequest {
             ledger_id: ledger_id.to_string(),
-            amount,
+            amount: Some(amount),
             date: date.to_string(),
         },
     )
@@ -319,10 +189,10 @@ pub async fn fund_records(
 ) -> Result<StockFundRecordPage, IpcError> {
     ipc::call(
         "stock_fund_records",
-        FundRecordsRequest {
+        StockFundRecordsRequest {
             ledger_id: ledger_id.to_string(),
-            page: Some(page),
-            page_size: Some(page_size),
+            page: Some(page.into()),
+            page_size: Some(page_size.into()),
         },
     )
     .await
@@ -347,7 +217,7 @@ pub async fn position_review(
 ) -> Result<StockPositionDto, IpcError> {
     ipc::call(
         "stock_position_review",
-        PositionReviewRequest {
+        StockPositionReviewRequest {
             ledger_id: ledger_id.to_string(),
             code: code.to_string(),
             review: review.to_string(),
@@ -360,7 +230,7 @@ pub async fn position_review(
 pub async fn trades(ledger_id: &str, stock_code: &str) -> Result<Vec<StockTradeDto>, IpcError> {
     ipc::call(
         "stock_trades",
-        TradesRequest {
+        StockTradesRequest {
             ledger_id: ledger_id.to_string(),
             stock_code: stock_code.to_string(),
         },
@@ -376,20 +246,23 @@ pub async fn trade_create(
     trade_type: &str,
     trade_time: i64,
     tag: &str,
-    fills: Vec<TradeFillInput>,
+    fills: Vec<TradeFillRequest>,
 ) -> Result<Vec<StockTradeDto>, IpcError> {
     ipc::call(
         "stock_trade_create",
-        TradeCreateRequest {
+        StockTradeCreateRequest {
             ledger_id: ledger_id.to_string(),
             stock_code: stock_code.to_string(),
             stock_name: stock_name.to_string(),
             trade_type: trade_type.to_string(),
-            trade_time,
+            trade_time: trade_time as f64,
             // 下单弹窗没有备注字段，恒发空串
             remark: String::new(),
             tag: tag.to_string(),
             fills,
+            // 旧调用的单笔价格/手数：发 `fills` 时后端不看它们
+            price: 0.0,
+            lots: 0.0,
         },
     )
     .await
@@ -405,12 +278,12 @@ pub async fn trade_update(
 ) -> Result<StockTradeDto, IpcError> {
     ipc::call(
         "stock_trade_update",
-        TradeUpdateRequest {
+        StockTradeUpdateRequest {
             ledger_id: ledger_id.to_string(),
             id: id.to_string(),
             price: price_yuan,
-            lots,
-            trade_time,
+            lots: lots as f64,
+            trade_time: trade_time as f64,
         },
     )
     .await
@@ -420,7 +293,7 @@ pub async fn trade_update(
 pub async fn trade_order_delete(ledger_id: &str, order_id: &str) -> Result<bool, IpcError> {
     ipc::call(
         "stock_trade_order_delete",
-        OrderDeleteRequest {
+        StockTradeOrderDeleteRequest {
             ledger_id: ledger_id.to_string(),
             order_id: order_id.to_string(),
         },
@@ -441,14 +314,14 @@ pub async fn trade_impact(
 ) -> Result<StockTradeImpactDto, IpcError> {
     ipc::call(
         "stock_trade_impact",
-        TradeImpactRequest {
+        StockTradeImpactRequest {
             ledger_id: ledger_id.to_string(),
             action: action.to_string(),
             trade_id: trade_id.to_string(),
             order_id: order_id.to_string(),
             price: price_yuan,
-            lots,
-            trade_time,
+            lots: lots as f64,
+            trade_time: trade_time as f64,
         },
     )
     .await
@@ -472,7 +345,7 @@ pub async fn history_detail(
 ) -> Result<StockTradeHistoryDetailDto, IpcError> {
     ipc::call(
         "stock_history_detail",
-        TradesRequest {
+        StockTradesRequest {
             ledger_id: ledger_id.to_string(),
             stock_code: stock_code.to_string(),
         },
@@ -499,7 +372,7 @@ pub async fn round_review(
 ) -> Result<StockTradeHistoryDetailDto, IpcError> {
     ipc::call(
         "stock_round_review",
-        RoundReviewRequest {
+        StockRoundReviewRequest {
             ledger_id: ledger_id.to_string(),
             id: id.to_string(),
             review: review.to_string(),
@@ -516,7 +389,7 @@ pub async fn round_tag(
 ) -> Result<StockTradeHistoryDetailDto, IpcError> {
     ipc::call(
         "stock_round_tag",
-        RoundTagRequest {
+        StockRoundTagRequest {
             ledger_id: ledger_id.to_string(),
             id: id.to_string(),
             tag: tag.to_string(),
@@ -538,11 +411,11 @@ pub async fn statistics(
 ) -> Result<StockStatisticsDto, IpcError> {
     ipc::call(
         "stock_statistics",
-        StatisticsRequest {
+        StockStatisticsRequest {
             ledger_id: ledger_id.to_string(),
             start_month: start_month.to_string(),
             end_month: end_month.to_string(),
-            recent: recent.filter(|value| *value > 0),
+            recent: recent.filter(|value| *value > 0).map(Into::into),
             tag: tag.to_string(),
         },
     )

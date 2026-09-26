@@ -1231,7 +1231,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         leptos::task::spawn_local(async move {
             let inputs = fills
                 .iter()
-                .map(|fill| api::stock::TradeFillInput::new(fill.price, fill.lots))
+                .map(|fill| api::stock::TradeFillRequest::new(fill.price, fill.lots))
                 .collect::<Vec<_>>();
             match api::stock::trade_create(
                 &ledger_id,

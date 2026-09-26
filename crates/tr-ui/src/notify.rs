@@ -150,15 +150,10 @@ impl Notifier {
         id
     }
 
-    /// 立即移除某条。
+    /// 立即移除某条（到点自动消失、以及通知上的「关闭」按钮走这里）。
     pub fn dismiss(&self, id: u32) {
         self.items
             .update(|items| items.retain(|item| item.id != id));
-    }
-
-    /// 清空队列。
-    pub fn clear(&self) {
-        self.items.update(Vec::clear);
     }
 }
 

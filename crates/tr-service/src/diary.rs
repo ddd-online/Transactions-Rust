@@ -52,7 +52,7 @@ pub fn upsert(
         id: tr_store::util::new_uuid(),
         date: date.to_string(),
         content: content.to_string(),
-        word_count: tr_store::util::char_count(content),
+        word_count: tr_domain::util::char_count(content) as i64,
         mood: mood.to_string(),
         created_at: now,
         updated_at: now,
@@ -518,7 +518,10 @@ mod tests {
         for (date, content) in contents {
             let loaded = get_by_date(&target, LEDGER, date).unwrap();
             assert_eq!(loaded.content, content, "{date} 正文未逐字节还原");
-            assert_eq!(loaded.word_count, tr_store::util::char_count(content));
+            assert_eq!(
+                loaded.word_count,
+                tr_domain::util::char_count(content) as i64
+            );
         }
 
         for dir in [source_dir, target_dir, out] {

@@ -15,27 +15,17 @@
 //! `invalid request: ...`（绑定失败，400）——最后一条在 Tauri 里由 serde 在进入命令体之前
 //! 处理，无法复用同一文案（见汇报）。
 
-use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::dto::{
     CategoryDto, CreateCategoryRequest, InitializeCategoriesResponse, UpdateCategorySortRequest,
 };
 use tr_domain::error::AppError;
+use tr_domain::wire::{CategoryDeleteRequest, CategoryListRequest, InitializeCategoriesRequest};
 use tr_service::category;
 
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct CategoryListRequest {
-    /// 参数 `type`（空字符串与 `all` 等价：不过滤）
-    #[serde(rename = "type", alias = "transactionType")]
-    pub transaction_type: String,
-    #[serde(rename = "ledgerId")]
-    pub ledger_id: String,
-}
 
 /// 查询分类并补齐每个分类的记录数。`ledgerId` 为空时返回空数组，不报错。
 #[tauri::command]
@@ -74,18 +64,6 @@ pub fn category_create(state: State<'_, AppState>, req: CreateCategoryRequest) -
     Ok(())
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct CategoryDeleteRequest {
-    /// 参数 `name`
-    pub name: String,
-    /// 参数 `type`（同时接受请求体字段名 `transactionType`）
-    #[serde(rename = "type", alias = "transactionType")]
-    pub transaction_type: String,
-    #[serde(rename = "ledgerId")]
-    pub ledger_id: String,
-}
-
 /// 删除分类（连带删除该分类下的标签）。
 #[tauri::command]
 pub fn category_delete(state: State<'_, AppState>, req: CategoryDeleteRequest) -> ApiResult<()> {
@@ -115,13 +93,6 @@ pub fn category_update_sort(
         req.sort_order,
     )?;
     Ok(())
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct InitializeCategoriesRequest {
-    #[serde(rename = "ledgerId")]
-    pub ledger_id: String,
 }
 
 /// 为账本初始化默认分类与标签，返回 `{ categories, tags }`。

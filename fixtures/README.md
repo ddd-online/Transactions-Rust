@@ -44,7 +44,7 @@ cargo xtask dump <dir> --table tbl_billadm_stock_trade
 
 | 档位 | 命令 | 含义 |
 |---|---|---|
-| 单元档 | `pwsh -File fixtures/test.ps1 -Unit <分组>` | 改某个功能时跑的相关测试：`core`（fmt / clippy / design-audit / contract-audit）+ 该功能的包单测与界面护栏；`-Unit changed` 按 git 改动自动挑 |
+| 单元档 | `pwsh -File fixtures/test.ps1 -Unit <分组>` | 改某个功能时跑的相关测试：`core`（fmt / clippy / design-audit）+ 该功能的包单测与界面护栏；`-Unit changed` 按 git 改动自动挑 |
 | 全量档 | `pwsh -File fixtures/test.ps1 -All` | 发布前跑：先构建（trunk + `cargo build --release --features tauri/custom-protocol`），再跑全部静态检查、Rust 单测、schema-diff、chart-tests 与 20 个界面/外壳护栏 |
 
 ```powershell

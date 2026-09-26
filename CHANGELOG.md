@@ -2,6 +2,20 @@
 
 本文件记录本仓库的版本变更。版本号以 `src-tauri/tauri.conf.json` 为唯一来源。
 
+## [未发布]
+
+### 重构：IPC 请求/响应类型收进 `tr-domain`（纯删除，不改字段名）
+
+界面侧 60 个"手抄命令面"的请求/响应结构体与外壳的 `FeatureFlags` / `ConfigSnapshot` / 更新接口类型，
+现在与命令面**共用 `tr_domain::wire` 的同一份定义**（`ProxySetting`、`CreateChartRequest` 一直就是这么做的）。
+字段名与 `#[serde(rename)]` / `alias` / `default` 逐字保留，线上 JSON 不变。
+
+- 删掉 `fixtures/contract-audit.ps1`（218 行）与 `tr-ipc` 的契约锁定测试：跨 crate 逐字段比对的前提
+  （两份手抄副本）已经不成立；`tr-domain` 的 `wire::tests` 改为锁"界面会发的 JSON 形状"。
+- 顺带删掉无人使用的 `tr-ipc::commands::EmptyRequest`，`Notifier::clear()`，
+  并把字符计数/截断（`char_count` / `truncate_chars`）合并到 `tr_domain::util` 一份
+  （界面的「N 字」与落库的 `word_count` 从此同一条规则）。
+
 ## [0.6.1] - 2026-09-25
 
 ### 修复：股票资金记录的日期比委托日期早一天（东区）

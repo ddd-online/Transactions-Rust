@@ -220,16 +220,10 @@ pub fn short_date(date: &str) -> String {
     format!("{month}-{day}")
 }
 
-/// 截断文本（超出时补 `…`，按**字符**计数）。
+/// 截断文本（超出时补 `…`，按**字符**计数，规则见 [`tr_domain::util`]）。
 pub fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
+    if tr_domain::util::char_count(text) <= max {
         return text.to_string();
     }
-    let head: String = text.chars().take(max).collect();
-    format!("{head}…")
-}
-
-/// 字符数（按 Unicode 码点计）。
-pub fn char_count(text: &str) -> usize {
-    text.chars().count()
+    format!("{}…", tr_domain::util::truncate_chars(text, max))
 }

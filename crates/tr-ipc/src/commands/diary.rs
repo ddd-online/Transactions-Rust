@@ -3,13 +3,15 @@
 //! **日记按账本隔离**：除 `diary_import_scan`（纯文件系统、不碰数据库）之外的命令都要求
 //! `ledger_id`，缺失时报既有的 `ledger_id is required`。
 
-use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::dto::{
     DiaryExportRequest, DiaryExportResult, DiaryScanResponse, DiaryUpsertRequest,
 };
 use tr_domain::models::DiaryEntry;
+use tr_domain::wire::{
+    DiaryDateRequest, DiaryImportFileRequest, DiaryLedgerRequest, DiaryScanRequest,
+};
 use tr_service::diary;
 
 use crate::error::ApiResult;
@@ -26,17 +28,6 @@ pub fn diary_list_dates(
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
     Ok(diary::list_dates(&workspace, &req.ledger_id)?)
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DiaryLedgerRequest {
-    pub ledger_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DiaryDateRequest {
-    pub date: String,
-    pub ledger_id: String,
 }
 
 /// `date` 必填（空串报 `missing date parameter`），账本必填。
@@ -90,23 +81,11 @@ pub fn diary_delete(state: State<'_, AppState>, req: DiaryDateRequest) -> ApiRes
     )?)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct DiaryScanRequest {
-    pub directory: String,
-}
-
 /// 扫描目录里的日记文件（不碰数据库，因此不需要账本）。
 #[tauri::command]
 pub fn diary_import_scan(req: DiaryScanRequest) -> ApiResult<DiaryScanResponse> {
     require_directory(&req.directory)?;
     Ok(diary::scan_directory(&req.directory)?)
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DiaryImportFileRequest {
-    pub path: String,
-    pub date: String,
-    pub ledger_id: String,
 }
 
 /// 导入单个文件（自动识别 UTF-8/UTF-16/GBK）到指定账本。

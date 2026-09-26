@@ -8,26 +8,11 @@
 //! | `ledger_update` | `{ id, name, description }` |
 //! | `ledger_delete` | `{ id }` |
 
-use serde::Serialize;
 use tr_domain::dto::LedgerDto;
+use tr_domain::wire::{CreateLedgerRequest, IdRequest, UpdateLedgerRequest};
 
 use crate::ipc::{self, IpcError};
 use crate::store::ALL;
-
-use super::IdRequest;
-
-#[derive(Debug, Serialize)]
-struct CreateRequest {
-    name: String,
-    description: String,
-}
-
-#[derive(Debug, Serialize)]
-struct UpdateRequest {
-    id: String,
-    name: String,
-    description: String,
-}
 
 /// 查询全部账本（`id = "all"`）。
 pub async fn list_all() -> Result<Vec<LedgerDto>, IpcError> {
@@ -43,9 +28,9 @@ pub async fn list(id: &str) -> Result<Vec<LedgerDto>, IpcError> {
 pub async fn create(name: &str, description: &str) -> Result<String, IpcError> {
     ipc::call(
         "ledger_create",
-        CreateRequest {
-            name: name.to_string(),
-            description: description.to_string(),
+        CreateLedgerRequest {
+            name: Some(name.to_string()),
+            description: Some(description.to_string()),
         },
     )
     .await
@@ -60,10 +45,10 @@ pub async fn get(id: &str) -> Result<LedgerDto, IpcError> {
 pub async fn update(id: &str, name: &str, description: &str) -> Result<(), IpcError> {
     ipc::call_void(
         "ledger_update",
-        UpdateRequest {
+        UpdateLedgerRequest {
             id: id.to_string(),
-            name: name.to_string(),
-            description: description.to_string(),
+            name: Some(name.to_string()),
+            description: Some(description.to_string()),
         },
     )
     .await

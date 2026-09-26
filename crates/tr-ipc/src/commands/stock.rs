@@ -10,7 +10,6 @@
 //! **价格**：`(price_yuan * 100.0).round() as i64`。**不用** `money::yuan_to_cents`——它的入参是
 //! 字符串且小数第三位进位规则不同，会改变边界行为。
 
-use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::dto::{
@@ -21,6 +20,13 @@ use tr_domain::dto::{
 };
 use tr_domain::error::AppError;
 use tr_domain::models::StockFeeSetting;
+use tr_domain::wire::{
+    LedgerIdRequest, QueryNumber, StockAmountDateRequest, StockFeeSettingsRequest,
+    StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest, StockRoundReviewRequest,
+    StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
+    StockTradesRequest,
+};
 use tr_service::stock::{self, TradeFill};
 
 use crate::error::{ApiError, ApiResult};
@@ -35,31 +41,15 @@ fn yuan_to_price_cents(price_yuan: f64) -> i64 {
 
 // ---------- 账户 / 费用设置 ----------
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockOverviewRequest {
-    pub ledger_id: String,
-}
-
 /// 股票账户总览（可用现金 = 本金 + 已实现盈亏 − 累计支取 − 持仓成本）。
 #[tauri::command]
 pub fn stock_overview(
     state: State<'_, AppState>,
-    req: StockOverviewRequest,
+    req: LedgerIdRequest,
 ) -> ApiResult<StockOverviewDto> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
     Ok(stock::get_overview(&workspace, &req.ledger_id)?)
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockAmountDateRequest {
-    pub ledger_id: String,
-    /// 金额（**分**，整数）
-    pub amount: Option<i64>,
-    /// 可选的发生日期 `YYYY-MM-DD`
-    pub date: String,
 }
 
 /// 追加本金（可指定发生日期）。
@@ -123,7 +113,7 @@ pub fn stock_withdraw(
 #[tauri::command]
 pub fn stock_fee_settings_get(
     state: State<'_, AppState>,
-    req: StockOverviewRequest,
+    req: LedgerIdRequest,
 ) -> ApiResult<StockFeeSetting> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
@@ -131,20 +121,6 @@ pub fn stock_fee_settings_get(
         &workspace,
         &req.ledger_id,
     )?)
-}
-
-/// 保存费用设置。`commission_rate` 必填（缺省即 0 → 触发"必须大于 0"的错误）；
-/// 其余三项缺省为 0。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockFeeSettingsRequest {
-    pub ledger_id: String,
-    /// 佣金费率（小数：万2.354 → 0.0002354）
-    pub commission_rate: Option<f64>,
-    /// 最低佣金（**分**）
-    pub min_commission: Option<f64>,
-    pub stamp_duty_rate: Option<f64>,
-    pub transfer_fee_rate: Option<f64>,
 }
 
 /// 保存佣金/最低佣金/印花税/过户费。
@@ -175,7 +151,7 @@ pub fn stock_fee_settings_put(
 #[tauri::command]
 pub fn stock_tag_settings_get(
     state: State<'_, AppState>,
-    req: StockOverviewRequest,
+    req: LedgerIdRequest,
 ) -> ApiResult<StockTradeTagSettingDto> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
@@ -184,14 +160,6 @@ pub fn stock_tag_settings_get(
 
 /// 保存可用交易标签（「分析」不可删除）。字段名是 `ledger_id` / `tags`；
 /// 同时接受界面侧可能用的驼峰 `ledgerId`，语义完全相同。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockTagSettingsRequest {
-    #[serde(alias = "ledgerId")]
-    pub ledger_id: String,
-    pub tags: Vec<String>,
-}
-
 #[tauri::command]
 pub fn stock_tag_settings_put(
     state: State<'_, AppState>,
@@ -206,28 +174,6 @@ pub fn stock_tag_settings_put(
 }
 
 // ---------- 资金记录 / 持仓 ----------
-
-/// 数值参数：界面可能传数字字符串（`"2"`）也可能直接传数字（`2`）。
-///
-/// 两种形态都接受，解析结果一致。
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum QueryNumber {
-    Text(String),
-    Integer(i64),
-    Float(f64),
-}
-
-/// `page` / `page_size` 同时接受数字与数字字符串（`alias` 覆盖 `pageSize` 这种前端驼峰写法）；
-/// 非法或缺失时回退默认值。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockFundRecordsRequest {
-    pub ledger_id: String,
-    pub page: Option<QueryNumber>,
-    #[serde(alias = "pageSize")]
-    pub page_size: Option<QueryNumber>,
-}
 
 /// 解析正整数参数，非法或缺失时返回默认值。
 fn parse_positive_int(raw: Option<&QueryNumber>, default: i64) -> i64 {
@@ -272,7 +218,7 @@ pub fn stock_fund_records(
 #[tauri::command]
 pub async fn stock_positions(
     state: State<'_, AppState>,
-    req: StockOverviewRequest,
+    req: LedgerIdRequest,
 ) -> ApiResult<Vec<StockPositionDto>> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
@@ -284,15 +230,6 @@ pub async fn stock_positions(
 }
 
 /// 保存持仓中的「本轮复盘」（500 字以内）。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockPositionReviewRequest {
-    pub ledger_id: String,
-    /// 股票代码
-    pub code: String,
-    pub review: String,
-}
-
 #[tauri::command]
 pub fn stock_position_review(
     state: State<'_, AppState>,
@@ -310,13 +247,6 @@ pub fn stock_position_review(
 
 // ---------- 交易 ----------
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockTradesRequest {
-    pub ledger_id: String,
-    pub stock_code: String,
-}
-
 /// 某股交易列表（持仓中只返回本轮）。
 #[tauri::command]
 pub fn stock_trades(
@@ -330,32 +260,6 @@ pub fn stock_trades(
         &req.ledger_id,
         &req.stock_code,
     )?)
-}
-
-/// 一笔委托内的一笔成交明细（价格单位：**元**）。
-#[derive(Debug, Default, Clone, Copy, Deserialize)]
-#[serde(default)]
-pub struct TradeFillRequest {
-    pub price: f64,
-    pub lots: f64,
-}
-
-/// 一笔委托（可含多笔成交明细），返回成交明细数组。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockTradeCreateRequest {
-    pub ledger_id: String,
-    pub stock_code: String,
-    pub stock_name: String,
-    pub trade_type: String,
-    pub trade_time: f64,
-    pub remark: String,
-    pub tag: String,
-    /// 成交明细；缺省时回退到单笔 `price` / `lots`（兼容旧调用）
-    pub fills: Vec<TradeFillRequest>,
-    /// 兼容旧调用的单笔价格（**元**）
-    pub price: f64,
-    pub lots: f64,
 }
 
 /// 解析成交明细：优先 `fills` 数组，缺省回退到单笔 `price`/`lots`。
@@ -403,18 +307,6 @@ pub fn stock_trade_create(
 }
 
 /// 编辑一笔成交（按当前费用设置重算整笔委托）。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockTradeUpdateRequest {
-    pub ledger_id: String,
-    /// 成交记录 ID
-    pub id: String,
-    /// 成交价（**元**）
-    pub price: f64,
-    pub lots: f64,
-    pub trade_time: f64,
-}
-
 #[tauri::command]
 pub fn stock_trade_update(
     state: State<'_, AppState>,
@@ -433,15 +325,6 @@ pub fn stock_trade_update(
 }
 
 /// 删除整笔委托。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockTradeOrderDeleteRequest {
-    pub ledger_id: String,
-    /// 委托 ID（保持 `orderId` 的大小写）
-    #[serde(alias = "order_id")]
-    pub order_id: String,
-}
-
 #[tauri::command]
 pub fn stock_trade_order_delete(
     state: State<'_, AppState>,
@@ -454,20 +337,6 @@ pub fn stock_trade_order_delete(
 }
 
 /// 预演编辑/删除的影响（**不落库**）。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockTradeImpactRequest {
-    pub ledger_id: String,
-    /// `update_trade` | `delete_order`
-    pub action: String,
-    pub trade_id: String,
-    pub order_id: String,
-    /// 成交价（**元**）
-    pub price: f64,
-    pub lots: f64,
-    pub trade_time: f64,
-}
-
 #[tauri::command]
 pub fn stock_trade_impact(
     state: State<'_, AppState>,
@@ -493,7 +362,7 @@ pub fn stock_trade_impact(
 #[tauri::command]
 pub async fn stock_history(
     state: State<'_, AppState>,
-    req: StockOverviewRequest,
+    req: LedgerIdRequest,
 ) -> ApiResult<Vec<StockTradeHistoryDto>> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
@@ -526,7 +395,7 @@ pub fn stock_history_detail(
 #[tauri::command]
 pub fn stock_history_summary(
     state: State<'_, AppState>,
-    req: StockOverviewRequest,
+    req: LedgerIdRequest,
 ) -> ApiResult<StockTradeHistorySummaryDto> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
@@ -537,15 +406,6 @@ pub fn stock_history_summary(
 }
 
 /// 保存某轮次的交易复盘（500 字以内）。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockRoundReviewRequest {
-    pub ledger_id: String,
-    /// 轮次 ID
-    pub id: String,
-    pub review: String,
-}
-
 #[tauri::command]
 pub fn stock_round_review(
     state: State<'_, AppState>,
@@ -562,15 +422,6 @@ pub fn stock_round_review(
 }
 
 /// 保存某轮次的交易标签。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockRoundTagRequest {
-    pub ledger_id: String,
-    /// 轮次 ID
-    pub id: String,
-    pub tag: String,
-}
-
 #[tauri::command]
 pub fn stock_round_tag(
     state: State<'_, AppState>,
@@ -589,17 +440,6 @@ pub fn stock_round_tag(
 // ---------- 统计 / 股票名 / 重置 ----------
 
 /// 统计的筛选参数：`start_month` / `end_month` / `recent` / `tag`。
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockStatisticsRequest {
-    pub ledger_id: String,
-    pub start_month: String,
-    pub end_month: String,
-    /// 非法值报 `recent 必须为正整数`
-    pub recent: Option<QueryNumber>,
-    pub tag: String,
-}
-
 /// 逐笔结算统计（可按月份区间 / 最近 N 笔 / 标签筛选）。
 #[tauri::command]
 pub fn stock_statistics(
@@ -629,12 +469,6 @@ pub fn stock_statistics(
     )?)
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct StockNameRequest {
-    pub stock_code: String,
-}
-
 /// 查询股票名称（优先本地交易记录，未命中走外部行情接口）。涉及网络，走 `spawn_blocking`。
 #[tauri::command]
 pub async fn stock_name(
@@ -655,7 +489,7 @@ pub async fn stock_name(
 
 /// 清空指定账本的全部股票交易数据。
 #[tauri::command]
-pub fn stock_reset(state: State<'_, AppState>, req: StockOverviewRequest) -> ApiResult<bool> {
+pub fn stock_reset(state: State<'_, AppState>, req: LedgerIdRequest) -> ApiResult<bool> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
     stock::reset_data(&workspace, &req.ledger_id)?;
@@ -664,14 +498,13 @@ pub fn stock_reset(state: State<'_, AppState>, req: StockOverviewRequest) -> Api
 
 // ---------- 操作记录 / 回滚 ----------
 //
-// 三条命令共用 `StockOverviewRequest`（只需要 ledger_id），界面侧对应 `api::stock` 的
-// `LedgerIdRequest` —— 字段集一致，契约审计逐字段比得过。
+// 三条命令共用 `LedgerIdRequest`（只需要 ledger_id）。
 
 /// 某账本的操作记录（最新的在前，最多 10 条）。
 #[tauri::command]
 pub fn stock_operation_list(
     state: State<'_, AppState>,
-    req: StockOverviewRequest,
+    req: LedgerIdRequest,
 ) -> ApiResult<Vec<StockOperationDto>> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
@@ -685,7 +518,7 @@ pub fn stock_operation_list(
 #[tauri::command]
 pub fn stock_operation_preview(
     state: State<'_, AppState>,
-    req: StockOverviewRequest,
+    req: LedgerIdRequest,
 ) -> ApiResult<StockOperationRollbackPreviewDto> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
@@ -699,7 +532,7 @@ pub fn stock_operation_preview(
 #[tauri::command]
 pub fn stock_operation_rollback(
     state: State<'_, AppState>,
-    req: StockOverviewRequest,
+    req: LedgerIdRequest,
 ) -> ApiResult<StockOperationRollbackDto> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;

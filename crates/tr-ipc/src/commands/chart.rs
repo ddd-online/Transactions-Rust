@@ -10,11 +10,11 @@
 //! `parse create chart request failed` / `parse update chart request failed` 是请求体绑定失败
 //! 时的文案，在 Tauri 里请求体反序列化发生在进入命令体之前，无法复用同一文案（见汇报）。
 
-use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::dto::{ChartDto, CreateChartRequest, UpdateChartRequest};
 use tr_domain::error::AppError;
+use tr_domain::wire::{ChartIdRequest, ChartListRequest};
 use tr_service::chart;
 
 use crate::error::{ApiError, ApiResult};
@@ -27,14 +27,6 @@ pub fn chart_create(state: State<'_, AppState>, req: CreateChartRequest) -> ApiR
     Ok(chart::create(&workspace, &req)?)
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct ChartIdRequest {
-    /// 图表 DTO 里的字段名是 `chartId`，也接受 `id`
-    #[serde(rename = "chartId", alias = "id")]
-    pub chart_id: String,
-}
-
 /// 删除图表。
 #[tauri::command]
 pub fn chart_delete(state: State<'_, AppState>, req: ChartIdRequest) -> ApiResult<()> {
@@ -45,13 +37,6 @@ pub fn chart_delete(state: State<'_, AppState>, req: ChartIdRequest) -> ApiResul
     let workspace = state.workspace()?;
     chart::delete_by_id(&workspace, &req.chart_id)?;
     Ok(())
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct ChartListRequest {
-    #[serde(rename = "ledgerId")]
-    pub ledger_id: String,
 }
 
 /// 列出某账本的全部图表（会先补齐预设图表，失败只告警）。

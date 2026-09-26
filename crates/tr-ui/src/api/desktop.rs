@@ -26,209 +26,44 @@
 //! `dialog_open` / `file_save_image` 的返回形状是固定契约
 //! （`{ canceled, filePaths, error? }` / `{ success, canceled?, error? }`）。
 
-use serde::{Deserialize, Serialize};
-
 use tr_domain::proxy::ProxySetting;
+pub use tr_domain::wire::{
+    AppInfoRequest, AssetUrlRequest, ConfigSnapshot, DevToolsToggleRequest, DialogOpenRequest,
+    DialogOpenResponse, FeatureFlags, FileSaveRequest, FileSaveResponse, ProxyDetectResponse,
+    SetAppearanceRequest, SetCloseBehaviorRequest, SetFeatureRequest, SetKeyEventLinkedOpenRequest,
+    WindowControlRequest, WorkspaceDirRequest,
+};
 
 use crate::ipc::{self, IpcError};
 
 /// 窗口控制动作（最小化 / 最大化 / 关闭）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowAction {
     Minimize,
     Maximize,
     Close,
 }
 
-#[derive(Debug, Serialize)]
-struct WindowControlRequest {
-    action: WindowAction,
-}
-
-#[derive(Debug, Serialize)]
-struct AppInfoRequest {
-    field: String,
-}
-
-#[derive(Debug, Serialize)]
-struct AssetUrlRequest {
-    #[serde(rename = "filePath")]
-    file_path: String,
-}
-
-#[derive(Debug, Serialize)]
-struct AppearanceRequest {
-    appearance: String,
-}
-
-#[derive(Debug, Serialize)]
-struct CloseBehaviorRequest {
-    behavior: String,
-}
-
-#[derive(Debug, Serialize)]
-struct SetFeatureRequest {
-    feature: String,
-    enabled: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct SetKeyEventLinkedOpenRequest {
-    open: bool,
-}
-
-/// `bool` 字段的 serde 缺省值：**true**。
-///
-/// 容器上的 `#[serde(default)]` 会用 `bool::default()`（= false），对"缺省应当是开"
-/// 的偏好是错的 —— 外壳漏发字段或老后端不认识它时，界面会静默变成"收起"。
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Serialize)]
-struct WorkspaceDirRequest {
-    #[serde(rename = "workspaceDir")]
-    workspace_dir: String,
-}
-
-#[derive(Debug, Default, Serialize)]
-struct DialogOpenRequest {
-    title: String,
-    #[serde(rename = "defaultPath")]
-    default_path: String,
-}
-
-#[derive(Debug, Serialize)]
-struct FileSaveRequest {
-    #[serde(rename = "relativePath")]
-    relative_path: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DevToolsToggleRequest {
-    enabled: bool,
-}
-
-/// 功能开关（逐字段照抄 `src-tauri/src/config.rs` 的 `FeatureFlags`）。
-///
-/// **硬契约**：键名要与外壳一致（`keyEvent` 是 camelCase，其余三个是小写单词）。
-/// `Default` = **全开**：外壳漏发这个字段、或老配置里根本没有它时，界面按"没关过任何功能"处理。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default)]
-pub struct FeatureFlags {
-    /// 记账（记录 / 分析 / 标签 / 模板）
-    pub accounting: bool,
-    /// 股票
-    pub stock: bool,
-    /// 事件
-    #[serde(rename = "keyEvent")]
-    pub key_event: bool,
-    /// 日记
-    pub diary: bool,
-}
-
-impl Default for FeatureFlags {
-    fn default() -> Self {
-        Self::all_enabled()
-    }
-}
-
-impl FeatureFlags {
-    /// 全开（新增功能时的默认值）。
-    pub const fn all_enabled() -> Self {
-        Self {
-            accounting: true,
-            stock: true,
-            key_event: true,
-            diary: true,
+impl WindowAction {
+    /// 传给 `window_control` 的动作名（外壳按这几个字符串匹配）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WindowAction::Minimize => "minimize",
+            WindowAction::Maximize => "maximize",
+            WindowAction::Close => "close",
         }
     }
-
-    /// 按功能名读取（`shell::Page::feature_key` 用的就是这几个名字）。
-    pub fn get(&self, feature: &str) -> Option<bool> {
-        Some(match feature {
-            "accounting" => self.accounting,
-            "stock" => self.stock,
-            "keyEvent" => self.key_event,
-            "diary" => self.diary,
-            _ => return None,
-        })
-    }
-}
-
-/// `config_get` 的返回（逐字段照抄 `commands.rs` 的 `ConfigSnapshot`）。
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct ConfigSnapshot {
-    #[serde(rename = "workspaceDir")]
-    pub workspace_dir: String,
-    #[serde(rename = "closeBehavior")]
-    pub close_behavior: String,
-    /// light / dark / system
-    pub appearance: String,
-    #[serde(rename = "configPath")]
-    pub config_path: String,
-    #[serde(rename = "isDev")]
-    pub is_dev: bool,
-    /// 代理设置（`mode` / `url`）。
-    ///
-    /// 这里**直接复用 `tr_domain::proxy::ProxySetting`**（两侧同一份类型，不是手抄，
-    /// 所以不存在字段漂移）；缺省值是 `auto`，后端漏发该字段时也按自动探测处理。
-    pub proxy: ProxySetting,
-    /// 功能开关（缺省 = 全开，见 [`FeatureFlags`]）。
-    pub features: FeatureFlags,
-    /// 事件页右栏（关联交易）是否展开。
-    ///
-    /// **缺省 = 展开**（见 [`default_true`]）：字段缺失时按"没关过"处理，
-    /// 与外壳 `AppConfig::key_event_linked_open` 的默认值一致。
-    #[serde(rename = "keyEventLinkedOpen", default = "default_true")]
-    pub key_event_linked_open: bool,
-}
-
-/// `proxy_detect` 的返回（逐字段照抄 `commands.rs` 的 `ProxyDetectResponse`）。
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct ProxyDetectResponse {
-    /// 会用到的代理地址（空串 = 直连）
-    pub url: String,
-    /// env / system / manual / none
-    pub source: String,
-    /// 系统是否配置了 PAC 自动配置脚本（本版本不解析）
-    pub pac: bool,
-    /// 直接展示给用户的说明
-    pub message: String,
-}
-
-/// `dialog_open` 的返回（固定契约）。
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct DialogOpenResponse {
-    pub canceled: bool,
-    #[serde(rename = "filePaths")]
-    pub file_paths: Vec<String>,
-    pub error: Option<String>,
-}
-
-impl DialogOpenResponse {
-    /// 取用户选中的第一个目录（取消或异常时为空）。
-    pub fn first_path(&self) -> Option<&str> {
-        self.file_paths.first().map(String::as_str)
-    }
-}
-
-/// `file_save_image` 的返回。
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct FileSaveResponse {
-    pub success: bool,
-    pub canceled: Option<bool>,
-    pub error: Option<String>,
 }
 
 /// 最小化 / 最大化（还原）/ 关闭窗口。
 pub async fn window_control(action: WindowAction) -> Result<(), IpcError> {
-    ipc::call_void("window_control", WindowControlRequest { action }).await
+    ipc::call_void(
+        "window_control",
+        WindowControlRequest {
+            action: action.as_str().to_string(),
+        },
+    )
+    .await
 }
 
 /// 读取应用信息（`name` / `version` / `isDev`）。
@@ -262,7 +97,7 @@ pub async fn config_get() -> Result<ConfigSnapshot, IpcError> {
 pub async fn config_set_appearance(appearance: &str) -> Result<(), IpcError> {
     ipc::call_void(
         "config_set_appearance",
-        AppearanceRequest {
+        SetAppearanceRequest {
             appearance: appearance.to_string(),
         },
     )
@@ -273,7 +108,7 @@ pub async fn config_set_appearance(appearance: &str) -> Result<(), IpcError> {
 pub async fn config_set_close_behavior(behavior: &str) -> Result<(), IpcError> {
     ipc::call_void(
         "config_set_close_behavior",
-        CloseBehaviorRequest {
+        SetCloseBehaviorRequest {
             behavior: behavior.to_string(),
         },
     )
@@ -351,8 +186,8 @@ pub async fn dialog_open(title: &str, default_path: &str) -> Result<DialogOpenRe
     ipc::call(
         "dialog_open",
         DialogOpenRequest {
-            title: title.to_string(),
-            default_path: default_path.to_string(),
+            title: Some(title.to_string()),
+            default_path: Some(default_path.to_string()),
         },
     )
     .await

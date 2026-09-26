@@ -3,23 +3,19 @@
 //! 所有参数并入一个 `req`，命名保持 snake_case（`ledger_id`），
 //! 校验文案与顺序是固定契约。
 
-use serde::Deserialize;
 use tauri::State;
 
 use tr_domain::error::AppError;
 use tr_domain::models::{KeyEvent, KeyEventImage};
+use tr_domain::wire::{
+    IdRequest, KeyEventDateRequest, KeyEventImageAddRequest, KeyEventUpsertRequest, YearRequest,
+};
 use tr_service::key_event;
 
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
 use super::{require, require_ledger_id};
-
-#[derive(Debug, Deserialize)]
-pub struct YearRequest {
-    pub year: String,
-    pub ledger_id: String,
-}
 
 fn require_year_and_ledger(req: &YearRequest) -> ApiResult<()> {
     require(!req.year.is_empty(), "missing year parameter")?;
@@ -56,12 +52,6 @@ pub fn key_event_dates_by_year(
     )?)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct KeyEventDateRequest {
-    pub date: String,
-    pub ledger_id: String,
-}
-
 fn require_date_and_ledger(req: &KeyEventDateRequest) -> ApiResult<()> {
     require(!req.date.is_empty(), "missing date parameter")?;
     require_ledger_id(&req.ledger_id)
@@ -80,18 +70,6 @@ pub fn key_event_get(state: State<'_, AppState>, req: KeyEventDateRequest) -> Ap
 }
 
 /// 写入关键事件，返回日期。
-#[derive(Debug, Deserialize)]
-pub struct KeyEventUpsertRequest {
-    pub ledger_id: String,
-    pub date: String,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub content: Option<String>,
-    #[serde(default)]
-    pub color: Option<String>,
-}
-
 #[tauri::command]
 pub fn key_event_upsert(
     state: State<'_, AppState>,
@@ -139,14 +117,6 @@ pub fn key_event_images_list(
 }
 
 /// 上传一张图片（base64 data URI）。
-#[derive(Debug, Deserialize)]
-pub struct KeyEventImageAddRequest {
-    pub date: String,
-    pub ledger_id: String,
-    #[serde(default)]
-    pub data: Option<String>,
-}
-
 #[tauri::command]
 pub fn key_event_image_add(
     state: State<'_, AppState>,
@@ -167,17 +137,9 @@ pub fn key_event_image_add(
     )?)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct KeyEventImageIdRequest {
-    pub id: String,
-}
-
 /// 删除一张图片。
 #[tauri::command]
-pub fn key_event_image_delete(
-    state: State<'_, AppState>,
-    req: KeyEventImageIdRequest,
-) -> ApiResult<()> {
+pub fn key_event_image_delete(state: State<'_, AppState>, req: IdRequest) -> ApiResult<()> {
     if req.id.is_empty() {
         return Err(ApiError::from(AppError::bad_request(
             "missing image id parameter",

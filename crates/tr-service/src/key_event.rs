@@ -24,7 +24,7 @@ pub fn upsert_key_event(
     content: &str,
     color: &str,
 ) -> ServiceResult<()> {
-    let title = tr_store::util::truncate_chars(title, TITLE_MAX_CHARS);
+    let title = tr_domain::util::truncate_chars(title, TITLE_MAX_CHARS);
     let event = KeyEvent {
         id: tr_store::util::new_uuid(),
         date: date.to_string(),

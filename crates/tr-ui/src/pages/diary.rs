@@ -45,7 +45,6 @@ use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, DatePicker, FeaturePage, Modal, ModalSize, Textarea,
 };
 use crate::error_handler::notify_error;
-use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::store::AppStores;
@@ -961,7 +960,7 @@ fn DiaryEditor(
                                 .collect_view()}
                         </div>
                         <span class="diary-editor__words" aria-live="polite">
-                            {move || format!("{}字", format::char_count(&draft.get()))}
+                            {move || format!("{}字", tr_domain::util::char_count(&draft.get()))}
                         </span>
                     </div>
                 </div>

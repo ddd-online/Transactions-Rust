@@ -24,7 +24,11 @@
 //! `percent` 是 **0..=100 的整数**，`speed` 是**已经格式化好的字符串**（例如 `"2.0 KB/s"`），
 //! 不是数字 —— 界面对照 `UpdateProgress` 的字段类型照抄，不要再除一次。
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+use tr_domain::wire::{
+    UpdateCheckResponse, UpdateDownloadRequest, UpdateDownloadStatus, UpdateResponse,
+};
 
 use crate::ipc::{self, IpcError};
 
@@ -34,37 +38,6 @@ pub const EVENT_DOWNLOAD_PROGRESS: &str = "update:download-progress";
 pub const EVENT_DOWNLOAD_COMPLETE: &str = "update:download-complete";
 /// 事件名：下载失败（载荷 `{ message }`）。
 pub const EVENT_DOWNLOAD_ERROR: &str = "update:download-error";
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
-pub struct UpdateCheckResponse {
-    #[serde(rename = "hasUpdate")]
-    pub has_update: bool,
-    #[serde(rename = "latestVersion")]
-    pub latest_version: String,
-    #[serde(rename = "downloadUrl")]
-    pub download_url: String,
-    /// 形如 `sha256:...`（GitHub release asset 的 digest）
-    pub digest: String,
-    /// release notes（Markdown；本轮按纯文本渲染）
-    pub body: String,
-    /// 检查失败原因（网络/解析问题），成功时为 `None`
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct UpdateResponse {
-    pub success: bool,
-    pub error: Option<String>,
-}
-
-impl UpdateResponse {
-    /// 是否为"用户主动取消"（后端用固定文案 `cancelled` 表示）。
-    pub fn is_cancelled(&self) -> bool {
-        self.error.as_deref() == Some("cancelled")
-    }
-}
 
 /// `update:download-progress` 的载荷。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -95,30 +68,6 @@ pub struct UpdateError {
     pub message: String,
 }
 
-/// `update_download_status` 的返回：界面（重新）进入「关于软件」时恢复下载状态。
-///
-/// 下载是**单例**（一次只有一笔，跑在外壳的线程里），界面进来时先问一次当前状态，
-/// 这样切换页面回来、甚至重开界面，都能接着显示进度而不是回到"未下载"。
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct UpdateDownloadStatus {
-    /// 是否有下载正在跑
-    pub active: bool,
-    /// 已经下载好、等待安装
-    pub downloaded: bool,
-    /// 最近一次上报的百分比
-    pub percent: u32,
-    /// 最近一次上报的速度串
-    pub speed: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DownloadRequest {
-    url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    digest: Option<String>,
-}
-
 /// 检查更新（**无 `req` 形参**）。
 pub async fn check() -> Result<UpdateCheckResponse, IpcError> {
     ipc::call_no_args("update_check").await
@@ -133,7 +82,7 @@ pub async fn download(url: &str, digest: &str) -> Result<UpdateResponse, IpcErro
     };
     ipc::call(
         "update_download",
-        DownloadRequest {
+        UpdateDownloadRequest {
             url: url.to_string(),
             digest,
         },
