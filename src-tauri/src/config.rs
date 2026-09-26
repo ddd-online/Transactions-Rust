@@ -66,7 +66,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            // 默认窗口尺寸 = 主窗口的最小尺寸（见 `shell.rs` 的 `min_inner_size`）
+            // 默认开窗尺寸（**不是下限**：窗口没有最小尺寸，见 `shell.rs` 的 `create_main_window`）
             width: 1500,
             height: 1000,
             x: None,
@@ -175,8 +175,8 @@ mod tests {
     #[test]
     fn defaults_match_documented_initial_values() {
         let config = AppConfig::default();
-        // 与 `shell.rs` 的 `min_inner_size(1500, 1000)` 保持一致：
-        // 默认尺寸低于最小尺寸时，窗口一启动就会被系统夹到最小尺寸，配置里写的值就没意义了。
+        // 首次开窗的大小：侧栏 200 + 子功能条 56 + 内容 1244，正好是设计系统常看的那一屏。
+        // 改这个值要顺手看一眼 `fixtures/window-bounds.ps1`（它按逻辑像素核对开窗尺寸）。
         assert_eq!(config.width, 1500);
         assert_eq!(config.height, 1000);
         assert_eq!(config.appearance, "system");

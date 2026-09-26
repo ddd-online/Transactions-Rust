@@ -70,11 +70,10 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::App("index.html".into()))
             .title("Transactions")
             .inner_size(config.width as f64, config.height as f64)
-            // 最小窗口 = 1500×1000 逻辑像素（内容区尺寸，不含窗口边框）。
-            // 这个下限是界面骨架撑开所需的：侧栏 200 + 内容卡片 + 顶部容器，
-            // 再窄就会把工具栏挤换行、把多栏页面压成一栏。
+            // **不设最小尺寸**：窗口能拖多小就多小，窄宽由界面自己的断点承担
+            // （1280px 收栏目 / 1080px 折多栏，见 stock.css / data_analysis.css 的 `@media`）。
+            // 曾经夹了一个 1500×1000 的下限，结果是：断点永远不触发、窗口在小屏上直接超出桌面。
             // 注意：**单位是逻辑像素**，与 `inner_size` 同一口径（见下方 `logical_bounds` 的注释）。
-            .min_inner_size(1500.0, 1000.0)
             .disable_drag_drop_handler()
             .on_navigation(is_allowed_navigation)
             .decorations(false);
