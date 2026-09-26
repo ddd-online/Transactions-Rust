@@ -1,4 +1,4 @@
-# chart-tests.ps1 —— 真跑 chart.rs 里的单元测试（Y 轴范围 / 面积填充基线）
+# chart-tests.ps1 —— 真跑 chart.rs 里的单元测试（Y 轴范围 / 面积填充基线 / 0 轴分色）
 #
 # 用法（pwsh 7）：pwsh -File fixtures/chart-tests.ps1
 #
@@ -43,19 +43,26 @@ function Get-ConstBody([string]$text, [string]$name) {
 
 # 被测函数：纯函数 + 它们依赖的测试辅助函数 + 测试本身
 $fns = @(
-    'display_range', 'nice_steps', 'nice_axis_range',
-    'path_points', 'fmt_coord', 'attr_value', 'replace_attr', 'rewrite_fill_baseline', 'anchor_fill_at_zero',
+    'display_range', 'nice_steps', 'nice_axis_range', 'format_value',
+    'path_points', 'fmt_coord', 'attr_value', 'replace_attr', 'rewrite_tags',
+    'zero_axis_y', 'rewrite_fill_baseline', 'anchor_fill_at_zero',
+    'split_at_zero', 'polyline_d', 'fill_d', 'split_fill', 'split_line', 'sign_dot', 'side_color',
+    'fill_tag', 'paint_by_sign',
     'ticks', 'fill_path_d',
     'axis_ticks_are_round_numbers_for_positive_money',
-    'axis_zero_sits_in_the_middle_when_data_crosses_zero',
+    'axis_range_hugs_the_data_when_it_crosses_zero',
+    'percent_bounds_hold_the_axis_within_one_hundred',
+    'ratio_and_percent_keep_two_decimals',
     'axis_range_covers_the_data_and_keeps_a_strict_upper_bound',
     'fill_baseline_moves_to_the_zero_axis',
     'fill_baseline_is_untouched_when_zero_is_an_edge_of_the_axis',
     'fill_baseline_is_left_alone_without_a_trustworthy_axis',
-    'zero_axis_geometry_agrees_with_the_data_points'
+    'zero_axis_geometry_agrees_with_the_data_points',
+    'fill_and_line_split_at_the_zero_axis',
+    'split_stays_untouched_without_a_trustworthy_zero_axis'
 )
 # 被测常量（`PROBE_SVG` 是 charts-rs 1.0.0 的真实输出，填充基线的定点断言就钉在它上面）
-$consts = @('FILL_OPACITY_ATTR', 'SVG_PATH_OPEN', 'PROBE_SVG')
+$consts = @('FILL_OPACITY_ATTR', 'SVG_PATH_OPEN', 'FILL_NONE_ATTR', 'AXIS_LIMIT_EPSILON', 'Y_SPLITS', 'PROBE_SVG')
 
 $parts = @()
 foreach ($n in $consts) { $parts += "// ---- 原文: const $n"; $parts += (Get-ConstBody $src $n); $parts += '' }
@@ -65,13 +72,12 @@ $header = @'
 // 自动生成（fixtures/chart-tests.ps1），不入库。
 #![allow(dead_code)]
 #[derive(Clone, Copy)]
-pub enum ChartValueKind { Money, Percent, Count }
-pub struct ChartSeries { pub data: Vec<i64> }
-pub fn display_value(value: i64, kind: ChartValueKind) -> f32 {
+pub enum ChartValueKind { Money, Percent, Ratio, Count }
+pub struct ChartSeries { pub data: Vec<f64> }
+pub fn display_value(value: f64, kind: ChartValueKind) -> f32 {
     match kind {
-        ChartValueKind::Money => value as f32 / 100.0,
-        ChartValueKind::Percent => value as f32,
-        ChartValueKind::Count => value as f32,
+        ChartValueKind::Money => (value / 100.0) as f32,
+        ChartValueKind::Percent | ChartValueKind::Ratio | ChartValueKind::Count => value as f32,
     }
 }
 /// 与 chart.rs 同一个常量（那里是 `const MARGIN: f32 = 8.0;`）
@@ -84,20 +90,27 @@ const Y_AXIS_MAX_SPLITS: usize = 5;
 $main = @'
 
 fn main() {
+    // ⚠ 这里的条数要与 cases 的条数一致（下面打印用）
+    const COUNT: usize = 11;
     let cases: Vec<(&str, fn())> = vec![
         ("Y 轴刻度是正整数（用户报的那张图）", axis_ticks_are_round_numbers_for_positive_money),
-        ("跨零时 0 落在正中", axis_zero_sits_in_the_middle_when_data_crosses_zero),
+        ("跨零时范围各自贴住数据（不强制对称）", axis_range_hugs_the_data_when_it_crosses_zero),
+        ("百分比上下界停在 0..100", percent_bounds_hold_the_axis_within_one_hundred),
+        ("盈亏比保留两位小数", ratio_and_percent_keep_two_decimals),
         ("范围盖住数据且上界严格更大", axis_range_covers_the_data_and_keeps_a_strict_upper_bound),
         ("填充基线挪到 0 轴", fill_baseline_moves_to_the_zero_axis),
         ("0 在轴端点时填充基线不动", fill_baseline_is_untouched_when_zero_is_an_edge_of_the_axis),
         ("没有可信范围时不动填充", fill_baseline_is_left_alone_without_a_trustworthy_axis),
         ("0 轴几何与数据点一致", zero_axis_geometry_agrees_with_the_data_points),
+        ("面积/折线/数据点按 0 轴分色", fill_and_line_split_at_the_zero_axis),
+        ("没有可信 0 轴时不分色", split_stays_untouched_without_a_trustworthy_zero_axis),
     ];
+    assert_eq!(cases.len(), COUNT, "cases 与 COUNT 不一致");
     for (name, case) in cases {
         case();
         println!("  ✓ {name}");
     }
-    println!("[chart-tests] ✅ chart.rs 的 {} 条测试全部通过", 7);
+    println!("[chart-tests] ✅ chart.rs 的 {COUNT} 条测试全部通过");
 }
 '@
 

@@ -62,24 +62,6 @@ use charts_rs::{
 
 use crate::store::AppStores;
 
-/// 一个类目上的数据点。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ChartPoint {
-    /// X 轴类目（`2024-01` / `2024` / `1`）
-    pub label: String,
-    /// Y 轴数值（金额时单位是**分**）
-    pub value: i64,
-}
-
-impl ChartPoint {
-    pub fn new(label: impl Into<String>, value: i64) -> Self {
-        Self {
-            label: label.into(),
-            value,
-        }
-    }
-}
-
 /// 一条序列。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartSeries {
@@ -87,12 +69,15 @@ pub struct ChartSeries {
     pub label: String,
     /// CSS 变量名或任意合法颜色值（推荐 `var(--transactions-color-*)`）
     pub color: String,
-    /// 与 X 轴类目一一对应的取值（长度不足的类目按 0 处理）
-    pub data: Vec<i64>,
+    /// 与 X 轴类目一一对应的取值（长度不足的类目按 0 处理）。
+    ///
+    /// **金额仍是"分"**（由 `ChartValueKind::Money` 换算成元）；用 `f64` 是因为比值、
+    /// 百分比这类指标本来就是小数，取整会把 0.81 变成 1（见 `ChartValueKind::Ratio`）。
+    pub data: Vec<f64>,
 }
 
 impl ChartSeries {
-    pub fn new(label: impl Into<String>, color: impl Into<String>, data: Vec<i64>) -> Self {
+    pub fn new(label: impl Into<String>, color: impl Into<String>, data: Vec<f64>) -> Self {
         Self {
             label: label.into(),
             color: color.into(),
@@ -108,6 +93,8 @@ pub enum ChartValueKind {
     Money,
     /// 百分比：已是百分数（`12.5` → `12.50%`）
     Percent,
+    /// 比值/倍数：两位小数（`0.81` → `0.81`）
+    Ratio,
     /// 计数：整数
     Count,
 }
@@ -123,6 +110,16 @@ pub struct ChartConfig {
     pub value_kind: ChartValueKind,
     /// 虚线参考线（金额时单位是分），例如 0
     pub reference: Option<i64>,
+    /// Y 轴上下界（`None` = 按数据自动挑刻度）。
+    ///
+    /// 天生有边界的指标必须显式给：胜率 `0..100`（出现负数时 `-100..100`）——
+    /// 自动挑刻度会把"数据正好压在 100"当成"上界要严格大于数据"，
+    /// 于是多撑出一档 150。数据超出给定上下界时自动退回按数据挑（防御）。
+    pub y_bounds: Option<(f64, f64)>,
+    /// 面积 / 折线 / 数据点按 0 轴分色：`(0 轴之上, 0 轴之下)`（`None` = 整条一个颜色）。
+    ///
+    /// 盈亏类曲线用（红涨绿跌：之上红、之下绿）；多序列时不分色（只有单序列才画面积）。
+    pub sign_colors: Option<(String, String)>,
     /// 隐藏图例
     pub hide_legend: bool,
     /// 隐藏网格线
@@ -136,6 +133,8 @@ impl Default for ChartConfig {
             y_title: String::new(),
             value_kind: ChartValueKind::Money,
             reference: None,
+            y_bounds: None,
+            sign_colors: None,
             hide_legend: false,
             hide_grid: false,
         }
@@ -163,6 +162,16 @@ impl ChartConfig {
         self
     }
 
+    pub fn y_bounds(mut self, low: f64, high: f64) -> Self {
+        self.y_bounds = Some((low, high));
+        self
+    }
+
+    pub fn sign_colors(mut self, above: impl Into<String>, below: impl Into<String>) -> Self {
+        self.sign_colors = Some((above.into(), below.into()));
+        self
+    }
+
     /// 预设配色（语义色，顺序即取值顺序）。
     pub fn default_colors() -> [&'static str; 5] {
         [
@@ -186,6 +195,9 @@ const X_LABEL_MIN_GAP: f64 = 56.0;
 const Y_SPLITS: usize = 4;
 /// Y 轴最多分几段（= 最多 6 条刻度）。再密就压过折线本身了。
 const Y_AXIS_MAX_SPLITS: usize = 5;
+/// 上界贴着数据时抬起的微量（只为过 charts-rs 的"`axis_max` 必须严格大于数据"那一关；
+/// 刻度按一位小数格式化，0.01 不会出现在刻度文字里）。
+const AXIS_LIMIT_EPSILON: f64 = 0.01;
 /// 数据点半径
 const POINT_RADIUS: f32 = 2.5;
 /// 入场动画时长（ms）
@@ -574,7 +586,10 @@ fn build_chart(
         .map(|item| {
             let values: Vec<f32> = (0..categories.len())
                 .map(|slot| {
-                    display_value(item.data.get(slot).copied().unwrap_or(0), config.value_kind)
+                    display_value(
+                        item.data.get(slot).copied().unwrap_or(0.0),
+                        config.value_kind,
+                    )
                 })
                 .collect();
             ChartSeriesData::new(item.label.clone(), values)
@@ -678,14 +693,16 @@ fn build_chart(
         axis.axis_name_gap = 8.0;
         axis.axis_formatter = Some(match config.value_kind {
             ChartValueKind::Percent => "{t}%".to_string(),
-            ChartValueKind::Money | ChartValueKind::Count => "{t}".to_string(),
+            ChartValueKind::Money | ChartValueKind::Ratio | ChartValueKind::Count => {
+                "{t}".to_string()
+            }
         });
     }
     // **范围由我们自己定**（刻度值因此永远是大整数、跨零时 0 在正中）：把 min/max/splits
     // 一起写死，charts-rs 就不会再走它那套"按数量级把步长往上取整"的阶梯。
     // 写进**每一条** Y 轴配置：多轴时它们共用同一套网格，范围必须一致。
     let (data_min, data_max) = display_range(series, categories.len(), config.value_kind);
-    let axis_range = nice_axis_range(data_min, data_max);
+    let axis_range = nice_axis_range(data_min, data_max, config.y_bounds);
     if let Some((min, max, splits)) = axis_range {
         for axis in chart.y_axis_configs.iter_mut() {
             axis.axis_min = Some(min as f32);
@@ -694,8 +711,17 @@ fn build_chart(
         }
     }
 
-    let svg = anchor_fill_at_zero(chart.svg().unwrap_or_default(), axis_range);
-    solid_dots(svg, &palette)
+    let svg = chart.svg().unwrap_or_default();
+    match config.sign_colors.as_ref().filter(|_| series.len() == 1) {
+        // 分色模式：填充 / 折线 / 数据点三处一起按 0 轴换色（`solid_dots` 由它代劳）
+        Some((above, below)) => paint_by_sign(
+            svg,
+            axis_range,
+            &hex_of(&resolve_color(above)),
+            &hex_of(&resolve_color(below)),
+        ),
+        None => solid_dots(anchor_fill_at_zero(svg, axis_range), &palette),
+    }
 }
 
 /// 面积填充 path 的判据：**只有它带 `fill-opacity`**（折线是 `fill="none" stroke="…"`，
@@ -703,6 +729,8 @@ fn build_chart(
 const FILL_OPACITY_ATTR: &str = "fill-opacity";
 /// SVG path 元素的起始标记
 const SVG_PATH_OPEN: &str = "<path ";
+/// SVG 里"没有填充"的写法（折线 path 用它；填充 path 用的是具体颜色）
+const FILL_NONE_ATTR: &str = r#"fill="none""#;
 
 /// 把面积填充的基线从"绘图区底边"挪到 **0 轴**。
 ///
@@ -731,9 +759,19 @@ fn anchor_fill_at_zero(svg: String, axis_range: Option<(f64, f64, usize)>) -> St
     if !(max > min) {
         return svg;
     }
+    rewrite_tags(&svg, SVG_PATH_OPEN, |tag| {
+        rewrite_fill_baseline(tag, min, max)
+    })
+}
+
+/// 逐个替换 SVG 里以 `open` 开头的自闭合标签（`…/>`）；`f` 返回 `None` 的标签原样保留。
+///
+/// 三处定点改写（填充基线 / 实心点 / 按 0 轴分色）共用这一套扫描：只认 `<path `/`<circle`
+/// 这样的起始标记，标签之间的字节（网格线、文字、缩进）原样搬过去。
+fn rewrite_tags(svg: &str, open: &str, f: impl Fn(&str) -> Option<String>) -> String {
     let mut out = String::with_capacity(svg.len());
-    let mut rest = svg.as_str();
-    while let Some(start) = rest.find(SVG_PATH_OPEN) {
+    let mut rest = svg;
+    while let Some(start) = rest.find(open) {
         let (head, tail) = rest.split_at(start);
         out.push_str(head);
         let Some(end) = tail.find("/>") else {
@@ -741,11 +779,31 @@ fn anchor_fill_at_zero(svg: String, axis_range: Option<(f64, f64, usize)>) -> St
             return out;
         };
         let (tag, after) = tail.split_at(end + 2);
-        out.push_str(&rewrite_fill_baseline(tag, min, max).unwrap_or_else(|| tag.to_string()));
+        out.push_str(&f(tag).unwrap_or_else(|| tag.to_string()));
         rest = after;
     }
     out.push_str(rest);
     out
+}
+
+/// 0 轴的 y 像素：由填充 path 的**收尾基线**（绘图区底边）与 Y 轴范围反推。
+///
+/// 填充 path 的形状是"折线各点 + 三个收尾点"，倒数第三个点的 y 就是绘图区底边。
+/// 算不出高度、或 0 落在绘图区外时返回 `None`（几何假设不成立就别画）。
+fn zero_axis_y(points: &[(f64, f64)], min: f64, max: f64) -> Option<f64> {
+    if !(max > min) || points.len() < 4 {
+        return None;
+    }
+    let bottom = points[points.len() - 3].1;
+    let height = bottom - f64::from(MARGIN);
+    if !(height > 0.0) {
+        return None;
+    }
+    let zero = bottom + height * min / (max - min);
+    if !zero.is_finite() || zero < f64::from(MARGIN) - 0.5 || zero > bottom + 0.5 {
+        return None;
+    }
+    Some(zero)
 }
 
 /// 把一条填充 path 的收尾基线挪到 0 轴；不是填充 path（或结构不是预期的那三个收尾点）时返回
@@ -755,21 +813,7 @@ fn rewrite_fill_baseline(tag: &str, min: f64, max: f64) -> Option<String> {
         return None;
     }
     let points = path_points(attr_value(tag, "d")?)?;
-    // 折线各点之后固定跟三个收尾点：(last.x, bottom) (first.x, bottom) first
-    if points.len() < 4 {
-        return None;
-    }
-    let bottom = points[points.len() - 3].1;
-    let height = bottom - f64::from(MARGIN);
-    if !(height > 0.0) {
-        return None;
-    }
-    let zero = bottom + height * min / (max - min);
-    let top = f64::from(MARGIN);
-    // 0 在 [min, max] 内 ⇒ 0 轴必定落在绘图区内；落在外面说明几何假设不成立（别画错基线）
-    if !zero.is_finite() || zero < top - 0.5 || zero > bottom + 0.5 {
-        return None;
-    }
+    let zero = zero_axis_y(&points, min, max)?;
 
     let mut parts = Vec::with_capacity(points.len());
     for (index, (x, y)) in points.iter().enumerate() {
@@ -859,16 +903,7 @@ fn replace_attr(element: &str, name: &str, value: &str) -> Option<String> {
 /// 填成一整块面积（tests 里锁了这条）。
 fn solid_dots(svg: String, palette: &[ChartColor]) -> String {
     let hexes: Vec<String> = palette.iter().map(hex_of).collect();
-    let mut out = String::with_capacity(svg.len());
-    let mut rest = svg.as_str();
-    while let Some(start) = rest.find("<circle") {
-        let (head, tail) = rest.split_at(start);
-        out.push_str(head);
-        let Some(end) = tail.find("/>") else {
-            out.push_str(tail);
-            return out;
-        };
-        let (tag, after) = tail.split_at(end + 2);
+    rewrite_tags(&svg, "<circle", |tag| {
         let mut tag = tag.to_string();
         for hex in &hexes {
             let ring = format!("stroke=\"{hex}\" fill=\"none\"");
@@ -876,11 +911,178 @@ fn solid_dots(svg: String, palette: &[ChartColor]) -> String {
                 tag = tag.replace(&ring, &format!("stroke=\"{hex}\" fill=\"{hex}\""));
             }
         }
-        out.push_str(&tag);
-        rest = after;
+        Some(tag)
+    })
+}
+
+// ---------------------------------------------------------------- 0 轴分色
+
+/// 折线按 0 轴切成若干**连续段**：`(点集, 是否在 0 轴之上)`。
+///
+/// 相邻两点的 y 跨过 0 轴时插入**交点**（两段各收一个），段与段首尾相接 —— 于是每段都能
+/// 单独闭合成"以 0 轴为底"的多边形，颜色可以按符号分开（红涨绿跌）。
+fn split_at_zero(points: &[(f64, f64)], zero: f64) -> Vec<(Vec<(f64, f64)>, bool)> {
+    // SVG 里 y 越小越靠上：`y <= 0 轴` 就是"在 0 轴之上"
+    let above = |point: &(f64, f64)| point.1 <= zero;
+    let mut runs: Vec<(Vec<(f64, f64)>, bool)> = Vec::new();
+    for (index, point) in points.iter().enumerate() {
+        if index == 0 {
+            runs.push((vec![*point], above(point)));
+            continue;
+        }
+        let previous = points[index - 1];
+        if above(&previous) == above(point) {
+            if let Some(run) = runs.last_mut() {
+                run.0.push(*point);
+            }
+            continue;
+        }
+        let span = point.1 - previous.1;
+        let ratio = if span.abs() < f64::EPSILON {
+            0.0
+        } else {
+            (zero - previous.1) / span
+        };
+        let crossing = (previous.0 + ratio * (point.0 - previous.0), zero);
+        if let Some(run) = runs.last_mut() {
+            run.0.push(crossing);
+        }
+        runs.push((vec![crossing, *point], above(point)));
     }
-    out.push_str(rest);
-    out
+    runs
+}
+
+/// 折线 path 的 `d`（`M x y L x y …`，与 charts-rs 的写法一致）
+fn polyline_d(points: &[(f64, f64)]) -> String {
+    points
+        .iter()
+        .enumerate()
+        .map(|(index, (x, y))| {
+            format!(
+                "{} {} {}",
+                if index == 0 { "M" } else { "L" },
+                fmt_coord(*x),
+                fmt_coord(*y)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 一段折线闭合成"以 0 轴为底"的多边形（单点、竖直段没有面积，返回 `None`）
+fn fill_d(run: &[(f64, f64)], zero: f64) -> Option<String> {
+    let (first, last) = (run.first()?, run.last()?);
+    if run.len() < 2 || (last.0 - first.0).abs() < f64::EPSILON {
+        return None;
+    }
+    let mut d = polyline_d(run);
+    // 收尾沿 0 轴折回起点；末点已经落在 0 轴上时不必多画一条重复的边
+    if (last.1 - zero).abs() > f64::EPSILON {
+        d.push_str(&format!(" L {} {}", fmt_coord(last.0), fmt_coord(zero)));
+    }
+    d.push_str(&format!(" L {} {}", fmt_coord(first.0), fmt_coord(zero)));
+    Some(d)
+}
+
+/// 面积填充按 0 轴拆成多条 path，各自换成对应侧的颜色（`fill-opacity` 等属性原样保留）。
+fn split_fill(tag: &str, zero: f64, above: &str, below: &str) -> Option<String> {
+    let points = path_points(attr_value(tag, "d")?)?;
+    // 最后三个点是 charts-rs 的收尾基线（见 `rewrite_fill_baseline`），只取折线本身
+    let line = points.get(..points.len().checked_sub(3)?)?;
+    let mut out = String::new();
+    for (run, is_above) in split_at_zero(line, zero) {
+        let Some(d) = fill_d(&run, zero) else {
+            continue;
+        };
+        let colored = replace_attr(tag, "d", &d)?;
+        out.push_str(&replace_attr(
+            &colored,
+            "fill",
+            side_color(is_above, above, below),
+        )?);
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// 折线按 0 轴拆成多条 path，各自换成对应侧的颜色（颜色与面积、数据点一致）。
+fn split_line(tag: &str, zero: f64, above: &str, below: &str) -> Option<String> {
+    let points = path_points(attr_value(tag, "d")?)?;
+    let mut out = String::new();
+    for (run, is_above) in split_at_zero(&points, zero) {
+        let colored = replace_attr(tag, "d", &polyline_d(&run))?;
+        out.push_str(&replace_attr(
+            &colored,
+            "stroke",
+            side_color(is_above, above, below),
+        )?);
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// 数据点按圆心相对 0 轴的位置着色（`stroke` 与 `fill` 一起换，边框与实心色一致）。
+fn sign_dot(tag: &str, zero: f64, above: &str, below: &str) -> Option<String> {
+    let cy = attr_value(tag, "cy")?.parse::<f64>().ok()?;
+    let color = side_color(cy <= zero, above, below);
+    let colored = replace_attr(tag, "stroke", color)?;
+    replace_attr(&colored, "fill", color)
+}
+
+/// 取"0 轴之上 / 之下"对应的颜色。
+fn side_color<'a>(above: bool, up: &'a str, down: &'a str) -> &'a str {
+    if above {
+        up
+    } else {
+        down
+    }
+}
+
+/// 找出填充 path 的标签文本（判据见 [`FILL_OPACITY_ATTR`]）。
+fn fill_tag(svg: &str) -> Option<&str> {
+    svg.split(SVG_PATH_OPEN).skip(1).find_map(|tail| {
+        let end = tail.find("/>")?;
+        let tag = &tail[..end + 2];
+        tag.contains(FILL_OPACITY_ATTR).then_some(tag)
+    })
+}
+
+/// 面积 / 折线 / 数据点按 0 轴分色（红涨绿跌：之上红、之下绿）。
+///
+/// 只在自己算出的范围有效、且 0 轴确实落在绘图区内时改写（同 [`anchor_fill_at_zero`]）；
+/// 算不出 0 轴就原样返回 —— 宁可保持单色，也不画一条位置错的分界线。
+fn paint_by_sign(
+    svg: String,
+    axis_range: Option<(f64, f64, usize)>,
+    above: &str,
+    below: &str,
+) -> String {
+    let Some((min, max, _splits)) = axis_range else {
+        return svg;
+    };
+    let Some(zero) = fill_tag(&svg)
+        .and_then(|tag| attr_value(tag, "d"))
+        .and_then(path_points)
+        .and_then(|points| zero_axis_y(&points, min, max))
+    else {
+        return svg;
+    };
+    let painted = rewrite_tags(&svg, SVG_PATH_OPEN, |tag| {
+        if tag.contains(FILL_OPACITY_ATTR) {
+            split_fill(tag, zero, above, below)
+        } else if tag.contains(FILL_NONE_ATTR) {
+            split_line(tag, zero, above, below)
+        } else {
+            None
+        }
+    });
+    rewrite_tags(&painted, "<circle", |tag| sign_dot(tag, zero, above, below))
 }
 /// charts-rs 输出颜色的写法（`#RRGGBB`，带透明度时 `#RRGGBBAA`）。
 fn hex_of(color: &ChartColor) -> String {
@@ -937,12 +1139,10 @@ fn thin_labels(categories: &[String], width: f64) -> Vec<String> {
 }
 
 /// 数值 → charts-rs 的画图值（金额换算成"元"，其余原样）。
-fn display_value(value: i64, kind: ChartValueKind) -> f32 {
+fn display_value(value: f64, kind: ChartValueKind) -> f32 {
     match kind {
-        ChartValueKind::Money => tr_domain::money::cents_to_yuan(value)
-            .parse::<f32>()
-            .unwrap_or(0.0),
-        ChartValueKind::Percent | ChartValueKind::Count => value as f32,
+        ChartValueKind::Money => (value / 100.0) as f32,
+        ChartValueKind::Percent | ChartValueKind::Ratio | ChartValueKind::Count => value as f32,
     }
 }
 
@@ -953,7 +1153,7 @@ fn display_range(series: &[ChartSeries], slots: usize, kind: ChartValueKind) -> 
     for item in series {
         for slot in 0..slots {
             let value = f64::from(display_value(
-                item.data.get(slot).copied().unwrap_or(0),
+                item.data.get(slot).copied().unwrap_or(0.0),
                 kind,
             ));
             min = min.min(value);
@@ -982,7 +1182,7 @@ fn nice_steps(scale: f64) -> impl Iterator<Item = f64> {
     })
 }
 
-/// Y 轴范围：刻度必须是**大整数**，并且**跨零时 0 落在正中**。
+/// Y 轴范围：刻度必须是**大整数**，上下界**各自贴合数据**（不强制以 0 对称）。
 ///
 /// 返回 `(min, max, splits)`；刻度就是 `min + i × (max - min) / splits`。
 ///
@@ -995,35 +1195,46 @@ fn nice_steps(scale: f64) -> impl Iterator<Item = f64> {
 /// 那一档因为"上界必须严格大于数据"要多出一段，可能撞上段数上限而让位给粗一档的步长
 /// （如数据 `0..5000` 给的是 0/2000/4000/6000，而不是 0/1000/…/6000）。
 ///
-/// 0 居中的规则：数据**跨零**时范围取成上下对称的 `±half` 且段数取**偶数**，
-/// 于是 `i = splits / 2` 那条刻度正好是 0 —— 涨与跌从同一条基准线读，
-/// 而不是各自从图的上下边缘起算。
+/// **不做上下对称**：`-35..90` 给的是 `-50..100`（期望值那张图曾经被撑成 `±100`，
+/// 底下 50 的空白里一个数据点都没有）。上下界都对齐到步长的整数倍，0 因此**仍然是**
+/// 一条刻度（`0 = 0 × step`），涨跌照样从 0 轴读，只是不再各留一半空白。
+///
+/// `bounds` 是调用方给的天生上下界（见 [`ChartConfig::y_bounds`]）：数据落在里面就直接用，
+/// 于是"胜率"这类百分比指标拿到的是 `0..100` 而不是被撑到 150。
 ///
 /// 算不出（数据非有限、或极端量级下 6 段都放不下）时返回 `None`，
 /// 交给 charts-rs 自己决定（见调用点的兜底）。
-fn nice_axis_range(data_min: f64, data_max: f64) -> Option<(f64, f64, usize)> {
+fn nice_axis_range(
+    data_min: f64,
+    data_max: f64,
+    bounds: Option<(f64, f64)>,
+) -> Option<(f64, f64, usize)> {
+    if let Some((low, high)) = bounds {
+        if high > low && data_min >= low && data_max <= high {
+            // 上界必须**严格**大于数据最大值（charts-rs 只在 `axis_max > 数据最大值` 时才认它），
+            // 数据正好贴着上界（胜率首笔就 100%）时抬一个**不会出现在刻度文字里**的微量：
+            // 刻度由 `format_float` 按一位小数格式化。
+            let high = if data_max >= high {
+                high + AXIS_LIMIT_EPSILON
+            } else {
+                high
+            };
+            return Some((low, high, Y_SPLITS));
+        }
+    }
     let scale = data_min.abs().max(data_max.abs()).max(data_max - data_min);
     for step in nice_steps(scale) {
-        let (min, max) = if data_min < 0.0 && data_max > 0.0 {
-            let mut half_units = (data_min.abs().max(data_max) / step).ceil().max(1.0);
-            // 上界必须**严格**大于数据最大值：charts-rs 只在 `axis_max > 数据最大值` 时才认这个
-            // 自定义上界，否则它退回自己那套阶梯（等于白算）。用 f32 比较（它就是 f32），
-            // 所以可能要多抬一格。
-            while (half_units * step) as f32 <= data_max as f32 {
-                half_units += 1.0;
-            }
-            let half = half_units * step;
-            (-half, half)
-        } else {
-            // 不跨零：整段对齐到步长的整数倍；全正的数据从 0 起算（与 charts-rs 的默认一致）
-            let low = if data_min > 0.0 { 0.0 } else { data_min };
-            let low_units = (low / step).floor();
-            let mut high_units = (low.max(data_max) / step).ceil();
-            while (high_units * step) as f32 <= data_max as f32 {
-                high_units += 1.0;
-            }
-            (low_units * step, high_units * step)
-        };
+        // 上下界各自对齐到步长的整数倍；全正的数据从 0 起算（与 charts-rs 的默认一致）
+        let low = if data_min > 0.0 { 0.0 } else { data_min };
+        let low_units = (low / step).floor();
+        let mut high_units = (low.max(data_max) / step).ceil();
+        // 上界必须**严格**大于数据最大值：charts-rs 只在 `axis_max > 数据最大值` 时才认这个
+        // 自定义上界，否则它退回自己那套阶梯（等于白算）。用 f32 比较（它就是 f32），
+        // 所以可能要多抬一格。
+        while (high_units * step) as f32 <= data_max as f32 {
+            high_units += 1.0;
+        }
+        let (min, max) = (low_units * step, high_units * step);
         let splits = ((max - min) / step).round();
         if splits.is_finite() && splits >= 1.0 && splits <= Y_AXIS_MAX_SPLITS as f64 {
             return Some((min, max, splits as usize));
@@ -1093,9 +1304,10 @@ impl ChartGeometry {
             let Some(first) = item.first() else {
                 continue;
             };
-            let first_value = display_value(data.data.first().copied().unwrap_or(0), kind) as f64;
+            let first_value = display_value(data.data.first().copied().unwrap_or(0.0), kind) as f64;
             for (offset, (_, _, y)) in item.iter().enumerate().skip(1) {
-                let value = display_value(data.data.get(offset).copied().unwrap_or(0), kind) as f64;
+                let value =
+                    display_value(data.data.get(offset).copied().unwrap_or(0.0), kind) as f64;
                 if (value - first_value).abs() > f64::EPSILON {
                     value_axis = Some((first_value, first.2, value, *y));
                     break;
@@ -1110,7 +1322,7 @@ impl ChartGeometry {
             .map(|item| {
                 (0..count)
                     .map(|slot| {
-                        let value = item.data.get(slot).copied().unwrap_or(0);
+                        let value = item.data.get(slot).copied().unwrap_or(0.0);
                         (
                             item.label.clone(),
                             item.color.clone(),
@@ -1205,7 +1417,7 @@ fn read_points(canvas: Option<web_sys::HtmlDivElement>) -> Option<MeasuredPoints
         if !group_is_series(paths.length() as usize, circles.length() as usize) {
             continue;
         }
-        let color = paths
+        let fallback = paths
             .item(0)
             .and_then(|path| path.dyn_into::<web_sys::Element>().ok())
             .and_then(|path| path.get_attribute("stroke"))
@@ -1219,6 +1431,12 @@ fn read_points(canvas: Option<web_sys::HtmlDivElement>) -> Option<MeasuredPoints
             let Ok(circle) = node.dyn_into::<web_sys::Element>() else {
                 continue;
             };
+            // 数据点自己的颜色优先（按 0 轴分色时逐点不同，见 `paint_by_sign`）；
+            // 取不到才退回整条序列的折线色
+            let color = circle
+                .get_attribute("fill")
+                .filter(|value| value != "none")
+                .unwrap_or_else(|| fallback.clone());
             let rect = circle.get_bounding_client_rect();
             points.push((
                 color.clone(),
@@ -1444,21 +1662,23 @@ fn is_wide_char(c: char) -> bool {
 
 /// 数值 → 展示文案。
 ///
-/// * [`ChartValueKind::Money`]：分 → 元两位小数（`with_symbol` 为真时带 `¥`）；
-///   换算走 `tr_domain::money`。
+/// * [`ChartValueKind::Money`]：分 → 元两位小数（`with_symbol` 为真时带 `¥`）
 /// * [`ChartValueKind::Percent`]：两位小数 + `%`
+/// * [`ChartValueKind::Ratio`]：两位小数（比值 / 倍数）
 /// * [`ChartValueKind::Count`]：整数
-pub fn format_value(value: i64, kind: ChartValueKind, with_symbol: bool) -> String {
+pub fn format_value(value: f64, kind: ChartValueKind, with_symbol: bool) -> String {
     match kind {
         ChartValueKind::Money => {
-            let yuan = tr_domain::money::cents_to_yuan(value);
+            // 金额按分存、按元显示（两位小数）；`f64` 对分这个量级是精确的
+            let yuan = format!("{:.2}", value / 100.0);
             if with_symbol {
                 format!("¥{yuan}")
             } else {
                 yuan
             }
         }
-        ChartValueKind::Percent => format!("{:.2}%", value as f64),
+        ChartValueKind::Percent => format!("{value:.2}%"),
+        ChartValueKind::Ratio => format!("{value:.2}"),
         ChartValueKind::Count => value.to_string(),
     }
 }
@@ -1528,22 +1748,22 @@ mod tests {
 
     #[test]
     fn money_is_drawn_in_yuan() {
-        assert!((display_value(123_456, ChartValueKind::Money) - 1234.56).abs() < 0.01);
-        assert!((display_value(50, ChartValueKind::Percent) - 50.0).abs() < f32::EPSILON);
-        assert!((display_value(7, ChartValueKind::Count) - 7.0).abs() < f32::EPSILON);
+        assert!((display_value(123_456.0, ChartValueKind::Money) - 1234.56).abs() < 0.01);
+        assert!((display_value(50.0, ChartValueKind::Percent) - 50.0).abs() < f32::EPSILON);
+        assert!((display_value(7.0, ChartValueKind::Count) - 7.0).abs() < f32::EPSILON);
     }
 
     #[test]
     fn tooltip_rows_are_formatted_per_kind() {
         assert_eq!(
-            format_value(123_456, ChartValueKind::Money, true),
+            format_value(123_456.0, ChartValueKind::Money, true),
             "¥1234.56"
         );
         assert_eq!(
-            format_value(12_500, ChartValueKind::Percent, true),
+            format_value(12_500.0, ChartValueKind::Percent, true),
             "125.00%"
         );
-        assert_eq!(format_value(3, ChartValueKind::Count, true), "3");
+        assert_eq!(format_value(3.0, ChartValueKind::Count, true), "3");
     }
 
     #[test]
@@ -1812,7 +2032,7 @@ mod tests {
     #[test]
     fn axis_ticks_are_round_numbers_for_positive_money() {
         // 用户报的那张图：月支出最高约 3.6 万 —— 以前是 9,500 / 19,000 / 28,500 / 38,000
-        let (min, max, splits) = nice_axis_range(0.0, 36_000.0).unwrap();
+        let (min, max, splits) = nice_axis_range(0.0, 36_000.0, None).unwrap();
         assert_eq!(
             ticks(min, max, splits),
             vec![0.0, 10_000.0, 20_000.0, 30_000.0, 40_000.0]
@@ -1820,32 +2040,77 @@ mod tests {
     }
 
     #[test]
-    fn axis_zero_sits_in_the_middle_when_data_crosses_zero() {
-        // 跨零：上下对称 + 偶数段 → 正中那条刻度就是 0
-        let (min, max, splits) = nice_axis_range(-3_000.0, 3_000.0).unwrap();
-        assert_eq!((-min, max), (4_000.0, 4_000.0), "必须上下对称");
-        assert_eq!(splits % 2, 0, "段数必须是偶数，0 才会落在刻度上");
+    fn axis_range_hugs_the_data_when_it_crosses_zero() {
+        // 跨零**不**做上下对称：期望值那张图（-35..90）曾经被撑成 ±100，底下 50 的空白里
+        // 一个数据点都没有 —— 现在各自贴住数据两侧，0 依然落在刻度上。
+        let (min, max, splits) = nice_axis_range(-35.0, 90.0, None).unwrap();
+        assert_eq!(ticks(min, max, splits), vec![-50.0, 0.0, 50.0, 100.0]);
+
+        // 数据自己对称时范围仍然对称（不是被强制的）
+        let (min, max, splits) = nice_axis_range(-3_000.0, 3_000.0, None).unwrap();
         assert_eq!(
             ticks(min, max, splits),
             vec![-4_000.0, -2_000.0, 0.0, 2_000.0, 4_000.0]
         );
 
-        // 不对称时按"离 0 更远的那一侧"取对称范围，0 仍在正中
-        let (min, max, splits) = nice_axis_range(-1_000.0, 5_000.0).unwrap();
-        assert_eq!((-min, max), (10_000.0, 10_000.0));
+        // 一边高一边矮：各按自己的数据贴边（0 仍是一条刻度）
+        let (min, max, splits) = nice_axis_range(-1_000.0, 5_000.0, None).unwrap();
         assert_eq!(
             ticks(min, max, splits),
-            vec![-10_000.0, -5_000.0, 0.0, 5_000.0, 10_000.0]
+            vec![-2_000.0, 0.0, 2_000.0, 4_000.0, 6_000.0]
         );
 
-        // 只到 0（不跨零）时**不**做对称：从 0 起算即可。
+        // 只到 0（不跨零）时从 0 起算即可。
         // 这里顺带钉住"上界那格"的代价：数据最大值 5000 恰好是 1000 的整数倍，而自定义上界
         // 必须**严格**大于它，于是 1000 的步长要 6 段（0…6000）—— 超过 5 段的上限，
         // 这一档只能让位给 2000 的步长（宁可网格粗一档，也不超段数）。
-        let (min, max, splits) = nice_axis_range(0.0, 5_000.0).unwrap();
+        let (min, max, splits) = nice_axis_range(0.0, 5_000.0, None).unwrap();
         assert_eq!(
             ticks(min, max, splits),
             vec![0.0, 2_000.0, 4_000.0, 6_000.0]
+        );
+    }
+
+    #[test]
+    fn percent_bounds_hold_the_axis_within_one_hundred() {
+        // 胜率：数据打到 100% 时上界也停在 100 —— 只抬一个刻度文字里看不见的微量
+        // （charts-rs 要求 `axis_max` 严格大于数据最大值；刻度按一位小数格式化）。
+        let (min, max, splits) = nice_axis_range(0.0, 100.0, Some((0.0, 100.0))).unwrap();
+        assert_eq!(min, 0.0);
+        assert!(max > 100.0 && max < 100.1, "上界不该跑出 100：{max}");
+        assert_eq!(splits, Y_SPLITS);
+        // 刻度按**一位小数**取整后必须是 25 的整数倍 —— charts-rs 就是这么格式化刻度文字的
+        // （`format_float`：一位小数、去掉 `.0`），所以那点微量不会出现在轴上。
+        let rounded: Vec<f64> = ticks(min, max, splits)
+            .into_iter()
+            .map(|value| (value * 10.0).round() / 10.0)
+            .collect();
+        assert_eq!(rounded, vec![0.0, 25.0, 50.0, 75.0, 100.0]);
+
+        // 有负数（亏损笔）时给 -100..100
+        let (min, max, splits) = nice_axis_range(-30.0, 40.0, Some((-100.0, 100.0))).unwrap();
+        assert_eq!(
+            ticks(min, max, splits),
+            vec![-100.0, -50.0, 0.0, 50.0, 100.0]
+        );
+
+        // 数据超出给定上下界时不信边界（防御）：退回按数据挑
+        let (_, max, _) = nice_axis_range(-30.0, 140.0, Some((0.0, 100.0))).unwrap();
+        assert!(max > 140.0, "数据超界时必须按数据挑：{max}");
+    }
+
+    #[test]
+    fn ratio_and_percent_keep_two_decimals() {
+        // 用户报的那张图：盈亏比 0.81 被取整成 1（曲线一直是平的）
+        assert_eq!(format_value(0.8129, ChartValueKind::Ratio, true), "0.81");
+        assert_eq!(format_value(1.0, ChartValueKind::Ratio, true), "1.00");
+        assert_eq!(
+            format_value(83.333, ChartValueKind::Percent, true),
+            "83.33%"
+        );
+        assert_eq!(
+            format_value(12_345.0, ChartValueKind::Money, true),
+            "¥123.45"
         );
     }
 
@@ -1865,7 +2130,7 @@ mod tests {
             (4_000.0, 4_000.0),
             (12_345.67, 98_765.43),
         ] {
-            let (min, max, splits) = nice_axis_range(data_min, data_max)
+            let (min, max, splits) = nice_axis_range(data_min, data_max, None)
                 .unwrap_or_else(|| panic!("算不出范围: {data_min}..{data_max}"));
             assert!(min <= data_min, "{min} 没盖住下界 {data_min}");
             assert!(
@@ -1981,6 +2246,69 @@ mod tests {
         assert!(
             (baseline - from_points).abs() < 0.5,
             "反推的 0 轴 {baseline} 与数据点定出的 {from_points} 不一致"
+        );
+    }
+
+    // ---------------------------------------------------------------- 0 轴分色
+    //
+    // 用户报的那张「累计盈亏」：面积整块一个颜色，0 轴上下的部分看不出盈亏。
+    // 探针 SVG 的三点跨零（-20000 / -5000 / 60000，0 轴在 y=147），正好覆盖这一档。
+
+    #[test]
+    fn fill_and_line_split_at_the_zero_axis() {
+        let svg = paint_by_sign(
+            PROBE_SVG.to_string(),
+            Some((-100_000.0, 100_000.0, 4)),
+            "#DC2626",
+            "#16A34A",
+        );
+        // 面积：0 轴之下（y > 147）那段绿、之上（y < 147）那段红，各自闭到 0 轴
+        let below_fill = concat!(
+            r##"<path d="M 196.3 174.8 L 461 153.9 L 481.2 147 L 196.3 147""##,
+            r##" fill="#16A34A" fill-opacity="0.4"/>"##
+        );
+        let above_fill = concat!(
+            r##"<path d="M 481.2 147 L 725.7 63.6 L 725.7 147 L 481.2 147""##,
+            r##" fill="#DC2626" fill-opacity="0.4"/>"##
+        );
+        assert!(svg.contains(below_fill), "{svg}");
+        assert!(svg.contains(above_fill), "{svg}");
+        // 折线同色：交点（481.2, 147）是两段共用的端点
+        let below_line = concat!(
+            r##"<path d="M 196.3 174.8 L 461 153.9 L 481.2 147""##,
+            r##" stroke-width="2" fill="none" stroke="#16A34A"/>"##
+        );
+        let above_line = concat!(
+            r##"<path d="M 481.2 147 L 725.7 63.6""##,
+            r##" stroke-width="2" fill="none" stroke="#DC2626"/>"##
+        );
+        assert!(svg.contains(below_line), "{svg}");
+        assert!(svg.contains(above_line), "{svg}");
+        // 数据点按圆心落在哪一侧着色（`stroke` 与 `fill` 一起换，边框与实心色一致）
+        let dot = concat!(
+            r##"<circle cx="196.3" cy="174.8" r="2.5" stroke-width="2""##,
+            r##" stroke="#16A34A" fill="#16A34A"/>"##
+        );
+        assert!(svg.contains(dot), "{svg}");
+        // 网格线一个字节都不动
+        assert!(svg.contains(r#"<line stroke-width="1" x1="64" y1="147" x2="858" y2="147"/>"#));
+    }
+
+    #[test]
+    fn split_stays_untouched_without_a_trustworthy_zero_axis() {
+        // 没有自己算出的范围 ⇒ 不知道 0 在哪儿，整条保持单色
+        assert_eq!(
+            paint_by_sign(PROBE_SVG.to_string(), None, "#DC2626", "#16A34A"),
+            PROBE_SVG.to_string()
+        );
+        assert_eq!(
+            paint_by_sign(
+                PROBE_SVG.to_string(),
+                Some((1.0, 1.0, 4)),
+                "#DC2626",
+                "#16A34A"
+            ),
+            PROBE_SVG.to_string()
         );
     }
 }

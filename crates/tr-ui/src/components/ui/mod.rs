@@ -105,7 +105,7 @@ pub(super) fn nav_button(
 }
 
 pub use button::{Button, ButtonSize, ButtonVariant, IconButton, IconButtonVariant};
-pub use chart::{ChartConfig, ChartPoint, ChartSeries, ChartValueKind, LineChart};
+pub use chart::{ChartConfig, ChartSeries, ChartValueKind, LineChart};
 pub use checkbox::{Checkbox, CheckboxGroup, CheckboxOption};
 pub use date_picker::{add_months, parse_ymd, today, DatePicker, DateRangePicker, Ymd};
 pub use divider::Divider;

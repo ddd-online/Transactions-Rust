@@ -3439,8 +3439,25 @@ impl Metric {
     fn kind(self) -> ChartValueKind {
         match self {
             Metric::WinRate | Metric::MaxDrawdown => ChartValueKind::Percent,
-            Metric::PnlRatio => ChartValueKind::Count,
+            Metric::PnlRatio => ChartValueKind::Ratio,
             _ => ChartValueKind::Money,
+        }
+    }
+
+    /// Y 轴上下界：只有**天生有边界**的指标才给。
+    ///
+    /// 胜率是百分比（0..100；出现负数时 -100..100）—— 不给的话自动挑刻度会把
+    /// "数据正好压在 100%"当成"上界还要再大一档"，于是多画一条 150% 的网格线。
+    /// 最大回撤同样是百分比，但它没有天然天花板（`4%` 的回撤画在 0..100 的轴上没法看），
+    /// 因此交给按数据自动挑。
+    fn y_bounds(self, values: &[f64]) -> Option<(f64, f64)> {
+        match self {
+            Metric::WinRate => Some(if values.iter().any(|value| *value < 0.0) {
+                (-100.0, 100.0)
+            } else {
+                (0.0, 100.0)
+            }),
+            _ => None,
         }
     }
 
@@ -3991,32 +4008,42 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                 let values = data
                                     .points
                                     .iter()
-                                    .map(|point| selected.value(point).round() as i64)
+                                    .map(|point| selected.value(point))
                                     .collect::<Vec<_>>();
-                                let color = match selected {
-                                    Metric::AvgWin | Metric::WinRate | Metric::PnlRatio => {
-                                        "var(--transactions-color-expense)"
-                                    }
-                                    Metric::AvgLoss | Metric::MaxDrawdown => {
-                                        "var(--transactions-color-income)"
-                                    }
-                                    _ => {
-                                        let last = values.last().copied().unwrap_or(0);
-                                        if last >= 0 {
-                                            "var(--transactions-color-expense)"
-                                        } else {
-                                            "var(--transactions-color-income)"
-                                        }
-                                    }
+                                // A 股配色：0 轴之上（盈利 / 胜率）红、之下（亏损）绿 ——
+                                // 面积、折线、数据点三处按同一条规则分色（`sign_colors`）。
+                                let above = "var(--transactions-color-expense)";
+                                let below = "var(--transactions-color-income)";
+                                // 图例色跟着**最后一点**的正负，与上面的 KPI 卡片同色。
+                                // 例外只有「最大回撤」：它不是盈亏（值恒 ≥ 0，但**越低越好**），
+                                // 按符号上色会变成"红色回撤"，跟自己那张绿色 KPI 卡片打架 ——
+                                // 保持单色绿、不做 0 轴分色。
+                                let last = values.last().copied().unwrap_or(0.0);
+                                let split = selected != Metric::MaxDrawdown;
+                                let color = if !split {
+                                    below
+                                } else if last >= 0.0 {
+                                    above
+                                } else {
+                                    below
                                 };
                                 let config = ChartConfig::default()
                                     .height(320)
                                     .value_kind(selected.kind())
                                     .y_title("金额（元）");
+                                let config = if split {
+                                    config.sign_colors(above, below)
+                                } else {
+                                    config
+                                };
                                 let config = if selected.has_reference() {
                                     config.reference(0)
                                 } else {
                                     config
+                                };
+                                let config = match selected.y_bounds(&values) {
+                                    Some((low, high)) => config.y_bounds(low, high),
+                                    None => config,
                                 };
                                 view! {
                                     <LineChart

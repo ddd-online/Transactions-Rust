@@ -776,7 +776,10 @@ fn chart_panel(
                                 ChartSeries::new(
                                     line.label.clone(),
                                     series_color(&transaction_type, index),
-                                    line.data.iter().map(|point| point.amount).collect(),
+                                    line.data
+                                        .iter()
+                                        .map(|point| point.amount as f64)
+                                        .collect(),
                                 )
                             })
                             .collect::<Vec<_>>();
