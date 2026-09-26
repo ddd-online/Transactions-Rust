@@ -131,7 +131,6 @@ fn main() {
             tr_ipc::commands::key_event_image_delete,
             // 股票（P4）：账户 / 费用与标签设置 / 资金记录 / 持仓 / 委托与成交 / 历史与轮次 / 统计
             tr_ipc::commands::stock_overview,
-            tr_ipc::commands::stock_principal_set,
             tr_ipc::commands::stock_principal_add,
             tr_ipc::commands::stock_interest_add,
             tr_ipc::commands::stock_withdraw,

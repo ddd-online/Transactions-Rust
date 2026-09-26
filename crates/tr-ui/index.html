@@ -40,13 +40,11 @@
     <link data-trunk rel="css" href="static/css/data_analysis.css" />
     <link data-trunk rel="css" href="static/css/templates.css" />
     <!--
-      字体与图标按原样拷进 dist（不参与 hash 重命名）：
-      样式表被 trunk 放在 dist 根目录，因此 fonts.css / app.css 里的相对路径写作 ./fonts/...
-      图标资源位于 static/icons/，
-      供后续阶段（图片查看器、工具栏）直接以 URL 引用；导航图标是内联 SVG（见 src/icons.rs）。
+      字体按原样拷进 dist（不参与 hash 重命名）：
+      样式表被 trunk 放在 dist 根目录，因此 fonts.css / app.css 里的相对路径写作 ./fonts/...；
+      图标一律是内联 SVG（见 src/icons.rs），不额外拷资源。
     -->
     <link data-trunk rel="copy-dir" href="static/fonts" />
-    <link data-trunk rel="copy-dir" href="static/icons" />
   </head>
   <body>
     <div id="app"></div>

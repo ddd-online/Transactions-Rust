@@ -54,28 +54,6 @@ pub fn stock_overview(
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-pub struct StockPrincipalRequest {
-    pub ledger_id: String,
-    /// 本金（**分**，整数）
-    pub amount: Option<i64>,
-}
-
-/// 设置初始本金（已有资金记录时返回 409）。
-#[tauri::command]
-pub fn stock_principal_set(
-    state: State<'_, AppState>,
-    req: StockPrincipalRequest,
-) -> ApiResult<StockOverviewDto> {
-    require_ledger_id(&req.ledger_id)?;
-    let amount = req
-        .amount
-        .ok_or_else(|| ApiError::from(AppError::bad_request("amount is required")))?;
-    let workspace = state.workspace()?;
-    Ok(stock::set_principal(&workspace, &req.ledger_id, amount)?)
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
 pub struct StockAmountDateRequest {
     pub ledger_id: String,
     /// 金额（**分**，整数）

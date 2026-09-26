@@ -49,18 +49,6 @@
  * 页签本身已经说明当前在看哪一页，标题只是重复一遍。若将来某一页内容复杂到需要
  * 二级分区，再按"分区标题 + 发丝线"的样式新加，不要恢复到"标题重复页签"的老样子。 */
 
-.st-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--transactions-space-md);
-}
-
-/* 只剩动作按钮的工具条：贴右（标题已经交给页签，不再重复） */
-.st-toolbar--actions {
-  justify-content: flex-end;
-}
-
 /* ---------------------------------------------------------------- 卡片列表 */
 
 /* 设置行 = **版心里的行**，不是卡片里再套一张卡片：
@@ -151,7 +139,6 @@
   align-items: center;
   gap: var(--transactions-space-sm);
 }
-
 
 /* ---------------------------------------------------------------- 日记配置 */
 

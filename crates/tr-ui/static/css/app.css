@@ -859,20 +859,6 @@
   -webkit-app-region: no-drag;
 }
 
-.page-header-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-  -webkit-app-region: no-drag;
-}
-
-.page-subtitle {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-secondary);
-  margin: var(--transactions-space-xs) 0 0 0;
-}
-
 /* 底栏（可选）：消费记录页放「共 N 条 + 收支合计」，模板子功能把主动作放在工具栏（不用底栏）。
  * 它是**主列的最后一行**：有子功能图标条时，图标条在它左边一路通到底（底栏不铺到图标条下面）。
  *
@@ -1060,10 +1046,6 @@
 
 .tr-cell--center {
   text-align: center;
-}
-
-.tr-cell--right {
-  text-align: right;
 }
 
 .tr-cell-date {

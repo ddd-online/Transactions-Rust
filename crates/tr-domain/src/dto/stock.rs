@@ -95,15 +95,6 @@ pub struct StockTradeTagSettingDto {
     pub default_tag: String,
 }
 
-/// 保存交易标签设置的请求体。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct StockTradeTagSettingRequest {
-    #[serde(rename = "ledger_id")]
-    pub ledger_id: String,
-    pub tags: Vec<String>,
-}
-
 /// 资金变化记录分页结果。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

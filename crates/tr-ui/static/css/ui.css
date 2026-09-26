@@ -319,8 +319,7 @@
   color: var(--transactions-color-text-disabled);
 }
 
-.ui-input__prefix,
-.ui-input__suffix {
+.ui-input__prefix {
   display: inline-flex;
   align-items: center;
   color: var(--transactions-color-text-tertiary);
@@ -737,14 +736,6 @@
   transform: none;
 }
 
-/* 触发器在版心**左半边**时用这个：气泡左对齐、向右铺开。
- * 居中的长气泡在这个位置会往左顶出面板（越过版心左缘、压到侧栏上）。 */
-.ui-tooltip--start::after {
-  left: 0;
-  right: auto;
-  transform: none;
-}
-
 .ui-tooltip:hover::after,
 .ui-tooltip:focus-within::after {
   opacity: 1;
@@ -798,13 +789,6 @@
   color: var(--transactions-color-text-secondary);
   margin: 0;
   max-width: 420px;
-}
-
-.ui-empty__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--transactions-space-sm);
-  margin-top: var(--transactions-space-sm);
 }
 
 /* ============================================
@@ -898,13 +882,11 @@
   white-space: nowrap;
 }
 
-.ui-table__cell--center,
-.ui-table__head-cell--center {
+.ui-table__cell--center {
   text-align: center;
 }
 
-.ui-table__cell--right,
-.ui-table__head-cell--right {
+.ui-table__cell--right {
   text-align: right;
 }
 
@@ -915,16 +897,6 @@
 
 .table-wrapper tbody > tr.is-selected > td:first-child {
   box-shadow: inset 2px 0 0 0 var(--transactions-color-primary);
-}
-
-.ui-table-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--transactions-space-3xl);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body);
-  color: var(--transactions-color-text-secondary);
 }
 
 /* ============================================
@@ -2180,12 +2152,6 @@
   stroke: var(--transactions-color-window-border);
   stroke-width: 1;
   stroke-dasharray: 4 4;
-}
-
-.chart__xtick {
-  fill: var(--transactions-color-text-secondary);
-  font-size: var(--transactions-size-text-caption);
-  font-family: var(--transactions-font-mono);
 }
 
 .chart__dot {

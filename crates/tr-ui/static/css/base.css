@@ -1,11 +1,12 @@
 /* ============================================
- * 基础样式：全局重置 / 排版 / 混合宏等价物 / 布局 / 组件 / 工具类 / 交易类型 / 动画
+ * 基础样式：全局重置 / 内联图标 / 布局 / 组件 / 工具类 / 动画
  * （按下列顺序组织）
- *   1. 全局重置与基础 → 重置、工具类、动画
- *   2. 排版           → 排版类
- *   3. 混合宏等价物   → 混合宏的可复用类等价物
- *   4. 布局           → 布局类
- *   5. 组件           → 组件类
+ *   1. 全局重置与基础 → 重置、浏览器自带表面（滚动条/选区/光标）
+ *   2. 内联图标       → `.icon`
+ *   3. 布局           → 工具条、统计页脚、模态内表单、页面标题
+ *   4. 组件           → 卡片、表格、金额
+ *   5. 工具类         → 文字色、间距
+ *   6. 动画           → 淡入与减少动态偏好
  *
  * 约定：只使用 `--transactions-*` 令牌，不写裸 hex。
  * 不引入任何第三方组件库，其类名覆盖所表达的外观已由 `ui.css` 里的自有组件类承担。
@@ -112,7 +113,7 @@ textarea,
 }
 
 /* ============================================
- * 2. 排版
+ * 2. 内联图标
  * ============================================ */
 
 /* 内联图标：默认 1em 方形、吃 currentColor（组件里再按需覆盖尺寸） */
@@ -123,219 +124,9 @@ textarea,
   flex-shrink: 0;
 }
 
-.typography-display-xl {
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-display-xl);
-  font-weight: 700;
-  color: var(--transactions-color-text-major);
-  line-height: var(--transactions-height-tight);
-  margin: 0;
-  letter-spacing: -0.02em;
-}
-
-.typography-display {
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-display);
-  font-weight: 700;
-  color: var(--transactions-color-text-major);
-  line-height: var(--transactions-height-tight);
-  margin: 0;
-  letter-spacing: -0.015em;
-}
-
-.typography-display-sm {
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-display-sm);
-  font-weight: 600;
-  color: var(--transactions-color-text-major);
-  line-height: var(--transactions-height-tight);
-  margin: 0;
-}
-
-.typography-title {
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-title);
-  font-weight: 600;
-  color: var(--transactions-color-text-major);
-  line-height: var(--transactions-height-snug);
-  margin: 0;
-}
-
-.typography-title-sm {
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-title-sm);
-  font-weight: 600;
-  color: var(--transactions-color-text-major);
-  line-height: var(--transactions-height-snug);
-  margin: 0;
-}
-
-.typography-section {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-section);
-  font-weight: 500;
-  color: var(--transactions-color-text-major);
-  line-height: var(--transactions-height-normal);
-  margin: 0;
-}
-
-.typography-body {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body);
-  font-weight: 400;
-  color: var(--transactions-color-text-major);
-  line-height: var(--transactions-height-normal);
-  margin: 0;
-}
-
-.typography-caption {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  font-weight: 400;
-  color: var(--transactions-color-text-secondary);
-  line-height: var(--transactions-height-normal);
-  margin: 0;
-}
-
-.typography-small {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-small);
-  font-weight: 500;
-  color: var(--transactions-color-text-secondary);
-  line-height: var(--transactions-height-tight);
-  margin: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.typography-amount {
-  font-family: var(--transactions-font-mono);
-  font-size: var(--transactions-size-text-title);
-  font-weight: 500;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-}
-
-.typography-amount-large {
-  font-family: var(--transactions-font-mono);
-  font-size: var(--transactions-size-text-display);
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums;
-}
-
-.typography-amount-small {
-  font-family: var(--transactions-font-mono);
-  font-size: var(--transactions-size-text-body);
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-}
-
-.typography-label {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  font-weight: 500;
-  color: var(--transactions-color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.typography-secondary {
-  color: var(--transactions-color-text-secondary);
-}
-
-.typography-disabled {
-  color: var(--transactions-color-text-disabled);
-}
-
-.typography-success {
-  color: var(--transactions-color-success);
-}
-
-.typography-danger {
-  color: var(--transactions-color-negative);
-}
-
-.typography-income {
-  color: var(--transactions-color-income);
-}
-
-.typography-expense {
-  color: var(--transactions-color-expense);
-}
-
-.typography-transfer {
-  color: var(--transactions-color-transfer);
-}
-
-/* 统计数字（.statistic） */
-.statistic-value {
-  font-family: var(--transactions-font-mono);
-  font-size: var(--transactions-size-text-display);
-  font-weight: 600;
-  color: var(--transactions-color-text-major);
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-}
-
-.statistic-label {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  font-weight: 500;
-  color: var(--transactions-color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin: var(--transactions-space-xs) 0 0 0;
-}
-
-.statistic-income .statistic-value {
-  color: var(--transactions-color-income);
-}
-
-.statistic-expense .statistic-value {
-  color: var(--transactions-color-expense);
-}
-
-.statistic-transfer .statistic-value {
-  color: var(--transactions-color-transfer);
-}
-
-/* 等宽数字（表格与数据） */
-.mono-number {
-  font-family: var(--transactions-font-mono);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-}
-
 /* ============================================
- * 4. 布局
+ * 3. 布局
  * ============================================ */
-
-.layout-content {
-  background-color: var(--transactions-color-major-background);
-  overflow-y: auto;
-  margin-bottom: auto;
-}
-
-.layout-header {
-  height: auto;
-  background-color: var(--transactions-color-major-background);
-  padding: 0 0 var(--transactions-space-lg) 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  gap: var(--transactions-space-md);
-}
-
-.layout-footer {
-  height: auto;
-  background-color: var(--transactions-color-major-background);
-  padding: var(--transactions-space-lg) 0 0 0;
-  display: flex;
-  justify-content: flex-end;
-}
 
 /* 工具条 */
 .toolbar {
@@ -349,37 +140,7 @@ textarea,
   border-bottom: 1px solid var(--transactions-color-divider);
 }
 
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: var(--transactions-space-md);
-}
-
-.toolbar-center {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: var(--transactions-space-md);
-}
-
-.toolbar-right {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--transactions-space-md);
-}
-
 /* 卡片网格 */
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: var(--transactions-space-xl);
-  padding: var(--transactions-space-xl);
-}
 
 /* 统计页脚（TransactionsStatisticsFooter） */
 .statistics-footer {
@@ -446,30 +207,6 @@ textarea,
   margin: 0 0 var(--transactions-space-sm) 0;
 }
 
-/* 悬浮按钮锚点（消费记录页的三个 float button） */
-.float-actions-primary {
-  right: 48px;
-  bottom: 80px;
-}
-
-.float-actions-secondary {
-  right: 112px;
-  bottom: 80px;
-}
-
-.float-actions-sort {
-  right: 176px;
-  bottom: 80px;
-}
-
-/* 分页容器 */
-.pagination-wrapper {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding-top: var(--transactions-space-xl);
-}
-
 /* 页面标题 = 标题栏（`.page-header`）里的**居中小字**，文案 `Transactions-记账`。
  *
  * 它是"窗口标题"性质的处所标签，不是页面大标题：页面身份由侧栏当前项与子功能
@@ -494,30 +231,9 @@ textarea,
 }
 
 /* 区块标题行 */
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--transactions-space-lg);
-}
-
-.section-header-title {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-section);
-  font-weight: 600;
-  color: var(--transactions-color-text-major);
-  margin: 0;
-}
-
-.section-header-action {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: var(--transactions-space-sm);
-}
 
 /* ============================================
- * 5. 组件
+ * 4. 组件
  * ============================================ */
 
 .card {
@@ -535,62 +251,7 @@ textarea,
   box-shadow: var(--transactions-shadow-md);
 }
 
-.card-title {
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-title-sm);
-  font-weight: 500;
-  color: var(--transactions-color-text-major);
-  margin: 0 0 var(--transactions-space-md) 0;
-}
-
-.card-subtitle {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-secondary);
-  margin: 0 0 var(--transactions-space-sm) 0;
-}
-
-.card-content {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body);
-  color: var(--transactions-color-text-major);
-}
-
-.card-grid-2 {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: var(--transactions-space-xl);
-  padding: var(--transactions-space-xl);
-}
-
 /* 交易类型语义标签（.tag-* 与 .ui-tag 的语义变体配合使用） */
-.tag-income {
-  background-color: var(--transactions-color-income-tint);
-  color: var(--transactions-color-income);
-  border: none;
-  font-weight: 500;
-}
-
-.tag-expense {
-  background-color: var(--transactions-color-expense-tint);
-  color: var(--transactions-color-expense);
-  border: none;
-  font-weight: 500;
-}
-
-.tag-transfer {
-  background-color: var(--transactions-color-transfer-tint);
-  color: var(--transactions-color-transfer);
-  border: none;
-  font-weight: 500;
-}
-
-.tag-outlier {
-  background-color: var(--transactions-color-outlier-tint);
-  color: var(--transactions-color-outlier);
-  border: none;
-  font-weight: 500;
-}
 
 /* 表格（自有表格，取代 .table-wrapper .ant-table） */
 .table-wrapper {
@@ -630,130 +291,11 @@ textarea,
   background-color: var(--transactions-color-hover-bg);
 }
 
-/* 表单（.form-wrapper 的 Ant 覆盖由 ui.css 的自有控件承担） */
-.form-wrapper .form-item {
-  margin-bottom: var(--transactions-space-lg);
-}
-
-.form-wrapper .form-item-label {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-section);
-  font-weight: 500;
-  color: var(--transactions-color-text-major);
-  height: auto;
-}
-
-/* 过滤卡片 */
-.filter-card {
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-lg);
-  background-color: var(--transactions-color-major-background);
-  box-shadow: var(--transactions-shadow-sm);
-}
-
-.filter-card-head {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body);
-  font-weight: 500;
-  color: var(--transactions-color-text-major);
-  min-height: auto;
-  padding: var(--transactions-space-md) var(--transactions-space-lg);
-  border-bottom: 1px solid var(--transactions-color-divider);
-}
-
-.filter-card-body {
-  padding: var(--transactions-space-lg);
-}
-
-/* 空态 / 加载态 */
-.empty-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  padding: var(--transactions-space-3xl);
-  color: var(--transactions-color-text-secondary);
-}
-
-.empty-state-icon {
-  font-size: 48px;
-  margin-bottom: var(--transactions-space-xl);
-  opacity: 0.4;
-  color: var(--transactions-color-primary);
-}
-
-.empty-state-text {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body);
-  color: var(--transactions-color-text-secondary);
-  text-align: center;
-}
-
-.loading-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--transactions-space-3xl);
-}
-
-/* 区块标题带（账户/持仓等页共用） */
-.panel-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--transactions-space-md);
-  margin-bottom: 0;
-  padding-bottom: var(--transactions-space-lg);
-  border-bottom: 1px solid var(--transactions-color-divider);
-}
-
-.panel-title-left {
-  display: flex;
-  align-items: center;
-  gap: var(--transactions-space-xs);
-  min-width: 0;
-}
-
-.panel-title {
-  margin: 0;
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-title);
-  font-weight: 600;
-  color: var(--transactions-color-text-major);
-  line-height: var(--transactions-height-snug);
-}
-
-.panel-title-tip {
-  font-size: var(--transactions-size-text-body);
-  color: var(--transactions-color-text-tertiary);
-  cursor: help;
-  transition: color var(--transactions-transition-fast);
-}
-
-.panel-title-tip:hover {
-  color: var(--transactions-color-text-secondary);
-}
-
 /* 金额（等宽） */
 .amount {
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
-}
-
-.amount-large {
-  font-size: var(--transactions-size-text-display);
-  font-weight: 600;
-}
-
-.amount-medium {
-  font-size: var(--transactions-size-text-title);
-  font-weight: 500;
-}
-
-.amount-small {
-  font-size: var(--transactions-size-text-body);
-  font-weight: 500;
 }
 
 .amount-income {
@@ -768,274 +310,21 @@ textarea,
   color: var(--transactions-color-transfer);
 }
 
-/* 账本卡片 */
-.ledger-card {
-  background-color: var(--transactions-color-elevated);
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-lg);
-  box-shadow: var(--transactions-shadow-md);
-  transition: box-shadow var(--transactions-transition-normal),
-    border-color var(--transactions-transition-normal);
-  cursor: pointer;
-}
-
-.ledger-card:hover {
-  box-shadow: var(--transactions-shadow-lg);
-  transform: translateY(-2px);
-}
-
-.ledger-card-name {
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-title-sm);
-  font-weight: 500;
-  color: var(--transactions-color-text-major);
-  margin: 0 0 var(--transactions-space-sm) 0;
-}
-
-.ledger-card-description {
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-body);
-  color: var(--transactions-color-text-secondary);
-  margin: 0 0 var(--transactions-space-lg) 0;
-}
-
-.ledger-card-meta {
-  display: flex;
-  gap: var(--transactions-space-lg);
-  font-family: var(--transactions-font-body);
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-secondary);
-}
-
-/* 图表容器 */
-.chart-container {
-  background-color: var(--transactions-color-major-background);
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-lg);
-  padding: var(--transactions-space-xl);
-  box-shadow: var(--transactions-shadow-sm);
-}
-
-.chart-container-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--transactions-space-lg);
-}
-
-.chart-container-header-title {
-  font-family: var(--transactions-font-display);
-  font-size: var(--transactions-size-text-title-sm);
-  font-weight: 500;
-  color: var(--transactions-color-text-major);
-  margin: 0;
-}
-
 /* ============================================
- * 6. 工具类
+ * 5. 工具类
  * ============================================ */
-
-.text-primary {
-  color: var(--transactions-color-primary);
-}
-
-.text-positive,
-.text-income {
-  color: var(--transactions-color-income);
-}
-
-.text-negative,
-.text-expense {
-  color: var(--transactions-color-expense);
-}
-
-.text-transfer {
-  color: var(--transactions-color-transfer);
-}
 
 .text-secondary {
   color: var(--transactions-color-text-secondary);
 }
 
-.text-success {
-  color: var(--transactions-color-success);
-}
-
-.text-danger,
-.text-error {
-  color: var(--transactions-color-negative);
-}
-
-.text-warning {
-  color: var(--transactions-color-warning);
-}
-
-.bg-major {
-  background-color: var(--transactions-color-major-background);
-}
-
-.bg-minor {
-  background-color: var(--transactions-color-minor-background);
-}
-
-.bg-elevated {
-  background-color: var(--transactions-color-elevated);
-}
-
-/* 间距工具类（.m-* / .p-*：方向 × 尺寸） */
+/* 零边距 */
 .m-0 {
   margin: 0;
 }
 
-.m-auto {
-  margin: auto;
-}
-
-.mt-sm {
-  margin-top: var(--transactions-space-sm);
-}
-
-.mb-sm {
-  margin-bottom: var(--transactions-space-sm);
-}
-
-.ml-sm {
-  margin-left: var(--transactions-space-sm);
-}
-
-.mr-sm {
-  margin-right: var(--transactions-space-sm);
-}
-
-.mt-md {
-  margin-top: var(--transactions-space-md);
-}
-
-.mb-md {
-  margin-bottom: var(--transactions-space-md);
-}
-
-.ml-md {
-  margin-left: var(--transactions-space-md);
-}
-
-.mr-md {
-  margin-right: var(--transactions-space-md);
-}
-
-.mt-lg {
-  margin-top: var(--transactions-space-lg);
-}
-
-.mb-lg {
-  margin-bottom: var(--transactions-space-lg);
-}
-
-.ml-lg {
-  margin-left: var(--transactions-space-lg);
-}
-
-.mr-lg {
-  margin-right: var(--transactions-space-lg);
-}
-
-.mt-xl {
-  margin-top: var(--transactions-space-xl);
-}
-
-.mb-xl {
-  margin-bottom: var(--transactions-space-xl);
-}
-
-.p-0 {
-  padding: 0;
-}
-
-.p-sm {
-  padding: var(--transactions-space-sm);
-}
-
-.p-md {
-  padding: var(--transactions-space-md);
-}
-
-.p-lg {
-  padding: var(--transactions-space-lg);
-}
-
-.p-xl {
-  padding: var(--transactions-space-xl);
-}
-
-.pt-sm {
-  padding-top: var(--transactions-space-sm);
-}
-
-.pb-sm {
-  padding-bottom: var(--transactions-space-sm);
-}
-
-.pl-sm {
-  padding-left: var(--transactions-space-sm);
-}
-
-.pr-sm {
-  padding-right: var(--transactions-space-sm);
-}
-
-.pt-md {
-  padding-top: var(--transactions-space-md);
-}
-
-.pb-md {
-  padding-bottom: var(--transactions-space-md);
-}
-
-.pl-md {
-  padding-left: var(--transactions-space-md);
-}
-
-.pr-md {
-  padding-right: var(--transactions-space-md);
-}
-
-.pt-lg {
-  padding-top: var(--transactions-space-lg);
-}
-
-.pb-lg {
-  padding-bottom: var(--transactions-space-lg);
-}
-
-.pl-lg {
-  padding-left: var(--transactions-space-lg);
-}
-
-.pr-lg {
-  padding-right: var(--transactions-space-lg);
-}
-
 /* ============================================
- * 7. 交易类型
- * ============================================ */
-
-.tr-type-income {
-  color: var(--transactions-color-income);
-  font-weight: 500;
-}
-
-.tr-type-expense {
-  color: var(--transactions-color-expense);
-  font-weight: 500;
-}
-
-.tr-type-transfer {
-  color: var(--transactions-color-transfer);
-  font-weight: 500;
-}
-
-/* ============================================
- * 8. 动画
+ * 6. 动画
  * ============================================ */
 
 @keyframes tr-fade-in {
@@ -1047,33 +336,6 @@ textarea,
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes tr-fade-out {
-  from {
-    opacity: 1;
-    transform: translateY(0);
-  }
-
-  to {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-}
-
-.fade-enter-active {
-  animation: tr-fade-in var(--transactions-transition-normal);
-}
-
-.fade-leave-active {
-  animation: tr-fade-out var(--transactions-transition-fast);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .fade-enter-active,
-  .fade-leave-active {
-    animation: none;
   }
 }
 

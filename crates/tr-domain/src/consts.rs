@@ -10,9 +10,6 @@ pub const DB_NAME: &str = "transactions.db";
 /// `id=all` 的查询语义。
 pub const ALL: &str = "all";
 
-/// 所有数据表共用前缀。
-pub const TABLE_PREFIX: &str = "tbl_billadm_";
-
 // ---------- 交易类型 ----------
 
 pub const TRANSACTION_TYPE_INCOME: &str = "income";

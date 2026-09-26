@@ -10,8 +10,6 @@
  * 取值只用 `--transactions-*` 令牌，禁止裸 hex / rgb。
  * ============================================ */
 
-
-
 /* ============================================
  * 2. 工具栏里带图标/角标的按钮（排序 / 筛选）
  *    形状与字号全部来自 `.ui-btn`，这里只加图标位与筛选计数徽标
@@ -177,12 +175,6 @@
   font-size: var(--transactions-size-text-caption);
   line-height: var(--transactions-height-snug);
   color: var(--transactions-color-text-tertiary);
-}
-
-/* 金额输入：前缀「￥」+ 输入框 */
-/* 金额输入框：去掉左侧的「¥」前缀后就是一个普通输入框，不再需要拼接圆角 */
-.tr-modal-price .ui-input {
-  flex: 1;
 }
 
 /* 弹窗底栏（`Modal` 的 footer 被关掉，按钮放在内容里） */

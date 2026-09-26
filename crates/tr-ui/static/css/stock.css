@@ -46,13 +46,6 @@
   gap: var(--transactions-space-md);
 }
 
-.stock-toolbar__end {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
 /* 工具栏左侧的两个分栏页签（统计 / 明细）：**不换行、不压缩** ——
  * 可伸缩的那一半是右侧的筛选组，页签被挤窄就点不准了。 */
 .stock-tabs {
@@ -355,11 +348,6 @@
   color: var(--transactions-color-text-major);
 }
 
-.stock-overview__actions {
-  display: flex;
-  gap: var(--transactions-space-sm);
-}
-
 .stock-overview__lead {
   margin: var(--transactions-space-md) 0;
   color: var(--transactions-color-text-major);
@@ -602,10 +590,6 @@
   font-family: var(--transactions-font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--transactions-color-text-major);
-}
-
-.stock-detail__toolbar {
-  justify-content: flex-end;
 }
 
 /* 本轮复盘（持仓 + 轮次共用） */
@@ -1248,7 +1232,6 @@
 
 /* ---------------- 自绘 SVG 图表 ---------------- */
 
-
 /* ---------------- 响应式 ---------------- */
 
 @media (max-width: 1280px) {
@@ -1738,4 +1721,3 @@
   flex: 1;
   min-height: 0;
 }
-
