@@ -1,6 +1,7 @@
 # Transactions
 
-桌面端记账应用。外壳是 Tauri 2，界面用 Leptos 编译成 WebAssembly，存储走 rusqlite，界面和内核都是 Rust。仓库里没有 npm，也没有前端构建链。
+桌面端记账应用。外壳是 Tauri 2，界面用 Leptos 编译成 WebAssembly，存储走 rusqlite，
+界面和内核都是 Rust。仓库里没有 npm，也没有前端构建链。
 
 记账数据放在你自己选的本地工作空间里，一个工作空间就是一个 SQLite 数据库。没有云端账户，也没有常驻后台。
 
@@ -8,12 +9,21 @@
 
 ## 功能
 
-- **记账**（四个子功能走左侧图标条切换）：**记录**负责日常流水，支持模板一键填充、编辑、删除、复制到其他账本、按关键词/类型/分类/标签/离群/时间范围筛选、排序、分页，底部有统计条；**分析**画图，分类占比、时间趋势、标签云、离群消费都能看，图表引擎是 `charts-rs`，界面层直出 SVG；另外两个子功能是**标签**（分类与标签管理）和**模板**。
-- **股票**：账户（支取 / 利息归本 / 追加本金，资金变化记录分页）与持仓、建仓/加仓/减仓/清仓（真实行情查名与现价）、成交记录与编辑、交易历史归档为轮次、费用设置（佣金/最低佣金/印花税/过户费）、盈亏统计、重置股票数据。
-- **事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、图片附件（含 HEIC 在界面层转码后上传）。
-- **日记**：按日期一篇，**按账本隔离**（切账本即切日记，同一天在不同账本各存一篇），Markdown 预览/编辑，导入/导出目录（作用于当前账本），心情标记，字数统计。
+- **记账**（四个子功能走左侧图标条切换）：**记录**负责日常流水，支持模板一键填充、编辑、删除、
+  复制到其他账本、按关键词/类型/分类/标签/离群/时间范围筛选、排序、分页，底部有统计条；
+  **分析**画图，分类占比、时间趋势、标签云、离群消费都能看，图表引擎是 `charts-rs`，
+  界面层直出 SVG；另外两个子功能是**标签**（分类与标签管理）和**模板**。
+- **股票**：账户（支取 / 利息归本 / 追加本金，资金变化记录分页）与持仓、建仓/加仓/减仓/清仓
+  （真实行情查名与现价）、成交记录与编辑、交易历史归档为轮次、费用设置
+  （佣金/最低佣金/印花税/过户费）、盈亏统计、重置股票数据。
+- **事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、
+  图片附件（含 HEIC 在界面层转码后上传）。
+- **日记**：按日期一篇，**按账本隔离**（切账本即切日记，同一天在不同账本各存一篇），
+  Markdown 预览/编辑，导入/导出目录（作用于当前账本），心情标记，字数统计。
 - **账本与工作空间**：多账本切换/新建/删除，单实例运行，托盘菜单，浅色/深色双主题，关闭行为可选。
-- **代理**：行情查询和更新检查可以走 HTTP 代理。三档，不使用、自动探测（先看环境变量，再看 Windows 系统代理，都没有就直连）、手动填 `http://host:port`（支持 `user:pass@`）。位置在「应用设置 → 通用设置 → 代理」，改完立刻生效，不用重启。
+- **代理**：行情查询和更新检查可以走 HTTP 代理。三档，不使用、自动探测（先看环境变量，
+  再看 Windows 系统代理，都没有就直连）、手动填 `http://host:port`（支持 `user:pass@`）。
+  位置在「应用设置 → 通用设置 → 代理」，改完立刻生效，不用重启。
 - **数据自主**：只有行情查询和更新检查要联网，其余功能全部离线可用。这两项也完全可以不用。
 
 ## 技术栈
@@ -41,16 +51,22 @@ fixtures/            # schema 基线、端到端脚本（**不含任何真实个
 
 ## 数据
 
-- 工作空间结构以 `fixtures/schema/fresh.sql` 为基线。`transactions.db` 不存在时按基线建库；已存在时先交给**迁移引擎**（`crates/tr-store/src/migrations.rs`）按登记表升级到当前格式，升级前自动备份成 `transactions.db.pre-migration-<时间戳>.bak`（同一个工作空间只留最近一份），升完再做一次只读校验（`cargo xtask validate <dir>` / `cargo xtask migrate <dir>`）。比已知格式更早、又没有对应迁移路径时，直接拒绝并说明原因。
+- 工作空间结构以 `fixtures/schema/fresh.sql` 为基线。`transactions.db` 不存在时按基线建库；
+  已存在时先交给**迁移引擎**（`crates/tr-store/src/migrations.rs`）按登记表升级到当前格式，
+  升级前自动备份成 `transactions.db.pre-migration-<时间戳>.bak`（同一个工作空间只留最近一份），
+  升完再做一次只读校验（`cargo xtask validate <dir>` / `cargo xtask migrate <dir>`）。
+  比已知格式更早、又没有对应迁移路径时，直接拒绝并说明原因。
 - 金额恒为整数分（`i64`），只有展示层做分/元换算。
-- 配置文件在 `~/.transactions.json`（开发构建是 `~/.transactions-dev.json`）。位置和键名不会变，读写时保留不认识的键。
+- 配置文件在 `~/.transactions.json`（开发构建是 `~/.transactions-dev.json`）。位置和键名不会变，
+  读写时保留不认识的键。
 
 ## 下载安装
 
 到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载
 `Transactions-x64-v0.6.2.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
 
-首次启动会让你选一个工作空间目录。空目录按当前 schema 建库，当前格式的目录直接打开，更早格式的目录会在打开时自动升级，升级前先备份。
+首次启动会让你选一个工作空间目录。空目录按当前 schema 建库，当前格式的目录直接打开，
+更早格式的目录会在打开时自动升级，升级前先备份。
 应用内「设置 → 关于软件」检查本仓库的 Release，有新版本可以下载，装之前校验 `sha256`。
 
 ## 从源码构建
@@ -74,9 +90,39 @@ pwsh -File build/build.ps1
 发布流程：`build/clean.ps1` → `build/build.ps1` → `build/release.ps1`（`gh release create` + 上传安装包）。
 版本号唯一来源是 `src-tauri/tauri.conf.json`。
 
-> `build/build.ps1` 和 `build/release.ps1` 里是中文注释，**要用 PowerShell 7（`pwsh`）跑**。脚本自己会检测，在 5.1 下自动改用 `pwsh` 重跑：Windows PowerShell 5.1 把无 BOM 的 UTF-8 当 ANSI 解码，出过一次事故，最后一步静默失败，退出码却还是 0。`build/build-ui.ps1` 由 `cargo tauri build` 用 5.1 调用，所以它是纯 ASCII 的。
+> `build/build.ps1` 和 `build/release.ps1` 里是中文注释，**要用 PowerShell 7（`pwsh`）跑**。
+> 脚本自己会检测，在 5.1 下自动改用 `pwsh` 重跑：Windows PowerShell 5.1 把无 BOM 的 UTF-8
+> 当 ANSI 解码，出过一次事故，最后一步静默失败，退出码却还是 0。
+> `build/build-ui.ps1` 由 `cargo tauri build` 用 5.1 调用，所以它是纯 ASCII 的。
 
-> 发布构建**必须**走 `build/build-ui.ps1`（trunk debug 模式，优化拉满，跳过 wasm-opt），别直接用 `trunk build --release`。手跑 exe 时要带 `tauri/custom-protocol` 特性，不然窗口里要么空白要么是"连接被拒绝"。原因写在 `AGENTS.md` 的「踩过的坑」里。
+> 发布构建**必须**走 `build/build-ui.ps1`（trunk debug 模式，优化拉满，跳过 wasm-opt），
+> 别直接用 `trunk build --release`。手跑 exe 时要带 `tauri/custom-protocol` 特性，
+> 不然窗口里要么空白要么是"连接被拒绝"。原因写在 `AGENTS.md` 的「踩过的坑」里。
+
+## 调试
+
+改界面（`crates/tr-ui` 下的 `.rs` / `.css`）走 dev 服务 + 热更新，一轮 5~10 秒，
+不必打包。**用一个独立目录当工作目录**，别拿真实账本调：
+
+```powershell
+# ① 播种一份示例数据当工作空间（target\tests\ 下的目录可以随手删）
+cargo xtask seed target\tests\dev-ws
+
+# ② 拉起 dev 窗口：trunk serve(:16000) + dev 外壳（配置目录也是独立的）
+#    改完 .rs/.css 脚本会给窗口发 Ctrl+R 刷新，并把窗口截图到 -ShotDir
+pwsh -File fixtures/dev-hot.ps1 -Trunk -Launch `
+    -Workspace target\tests\dev-ws -ShotDir target\tests\dev-shot\out
+
+# ③ 只看某个页面（不重建、不重启）：点侧栏 + 等页面真切过去 + 截图
+pwsh -File fixtures/dev-shot.ps1 -Page 股票        # -AllPages 逐页截
+```
+
+- `dev-hot.ps1` 用独立配置目录 `target\tests\dev-hot\home`，**不碰** `~/.transactions-dev.json`；
+  不给 `-Workspace` 会沿用配置里已有的工作空间（被写空会让外壳进首启动流程，
+  主循环要的侧栏「记账」就不会出现）。
+- 改 `src-tauri/`（外壳）不适用热更新，用 `cargo tauri dev` 重启。
+- 起不来先看端口：`netsh interface ipv4 show excludedportrange protocol=tcp`；换端口必须同时改
+  `crates/tr-ui/Trunk.toml`、`src-tauri/tauri.conf.json` 与 `fixtures/dev-hot.ps1 -Port`。
 
 ## 验证护栏
 
