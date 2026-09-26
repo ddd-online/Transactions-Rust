@@ -134,7 +134,9 @@ function Wait-Like { param($Root, [string]$Pattern, [int]$TimeoutSec = 25)
 }
 
 # 启动时要抓**主窗口**（含侧栏），不是"该进程的第一个窗口"：
-# 启动期会先出现 600×560 的初始化窗口，抓到它后面所有按名字的查找都会落空。
+# 启动期窗口的 UIA 树是惰性构建的，抓到半成品后面所有按名字的查找都会落空。
+# （**未选工作空间**时侧栏整层带 `inert`，连「记账」都查不到 —— 那种状态下界面本来就
+# 不该给自动化用，选择屏只暴露「选择目录…」那一个按钮。）
 # 注意与 `Get-AppWindow`（第一个顶层窗口）是**两个不同的判据**，不要互相替换。
 function Get-ReadyWindow { param([int]$ProcessId, [int]$TimeoutSec = 60)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)

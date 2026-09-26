@@ -8,11 +8,22 @@
 //! 通知文案：标题 = `error_prefix`，描述 = `"{error_prefix}: {msg}"`
 //! （`msg` 已经是 api 层拼好前缀之后的用户可见文案）。
 
+use leptos::prelude::GetUntracked;
+
 use crate::ipc::IpcError;
 use crate::notify::Notifier;
 
 /// 只通知、不处理（例如事件回调里需要显式提示时）。
 pub fn notify_error(error_prefix: &str, error: &IpcError) {
+    // 还没选定工作空间时**直接丢掉**：选择屏正挡在最上面（见 `shell.rs`），而下面那层
+    // 背景页面自己发出的业务命令必然以"未打开工作空间"失败 —— 一条条弹出来只会糊在
+    // 背景上。真正要读的仍然在日志里，用户该做的也只有"选个目录"。
+    if crate::store::AppStores::global()
+        .workspace_required
+        .get_untracked()
+    {
+        return;
+    }
     Notifier::global().error(error_prefix.to_string(), Some(error.prefixed(error_prefix)));
 }
 

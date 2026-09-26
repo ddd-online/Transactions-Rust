@@ -92,7 +92,8 @@ function Get-RepoAppWindow {
         foreach ($proc in $procs) {
             $cond = New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $proc.Id)
             foreach ($candidate in @($UIA::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $cond))) {
-                # 有侧栏「记账」才是主窗口（不是 600×560 的初始化窗口）
+                # 有侧栏「记账」才是**可用状态**的主窗口：未选工作空间时外壳整层带 `inert`，
+                # 侧栏不在辅助功能树里（那种状态请用 `dev-hot.ps1 -Workspace <dir>` 起）
                 $ok = @($candidate.FindAll([System.Windows.Automation.TreeScope]::Descendants,
                         (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, '记账'))))
                 if ($ok.Count -gt 0) { return $candidate }

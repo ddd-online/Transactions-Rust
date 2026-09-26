@@ -88,6 +88,9 @@
   --transactions-color-danger-hover-bg: rgba(220, 38, 38, 0.10);
   /* 叠在图片上的浮层控件底：浅色主题下也必须是"暗底 + 亮图标"才看得清 */
   --transactions-color-overlay-scrim: rgba(15, 17, 21, 0.55);
+  /* 阻塞屏（选工作空间）的压底：比弹窗遮罩重、比灯箱 scrim 轻 ——
+   * 背景是**真的应用界面**（侧栏 + 版心），要看得见，但不能跟对话框抢。 */
+  --transactions-color-screen-scrim: rgba(15, 17, 21, 0.28);
 
   /* Chat bubble（DSH specific-bubble） */
   --transactions-color-bubble: #eef0f4;
@@ -301,6 +304,7 @@
 
   /* 叠在图片上的浮层控件底：两套深色定义保持一致，图片前始终可读 */
   --transactions-color-overlay-scrim: rgba(15, 17, 21, 0.55);
+  --transactions-color-screen-scrim: rgba(0, 0, 0, 0.45);
 
   --transactions-color-bubble: #24282f;
 
@@ -394,6 +398,7 @@
 
     /* 叠在图片上的浮层控件底：两套深色定义保持一致，图片前始终可读 */
     --transactions-color-overlay-scrim: rgba(15, 17, 21, 0.55);
+    --transactions-color-screen-scrim: rgba(0, 0, 0, 0.45);
 
     --transactions-color-bubble: #24282f;
 

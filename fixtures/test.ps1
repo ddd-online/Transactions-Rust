@@ -84,7 +84,7 @@ $Steps = [ordered]@{
     'chart-tests'       = @{ Title='图表纯函数（Y 轴范围 / 填充基线）';              Kind='pwsh';  Script='fixtures\chart-tests.ps1'; Needs='none' }
 
     # ---- 界面护栏（真实启动 + UIA 驱动）----
-    'smoke'             = @{ Title='冒烟：已配置 → 只开主窗口；首启动 → 只开初始化窗口'; Kind='pwsh'; Script='fixtures\smoke.ps1'; Needs='exe' }
+    'smoke'             = @{ Title='冒烟：已配置 → 只开主窗口；首启动 → 主窗口 + 选工作空间屏（背景 inert）'; Kind='pwsh'; Script='fixtures\smoke.ps1'; Needs='exe' }
     'window-bounds'     = @{ Title='窗口几何：逻辑尺寸 × DPI = 物理尺寸，关闭写回';   Kind='pwsh';  Script='fixtures\window-bounds.ps1'; Needs='exe' }
     'close-behavior'    = @{ Title='关闭行为：quit / tray / 弹「关闭选项」';         Kind='pwsh';  Script='fixtures\close-behavior.ps1'; Needs='exe' }
     'migrate-workspace' = @{ Title='迁移引擎：降级 → 升级 → 备份 → 幂等';           Kind='pwsh';  Script='fixtures\migrate-workspace.ps1'; Needs='exe' }

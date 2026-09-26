@@ -2,10 +2,13 @@
 #
 # 覆盖两件事（都是自动护栏覆盖不到的部分）：
 #   1. **已配置工作空间**启动：只出现主窗口（标题 `Transactions`），并且真的打开了工作空间；
-#   2. **首次启动**（`workspaceDir` 为空）：只出现初始化窗口（标题 `欢迎使用 Transactions`），
-#      **不会**提前创建主窗口；而且这个窗口**关不掉**（发 WM_CLOSE 后窗口与进程都还在，
-#      用户必须先选定工作空间）。这一条对应曾经的真实缺陷：`workspace_init` 全仓无调用点，
-#      导致选完目录后主窗口永远不出现（详见 AGENTS.md 的踩坑清单）。
+#   2. **首次启动**（`workspaceDir` 为空）：还是那**一个**主窗口（标题 `Transactions`），
+#      里面渲染着完整的外壳，再把不可关闭的工作空间选择屏叠在它上面；窗口**关不掉**
+#      （发 WM_CLOSE 后窗口与进程都还在，用户必须先选定工作空间）。
+#      两个判据：选择屏的「选择目录…」在辅助功能树里**查得到**，而背景那层的
+#      「记一笔」**查不到**（主窗口那层带 `inert`）—— 这正是"背景渲染完整但不给用"。
+#      早期版本为此另开了一个 600×560 的初始化窗口，那个窗口里没有任何界面可看，
+#      用户反馈"背景没渲染"（详见 AGENTS.md 的踩坑清单）。
 #
 # 为什么默认用 debug 构建的 exe：`is_dev = cfg!(debug_assertions)`，
 # debug 版读 `~/.transactions-dev.json`，release 版读 `~/.transactions.json`（你的真实配置）。
@@ -21,7 +24,7 @@
 # **没被自动化的一步**：首次启动里"选目录 → 主窗口出现"需要走 Windows 原生文件夹对话框。
 # 有人试过用 SendKeys 盲敲回车，但那会在**当前目录**直接建库（可能建到用户自己的目录里），
 # 风险大于收益，因此这一步留给人工点一次。
-# 本脚本负责证明它两侧的分支都对：未配置→只有初始化窗口；已配置→只有主窗口。
+# 本脚本负责证明它两侧的分支都对：未配置→主窗口 + 选择屏（背景 inert）；已配置→只有主窗口。
 #
 # 注意：脚本会**强杀**自己启动的进程（用 PID 精确定位），不会动你手动开着的实例；
 # 如果检测到已有 `transactions` 进程在跑，会直接拒绝执行（单实例插件会干扰判断）。
@@ -229,19 +232,36 @@ if ($Case -in @('all', 'first-run')) {
         Wait-AppLog -Pattern 'IPC config_get' -TimeoutSec 30 | Out-Null
         $titles = Get-AppWindowTitles $process
 
-        Assert-True ($titles -contains '欢迎使用 Transactions') "出现初始化窗口（标题 欢迎使用 Transactions）"
-        Assert-True (-not ($titles -contains 'Transactions')) "没有提前创建主窗口"
+        Assert-True ($titles -contains 'Transactions') "出现主窗口（标题 Transactions）"
         Assert-True ($titles.Count -eq 1) "只有 1 个界面窗口（实际: $($titles.Count) → $($titles -join ' | ')）"
 
-        # 这个窗口是**强制**的工作空间选择屏：给它发 WM_CLOSE（= Alt+F4 / 点关闭），
+        # 主窗口里叠着不可关闭的选择屏。窗口元素不能用 `Get-ReadyWindow`：它按侧栏
+        # 「记账」认窗口，而首次启动时背景那层是 `inert`、侧栏不在辅助功能树里。
+        $uiaWindow = $null
+        $deadline = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $deadline -and -not $uiaWindow) {
+            $cond = New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $process.Id)
+            foreach ($el in @($UIA::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $cond))) {
+                $rect = $el.Current.BoundingRectangle
+                if ($rect.Width -gt 800 -and $rect.Height -gt 600) { $uiaWindow = $el; break }
+            }
+            if (-not $uiaWindow) { Start-Sleep -Milliseconds 400 }
+        }
+        Assert-True ($null -ne $uiaWindow) '拿到主窗口的 UIA 元素'
+        Assert-True ($null -ne (Wait-Element $uiaWindow '选择目录…' 20)) `
+            '选择屏叠在主窗口里（「选择目录…」可查到）'
+        Assert-True (@(Find-All $uiaWindow '记一笔').Count -eq 0) `
+            '背景那层 inert（内容区的「记一笔」不在辅助功能树里）'
+
+        # 这个窗口关不掉：给它发 WM_CLOSE（= Alt+F4 / 点关闭），
         # 窗口和进程都必须还在（用户必须先选定工作空间；逃生门是托盘菜单的「关闭程序」）。
-        $initHandle = [TrSmokeWindows]::HandleForPidTitle([uint32]$process.Id, '欢迎使用 Transactions')
-        Assert-True ($initHandle -ne [IntPtr]::Zero) '拿到初始化窗口的句柄（才能发关闭请求）'
-        if ($initHandle -ne [IntPtr]::Zero) {
-            [TrSmokeWindows]::PostClose($initHandle)
+        $mainHandle = [TrSmokeWindows]::HandleForPidTitle([uint32]$process.Id, 'Transactions')
+        Assert-True ($mainHandle -ne [IntPtr]::Zero) '拿到主窗口句柄（才能发关闭请求）'
+        if ($mainHandle -ne [IntPtr]::Zero) {
+            [TrSmokeWindows]::PostClose($mainHandle)
             Start-Sleep -Seconds 2
             $afterClose = Get-AppWindowTitles $process
-            Assert-True ($afterClose -contains '欢迎使用 Transactions') '收到关闭请求后初始化窗口仍在（未选定工作空间时关不掉）'
+            Assert-True ($afterClose -contains 'Transactions') '收到关闭请求后窗口仍在（未选定工作空间时关不掉）'
             Assert-True (-not $process.HasExited) '收到关闭请求后进程仍存活'
         }
 

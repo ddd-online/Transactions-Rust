@@ -94,8 +94,8 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 
 边界：改 `src-tauri/`（外壳）不适用热更新，要 `cargo tauri dev` 重启；`-Launch` / `-Trunk` 用独立配置目录
 （`target\tests\dev-hot\home`），不碰真实的 `~/.transactions-dev.json`；**不给 `-Workspace` 就沿用配置里已有的
-工作空间**（被写空会让外壳进首启动流程、只开 600×560 初始化窗口，主循环要的侧栏「记账」永远不出现，最后只看到
-一句"没找到主窗口"）；`NO_COLOR` 由脚本自己清掉。
+工作空间**（被写空会让外壳停在"选择工作空间"屏上、背景那层 `inert`，主循环按侧栏「记账」永远找不到窗口，
+最后只看到一句"没找到主窗口"）；`NO_COLOR` 由脚本自己清掉。
 
 ## 测试：单元档与全量档
 
@@ -179,9 +179,10 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
    `False`）：判据要显式排除非有限值（`[double]::IsInfinity/IsNaN` 四个分量都查一遍）——`Width -le 0` 挡得住
    `-∞`，但 `+∞` 参与 `[int]` 转换会抛"无法将值 "∞" 转换为类型 "System.Int32""。浮层（弹窗/气泡是 portal 出去
    的节点）可见性不稳，**别拿 `IsOffscreen` 当判据**。
-4. **启动时抓「主窗口」而不是「该进程的第一个窗口」**：启动期先出现初始化窗口（600×560、无侧栏），随后才切主
-   窗口；抓到前者后面所有按名字查找都会落空。见 `fixtures/ui-crud.ps1` 的 `Get-ReadyWindow`：轮询取窗口元素直到
-   它包含侧栏条目（如「记账」）为止。
+4. **启动时抓「主窗口」而不是「该进程的第一个窗口」**：窗口刚出现时 UIA 树是惰性的（首查常只有二十来个元素、
+   连 Button 都没有），抓到半成品后面所有按名字查找都会落空。见 `fixtures/ui-crud.ps1` 的 `Get-ReadyWindow`：
+   轮询取窗口元素直到它包含侧栏条目（如「记账」）为止。**未选工作空间**时侧栏整层带 `inert`、连「记账」都查
+   不到（那种状态只有选择屏的「选择目录…」暴露出来），所以各护栏都必须先写好 `workspaceDir` 再启动。
 
 **对话框、路径、cwd**
 
@@ -421,10 +422,12 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   **后端只接受 JPEG/PNG/GIF/WebP**：HEIC 转换留在界面层（web-sys canvas 交给 WebView2/系统解码器转 JPEG 再上传），
   后端不引入 libheif/WIC。缩略图：宽度 > 300 时等比缩到 300（CatmullRom）、JPEG q75。
 - **没有本地网络面**：不监听端口、没有 API 令牌、没有 CORS、没有子进程后端。进程即应用。
-- **首启动的窗口切换由外壳负责**：`workspaceDir` 为空时进初始化窗口（600×560、不可缩放），界面在"未配置工作空间"
-  时展示选目录引导；选完目录后 `workspace_open` 打开数据库，外壳随即 `show_main_window` + `destroy` 初始化窗口。
-  界面**不要**再调 `workspace_init`（它只是保留的幂等入口）：曾因全仓无调用点，导致首启动只在一个 600×560 窗口里
-  渲染整个应用、主窗口一直不出现（托盘"显示主窗口"才补出来，于是变成两个窗口）。
+- **只有一个窗口，首启动也不例外**：`workspaceDir` 为空时同样是主窗口 —— 界面在里面渲染**完整的外壳**
+  （侧栏 + 版心，页面照常挂载，只是显示空态），再把不可关闭的「选择工作空间」屏叠在它上面；背景那层带
+  `inert`（鼠标、键盘、读屏都进不去），外壳侧同时拒绝关闭请求（`close_allowed`）。选完目录后
+  `workspace_open` 打开数据库、界面收起选择屏即可，没有窗口切换。
+  历史：早期为此单开过一个 600×560 的初始化窗口 + `transition_from_init`（在主线程回调外建主窗口再 destroy），
+  被用户吐槽"背景没渲染、全是文案"；那一整套已删除。界面**不要**再调 `workspace_init`（只剩配置写入）。
 - **配置文件是用户数据**：`~/.transactions.json`（dev 为 `~/.transactions-dev.json`）的键名与位置都不变，读写时
   必须保留未知键（`AppConfig.extra`）。`features: { accounting, stock, keyEvent, diary }` 是「应用设置 → 功能
   开关」，**缺省全开**（`#[serde(default)]` + 字段默认 `true`）；它跨层面：外壳只落盘（`config_set_feature`），

@@ -1228,6 +1228,31 @@
   margin: 0 0 var(--transactions-space-lg) 0;
 }
 
+/* 首屏正文只有一句话 + 一个 ⓘ（细节收进浮层）：与 ⓘ 同一行，垂直居中对齐 */
+.workspace-picker-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  margin: 0 0 var(--transactions-space-md) 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-secondary);
+}
+
+/* ⓘ 触发器：与「交易费用设置」标题旁那个同款（`.st-panel-tip`），只是这里属于外壳。
+ * 尺寸给足 16px 见方，鼠标好停；颜色走 tertiary —— 它是"补充说明"，不是正文。 */
+.workspace-picker-tip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-text-tertiary);
+  cursor: help;
+}
+
+.workspace-picker-tip svg {
+  width: 16px;
+  height: 16px;
+}
+
 .workspace-picker-path {
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-body-sm);
@@ -1240,18 +1265,22 @@
   word-break: break-all;
 }
 
-/* 工作空间未指定时的**强制选择屏**：铺满窗口，且是此时唯一的界面（选择屏自己
- * 不可关闭，外壳的窗口控制按钮也不渲染）。背景与 --transactions-color-major-background
- * 一致，弹窗卡片仍靠边框 + 阴影与它区分（与其它弹窗同一套观感）。 */
+/* 工作空间未指定时的**强制选择屏**：铺满窗口、叠在**完整渲染的外壳**之上
+ * （选目录之前用户先看到"应用长什么样"）。这一层因此**不填色** —— 只留
+ * `.ui-modal__mask` 那层浅浅的遮罩把背景压下去，内容那层同时 `inert`，
+ * 鼠标键盘都进不去。选择屏自己不可关闭：没有 × / 「取消」、点遮罩不关。 */
 .workspace-required {
   position: fixed;
   inset: 0;
-  background-color: var(--transactions-color-major-background);
 }
 
-/* 这个屏里没有自绘标题栏（`.app-top-bar` / `.page-header` —— 它们平时负责拖动窗口），
- * 于是把遮罩本身当作拖动区：卡片以外的空白处可以拖窗口，卡片上不行（按钮要能点）。 */
+/* 遮罩本身承担两件事：
+ *  1. **压底重一档**（`--transactions-color-screen-scrim`）—— 背景不再是空白，而是真的
+ *     应用界面（侧栏 + 版心），得让它退到后面去，同时仍看得清版式；
+ *  2. **当拖动区** —— 遮罩盖住了自绘标题栏（`.app-top-bar` / `.page-header`，它们平时
+ *     负责拖窗口），所以卡片以外的空白处要能拖窗口，卡片上不行（按钮要能点）。 */
 .workspace-required .ui-modal__mask {
+  background-color: var(--transactions-color-screen-scrim);
   -webkit-app-region: drag;
 }
 

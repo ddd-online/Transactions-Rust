@@ -1,9 +1,13 @@
-//! 窗口与系统托盘：无边框主窗口、初始化窗口、托盘菜单、关闭行为。
+//! 窗口与系统托盘：无边框主窗口、托盘菜单、关闭行为。
 //!
-//! * 主窗口 1400×1000（默认），无边框，尺寸/位置写回 `~/.transactions.json`
-//! * 首次启动（配置里没有工作空间目录）先显示初始化窗口（600×560，不可缩放，无边框）：
-//!   界面在这个窗口里只渲染**不可关闭**的工作空间选择屏，外壳同时拒绝关闭请求，
-//!   用户必须先选定工作空间（逃生门：托盘菜单「关闭程序」）
+//! * 主窗口（默认 1500×1000），无边框，尺寸/位置写回 `~/.transactions.json`
+//! * **只有一个窗口**。首次启动（配置里没有工作空间目录）也是这一个主窗口：界面在里面
+//!   渲染**完整的外壳**（侧栏 + 页面版心），再把不可关闭的工作空间选择屏叠上去
+//!   （外壳那层同时 `inert`，鼠标键盘都进不去）；外壳侧拒绝关闭请求，用户必须先选定
+//!   工作空间（逃生门：托盘菜单「关闭程序」）。
+//!   早期版本为此另开了一个 600×560 的初始化窗口 —— 那个窗口里没有任何界面可看，
+//!   选择屏就浮在一片空白上（用户反馈"背景没渲染"），选完目录还得在主线程回调里先建主
+//!   窗口再销毁它（见 `commands.rs` 里那段 WebView2 回调时序的注释）。现在一个窗口就够。
 //! * 系统托盘：显示主窗口 / 关闭程序；最小化到托盘后任务栏不保留图标
 //! * 关闭行为：`quit` 直接退出、`tray` 隐藏到托盘、未设置时每次询问
 //!   （Tauri 的消息框没有「下次不再提醒」勾选框，因此这里固定为"每次询问"，
@@ -24,8 +28,6 @@ use crate::config::{CLOSE_BEHAVIOR_QUIT, CLOSE_BEHAVIOR_TRAY};
 
 /// 主窗口 label。
 pub const MAIN_WINDOW: &str = "main";
-/// 初始化（工作空间选择）窗口 label。
-pub const INIT_WINDOW: &str = "init";
 /// 托盘 id。
 const TRAY_ID: &str = "transactions-tray";
 
@@ -37,14 +39,10 @@ pub fn app_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// 首次启动未配置工作空间 → 初始化窗口；否则直接主窗口。
+/// 启动窗口：**只有主窗口**。未配置工作空间时，界面会把不可关闭的选择屏叠在它上面
+/// （见 `crates/tr-ui/src/shell.rs` 的 `WorkspaceRequired`）。
 pub fn create_startup_window(app: &AppHandle) -> tauri::Result<()> {
-    let workspace_dir = app.state::<DesktopState>().config.snapshot().workspace_dir;
-    if workspace_dir.trim().is_empty() {
-        create_init_window(app)?;
-    } else {
-        create_main_window(app)?;
-    }
+    create_main_window(app)?;
     Ok(())
 }
 
@@ -85,29 +83,6 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let window = builder.build()?;
     apply_appearance(&window, &config.appearance);
     attach_main_window_events(app, &window);
-    Ok(window)
-}
-
-/// 初始化窗口（工作空间选择）：600×560、不可缩放、无边框。
-pub fn create_init_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    if let Some(existing) = app.get_webview_window(INIT_WINDOW) {
-        let _ = existing.set_focus();
-        return Ok(existing);
-    }
-
-    let window = WebviewWindowBuilder::new(app, INIT_WINDOW, WebviewUrl::App("index.html".into()))
-        .title("欢迎使用 Transactions")
-        .inner_size(600.0, 560.0)
-        .resizable(false)
-        .disable_drag_drop_handler()
-        .on_navigation(is_allowed_navigation)
-        .decorations(false)
-        .center()
-        .build()?;
-
-    let appearance = app.state::<DesktopState>().config.snapshot().appearance;
-    apply_appearance(&window, &appearance);
-    attach_init_window_events(app, &window);
     Ok(window)
 }
 
@@ -180,18 +155,9 @@ fn close_allowed(app: &AppHandle) -> bool {
 
 /// 显示并聚焦主窗口（必要时创建）。
 ///
-/// **工作空间还没打开时不创建主窗口**：那一刻唯一该存在的窗口是初始化窗口
-/// （工作空间选择屏）。否则"再点一次应用图标"会在单实例回调里凭空造出一个
-/// 1500×1000 的主窗口，看起来就像又开了一个软件实例。
+/// 主窗口从启动就存在（未配置工作空间时界面会把选择屏叠在它上面），所以这里只处理
+/// "窗口被最小化到托盘 / 被关掉之后又被叫回来"两种情况。
 pub fn show_main_window(app: &AppHandle) {
-    if !workspace_is_open(app) {
-        if let Some(init) = app.get_webview_window(INIT_WINDOW) {
-            let _ = init.show();
-            let _ = init.unminimize();
-            let _ = init.set_focus();
-            return;
-        }
-    }
     match app.get_webview_window(MAIN_WINDOW) {
         Some(window) => {
             let _ = window.show();
@@ -340,22 +306,6 @@ pub fn attach_main_window_events(app: &AppHandle, window: &WebviewWindow) {
             let _ = main_window.emit("window-state-changed", maximized);
         }
         _ => {}
-    });
-}
-
-/// 初始化窗口的事件：工作空间选定之前**关不掉**。
-///
-/// 这个窗口就是那个不可关闭的选择屏（界面侧同样没有 × / 「取消」，点遮罩也不关），
-/// 于是 Alt+F4 是唯一的绕过路径 —— 这里把它也拦掉。
-/// 正常路径不受影响：选定工作空间后外壳用的是 `destroy()`（不触发 `CloseRequested`）。
-pub fn attach_init_window_events(app: &AppHandle, window: &WebviewWindow) {
-    let app_handle = app.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            if !close_allowed(&app_handle) {
-                api.prevent_close();
-            }
-        }
     });
 }
 

@@ -323,14 +323,12 @@ pub fn workspace_set(state: State<'_, DesktopState>, req: WorkspaceDirRequest) -
 /// 一次完成三件事：打开数据库（含格式校验）、把日志切到工作空间目录、记住目录。
 /// 失败时返回既定的错误文案（含"该工作空间不是最新格式…"的升级提示）。
 ///
-/// 首次启动时这个命令是**从初始化窗口**发出的：成功后必须立刻切到主窗口
-/// （界面可以在切换后再发一次 `workspace:init` 兜底）。
-/// 这里由外壳自己完成切换，界面不需要额外调用——初始化窗口只加载与主窗口相同的
-/// `index.html`，"还没配置工作空间"时它展示选择目录的引导，因此切换是外壳的职责。
+/// 界面（`crates/tr-ui` 的 `open_workspace`）是唯一调用方：成功后它自己收起选择屏、
+/// 刷新账本列表即可 —— 窗口从头到尾只有一个（见 `shell.rs` 的模块注释），没有切换。
+/// 界面**不要**再调 `workspace:init`（那只是保留的命令面）。
 #[tauri::command]
 pub fn workspace_open(
     app: AppHandle,
-    window: WebviewWindow,
     state: State<'_, DesktopState>,
     ipc_state: State<'_, AppState>,
     req: WorkspaceDirRequest,
@@ -371,60 +369,16 @@ pub fn workspace_open(
 
     let _ = app.emit(EVENT_WORKSPACE_CHANGED, raw.to_string());
 
-    // 从初始化窗口发起的"选目录"：打开成功后立刻换成主窗口。
-    if window.label() == shell::INIT_WINDOW {
-        transition_from_init(&app, &window);
-    }
     Ok(())
 }
 
-/// 初始化窗口 → 主窗口的切换：创建并显示主窗口，然后销毁初始化窗口。
+/// 只写配置里的工作空间目录（保留 `workspace:init` 命令面）。
 ///
-/// 先显示主窗口，再销毁初始化窗口；用 `destroy()` 而不是 `close()`：
-/// 初始化窗口不该走"关闭行为（最小化到托盘）"那套逻辑。
-/// 幂等：当前窗口不是初始化窗口、或初始化窗口已销毁时是空操作。
-///
-/// **必须推迟到本次 IPC 回调之外**（后台线程 + `run_on_main_thread`）：
-/// `workspace_open` 是同步命令，Tauri 在主线程上、且**是在 WebView2 的
-/// `WebMessageReceived` 回调里**执行它；在这个回调里紧接着
-/// `WebviewWindowBuilder::build()` 会建出一个**空壳主窗口** —— 实测现象：
-/// 窗口可见但是纯白、没有任何 `Chrome_WidgetWin_1` 渲染子窗口、界面永远不发出
-/// `config_get`，而且紧随其后的 `destroy()` 也没生效（初始化窗口卡在选择屏、
-/// 按钮停在加载态）。等回调退出后再建就没有这个问题。
-fn transition_from_init(app: &AppHandle, window: &WebviewWindow) {
-    if window.label() != shell::INIT_WINDOW {
-        return;
-    }
-    tracing::info!("初始化窗口已选定工作空间，切换主窗口并销毁初始化窗口");
-    let app_handle = app.clone();
-    let init_window = window.clone();
-    std::thread::spawn(move || {
-        // 给当前这次 WebView2 回调留出退出的时间（回调没返回前不碰窗口创建）
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        let inner = app_handle.clone();
-        let task = move || {
-            shell::show_main_window(&inner);
-            if let Err(error) = init_window.destroy() {
-                tracing::warn!("销毁初始化窗口失败: {error}");
-            }
-        };
-        if let Err(error) = app_handle.run_on_main_thread(task) {
-            tracing::warn!("切换主窗口的任务投递失败: {error}");
-        }
-    });
-}
-
-/// 初始化窗口选定工作目录后的切换（保留 `workspace:init` 命令面）。
-///
-/// 本实现已由 [`workspace_open`] 自动完成切换，因此这个命令是**幂等的补充入口**：
-/// 主窗口已显示时调用它不会有副作用。
+/// **界面不用它**：真正的入口是 [`workspace_open`]（打开数据库 + 刷新账本）。
+/// 早先这个命令还负责"初始化窗口 → 主窗口"的切换；现在只有一个窗口（见 `shell.rs`），
+/// 它退化成一个纯粹的配置写入，留着只是为了命令面不变。
 #[tauri::command]
-pub fn workspace_init(
-    app: AppHandle,
-    window: WebviewWindow,
-    state: State<'_, DesktopState>,
-    req: WorkspaceDirRequest,
-) -> ApiResult<()> {
+pub fn workspace_init(state: State<'_, DesktopState>, req: WorkspaceDirRequest) -> ApiResult<()> {
     let raw = req.workspace_dir.trim().to_string();
     if raw.is_empty() {
         return Err(ApiError::from(AppError::bad_request(
@@ -435,7 +389,6 @@ pub fn workspace_init(
         .config
         .update(|config| config.workspace_dir = raw.clone());
 
-    transition_from_init(&app, &window);
     Ok(())
 }
 

@@ -50,6 +50,12 @@ pub struct AppStores {
     /// 放在全局状态里而不是页面局部：换页回来时不必再等一次 IPC 往返，
     /// 也就不会先按"展开"渲染一帧再收起来（闪一下）。
     pub key_event_linked_open: RwSignal<bool>,
+    /// **还没选定工作空间**：由外壳（`shell.rs` 的 [`App`](crate::shell::App)）读写，
+    /// [`crate::error_handler`] 也读它。
+    ///
+    /// 放在全局而不是外壳局部：那期间页面照常渲染（它们是选择屏的背景），而它们发出的
+    /// 业务命令必然以"未打开工作空间"失败 —— 这些提示只会糊在背景上，收口里全部丢掉。
+    pub workspace_required: RwSignal<bool>,
 }
 
 thread_local! {
@@ -68,6 +74,7 @@ impl AppStores {
             appearance: RwSignal::new(APPEARANCE_SYSTEM.to_string()),
             enabled_features: RwSignal::new(FeatureFlags::defaults()),
             key_event_linked_open: RwSignal::new(true),
+            workspace_required: RwSignal::new(false),
         }
     }
 

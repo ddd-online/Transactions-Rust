@@ -20,7 +20,7 @@ use leptos::tachys::view::any_view::IntoAny;
 
 use crate::api;
 use crate::components::ui::{
-    backdrop, close_button, IconButton, IconButtonVariant, Input, Modal, ModalSize,
+    backdrop, close_button, IconButton, IconButtonVariant, Input, Modal, ModalSize, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
@@ -152,9 +152,11 @@ pub fn App() -> impl IntoView {
     //   而后端此刻还没打开工作空间（`workspace_open` 由界面在读到配置后才发），
     //   命令会以「未打开工作空间」失败并派发 `workspace-required` ——
     //   在**已配置工作空间**的正常启动里弹出选择框。
-    // * `workspace_required`：还没选定工作空间 → 只显示**不可关闭**的强制选择屏。
+    // * `workspace_required`：还没选定工作空间 → 在外壳之上叠一张**不可关闭**的选择屏。
+    //   它放在全局 store 里（不是这里的局部信号）：`error_handler` 也要读它 ——
+    //   那期间页面自己发出的命令必然失败，提示只会糊在背景上（见 `error_handler.rs`）。
     let config_loaded = RwSignal::new(false);
-    let workspace_required = RwSignal::new(false);
+    let workspace_required = AppStores::global().workspace_required;
     let workspace_picking = RwSignal::new(false);
 
     // 监听 `workspace-required`：由 ipc 层在"未打开工作空间"时派发。
@@ -225,20 +227,12 @@ pub fn App() -> impl IntoView {
     });
 
     view! {
-        // 尚未选定工作空间 → **只有**这个不可关闭的选择屏：用户必须先选目录。
-        // 它有别于普通弹窗：没有 ×、没有「取消」、点遮罩不关，外壳（窗口控制按钮）
-        // 也不渲染，所以关不掉；外壳侧同时拒绝关闭请求（见 `src-tauri/src/shell.rs`）。
-        <Show when=move || config_loaded.get() && workspace_required.get()>
-            <WorkspaceRequired
-                picking=workspace_picking
-                on_pick=UnsyncCallback::new(move |()| {
-                    pick_workspace(workspace_picking, move || workspace_required.set(false))
-                })
-            />
-        </Show>
-
-        <Show when=move || config_loaded.get() && !workspace_required.get()>
-            <div class="app-shell">
+        // 外壳**始终渲染**（读到配置之后）：还没选工作空间时它就是选择屏的背景 ——
+        // 用户看到的是"应用长什么样"，而不是一片空白加一张卡片。
+        // 那一层同时 `inert`：鼠标、键盘、读屏都进不去，直到选定工作空间为止
+        // （`inert` 是 Chromium 原生支持的标准属性，WebView2 上可用）。
+        <Show when=move || config_loaded.get()>
+            <div class="app-shell" inert=move || workspace_required.get()>
                 <div class="app-shell-body">
                     <aside class="app-sidebar">
                         <AppLeftBar current_page=current_page />
@@ -263,10 +257,23 @@ pub fn App() -> impl IntoView {
                 </div>
             </div>
         </Show>
+
+        // 尚未选定工作空间 → 叠在外壳之上的**不可关闭**选择屏：没有 ×、没有「取消」、
+        // 点遮罩不关，外壳侧同时拒绝关闭请求（见 `src-tauri/src/shell.rs` 的
+        // `close_allowed`）。页面在下面照常渲染，但只是背景 —— 那期间的业务命令必然
+        // 失败，提示被 `error_handler` 丢弃，不会糊在屏幕上。
+        <Show when=move || config_loaded.get() && workspace_required.get()>
+            <WorkspaceRequired
+                picking=workspace_picking
+                on_pick=UnsyncCallback::new(move |()| {
+                    pick_workspace(workspace_picking, move || workspace_required.set(false))
+                })
+            />
+        </Show>
     }
 }
 
-/// 工作空间未指定时的**强制选择屏**：铺满窗口、不可关闭，是此时唯一的界面。
+/// 工作空间未指定时的**强制选择屏**：铺满窗口、叠在外壳之上、不可关闭。
 #[component]
 fn WorkspaceRequired(picking: RwSignal<bool>, on_pick: UnsyncCallback<()>) -> impl IntoView {
     let stores = AppStores::global();
@@ -274,28 +281,37 @@ fn WorkspaceRequired(picking: RwSignal<bool>, on_pick: UnsyncCallback<()>) -> im
         <div class="workspace-required">
             <Modal
                 open=true
-                title="新建或打开工作空间"
+                title="打开工作空间"
+                size=ModalSize::Small
                 ok_text="选择目录…"
                 ok_loading=picking
                 locked=true
                 on_ok=move || on_pick.run(())
             >
-                <p class="workspace-picker-text">
-                    "选择一个目录作为工作空间，应用会在其中创建 transactions.db 数据库与 data/assets 资产目录。"
-                </p>
+                <div class="workspace-picker-lead">
+                    <span>"选择一个目录存放账本数据。"</span>
+                    // 数据库名、"已有库直接打开"这类细节收进 ⓘ —— 首屏只留一句话。
+                    <Tooltip title=WORKSPACE_TOOLTIP class="workspace-picker-tip">
+                        <span aria-label="工作空间说明">
+                            {icons::icon(Icon::InfoCircle)}
+                        </span>
+                    </Tooltip>
+                </div>
                 <div class="workspace-picker-path">
                     {move || {
                         let dir = stores.workspace_dir.get();
                         if dir.is_empty() { "（尚未选择）".to_string() } else { dir }
                     }}
                 </div>
-                <p class="workspace-picker-text">
-                    "若目录里已有当前格式的 transactions.db，会直接打开（只读校验，不做迁移）。"
-                </p>
             </Modal>
         </div>
     }
 }
+
+/// 首屏 ⓘ 里的细节文案（正文只说"选个目录"）。
+const WORKSPACE_TOOLTIP: &str =
+    "应用会在目录里建立 transactions.db 数据库与 data/assets 资产目录；\n\
+     若目录里已有当前格式的 transactions.db，会直接打开（只读校验，不做迁移）。";
 
 /// 打开（或切换）工作空间：打开数据库 → 记住目录 → 刷新账本列表。
 /// 返回是否成功（失败时界面据此进入**强制选择屏**，用户必须换一个能打开的目录）。

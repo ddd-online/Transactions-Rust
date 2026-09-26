@@ -110,7 +110,8 @@ function Get-RepoAppWindow {
     foreach ($proc in $procs) {
         $cond = New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $proc.Id)
         foreach ($candidate in @($UIA::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $cond))) {
-            # 侧栏条目「记账」出现 = 这是主窗口（而不是 600×560 的初始化窗口）
+            # 侧栏条目「记账」出现 = 这窗口处于**可用状态**（未选工作空间时外壳整层 inert，
+            # 侧栏不在 UIA 树里，那种状态请用 -Workspace 起）
             $names = @($candidate.FindAll([System.Windows.Automation.TreeScope]::Descendants,
                     (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, '记账'))))
             if ($names.Count -gt 0) { return $candidate }
@@ -199,16 +200,17 @@ function Start-DevShell {
     $wsAbs = if ($Workspace) { [System.IO.Path]::GetFullPath($Workspace) } else { '' }
     if (-not $wsAbs -and (Test-Path $cfg)) {
         # 不给 -Workspace 时沿用上次那个工作空间：这份配置是**跨轮次复用**的，
-        # 直接写空会把已经配好的工作空间丢掉 —— 外壳于是进首启动流程、只有初始化窗口，
-        # 主循环找不到侧栏「记账」就干等 60 秒（实测踩过；要换工作空间请显式传 -Workspace）。
+        # 直接写空会把已经配好的工作空间丢掉 —— 外壳于是停在不可关闭的选择屏上
+        # （背景那层 inert，主循环按侧栏「记账」找窗口会干等 60 秒；实测踩过。
+        #  要换工作空间请显式传 -Workspace）。
         try { $wsAbs = [string](Get-Content $cfg -Raw | ConvertFrom-Json).workspaceDir } catch { $wsAbs = '' }
         if ($wsAbs) { Write-Host "[dev-hot] 沿用配置里的工作空间：$wsAbs（要换用 -Workspace <dir>）" -ForegroundColor DarkGray }
     }
     @{ width = 1500; height = 1000; workspaceDir = $wsAbs; closeBehavior = 'quit'; appearance = 'light' } |
         ConvertTo-Json | Set-Content -Path $cfg -Encoding UTF8
     if (-not $wsAbs) {
-        Write-Host '[dev-hot] ⚠ 工作空间为空 —— 外壳会进首启动流程、只开 600×560 的初始化窗口，' -ForegroundColor Yellow
-        Write-Host '          主循环要的侧栏「记账」不会出现。请传 -Workspace <dir>（可先 cargo xtask seed 一份）。' -ForegroundColor Yellow
+        Write-Host '[dev-hot] ⚠ 工作空间为空 —— 外壳会停在"选择工作空间"屏上（背景那层 inert），' -ForegroundColor Yellow
+        Write-Host '          主循环按侧栏「记账」找不到窗口。请传 -Workspace <dir>（可先 cargo xtask seed 一份）。' -ForegroundColor Yellow
     }
     $saved = $env:USERPROFILE
     try {
@@ -239,7 +241,7 @@ if (-not $window) {
     $hint = '没找到本仓库的应用主窗口。先把它跑起来：cargo tauri dev（或本脚本加 -Launch -Trunk）'
     $cfg = Join-Path $SmokeHome '.transactions-dev.json'
     if ((Test-Path $cfg) -and -not ((Get-Content $cfg -Raw | ConvertFrom-Json).workspaceDir)) {
-        $hint = '没找到主窗口：配置里的工作空间是空的，外壳停在 600×560 的初始化窗口。请加 -Workspace <dir> 重跑。'
+        $hint = '没找到主窗口：配置里的工作空间是空的，外壳停在"选择工作空间"屏上（背景那层 inert）。请加 -Workspace <dir> 重跑。'
     }
     throw $hint
 }

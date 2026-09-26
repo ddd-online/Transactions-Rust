@@ -300,6 +300,10 @@ Gently curved, consistent radii: 6px for tags and dropdown items, 8px for button
 - **Style:** 16px radius, shadow-xl, header/footer hairline-divided, title 18px 600.
 - **Width — three tiers only:** Small 400, Medium 520, Large 640 (`ModalSize` in `components/ui/modal.rs`, mirrored by `.ui-modal__content--sm|md|lg`). Pick the tier from the content, never a one-off pixel width: Small for confirmations and single-field forms, Medium for short forms and pickers, Large for multi-field forms and filter builders. Omitting the prop means Medium. Every modal keeps `max-width: 100%` so a narrow window shrinks it instead of pushing it off-screen.
 
+### Blocking screens
+
+- **The one blocking screen is the workspace picker** (no workspace open yet). It keeps the **whole app shell rendered behind it** — sidebar, page frame and empty states — so the user sees what they are configuring, and covers it with `--transactions-color-screen-scrim` (heavier than a modal mask, lighter than the lightbox scrim). That background layer is `inert`: no pointer, no keyboard focus, nothing in the accessibility tree; only the dialog is reachable. The screen has no dismiss affordance at all — no ×, no cancel, clicking the backdrop does nothing, and the shell refuses the window close request — the user must pick a directory (escape hatch: the tray menu's quit item). Everything else in the copy goes into the ⓘ tooltip: the title and one sentence are the whole text.
+
 ### Segmented / Switch
 
 - **Style:** Soft Gray track; selected segment lifts to Paper with shadow-sm and Clarity Blue text; switch is a full-radius pill, Clarity Blue when on.
