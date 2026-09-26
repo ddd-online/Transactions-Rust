@@ -388,6 +388,55 @@ function Switch-StatsTab { param($Window, [string]$Name, [int]$TimeoutSec = 20)
     return $false
 }
 
+# 交易标签下拉：触发器是弹窗里唯一带 `ui-select__trigger` 类的按钮，可访问名 = 当前值。
+#
+# 为什么要它：用户报"建仓时选了标签，清仓时又变回分析"。标签是**本轮**的属性
+# （落库在 `tbl_billadm_stock_trade_round.tag`，清仓时写入），所以界面上应当是
+# "在建仓/加仓/减仓/清仓任何一个弹窗里改都行，之后开的下单弹窗沿用同一个值"。
+# ⚠ 不能复用 `Find-VisibleButton`：那个函数要求按钮**有可访问名**（无名的一律跳过），
+# 而标签触发器只在"当前值"上有名字、按类名找才稳（实测传 `-Name ''` 永远匹配不到）。
+function Find-TagTrigger { param($Window)
+    $windowRect = $Window.Current.BoundingRectangle
+    foreach ($element in @(Get-Elements $Window)) {
+        if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+        if ($element.Current.IsOffscreen) { continue }
+        $className = [string]$element.Current.ClassName
+        if (-not $className -or -not $className.Contains('ui-select__trigger')) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if (-not (Test-Rect $rect)) { continue }
+        if ($rect.Y -lt $windowRect.Y -or ($rect.Y + $rect.Height) -gt ($windowRect.Y + $windowRect.Height)) { continue }
+        return $element
+    }
+    return $null
+}
+
+function Select-TradeTag { param($Window, [string]$Value)
+    $trigger = $null
+    $deadline = (Get-Date).AddSeconds(10)
+    while (-not $trigger -and (Get-Date) -lt $deadline) {
+        $trigger = Find-TagTrigger -Window $Window
+        if (-not $trigger) { Start-Sleep -Milliseconds 400 }
+    }
+    if (-not $trigger) { return $false }
+    $rect = $trigger.Current.BoundingRectangle
+    [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
+    Start-Sleep -Milliseconds 200
+    [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    Start-Sleep -Milliseconds 800
+    $option = Wait-Element -Root $Window -Name $Value -TimeoutSec 8
+    if (-not $option) { return $false }
+    $optionRect = $option.Current.BoundingRectangle
+    [TrUia]::Click([int]($optionRect.X + $optionRect.Width / 2), [int]($optionRect.Y + $optionRect.Height / 2))
+    Start-Sleep -Milliseconds 800
+    $after = Find-TagTrigger -Window $Window
+    return [bool]($after -and $after.Current.Name -eq $Value)
+}
+
+function Get-TradeTagValue { param($Window)
+    $trigger = Find-TagTrigger -Window $Window
+    if ($trigger) { return $trigger.Current.Name }
+    return ''
+}
 # 提交一笔委托：点开弹窗（**重试到出现标题为止**，因为持仓卡片/按钮会随重渲染换元素）→
 # 填价格与手数 → 点弹窗确认（与页面入口同名时取最后一个）。
 function Submit-Trade {
@@ -458,7 +507,8 @@ function Get-ModalEdits { param($Window, [string]$ModalTitle)
     return @($edits | Sort-Object Y | ForEach-Object { $_.Element })
 }
 function Add-Position {
-    param($Window, [string]$Code, [string]$Name, [string]$Price, [string]$Lots, [datetime]$Date)
+    param($Window, [string]$Code, [string]$Name, [string]$Price, [string]$Lots, [datetime]$Date,
+        [string]$Tag)
     $opened = $false
     for ($attempt = 1; $attempt -le 3 -and -not $opened; $attempt++) {
         Invoke-Element (Wait-Element -Root $Window -Name '建仓') | Out-Null
@@ -487,6 +537,9 @@ function Add-Position {
     # 重建现场时必须与第 1 步选的是同一天，否则"轮次 opened_at = 建仓成交时间"会红。
     if ($PSBoundParameters.ContainsKey('Date')) {
         Select-TradeDate -Window $Window -Date $Date | Out-Null
+    }
+    if ($Tag) {
+        Assert-True (Select-TradeTag -Window $Window -Value $Tag) "建仓弹窗里把交易标签选成「$Tag」"
     }
     Start-Sleep -Milliseconds 800
     $buttons = Find-All $Window '建仓'
@@ -523,6 +576,8 @@ $buyPrice = '100'
 $buyLots = '3'
 $reducePrice = '120'
 $closePrice = '130'
+# 本轮的交易标签（在建仓弹窗里选，清仓时应当沿用 —— 用户报过"清仓时总是分析"）
+$roundTag = '打板'
 
 $process = $null
 try {
@@ -823,7 +878,8 @@ try {
     Assert-True ($survivors.Count -eq 0) "删除委托后我们那条资金记录也被回放掉了（残留 $($survivors.Count) 条）"
 
     # 重新建仓，供 5/5 的减仓/清仓使用（**沿用第 1 步选的委托日期**：轮次的 opened_at 就是它）
-    Assert-True (Add-Position -Window $window -Code $code -Name $name -Price $buyPrice -Lots $buyLots -Date $tradeDate) '重新建仓 3 手 @ 100'
+    Assert-True (Add-Position -Window $window -Code $code -Name $name -Price $buyPrice -Lots $buyLots -Date $tradeDate -Tag $roundTag) `
+        "重新建仓 3 手 @ 100（交易标签选「$roundTag」）"
     Start-Sleep -Seconds 2
     $posRebuilt = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
@@ -890,6 +946,11 @@ try {
     $closeOpened = [bool](Wait-Element -Root $window -Name '委托清仓' -TimeoutSec 10)
     Assert-True $closeOpened '弹窗「委托清仓」已打开'
     if ($closeOpened) {
+        # 清仓弹窗的标签必须**沿用本轮在建仓时选的那个**：标签是本轮的属性，清仓时才落库。
+        # 这里以前一律被重置成账本默认值「分析」，于是"建仓选了打板、清仓落成分析"。
+        $prefilledTag = Get-TradeTagValue -Window $window
+        Assert-True ($prefilledTag -eq $roundTag) `
+            "清仓弹窗沿用本轮标签「$roundTag」（实际 '$prefilledTag'）"
         $lotsInput = Wait-EditLike -Root $window -Pattern '手数'
         $prefilled = ''
         $valuePattern = $null
@@ -938,6 +999,8 @@ try {
             }
             Assert-True ($newRound.round_no -eq ($roundsBefore.Count + 1)) `
                 "轮次序号 = $($roundsBefore.Count + 1)（实际 $($newRound.round_no)）"
+            Assert-True ($newRound.tag -eq $roundTag) `
+                "轮次的交易标签 = 清仓时用的「$roundTag」（实际 '$($newRound.tag)'）"
             # 建仓 / 减仓 / 清仓 三笔都挂到这一轮（归档是"回填"未挂接的成交）
             foreach ($tradeId in @($openTrade.id, $reduceTrade.id, $closeTrade.id)) {
                 if (-not $tradeId) { continue }

@@ -1180,7 +1180,14 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
             },
         )]);
         trade_date.set(today_ymd());
-        trade_tag.set(default_tag.get_untracked());
+        // 「交易标签」是**本轮**的属性（落库在 `tbl_billadm_stock_trade_round.tag`，
+        // 清仓时写入）。所以这里不能每次都用账本默认值覆盖：
+        // * 建仓 = 开新的一轮 → 回到默认标签；
+        // * 加仓 / 减仓 / 清仓 = 就着现有持仓 → 沿用这一轮已经选过的那个（没选过才用默认）。
+        // 以前一律重置成默认值，于是"建仓时选了打板，清仓时又变回分析"。
+        if next_type == "open" || trade_tag.get_untracked().is_empty() {
+            trade_tag.set(default_tag.get_untracked());
+        }
         trade_open.set(true);
     };
 
@@ -1219,11 +1226,9 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         if submit_type == "reduce" && available > 0 && total_lots == available {
             submit_type = "close".to_string();
         }
-        let tag = if submit_type == "close" {
-            trade_tag.get_untracked()
-        } else {
-            String::new()
-        };
+        // 四种委托都带上当前选中的标签：非清仓时它只用于"带到这一轮的下一次委托"
+        // （服务层只把它写进轮次，见 `close_round`），清仓时它落成轮次标签。
+        let tag = trade_tag.get_untracked();
         let trade_time = crate::time::ymd_to_seconds(&trade_date.get_untracked())
             .unwrap_or_else(crate::time::now_seconds);
         trade_mutating.set(true);
@@ -1814,7 +1819,6 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                 trade_date,
                 trade_tag,
                 tags,
-                default_tag,
                 fee_settings,
                 trade_mutating,
                 UnsyncCallback::new(move |code: String| {
@@ -2231,7 +2235,6 @@ fn trade_modal(
     date: RwSignal<String>,
     tag: RwSignal<String>,
     tags: RwSignal<Vec<String>>,
-    default_tag: RwSignal<String>,
     fee_settings: RwSignal<Option<StockFeeSetting>>,
     mutating: RwSignal<bool>,
     on_code_blur: UnsyncCallback<String>,
@@ -2471,16 +2474,6 @@ fn trade_modal(
                     />
                 </div>
             </div>
-            <p class="stock-trade-form__hint">
-                {move || {
-                    let default = default_tag.get();
-                    if default.is_empty() {
-                        "清仓时需选择交易标签".to_string()
-                    } else {
-                        format!("清仓时默认使用标签「{default}」")
-                    }
-                }}
-            </p>
         </Modal>
     }
     .into_any()

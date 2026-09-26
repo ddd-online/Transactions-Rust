@@ -751,12 +751,6 @@
   color: var(--transactions-color-text-tertiary);
 }
 
-.stock-trade-form__hint {
-  margin: var(--transactions-space-xs) 0 0;
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-tertiary);
-}
-
 .stock-trade-edit__head {
   display: flex;
   align-items: center;
