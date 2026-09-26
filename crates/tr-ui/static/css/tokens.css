@@ -187,6 +187,13 @@
   --transactions-transition-normal: 200ms ease;
   --transactions-transition-slow: 300ms ease;
   --transactions-transition-smooth: 300ms cubic-bezier(0.25, 1, 0.5, 1);
+  /* 动效语言（DESIGN.md「Motion」）——两个"落位"节拍共用下面那条 expo 曲线：
+   *   enter  = 面板/消息进场：位移小、200ms，弹窗/抽屉/下拉/气泡/通知都用它；
+   *   settle = 内容区落位：整块内容进来一次（每次切页/子功能），位移大一点、320ms
+   *            （"数据自己落定"那一拍留给曲线描线，见 DESIGN.md「Motion」）。
+   * 遮罩与背板只做透明度（`tr-fade-in`）：全屏层做位移会读成"窗口在动"。 */
+  --transactions-transition-enter: 200ms var(--transactions-ease-out-expo);
+  --transactions-transition-settle: 320ms var(--transactions-ease-out-expo);
 
   /* ---------- Button ---------- */
   --transactions-btn-height-sm: 28px;

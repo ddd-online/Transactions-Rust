@@ -401,6 +401,11 @@
   font-weight: var(--transactions-weight-medium);
 }
 
+/* 按下时下沉 1px（与 `.ui-btn` / `.page-rail-btn` 同一档）：桌面端点击没有原生按压反馈 */
+.nav-btn:active {
+  transform: translateY(1px);
+}
+
 .nav-btn:focus-visible {
   outline: 2px solid var(--transactions-color-primary);
   outline-offset: 2px;
@@ -548,7 +553,8 @@
   font-size: var(--transactions-size-text-body);
   color: var(--transactions-color-text-major);
   pointer-events: auto;
-  animation: tr-fade-in var(--transactions-transition-normal);
+  /* 消息是"面板"不是"遮罩"：与弹窗同一个进场节拍 */
+  animation: tr-rise-in var(--transactions-transition-enter);
 }
 
 .notice-notification {
@@ -561,7 +567,7 @@
   background-color: var(--transactions-color-elevated);
   box-shadow: var(--transactions-shadow-lg);
   pointer-events: auto;
-  animation: tr-fade-in var(--transactions-transition-normal);
+  animation: tr-rise-in var(--transactions-transition-enter);
 }
 
 .notice-message__icon,
@@ -708,7 +714,8 @@
   cursor: pointer;
   color: var(--transactions-color-icon);
   transition: background-color var(--transactions-transition-fast),
-    color var(--transactions-transition-fast);
+    color var(--transactions-transition-fast),
+    transform var(--transactions-transition-fast);
 }
 
 .page-rail-btn:hover {
@@ -719,6 +726,11 @@
 .page-rail-btn.is-active {
   background-color: var(--transactions-color-active-bg);
   color: var(--transactions-color-primary);
+}
+
+/* 与侧栏 `.nav-btn` 同一档按压反馈 */
+.page-rail-btn:active {
+  transform: translateY(1px);
 }
 
 .page-rail-btn:focus-visible {
@@ -785,6 +797,19 @@
   display: flex;
   flex-direction: column;
   overflow: auto;
+}
+
+/* **内容区落位**：页面容器进来时落位一次（8px + 淡入，320ms expo）——
+ * 这是"切页/切子功能"的连续性：内容整块到位，而不是硬切。
+ *
+ * 挂在这里而不是挂在每个区块上：切页 / 切子功能时换掉的是 `.page-content` 的**子节点**，
+ * 所以"每页一次"是天然成立的；同一页内刷新数据、翻页、筛选都不会重播（子节点没换）。
+ * 页面里的曲线自带描线动画（charts-rs 的 `AnimationConfig`，620ms），那是"数据落定"那一拍，
+ * 不要再往图表上叠第二套进场。
+ *
+ * 不写 `animation-fill-mode: both`：默认态就是终态，动画没跑起来也不会把内容藏住。 */
+.page-content > * {
+  animation: tr-settle var(--transactions-transition-settle);
 }
 
 /* 页面容器。**顶部不留内边距**：页头（顶部容器）必须从窗口顶端开始，

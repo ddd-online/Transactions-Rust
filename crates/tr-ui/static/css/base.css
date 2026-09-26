@@ -325,9 +325,26 @@ textarea,
 
 /* ============================================
  * 6. 动画
+ *
+ * 三个节拍，一个曲线（`--transactions-ease-out-expo`，指数 ease-out）：
+ *   tr-fade-in  —— 遮罩/背板：**只做透明度**（全屏层做位移会读成"窗口在动"）；
+ *   tr-rise-in  —— 面板与消息进场（弹窗/抽屉/下拉/气泡/通知），4px 落位；
+ *   tr-settle   —— 内容区落位：整块内容进来一次（每次切页/切子功能），8px 落位
+ *                  （"数据自己落定"那一拍是曲线描线，见 DESIGN.md「Motion」）。
+ * 三者都不写 `animation-fill-mode: both`：默认态就是终态，动画没跑成也不会把内容藏起来。
  * ============================================ */
 
 @keyframes tr-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes tr-rise-in {
   from {
     opacity: 0;
     transform: translateY(4px);
@@ -335,7 +352,19 @@ textarea,
 
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
+  }
+}
+
+@keyframes tr-settle {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 

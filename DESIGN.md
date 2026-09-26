@@ -231,6 +231,24 @@ Light layering: surfaces separate by tone and 1px hairline borders; shadows are 
 
 **The Hairline Layering Rule.** Separate surfaces with tone and a 1px hairline first; add shadows only when a surface actually needs to lift (hover, popover, modal).
 
+## Motion
+
+Motion here is structural, not decorative: it says where a surface came from, that a change landed, or that a press was received. One curve carries all of it — exponential ease-out (`cubic-bezier(0.16, 1, 0.3, 1)`, `--transactions-ease-out-expo`), never bounce or elastic, and exits are instant (nothing waits for a closing animation).
+
+| Beat | Applies to | Travel | Duration |
+|---|---|---|---|
+| **Enter** | panels and messages: modal, drawer, select / popconfirm / date-time panels, notices | 4px (drawer 24px sideways) | 200ms (`--transactions-transition-enter`) |
+| **Settle** | the whole content area when a page or sub-function lands — once per mount, never per section | 8px | 320ms (`--transactions-transition-settle`) |
+| **Draw the data** | the self-drawn chart's line and area draw (charts-rs `AnimationConfig`, 620ms + 60ms delay) | — | the surface's one authored moment |
+
+**The Two Kinds of Arrival.** Masks and backdrops only fade (`tr-fade-in`, opacity alone) — a full-screen layer that moves reads as the window moving. Panels and messages rise 4px (`tr-rise-in`); a whole content area settles 8px (`tr-settle`). Both keyframes end at their natural state and use no fill-mode, so content is visible even if the animation never runs.
+
+**The Press Rule.** Desktop clicks have no native press feedback, so buttons, icon buttons and both navigations sink 1px within the 150ms feedback band (`--transactions-transition-fast`). Hover, selected, and switch-handle transitions keep their existing timings. Nothing animates a layout-driving property; the two documented exceptions remain the sub-function rail's `grid-template-columns` collapse and the progress bar's width.
+
+**Budget.** Only transform, opacity, color and shadow animate; no scroll-driven motion, no parallax, no looping animation outside loading states, and loaders stop when their surface unmounts.
+
+**Reduced motion.** `prefers-reduced-motion: reduce` collapses every beat to an instant state change (the global cap in `base.css`), so focus, colour and state still land — and the chart's dash-offset draw is explicitly reset so a line can never stay hidden.
+
 ## Shapes
 
 Gently curved, consistent radii: 6px for tags and dropdown items, 8px for buttons, inputs, and menus, 12px for cards, popovers, and messages, 16px for modals and drawers, 9999px for switches and pills, and 20px for chat bubbles. Borders are always hairlines — never heavy outlines.

@@ -84,6 +84,13 @@
   border-color: var(--transactions-color-primary-active);
 }
 
+/* 按下即确认：1px 的下沉。
+ * 桌面端鼠标点击没有原生的按压反馈（触屏有），所以"点到了没有"要靠这一条 ——
+ * 100~150ms 档就是为它准备的；用 `translateY` 而不是改 padding，不牵动布局。 */
+.ui-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 /* ---- secondary：描边次要按钮 ----
  * 不透明表面色（而非透明）：避免悬浮卡片/内容区时透出卡片灰背景。 */
 .ui-btn--secondary {
@@ -206,6 +213,11 @@
 .ui-icon-btn:hover:not(:disabled) {
   background-color: var(--transactions-color-hover-bg);
   color: var(--transactions-color-icon-hover);
+}
+
+/* 图标按钮与主按钮同一档按压反馈 */
+.ui-icon-btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .ui-icon-btn:focus-visible {
@@ -492,6 +504,8 @@
   /* 4px（`space-xs`）：2px 在 150% 缩放下几乎看不出来（实测看不出间隔），
    * 4px 才稳定读成两块 —— 与面板自身的 4px 内边距同档，节奏也一致。 */
   gap: var(--transactions-space-xs);
+  /* 面板落位：与弹窗/抽屉同一个节拍（`tr-rise-in` + enter 令牌） */
+  animation: tr-rise-in var(--transactions-transition-enter);
 }
 
 .ui-select__search {
@@ -567,6 +581,9 @@
    * body 有内边距，没有任何子元素会画到圆角外。 */
   overflow: visible;
   box-shadow: var(--transactions-shadow-xl);
+  /* 弹窗本体的落位：遮罩只淡入（`tr-fade-in`），面板自己 4px 落定 ——
+   * 原来只有遮罩有动画，面板是硬切进来的，观感上像"没画完就出现了"。 */
+  animation: tr-rise-in var(--transactions-transition-enter);
 }
 
 /* 弹窗宽度三档（对应 `ModalSize`）。**新弹窗只用这三档**，别写裸像素：
@@ -1026,6 +1043,10 @@
  * 于是"账户/持仓/成交记录/交易统计"四个分栏顶部都多出一条间隔。 */
 .ui-tab-pane {
   padding: 0;
+  /* 页签切换 = 面板落位：`TabPane` 是 `Show` 语义（非激活时不渲染），所以每次切页签
+   * 都会重挂一次、动画自然重播 —— 与弹窗/下拉同一个节拍，比硬切多一层"这块换过了"。
+   * 用 enter（4px）而不是页面级的 settle（8px）：它是页面内部的一次局部更换。 */
+  animation: tr-rise-in var(--transactions-transition-enter);
 }
 
 /* ============================================
@@ -1176,6 +1197,7 @@
   /* DESIGN.md「Shapes」：popover / message 用 12px 圆角（菜单类仍是 8px） */
   border-radius: var(--transactions-radius-lg);
   box-shadow: var(--transactions-shadow-lg);
+  animation: tr-rise-in var(--transactions-transition-enter);
 }
 
 .ui-popconfirm--end .ui-popconfirm__panel {
@@ -1359,7 +1381,8 @@
   background-color: var(--transactions-color-major-background);
   border-left: 1px solid var(--transactions-color-window-border);
   box-shadow: var(--transactions-shadow-xl);
-  animation: ui-drawer-in var(--transactions-transition-normal);
+  /* 与弹窗同一个节拍：抽屉横向走 24px，曲线与时长都取 enter 令牌 */
+  animation: ui-drawer-in var(--transactions-transition-enter);
 }
 
 .ui-drawer__header {
@@ -1630,6 +1653,7 @@
   border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-lg);
   box-shadow: var(--transactions-shadow-lg);
+  animation: tr-rise-in var(--transactions-transition-enter);
 }
 
 .ui-date-picker__panel {
@@ -1934,6 +1958,7 @@
   border-radius: var(--transactions-radius-md);
   background-color: var(--transactions-color-elevated);
   box-shadow: var(--transactions-shadow-lg);
+  animation: tr-rise-in var(--transactions-transition-enter);
 }
 
 /* 面板内嵌的区间选择器：去掉自带的下拉定位，直接作为面板内容 */
