@@ -215,9 +215,14 @@
   color: var(--transactions-color-icon-hover);
 }
 
-/* 图标按钮与主按钮同一档按压反馈 */
+/* 图标按钮与主按钮同一档按压反馈。
+ * 这里用 `translate` 而不是 `transform`：图标按钮里有靠 `transform: translateY(-50%)` 定位的
+ * （右栏把手、账本菜单里的删除键），写成 `transform` 会把它整个顶掉 —— 按下那一瞬间按钮位移
+ * 十几像素，鼠标抬起就落到按钮外，click 事件根本不触发（现象是"这个按钮点不动"）。
+ * `translate` 与 `transform` 是两个独立属性、按 translate→rotate→scale→transform 叠加，
+ * 定位因此保得住，1px 下沉照旧。 */
 .ui-icon-btn:active:not(:disabled) {
-  transform: translateY(1px);
+  translate: 0 1px;
 }
 
 .ui-icon-btn:focus-visible {

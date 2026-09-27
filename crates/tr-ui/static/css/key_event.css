@@ -127,6 +127,16 @@
 
 .key-event-rail-toggle:hover:not(:disabled) {
   box-shadow: var(--transactions-shadow-md);
+  /* 底**不换**：`.ui-icon-btn--bordered` 的悬停底是半透明的 `--hover-bg`，而这颗药丸正骑在
+   * 右栏的左边线上 —— 半透明的圆会把那条线从里面透出来。反馈交给发丝色与投影。 */
+  background-color: var(--transactions-color-major-background);
+  border-color: var(--transactions-color-border-l2);
+}
+
+/* 这一颗不要按压反馈：它自己靠 `translateY(-50%)` 定位，任何按下位移都会让它看起来"跳"一下
+ * （48px 高的药丸按 1px 下沉，读起来是整颗歪了）。 */
+.key-event-rail-toggle:active:not(:disabled) {
+  translate: none;
 }
 
 /* 收起后竖线没了，把手贴到版心右缘（`- 8px` 内缩，不贴死窗口边） */
