@@ -24,33 +24,92 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\TrUia.ps1')
 
-# 右栏（关联交易）把手：点到**状态真的变了**为止，两种点法都试。
+# 右栏（关联交易）把手：点到**状态真的变了**为止，几种点法都试。
 #
-# 这一条原先偶发红（收起没生效 / 展开没生效各见过一次），两个成因各修一半：
-#   * 真实鼠标点在**别的窗口**上：脚本在后台跑时测试窗口被盖住，点三次都白点
-#     （实测截图：窗口右半边被 Codex 窗口压着，把手正好在压着的区域里）→ 先置前台再点；
-#   * `InvokePattern` 对**刚渲染出来**的元素有时不生效（AGENTS 记过：dev-shot 切侧栏
-#     因此改用真实鼠标）→ 真实鼠标之后再用它兜底一次。
+# 这一条以各种面目偶发红过（收起没生效 / 展开没生效都见过），拆出来四个成因，各自的对策：
+#   1. **按下与抬起之间不留时间**（真凶）：把手有 1px 按压下沉，`[TrUia]::Click` 零间隔的
+#      down/up 会让 up 落在按钮外 → 见 `Click-RailHandle`（带 80ms 间隔）；
+#   2. **`title` 提示与把手同名**：指针停在把手上时提示冒出来，按名字取第一个会取到那条
+#      132x38 的窄条提示（把手是 36x73 的 Button），点它没反应 → 见 `Find-RailHandle`
+#      （只认 Button）+ 点之前先把指针挪开；
+#   3. 真实鼠标点**别的窗口**上：脚本在后台跑时窗口被盖住（实测截图：窗口右半边压着 Codex），
+#      收起态的把手正好在窗口右缘 → 先置前台 + 写配置时把窗口钉在 (0,0)（见写配置那段）；
+#   4. `InvokePattern` 对**刚渲染出来**的元素有时不生效（AGENTS 记过：dev-shot 切侧栏因此
+#      改用真实鼠标）→ 真实鼠标之后再用它兜底一次，另外补一条键盘路径（SetFocus + 空格）。
 # 判据落在配置与重启上，随便红一次都很误导，所以这里重试到状态真的变了为止。
 function Set-RailCollapsed {
     param($Window, [bool]$Collapsed, [int]$Tries = 3)
     $from = if ($Collapsed) { '收起关联交易' } else { '展开关联交易' }
     $to = if ($Collapsed) { '展开关联交易' } else { '收起关联交易' }
     for ($i = 1; $i -le $Tries; $i++) {
-        $handle = Wait-Element -Root $Window -Name $from -TimeoutSec 6
-        if (-not $handle) {
-            # 已经是目标状态（上一次点生效了，只是名字变化比断言慢）
-            if (Wait-Element -Root $Window -Name $to -TimeoutSec 2) { return $true }
-            continue
-        }
+        # 先置前台、再把指针挪开：窗口没激活时拿到的矩形点下去可能落在别处，
+        # 而指针停在把手上会冒出同名的 `title` 提示。
         [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
-        Start-Sleep -Milliseconds 250
-        Click-Element $handle | Out-Null
-        if (Wait-Element -Root $Window -Name $to -TimeoutSec 4) { return $true }
-        Invoke-Element $handle | Out-Null
-        if (Wait-Element -Root $Window -Name $to -TimeoutSec 4) { return $true }
+        [TrUia]::SetCursorPos(30, 30) | Out-Null
+        Start-Sleep -Milliseconds 350
+        for ($click = 1; $click -le 2; $click++) {
+            $handle = Find-RailHandle -Window $Window -Name $from -TimeoutSec 4
+            if (-not $handle) { break }
+            Click-RailHandle $handle | Out-Null
+            if (Wait-Element -Root $Window -Name $to -TimeoutSec 3) { return $true }
+            # 真实鼠标没生效 → 用键盘：先把焦点落到把手（SetFocus 不依赖命中测试），再按空格
+            try { $handle.SetFocus() } catch { }
+            Start-Sleep -Milliseconds 200
+            [System.Windows.Forms.SendKeys]::SendWait(' ')
+            if (Wait-Element -Root $Window -Name $to -TimeoutSec 3) { return $true }
+        }
+        # 已经是目标状态（上一次点生效了，只是名字变化比断言慢）
+        if (Wait-Element -Root $Window -Name $to -TimeoutSec 2) { return $true }
+        $handle = Find-RailHandle -Window $Window -Name $from -TimeoutSec 2
+        if ($handle) { Invoke-Element $handle | Out-Null }
+        if (Wait-Element -Root $Window -Name $to -TimeoutSec 3) { return $true }
     }
     return $false
+}
+
+# 点把手：按下与抬起之间留 80ms。
+# `[TrUia]::Click` 是零间隔的 down/up，而把手按下时会下沉 1px（全站的按压反馈）——
+# down 之后元素挪了位置，up 可能落在按钮外，click 事件根本不触发。
+# 实测：不带间隔的那版 6 次里红 4 次（红的判据是配置没写进去、把手名字没变），
+# 带间隔的这版连过 4 次。dev-shot 的 Click 本来也是带间隔的，这里沿用同一做法。
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class TrKeRail {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+  public static void Click(int x, int y) {
+    SetCursorPos(x, y); System.Threading.Thread.Sleep(80);
+    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(80);
+    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+  }
+}
+'@ -Language CSharp -ErrorAction SilentlyContinue
+
+function Click-RailHandle { param($Element)
+    if (-not $Element) { return $false }
+    $rect = $Element.Current.BoundingRectangle
+    if (-not (Test-Rect $rect)) { return $false }
+    [TrKeRail]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    return $true
+}
+
+# 右栏把手：**只认 Button** —— `title` 提示与它同名（提示是 132x38 的窄条，把手是 36x73），
+# 按名字取第一个会取到提示，点它点不动（实测就是这么红的）。
+function Find-RailHandle {
+    param($Window, [string]$Name, [int]$TimeoutSec = 5)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $candidate = @($Window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)))) |
+            Where-Object {
+                $_.Current.ControlType.ProgrammaticName -eq 'ControlType.Button' -and
+                (Test-Rect $_.Current.BoundingRectangle)
+            } | Select-Object -First 1
+        if ($candidate) { return $candidate }
+        Start-Sleep -Milliseconds 300
+    }
+    return $null
 }
 
 $repo = Split-Path -Parent $PSScriptRoot
@@ -167,7 +226,9 @@ if (-not (Test-Path (Join-Path $ws 'transactions.db'))) {
     Write-Host "[ke] 播种工作空间: $ws" -ForegroundColor Cyan
 }
 
-@{ width = 1500; height = 950; workspaceDir = $ws; closeBehavior = 'quit'
+# `x`/`y` 钉在 (0,0)：收起态的右栏把手贴在窗口右缘，而本机屏幕右侧常年停着别的窗口
+# （Codex），窗口靠右时把手正好被压住（见 Set-RailCollapsed 的注释）。
+@{ width = 1500; height = 950; x = 0; y = 0; workspaceDir = $ws; closeBehavior = 'quit'
    appearance = 'light'; smokeTestMarker = 'ui-key-event.ps1' } |
     ConvertTo-Json | Set-Content -Path (Join-Path $smokeHome '.transactions.json') -Encoding UTF8
 
