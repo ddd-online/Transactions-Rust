@@ -22,6 +22,7 @@ pub mod quote;
 pub mod stock;
 pub mod stock_statistics;
 pub mod tag;
+pub mod todo;
 pub mod transaction_record;
 pub mod transaction_template;
 

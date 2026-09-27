@@ -308,6 +308,65 @@ pub struct StockArchiveRequest {
     pub name: String,
 }
 
+// ================================================================ 待办
+
+/// 新建待办卡片（只要一个主题名；空由命令层报 `请输入卡片主题`）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TodoCardCreateRequest {
+    #[serde(alias = "ledgerId")]
+    pub ledger_id: String,
+    pub title: String,
+}
+
+/// 新建待办事项。`urgency` / `importance` 是 -5..=5；日期是日粒度 `YYYY-MM-DD`（可为空串）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TodoItemCreateRequest {
+    #[serde(alias = "ledgerId")]
+    pub ledger_id: String,
+    pub card_id: String,
+    pub title: String,
+    pub start_date: String,
+    pub due_date: String,
+    pub urgency: i32,
+    pub importance: i32,
+}
+
+/// 编辑待办事项（状态不在这里改，见 [`TodoItemStatusRequest`]）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TodoItemUpdateRequest {
+    #[serde(alias = "ledgerId")]
+    pub ledger_id: String,
+    pub id: String,
+    pub title: String,
+    pub start_date: String,
+    pub due_date: String,
+    pub urgency: i32,
+    pub importance: i32,
+}
+
+/// 改状态：`doing` / `done`（改 `done` 会写完成时刻，改回 `doing` 会清掉）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TodoItemStatusRequest {
+    #[serde(alias = "ledgerId")]
+    pub ledger_id: String,
+    pub id: String,
+    pub status: String,
+}
+
+/// 追加一条进度记录。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TodoProgressCreateRequest {
+    #[serde(alias = "ledgerId")]
+    pub ledger_id: String,
+    pub item_id: String,
+    pub content: String,
+}
+
 /// 数值参数：界面可能传数字字符串（`"2"`）也可能直接传数字（`2`），两种形态都接受。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -527,7 +586,7 @@ pub struct SetKeyEventLinkedOpenRequest {
 /// 功能开关：哪些顶级功能在侧边栏出现。
 ///
 /// **默认全开**：老配置里没有 `features` 这个键、或外壳漏发该字段时，
-/// 四个功能照常显示（缺少个别字段同理）。
+/// 五个功能照常显示（缺少个别字段同理）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FeatureFlags {
@@ -540,6 +599,8 @@ pub struct FeatureFlags {
     pub key_event: bool,
     /// 日记
     pub diary: bool,
+    /// 待办
+    pub todo: bool,
 }
 
 impl Default for FeatureFlags {
@@ -556,6 +617,7 @@ impl FeatureFlags {
             stock: true,
             key_event: true,
             diary: true,
+            todo: true,
         }
     }
 
@@ -566,6 +628,7 @@ impl FeatureFlags {
             "stock" => self.stock,
             "keyEvent" => self.key_event,
             "diary" => self.diary,
+            "todo" => self.todo,
             _ => return None,
         })
     }
@@ -577,6 +640,7 @@ impl FeatureFlags {
             "stock" => self.stock = enabled,
             "keyEvent" => self.key_event = enabled,
             "diary" => self.diary = enabled,
+            "todo" => self.todo = enabled,
             _ => return false,
         }
         true

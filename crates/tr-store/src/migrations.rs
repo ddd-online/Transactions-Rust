@@ -74,6 +74,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20260925_stock_operation_log",
         apply: stock_operation_log,
     },
+    Migration {
+        id: "20260928_todo_tables",
+        apply: todo_tables,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -283,6 +287,59 @@ fn stock_operation_log(conn: &Connection) -> MigrateResult {
     if !index_exists(conn, "idx_tbl_billadm_stock_operation_ledger").map_err(stringify)? {
         conn.execute_batch(
             "CREATE INDEX `idx_tbl_billadm_stock_operation_ledger` ON `tbl_billadm_stock_operation`(`ledger_id`,`created_at`);",
+        )
+        .map_err(stringify)?;
+    }
+    Ok(())
+}
+
+/// `20260928_todo_tables` —— 新增「待办」的三张表（卡片 / 事项 / 进度记录）。
+///
+/// 与「股票操作记录」同一种形状：**纯新增**，不碰任何既有表、不回填数据
+/// （升级之前本来就没有待办数据）。
+///
+/// ⚠ 这里的 DDL 必须与 `fixtures/schema/fresh.sql` 里那几条**逐字节相同**：
+/// 升级出来的库与新建的库在 `.schema` 层面要完全一致，否则两条建库路径会分叉。
+fn todo_tables(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_todo_card").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE TABLE `tbl_billadm_todo_card` (`id` text,`ledger_id` varchar(36) DEFAULT \"\",`title` varchar(200) NOT NULL DEFAULT \"\",`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));",
+        )
+        .map_err(stringify)?;
+    }
+    if !index_exists(conn, "idx_tbl_billadm_todo_card_ledger").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE INDEX `idx_tbl_billadm_todo_card_ledger` ON `tbl_billadm_todo_card`(`ledger_id`,`created_at`);",
+        )
+        .map_err(stringify)?;
+    }
+    if !table_exists(conn, "tbl_billadm_todo_item").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE TABLE `tbl_billadm_todo_item` (`id` text,`ledger_id` varchar(36) DEFAULT \"\",`card_id` varchar(36) DEFAULT \"\",`title` varchar(500) NOT NULL DEFAULT \"\",`start_date` varchar(10) NOT NULL DEFAULT \"\",`due_date` varchar(10) NOT NULL DEFAULT \"\",`urgency` integer NOT NULL DEFAULT 0,`importance` integer NOT NULL DEFAULT 0,`status` varchar(16) NOT NULL DEFAULT \"doing\",`completed_at` integer NOT NULL DEFAULT 0,`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));",
+        )
+        .map_err(stringify)?;
+    }
+    if !index_exists(conn, "idx_tbl_billadm_todo_item_card").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE INDEX `idx_tbl_billadm_todo_item_card` ON `tbl_billadm_todo_item`(`ledger_id`,`card_id`,`status`);",
+        )
+        .map_err(stringify)?;
+    }
+    if !index_exists(conn, "idx_tbl_billadm_todo_item_status").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE INDEX `idx_tbl_billadm_todo_item_status` ON `tbl_billadm_todo_item`(`ledger_id`,`status`,`completed_at`);",
+        )
+        .map_err(stringify)?;
+    }
+    if !table_exists(conn, "tbl_billadm_todo_progress").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE TABLE `tbl_billadm_todo_progress` (`id` text,`ledger_id` varchar(36) DEFAULT \"\",`item_id` varchar(36) DEFAULT \"\",`content` varchar(2000) NOT NULL DEFAULT \"\",`created_at` integer NOT NULL,PRIMARY KEY (`id`));",
+        )
+        .map_err(stringify)?;
+    }
+    if !index_exists(conn, "idx_tbl_billadm_todo_progress_item").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE INDEX `idx_tbl_billadm_todo_progress_item` ON `tbl_billadm_todo_progress`(`ledger_id`,`item_id`,`created_at`);",
         )
         .map_err(stringify)?;
     }
@@ -541,6 +598,81 @@ mod tests {
         let again = apply_all(&mut conn, &dir).unwrap();
         assert!(again.is_empty());
         assert!(table_exists(&conn, "tbl_billadm_stock_operation").unwrap());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 待办：老库（三张表与登记行都没有）升级后表、索引、登记行都到位，别的表一个不动。
+    ///
+    /// 与股票「操作记录」那条同一种形状（纯新增），所以除了结构之外还要证明三件事：
+    /// ① 三张表的建表 SQL 与新建库**逐字节一致**；② 不碰别的表；③ 重复应用无副作用。
+    #[test]
+    fn todo_migration_adds_three_tables_without_touching_others() {
+        let dir = temp_dir("todo-tables");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        // 降级成"还没有待办三张表"的老格式
+        conn.execute_batch(
+            "DROP INDEX idx_tbl_billadm_todo_progress_item;
+             DROP TABLE tbl_billadm_todo_progress;
+             DROP INDEX idx_tbl_billadm_todo_item_card;
+             DROP INDEX idx_tbl_billadm_todo_item_status;
+             DROP TABLE tbl_billadm_todo_item;
+             DROP INDEX idx_tbl_billadm_todo_card_ledger;
+             DROP TABLE tbl_billadm_todo_card;
+             DELETE FROM tbl_billadm_schema_migration WHERE id = '20260928_todo_tables';",
+        )
+        .unwrap();
+        assert!(!table_exists(&conn, "tbl_billadm_todo_card").unwrap());
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(applied, vec!["20260928_todo_tables".to_string()]);
+
+        for table in [
+            "tbl_billadm_todo_card",
+            "tbl_billadm_todo_item",
+            "tbl_billadm_todo_progress",
+        ] {
+            assert!(table_exists(&conn, table).unwrap(), "{table} 应当被建出来");
+            // 升级库与新建库不允许分叉：建表 SQL 逐字节一致
+            let migrated: String = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let fresh: String = fresh_conn()
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(migrated, fresh, "{table} 的建表 SQL 与基线不一致");
+        }
+        for index in [
+            "idx_tbl_billadm_todo_card_ledger",
+            "idx_tbl_billadm_todo_item_card",
+            "idx_tbl_billadm_todo_item_status",
+            "idx_tbl_billadm_todo_progress_item",
+        ] {
+            assert!(index_exists(&conn, index).unwrap(), "{index} 应当被建出来");
+        }
+        assert!(pending(&conn).unwrap().is_empty());
+        crate::schema::validate_current(&conn).unwrap();
+
+        // 别的东西一个都没动
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM tbl_billadm_ledger", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+
+        // 重复应用：无待应用迁移、表还在
+        assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
+        assert!(table_exists(&conn, "tbl_billadm_todo_item").unwrap());
 
         std::fs::remove_dir_all(&dir).ok();
     }

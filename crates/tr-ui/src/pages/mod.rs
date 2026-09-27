@@ -8,6 +8,7 @@
 //! * [`stock`]：股票（账户 / 持仓 / 交易历史 / 交易统计 四个分栏）
 //! * [`key_event`]：事件（年份 + 事件列表 + 详情 + 图片 + 关联消费记录）
 //! * [`diary`]：日记管理（日期树 + 编辑器）
+//! * [`todo`]：待办（记录 / 历史 两个子功能；记录里分「待办视图」与「四象限图」）
 //! * [`settings`]：应用设置（4 个分栏）
 
 pub mod accounting;
@@ -18,6 +19,7 @@ pub mod key_event;
 pub mod settings;
 pub mod stock;
 pub mod templates;
+pub mod todo;
 pub mod transactions;
 
 pub use accounting::AccountingPage;
@@ -25,3 +27,4 @@ pub use diary::DiaryPage;
 pub use key_event::KeyEventPage;
 pub use settings::SettingsPage;
 pub use stock::StockPage;
+pub use todo::TodoPage;

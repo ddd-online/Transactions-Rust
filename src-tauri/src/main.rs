@@ -159,6 +159,17 @@ fn main() {
             tr_ipc::commands::stock_operation_list,
             tr_ipc::commands::stock_operation_preview,
             tr_ipc::commands::stock_operation_rollback,
+            // 待办：卡片 / 事项 / 进度记录
+            tr_ipc::commands::todo_cards,
+            tr_ipc::commands::todo_history,
+            tr_ipc::commands::todo_card_create,
+            tr_ipc::commands::todo_card_delete,
+            tr_ipc::commands::todo_item_create,
+            tr_ipc::commands::todo_item_update,
+            tr_ipc::commands::todo_item_status,
+            tr_ipc::commands::todo_item_delete,
+            tr_ipc::commands::todo_progress_add,
+            tr_ipc::commands::todo_progress_delete,
         ])
         .setup(|app| {
             let handle = app.handle();

@@ -566,6 +566,7 @@ fn FeatureSetting() -> impl IntoView {
         ("stock", "股票", "建仓、持仓、成交与资金记录、行情统计"),
         ("keyEvent", "事件", "关键事件与日记、交易的关联"),
         ("diary", "日记", "按账本隔离的纯文本日记，可导入导出 txt"),
+        ("todo", "待办", "卡片式待办、进度记录与四象限视图"),
     ]
     .into_iter()
     .map(|(key, title, description)| FeatureRow {

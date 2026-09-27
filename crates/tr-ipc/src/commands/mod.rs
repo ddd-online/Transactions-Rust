@@ -1,7 +1,7 @@
 //! IPC 命令实现。
 //!
 //! 命令按业务域分模块：`ledger` / `tr` / `category` / `tag` / `template` / `chart` /
-//! `key_event` / `diary` / `stock`。
+//! `key_event` / `diary` / `stock` / `todo`。
 //!
 //! 每个命令都用 `#[tauri::command]` 标注、接收 `tauri::State<'_, AppState>`，
 //! 由 `src-tauri` 的 `generate_handler![]` 集中注册（命令清单因此只在一处）。
@@ -14,6 +14,7 @@ pub mod ledger;
 pub mod stock;
 pub mod tag;
 pub mod template;
+pub mod todo;
 pub mod tr;
 
 pub use category::*;
@@ -24,6 +25,7 @@ pub use ledger::*;
 pub use stock::*;
 pub use tag::*;
 pub use template::*;
+pub use todo::*;
 pub use tr::*;
 
 use tr_domain::error::AppError;

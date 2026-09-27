@@ -15,7 +15,8 @@ use crate::{assets, ServiceError, ServiceResult};
 
 /// 删除账本时的级联清理顺序（**逐条固定**，新增业务表必须同步补进这个数组）：
 /// 交易标签 → 交易 → 分类 → 标签 → 图表 → 模板 → 关键事件图片 → 关键事件 → 日记
-/// → 股票（资金记录/费用设置/标签设置/交易/轮次/历史/持仓/账户）→ 账本本身。
+/// → 股票（资金记录/费用设置/标签设置/交易/轮次/历史/持仓/账户）→
+/// 待办（进度记录/事项/卡片）→ 账本本身。
 const LEDGER_CASCADE: &[&str] = &[
     "DELETE FROM tbl_billadm_transaction_record_tag WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_transaction_record WHERE ledger_id = ?1",
@@ -35,6 +36,9 @@ const LEDGER_CASCADE: &[&str] = &[
     "DELETE FROM tbl_billadm_stock_position WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_account WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_operation WHERE ledger_id = ?1",
+    "DELETE FROM tbl_billadm_todo_progress WHERE ledger_id = ?1",
+    "DELETE FROM tbl_billadm_todo_item WHERE ledger_id = ?1",
+    "DELETE FROM tbl_billadm_todo_card WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_ledger WHERE id = ?1",
 ];
 

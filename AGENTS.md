@@ -64,10 +64,11 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 |---|---|
 | `design-audit` | `tokens.css` 之外的硬编码颜色、令牌是否已定义、深浅主题 + `prefers-color-scheme` 兜底覆盖同一组令牌 |
 | `smoke` / `window-bounds` / `close-behavior` | 首启动与已配置两种窗口形态；逻辑尺寸 ↔ 物理尺寸与关闭写回；`quit` / `tray` / 「关闭选项」三种关闭行为 |
-| `ui-smoke` / `ui-shots` | 5 顶级 + 9 子功能逐页渲染（`-WriteFlow` 走真实记账，`-Discover` 导出每页元素清单用来维护脚本顶部的页面标记表）；位图补 UIA 看不见的"被裁掉/没画出来" |
+| `ui-smoke` / `ui-shots` | 6 顶级 + 11 子功能逐页渲染（`-WriteFlow` 走真实记账，`-Discover` 导出每页元素清单用来维护脚本顶部的页面标记表）；位图补 UIA 看不见的"被裁掉/没画出来" |
 | `ui-crud` / `ui-drag` | 分类/标签/图表/事件/模板的新增与删除；真实鼠标拖拽排序（含 `sort_order` 落库） |
 | `ui-transactions` / `ui-sync-ledger` | 记一笔/编辑/排序/筛选/模板；同步到其他账本（复制而非移动 + 气泡收起） |
 | `ui-stock` | 建仓 → 编辑 → 减仓 → 清仓 → 费用设置 → 统计 → 回滚 → 重置的完整生命周期（含真实行情） |
+| `ui-todo` | 待办：建卡片 → 加事项（紧急/重要）→ 记进度 → 四象限图 → 完成进历史（带主题名 + 进度弹窗）→ 退回 → 删卡片（级联清三张表） |
 | `ui-key-event` / `ui-link-event` | 事件任选日期建/upsert/删除；交易关联到某天（含懒创建空事件与解除） |
 | `ui-diary-edit` / `ui-diary-ledger` / `ui-diary-io` | 防抖自动保存/心情/预览；账本隔离；只认 `.txt` 的导入导出（原生选目录框；判据唯一：`tr-service/src/diary.rs` 的 `parse_diary_file_name`，扫描与 `import_file` 两侧共用） |
 | `ui-upload` | 图片按原字节落盘 + 缩略图 + `trasset://` 资产协议 |

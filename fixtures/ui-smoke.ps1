@@ -74,6 +74,8 @@ if ($sameExe) { throw "同一个可执行文件已有实例在运行（PID $($sa
 # 标记刻意选"页面结构/常驻控件"而不是随数据变化的文案，换工作空间也能过。
 $markers = [ordered]@{
     '股票' = @('账户', '持仓', '记录', '统计', '设置')
+    # 待办页默认子功能是「记录」：工具栏的两个分栏 + 主动作都在
+    '待办' = @('待办视图', '四象限图', '新建卡片')
     '事件' = @('新增事件', '上一年', '下一年')
     '日记' = @('今天', '全部展开', '全部收起', '心情')
     '应用设置' = @('工作空间', '外观', '关闭行为', '开发者工具')
@@ -108,6 +110,12 @@ $stockSubMarkers = [ordered]@{
     '记录' = @('已实现盈亏')
     '统计' = @('全部标签', '最近 N 笔')
     '设置' = @('交易费用设置', '交易标签')
+}
+
+# 待办页的子功能：与股票页同样单独维护（「记录」与记账/股票重名，只能按父页区分）。
+# 标记选**任何数据状态下都在**的：历史页用它的分节标题（空态与表格都在它下面）。
+$todoSubMarkers = [ordered]@{
+    '历史' = @('已完成的事项')
 }
 
 # 注：`FeaturePage` 的 `toolbar` 是**可选插槽**，没人用的页面整段不渲染（不留空发丝线）。
@@ -232,6 +240,9 @@ function Invoke-NavigationChecks {
     # 断言与点击仍用 `Run` 里的原名。
     foreach ($key in $stockSubMarkers.Keys) {
         $checks += [pscustomobject]@{ Name = "股票·$key"; Run = $key; Parent = '股票'; Markers = $stockSubMarkers[$key]; Sub = $true }
+    }
+    foreach ($key in $todoSubMarkers.Keys) {
+        $checks += [pscustomobject]@{ Name = "待办·$key"; Run = $key; Parent = '待办'; Markers = $todoSubMarkers[$key]; Sub = $true }
     }
 
     foreach ($check in $checks) {

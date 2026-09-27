@@ -25,7 +25,7 @@ use crate::components::ui::{
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
 use crate::notify::{Notice, NoticeKind, Notifier};
-use crate::pages::{AccountingPage, DiaryPage, KeyEventPage, SettingsPage, StockPage};
+use crate::pages::{AccountingPage, DiaryPage, KeyEventPage, SettingsPage, StockPage, TodoPage};
 use crate::store::{AppStores, APPEARANCE_SYSTEM};
 
 /// 页面（共 5 个顶级功能）。
@@ -42,28 +42,38 @@ pub enum Page {
     KeyEvent,
     /// 日记管理
     Diary,
+    /// 待办
+    Todo,
     /// 应用设置
     Settings,
 }
 
 impl Page {
     /// 侧边栏顺序（顺序即渲染顺序）。
-    pub const ALL: [Page; 5] = [
+    pub const ALL: [Page; 6] = [
         Page::Accounting,
         Page::Stock,
+        Page::Todo,
         Page::KeyEvent,
         Page::Diary,
         Page::Settings,
     ];
 
-    /// 侧边栏中除「设置」之外的 4 项（「设置」固定在最底部）。
-    pub const NAV_ITEMS: [Page; 4] = [Page::Accounting, Page::Stock, Page::KeyEvent, Page::Diary];
+    /// 侧边栏中除「设置」之外的 5 项（「设置」固定在最底部）。
+    pub const NAV_ITEMS: [Page; 5] = [
+        Page::Accounting,
+        Page::Stock,
+        Page::Todo,
+        Page::KeyEvent,
+        Page::Diary,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             // 顶级功能名与页面标题共用一个来源（见 accounting::PAGE_TITLE）
             Page::Accounting => crate::pages::accounting::PAGE_TITLE,
             Page::Stock => "股票",
+            Page::Todo => crate::pages::todo::PAGE_TITLE,
             Page::KeyEvent => "事件",
             Page::Diary => "日记",
             Page::Settings => "应用设置",
@@ -79,6 +89,7 @@ impl Page {
         match self {
             Page::Accounting => "/accounting_view",
             Page::Stock => "/stock_view",
+            Page::Todo => "/todo_view",
             Page::KeyEvent => "/key_event_view",
             Page::Diary => "/diary_view",
             Page::Settings => "/settings_view",
@@ -94,6 +105,8 @@ impl Page {
             // 比折线更贴切；折线留给了「持仓」子功能（见 `pages/stock.rs` 的 `StockSub::icon`）。
             Page::Accounting => Icon::Transaction,
             Page::Stock => Icon::Sliders,
+            // 「待办」用带勾的圆：勾就是这一页的动词（把一件事做完）
+            Page::Todo => Icon::CheckCircle,
             Page::KeyEvent => Icon::Star,
             Page::Diary => Icon::Read,
             Page::Settings => Icon::Setting,
@@ -110,6 +123,7 @@ impl Page {
         match self {
             Page::Accounting => "accounting",
             Page::Stock => "stock",
+            Page::Todo => "todo",
             Page::KeyEvent => "keyEvent",
             Page::Diary => "diary",
             Page::Settings => "",
@@ -245,6 +259,7 @@ pub fn App() -> impl IntoView {
                             {move || match current_page.get() {
                                 Page::Accounting => view! { <AccountingPage /> }.into_any(),
                                 Page::Stock => view! { <StockPage /> }.into_any(),
+                                Page::Todo => view! { <TodoPage /> }.into_any(),
                                 Page::KeyEvent => view! { <KeyEventPage /> }.into_any(),
                                 Page::Diary => view! { <DiaryPage /> }.into_any(),
                                 Page::Settings => view! { <SettingsPage /> }.into_any(),

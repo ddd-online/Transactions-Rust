@@ -19,9 +19,9 @@ use rusqlite::Connection;
 
 use crate::workspace::WorkspaceError;
 
-/// 当前空库 DDL：20 张表 + 22 个索引 + 5 条迁移登记记录。
+/// 当前空库 DDL：23 张表 + 25 个索引 + 6 条迁移登记记录。
 ///
-/// 末尾 5 条 INSERT 是迁移登记记录（那些迁移对空库都是空操作）：新建库直接就是当前格式，
+/// 末尾 6 条 INSERT 是迁移登记记录（那些迁移对空库都是空操作）：新建库直接就是当前格式，
 /// 不需要再跑迁移；保留这些登记行是为了让新建库与"升级到当前格式的库"在数据层面也一致
 /// （迁移引擎正是按这张表判断"还差哪几条"）。
 pub const FRESH_SCHEMA_SQL: &str = include_str!("../../../fixtures/schema/fresh.sql");
@@ -257,6 +257,31 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
             "created_at",
         ],
     ),
+    (
+        "tbl_billadm_todo_card",
+        &["id", "ledger_id", "title", "created_at", "updated_at"],
+    ),
+    (
+        "tbl_billadm_todo_item",
+        &[
+            "id",
+            "ledger_id",
+            "card_id",
+            "title",
+            "start_date",
+            "due_date",
+            "urgency",
+            "importance",
+            "status",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        ],
+    ),
+    (
+        "tbl_billadm_todo_progress",
+        &["id", "ledger_id", "item_id", "content", "created_at"],
+    ),
 ];
 
 /// 在空库上执行完整 DDL。仅在数据库文件**不存在**时调用。
@@ -333,7 +358,7 @@ mod tests {
     #[test]
     fn fresh_database_has_current_schema() {
         let conn = fresh_conn();
-        // 20 张表（19 张数据表 + 迁移登记表）
+        // 23 张表（22 张数据表 + 迁移登记表）
         let tables: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
@@ -341,8 +366,8 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(tables, 20);
-        // 22 个索引
+        assert_eq!(tables, 23);
+        // 26 个索引
         let indexes: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL",
@@ -350,7 +375,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(indexes, 22);
+        assert_eq!(indexes, 26);
         validate_current(&conn).unwrap();
     }
 
@@ -364,7 +389,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 5);
+        assert_eq!(count, 6);
         let order_id_indexes: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' \

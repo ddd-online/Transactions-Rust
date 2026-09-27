@@ -9,7 +9,9 @@
 pub mod core;
 pub mod diary;
 pub mod stock;
+pub mod todo;
 
 pub use core::*;
 pub use diary::*;
 pub use stock::*;
+pub use todo::*;

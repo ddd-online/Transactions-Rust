@@ -1,0 +1,446 @@
+/* =============================================================================
+ * todo.css —— 待办页（记录 / 历史）
+ *
+ * 这一页只有一种"面"：**卡片**（Paper + 发丝线 + 12px 圆角）。
+ * 事项行不再各自成卡，只用发丝线分隔；进度记录展开后是一块 Soft Gray 底的内嵌区
+ * （不是第二层卡片 —— 卡片里套卡片是这一页最容易读成"一堆盒子"的写法）。
+ *
+ * 颜色与间距一律走 `--transactions-*` 令牌；四象限图的四个底用**同一支色的四种深浅**
+ * 分档（浅 → 深 = 优先级低 → 高），不引入第二个强调色。
+ * ============================================================================= */
+
+/* ---------------- 版心骨架 ----------------
+ * `.page-content`(flex ✓) → `.todo-body`(flex ✓) → `.todo-pane`(flex ✓) → 滚动容器
+ * 少任何一级，卡片列就贴不到版心底部、四象限图也会按错误高度出图。 */
+.todo-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.todo-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 工具栏右侧的动作簇（工具栏本身两端对齐：页签在左、动作在右） */
+.todo-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+.todo-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-body);
+}
+
+/* ---------------- 待办视图：竖直排列的卡片 ---------------- */
+.todo-cards {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-md);
+  /* 顶部不留白：卡片列的起点与工具栏底边那条发丝线相接 */
+  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
+}
+
+.todo-card {
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-lg);
+  box-shadow: var(--transactions-shadow-sm);
+}
+
+.todo-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  padding: var(--transactions-space-md) var(--transactions-space-lg);
+  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+.todo-card__title {
+  margin: 0;
+  font-size: var(--transactions-size-text-section);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.todo-card__count {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.todo-card__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  /* 动作簇贴右：标题与计数留在左边 */
+  margin-left: auto;
+}
+
+.todo-card__empty {
+  margin: 0;
+  padding: var(--transactions-space-lg);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-tertiary);
+}
+
+/* ---------------- 事项行 ---------------- */
+.todo-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--transactions-space-md);
+  padding: var(--transactions-space-md) var(--transactions-space-lg);
+}
+
+.todo-item + .todo-item {
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+.todo-item:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+/* 勾选：方形描边按钮，悬停才亮主色（静置不与卡片抢注意力） */
+.todo-item__check {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--transactions-color-border-l3);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-major-background);
+  color: transparent;
+  cursor: pointer;
+  transition: color var(--transactions-transition-fast),
+    border-color var(--transactions-transition-fast),
+    background-color var(--transactions-transition-fast);
+}
+
+.todo-item__check svg {
+  width: 100%;
+  height: 100%;
+}
+
+.todo-item__check:hover {
+  border-color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-primary-tint);
+  color: var(--transactions-color-primary);
+}
+
+/* 按压反馈：与全站按钮同一档（用 `translate`，不要 `transform` —— 那会顶掉元素自己的定位） */
+.todo-item__check:active {
+  translate: 0 1px;
+}
+
+.todo-item__check:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.todo-item__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.todo-item__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-sm);
+  flex-wrap: wrap;
+}
+
+.todo-item__title {
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-major);
+  word-break: break-word;
+}
+
+.todo-item__levels {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  flex-wrap: wrap;
+}
+
+.todo-level {
+  padding: 1px var(--transactions-space-sm);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-caption);
+  white-space: nowrap;
+}
+
+.todo-item__dates {
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.todo-item__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-2xs);
+  flex-shrink: 0;
+}
+
+/* ---------------- 进度记录（展开区） ---------------- */
+.todo-progress {
+  margin-top: var(--transactions-space-sm);
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-minor-background);
+}
+
+.todo-progress__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+}
+
+.todo-progress__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-sm);
+}
+
+.todo-progress__time {
+  flex-shrink: 0;
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.todo-progress__text {
+  flex: 1;
+  min-width: 0;
+  color: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-body-sm);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.todo-progress__empty {
+  margin: 0;
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-caption);
+}
+
+.todo-progress__add {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-sm);
+}
+
+.todo-progress__add > *:first-child {
+  flex: 1;
+}
+
+/* ---------------- 四象限图 ---------------- */
+.todo-quadrant {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
+}
+
+.todo-quadrant__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-md);
+  padding: var(--transactions-space-md) 0;
+}
+
+.todo-quadrant__title {
+  margin: 0;
+  font-size: var(--transactions-size-text-section);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.todo-quadrant__hint {
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-caption);
+}
+
+.todo-quadrant__canvas {
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-lg);
+  padding: var(--transactions-space-md);
+}
+
+.todo-quadrant__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* 别无限放大：坐标与文字都随 viewBox 缩放，超过这个宽度就开始"糊大" */
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+/* 四个象限的底：同一支色（Ink）的四种浓度 —— 越"该马上做"越实 */
+.todo-quadrant__ground--now {
+  fill: color-mix(in srgb, var(--transactions-color-text-major) 7%, transparent);
+}
+
+.todo-quadrant__ground--plan {
+  fill: color-mix(in srgb, var(--transactions-color-text-major) 4%, transparent);
+}
+
+.todo-quadrant__ground--delegate {
+  fill: color-mix(in srgb, var(--transactions-color-text-major) 2%, transparent);
+}
+
+.todo-quadrant__ground--less {
+  fill: transparent;
+}
+
+.todo-quadrant__axis {
+  /* 十字轴是这张图里最该被看见的一条线：比象限底高一档 */
+  stroke: var(--transactions-color-text-tertiary);
+  stroke-width: 1;
+}
+
+.todo-quadrant__name {
+  fill: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-body);
+  font-weight: var(--transactions-weight-semibold);
+}
+
+/* 象限名唯一的主色落点：最该被看见的那个象限 */
+.todo-quadrant__name--now {
+  fill: var(--transactions-color-primary);
+}
+
+.todo-quadrant__sub {
+  /* 象限里的那行说明是**信息**不是装饰：用 secondary（tertiary 在白底上只有 ~3.4:1） */
+  fill: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-caption);
+}
+
+.todo-quadrant__axis-label {
+  fill: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-caption);
+}
+
+.todo-quadrant__origin {
+  fill: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-small);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 事项点：主色实心 + 白圈（白圈让叠在一起的点也分得出"这里有几个"） */
+.todo-quadrant__point {
+  fill: var(--transactions-color-primary);
+  stroke: var(--transactions-color-major-background);
+  stroke-width: 2;
+}
+
+/* ---------------- 历史 ---------------- */
+.todo-history {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
+}
+
+.todo-history__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-md);
+  padding: var(--transactions-space-md) 0;
+}
+
+.todo-history__title {
+  margin: 0;
+  font-size: var(--transactions-size-text-section);
+  font-weight: var(--transactions-weight-semibold);
+  color: var(--transactions-color-text-major);
+}
+
+.todo-history__count {
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-caption);
+}
+
+.todo-table {
+  width: 100%;
+}
+
+.todo-table__time {
+  color: var(--transactions-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.todo-table__title {
+  color: var(--transactions-color-text-major);
+}
+
+/* ---------------- 弹窗里的小结构 ---------------- */
+.todo-form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--transactions-space-lg);
+}
+
+.todo-form-hint {
+  margin: var(--transactions-space-sm) 0 0;
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-caption);
+}
+
+.todo-modal-text {
+  margin: 0;
+  color: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-body);
+}
+
+.todo-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-lg);
+}
+
+/* 窄窗：两列表单折成一列（版心本来就窄，别硬挤） */
+@media (max-width: 720px) {
+  .todo-form-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo-item__check {
+    transition: none;
+  }
+}

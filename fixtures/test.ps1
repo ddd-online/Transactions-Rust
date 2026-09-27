@@ -104,6 +104,7 @@ $Steps = [ordered]@{
     'ui-about'          = @{ Title='关于软件 / 版本自报';                          Kind='pwsh';  Script='fixtures\ui-about.ps1'; Needs='exe' }
     'ui-features'       = @{ Title='功能开关（侧栏当场少一项 / 重启后仍生效）';      Kind='pwsh';  Script='fixtures\ui-features.ps1'; Needs='exe' }
     'ui-stock'          = @{ Title='股票全生命周期（含真实行情）';                  Kind='pwsh';  Script='fixtures\ui-stock.ps1'; Needs='exe'; Network=$true }
+    'ui-todo'           = @{ Title='待办：建卡片 → 加事项 → 记进度 → 完成进历史 → 删卡片'; Kind='pwsh'; Script='fixtures\ui-todo.ps1'; Needs='exe' }
     'ui-update-restore' = @{ Title='更新下载状态跨页面恢复（依赖 GitHub API）';     Kind='pwsh';  Script='fixtures\ui-update-restore.ps1'; Needs='exe'; Network=$true }
 }
 
@@ -126,6 +127,7 @@ $Groups = [ordered]@{
     'key-event'    = @('ui-key-event', 'ui-link-event')
     'diary'        = @('ui-diary-edit', 'ui-diary-ledger', 'ui-diary-io')
     'stock'        = @('ui-stock')
+    'todo'         = @('ui-todo')
     'settings'     = @('ui-proxy', 'ui-about', 'ui-features')
     'assets'       = @('ui-upload')
     'shell'        = @('smoke', 'window-bounds', 'close-behavior')
@@ -147,6 +149,7 @@ $PathMap = @(
     @{ Re='^crates/tr-store/src/(migrations|schema|workspace)\.rs$'; Groups=@('store', 'schema') }
     @{ Re='^crates/tr-store/';                            Groups=@('store') }
     @{ Re='^crates/tr-service/src/stock';                 Groups=@('stock', 'service') }
+    @{ Re='^crates/tr-service/src/todo';                  Groups=@('todo', 'service') }
     @{ Re='^crates/tr-service/src/quote\.rs$';            Groups=@('stock') }
     @{ Re='^crates/tr-service/src/diary\.rs$';            Groups=@('diary') }
     @{ Re='^crates/tr-service/src/key_event\.rs$';        Groups=@('key-event') }
@@ -159,6 +162,7 @@ $PathMap = @(
     @{ Re='^crates/tr-ipc/';                              Groups=@('ipc') }
     @{ Re='^crates/tr-ui/src/api/';                       Groups=@('ipc') }
     @{ Re='^crates/tr-ui/src/pages/stock\.rs$';           Groups=@('stock') }
+    @{ Re='^crates/tr-ui/src/pages/todo\.rs$';            Groups=@('todo', 'ui-kit') }
     @{ Re='^crates/tr-ui/src/pages/diary\.rs$';           Groups=@('diary') }
     @{ Re='^crates/tr-ui/src/pages/key_event\.rs$';       Groups=@('key-event') }
     @{ Re='^crates/tr-ui/src/pages/category_tag\.rs$';    Groups=@('category-tag') }

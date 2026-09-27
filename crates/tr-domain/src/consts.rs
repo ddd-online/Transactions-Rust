@@ -83,6 +83,27 @@ pub const TAG_POLICY_ANY: &str = "any";
 /// 标签匹配策略：全部命中。
 pub const TAG_POLICY_ALL: &str = "all";
 
+// ---------- 待办 ----------
+
+/// 待办事项：进行中（卡片视图里显示的那批）
+pub const TODO_STATUS_DOING: &str = "doing";
+/// 待办事项：已完成（落在历史里）
+pub const TODO_STATUS_DONE: &str = "done";
+
+/// 合法的待办状态集合（校验用，顺序为 doing / done）。
+pub const TODO_STATUSES: [&str; 2] = [TODO_STATUS_DOING, TODO_STATUS_DONE];
+
+/// 紧急度 / 重要度的取值上下限（含端点）。四象限图的坐标范围也用它。
+pub const TODO_LEVEL_MIN: i32 = -5;
+pub const TODO_LEVEL_MAX: i32 = 5;
+
+/// 卡片主题最长字符数。
+pub const TODO_CARD_TITLE_MAX: usize = 200;
+/// 事项最长字符数。
+pub const TODO_ITEM_TITLE_MAX: usize = 500;
+/// 单条进度记录最长字符数。
+pub const TODO_PROGRESS_MAX: usize = 2000;
+
 #[cfg(test)]
 mod tests {
     use super::*;

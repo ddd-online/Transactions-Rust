@@ -15,6 +15,7 @@ pub mod key_event_image;
 pub mod ledger;
 pub mod stock;
 pub mod tag;
+pub mod todo;
 pub mod transaction_record;
 pub mod transaction_record_tag;
 pub mod transaction_template;

@@ -11,6 +11,7 @@
 //! | [`key_event`] | `key_event_*` |
 //! | [`diary`] | `diary_*` |
 //! | [`stock`] | `stock_*`（设置页要用的费用/标签/重置也已接入） |
+//! | [`todo`] | `todo_*` |
 //! | [`desktop`] | `window_control` / `workspace_*` / `config_*` / `dialog_open` / `devtools_*` |
 //! | [`update`] | `update_check` / `update_download` / `update_install` / `update_cancel` |
 //!
@@ -36,6 +37,7 @@ pub mod ledger;
 pub mod stock;
 pub mod tag;
 pub mod template;
+pub mod todo;
 pub mod tr;
 pub mod update;
 

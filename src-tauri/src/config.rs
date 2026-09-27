@@ -188,12 +188,13 @@ mod tests {
         // 功能开关缺省 = 全开（用户没关过任何功能）
         assert_eq!(
             config.features,
-            // 四个字段逐一断言，避免 `PartialEq` 之外的口径漂移
+            // 五个字段逐一断言，避免 `PartialEq` 之外的口径漂移
             FeatureFlags {
                 accounting: true,
                 stock: true,
                 key_event: true,
                 diary: true,
+                todo: true,
             }
         );
         // 事件页右栏缺省 = 展开（老配置没有这个键时与升级前一致）

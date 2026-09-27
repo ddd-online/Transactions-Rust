@@ -44,6 +44,9 @@ const BUSINESS_TABLES: &[&str] = &[
     "tbl_billadm_stock_trade_history",
     "tbl_billadm_stock_trade_round",
     "tbl_billadm_stock_trade_tag_setting",
+    "tbl_billadm_todo_card",
+    "tbl_billadm_todo_item",
+    "tbl_billadm_todo_progress",
 ];
 
 fn main() -> ExitCode {
