@@ -15,6 +15,10 @@
   记账页的 `DEFAULT_PAGE_SIZE` 也一直是 15，两边终于同口径。
 - 回归：`fixtures/test.ps1 -Unit stock,ui` 3/3（design-audit / check-ui-wasm / ui-stock 202.2s）；
   全量档 33/33；dev 窗口实拍确认页脚是「15 条/页」、表头只剩「逐笔结算明细」。
+- 顺手修掉 `test-store` 的偶发红：测试用的临时工作空间目录名只有「进程号 + 纳秒」，而 Windows
+  的 `SystemTime::now()` 只有约 15.6ms 粒度 —— 同一个 tag 的多个测试在同一 tick 里起跑会拿到
+  同一个纳秒值、撞到同一个目录，后一个在已建好的库上再跑一遍建库脚本而报
+  "table `tbl_billadm_ledger` already exists"。`tr-store` 与 `tr-service` 两处都补了自增序号。
 - 未做：账户页「资金变化记录」默认仍是每页 10（那页不分「每页条数」选择器）。
 
 ### 文档：README 瘦身

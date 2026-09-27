@@ -70,15 +70,23 @@ pub(crate) fn count_grouped_by(
 }
 
 /// 测试用临时工作空间：临时目录 + `Workspace::open`，`tag` 只用于区分目录前缀。
+///
+/// 名字末尾带一个**进程内自增序号**：Windows 的 `SystemTime::now()` 只有约 15.6ms 的粒度，
+/// 同一个 tag 的多个测试（如 `dao/category.rs` 里五个都用 `"category-dao"`)在同一 tick 里起跑
+/// 会拿到**同一个纳秒值** → 同名目录 → 后一个在已有库上再跑一遍建库脚本，
+/// 报 "table `tbl_billadm_ledger` already exists"（full 档里 `test-store` 偶发红过）。
 #[cfg(test)]
 pub(crate) fn test_workspace(tag: &str) -> (crate::Workspace, std::path::PathBuf) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "tr-{tag}-{}-{}",
+        "tr-{tag}-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        SEQ.fetch_add(1, Ordering::Relaxed),
     ));
     (crate::Workspace::open(&dir).unwrap(), dir)
 }
