@@ -5,7 +5,7 @@
 
 记账数据放在你自己选的本地工作空间里，一个工作空间就是一个 SQLite 数据库。没有云端账户，也没有常驻后台。
 
-本文档描述 **0.7.0**。
+本文档描述 **0.8.0**。
 
 ## 功能
 
@@ -15,7 +15,8 @@
   界面层直出 SVG；另外两个子功能是**标签**（分类与标签管理）和**模板**。
 - **股票**：账户（支取 / 利息归本 / 追加本金，资金变化记录分页）与持仓、建仓/加仓/减仓/清仓
   （真实行情查名与现价）、成交记录与编辑、交易历史归档为轮次、费用设置
-  （佣金/最低佣金/印花税/过户费）、盈亏统计、重置股票数据。
+  （佣金/最低佣金/印花税/过户费）、盈亏统计、归档到新账本（无持仓时把整本股票数据迁进一个新账本，
+  原账本只留交易标签与费用设置）、重置股票数据。
 - **事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、
   图片附件（含 HEIC 在界面层转码后上传）。
 - **日记**：按日期一篇，**按账本隔离**（切账本即切日记，同一天在不同账本各存一篇），
@@ -63,7 +64,7 @@ fixtures/            # schema 基线、端到端脚本（**不含任何真实个
 ## 下载安装
 
 到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载
-`Transactions-x64-v0.7.0.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
+`Transactions-x64-v0.8.0.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
 
 首次启动会让你选一个工作空间目录。空目录按当前 schema 建库，当前格式的目录直接打开，
 更早格式的目录会在打开时自动升级，升级前先备份。
@@ -86,7 +87,7 @@ cargo tauri dev
 pwsh -File build/build.ps1
 ```
 
-产物：`build\target\Transactions-x64-v0.7.0.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
+产物：`build\target\Transactions-x64-v0.8.0.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
 发布流程：`build/clean.ps1` → `build/build.ps1` → `build/release.ps1`（`gh release create` + 上传安装包）。
 版本号唯一来源是 `src-tauri/tauri.conf.json`。
 
