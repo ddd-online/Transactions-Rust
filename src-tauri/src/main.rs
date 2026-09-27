@@ -154,6 +154,7 @@ fn main() {
             tr_ipc::commands::stock_statistics,
             tr_ipc::commands::stock_name,
             tr_ipc::commands::stock_reset,
+            tr_ipc::commands::stock_archive,
             // 股票操作记录 / 回滚
             tr_ipc::commands::stock_operation_list,
             tr_ipc::commands::stock_operation_preview,

@@ -62,6 +62,16 @@ const STOCK_TABLES: [&str; 9] = [
     "tbl_billadm_stock_account",
 ];
 
+/// 归档时**搬走**的股票表（`STOCK_TABLES` 去掉两张配置表与只会被清空的操作记录）。
+const STOCK_DATA_TABLES: [&str; 6] = [
+    "tbl_billadm_stock_fund_record",
+    "tbl_billadm_stock_trade",
+    "tbl_billadm_stock_trade_round",
+    "tbl_billadm_stock_trade_history",
+    "tbl_billadm_stock_position",
+    "tbl_billadm_stock_account",
+];
+
 impl StockDao {
     // ---------- 账户 ----------
 
@@ -1069,6 +1079,36 @@ impl StockDao {
                 [ledger_id],
             )?;
         }
+        Ok(())
+    }
+
+    /// 「归档」：把某账本的**数据类**股票表整体改挂到另一个账本（逐表 `UPDATE`，调用方保证在事务里）。
+    ///
+    /// 与 [`Self::reset_by_ledger_id`] 的差别只有两处，都是刻意的：
+    /// * 只搬 6 张**数据**表 —— 费用设置与交易标签是配置，留在原账本（费用设置另由调用方复制一份）；
+    /// * 顺序沿用 `STOCK_TABLES` 的书写顺序（本仓库无外键/触发器，顺序只是可读性）。
+    ///
+    /// 目标账本必须是**新建的空账本**，否则会撞 `(ledger_id, stock_code)` 这类唯一键。
+    pub fn move_to_ledger(
+        conn: &Connection,
+        from_ledger_id: &str,
+        to_ledger_id: &str,
+    ) -> rusqlite::Result<()> {
+        for table in STOCK_DATA_TABLES {
+            conn.execute(
+                &format!("UPDATE {table} SET ledger_id = ?2 WHERE ledger_id = ?1"),
+                params![from_ledger_id, to_ledger_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// 清空某账本的操作记录（归档后原账本的"回滚日志"没有意义：目标行已经搬走了）。
+    pub fn delete_operations_by_ledger(conn: &Connection, ledger_id: &str) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM tbl_billadm_stock_operation WHERE ledger_id = ?1",
+            [ledger_id],
+        )?;
         Ok(())
     }
 }

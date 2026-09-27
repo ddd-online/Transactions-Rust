@@ -298,6 +298,16 @@ pub struct StockTagSettingsRequest {
     pub tags: Vec<String>,
 }
 
+/// 归档股票数据：把 `ledger_id` 这一账本的股票数据迁进一个**新建**的 `name` 账本。
+/// `name` 为空由命令层报 `请输入账本名称`；账本描述由服务层统一生成。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockArchiveRequest {
+    #[serde(alias = "ledgerId")]
+    pub ledger_id: String,
+    pub name: String,
+}
+
 /// 数值参数：界面可能传数字字符串（`"2"`）也可能直接传数字（`2`），两种形态都接受。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]

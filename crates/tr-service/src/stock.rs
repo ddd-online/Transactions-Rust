@@ -28,10 +28,11 @@ use tr_domain::dto::{
 use tr_domain::error::AppError;
 use tr_domain::fee;
 use tr_domain::models::{
-    StockAccount, StockFeeSetting, StockFundRecord, StockOperation, StockPosition, StockTrade,
-    StockTradeHistory, StockTradeRound, StockTradeTagSetting,
+    Ledger, StockAccount, StockFeeSetting, StockFundRecord, StockOperation, StockPosition,
+    StockTrade, StockTradeHistory, StockTradeRound, StockTradeTagSetting,
 };
 use tr_store::dao::is_not_found;
+use tr_store::dao::ledger::LedgerDao;
 use tr_store::dao::stock::{StockDao, STOCK_OPERATION_LIMIT};
 use tr_store::Workspace;
 
@@ -1829,6 +1830,76 @@ pub fn reset_data(workspace: &Workspace, ledger_id: &str) -> ServiceResult<()> {
         return Err(error);
     }
     Ok(())
+}
+
+// ---------- 归档 ----------
+
+/// 归档：把某账本的股票数据整体迁进一个**当场新建**的账本，原账本只留交易标签与费用设置。
+///
+/// 单事务内按序做四件事（任一步失败整笔回滚，不会留下半个空账本）：
+/// 1. 无持仓是硬前提 —— 还有持仓时拒绝（持仓名报给界面，空名回落到代码）；
+/// 2. 新建账本（费用设置**复制**一份过去，其余配置留原处）；
+/// 3. `move_to_ledger` 把账户 / 资金记录 / 交易 / 轮次 / 历史 / 持仓改挂到新账本；
+/// 4. 清空原账本的操作记录（目标行都搬走了，回滚日志留着只会指向不存在的行）。
+///
+/// 返回新账本 id。
+pub fn archive_data(
+    workspace: &Workspace,
+    ledger_id: &str,
+    ledger_name: &str,
+) -> ServiceResult<String> {
+    let mut new_ledger_id = String::new();
+    if let Err(error) = workspace.transaction(|conn| {
+        let held: Vec<String> = db(StockDao::list_positions(conn, ledger_id))?
+            .into_iter()
+            .filter(|position| position.quantity > 0)
+            .map(|position| {
+                if position.stock_name.is_empty() {
+                    position.stock_code
+                } else {
+                    position.stock_name
+                }
+            })
+            .collect();
+        if !held.is_empty() {
+            return Err(AppError::conflict(format!(
+                "仍有持仓（{}），请先全部清仓后再归档",
+                held.join("、")
+            ))
+            .into());
+        }
+
+        let id = tr_store::util::new_uuid();
+        let ledger = Ledger {
+            id: id.clone(),
+            name: ledger_name.to_string(),
+            description: format!("股票归档 {}", today()),
+            created_at: 0,
+            updated_at: 0,
+        };
+        db(LedgerDao::create(conn, &ledger))?;
+
+        // 费用设置是配置：原账本保留，另给归档账本复制一份（原账本没有该行时跳过，新账本会懒创建默认值）
+        if let Ok(setting) = StockDao::get_fee_setting(conn, ledger_id) {
+            db(StockDao::create_fee_setting(
+                conn,
+                &StockFeeSetting {
+                    id: tr_store::util::new_uuid(),
+                    ledger_id: id.clone(),
+                    ..setting
+                },
+            ))?;
+        }
+
+        db(StockDao::move_to_ledger(conn, ledger_id, &id))?;
+        db(StockDao::delete_operations_by_ledger(conn, ledger_id))?;
+        new_ledger_id = id;
+        Ok(())
+    }) {
+        tracing::error!("归档股票数据失败, ledger: {}, err: {}", ledger_id, error);
+        return Err(error);
+    }
+    Ok(new_ledger_id)
 }
 
 // ---------- 成交编辑 / 委托删除 / 重放 ----------
@@ -4284,6 +4355,149 @@ mod tests {
         reset_data(&workspace, TEST_LEDGER_ID).unwrap();
         let setting = get_trade_tags(&workspace, TEST_LEDGER_ID).unwrap();
         assert_eq!(setting, consts::default_stock_trade_tags());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---------- 归档 ----------
+
+    #[test]
+    fn archive_moves_stock_data_and_keeps_settings() {
+        let (workspace, dir) = workspace("stock-archive");
+
+        seed_principal(&workspace, 10_000_000);
+        // 建仓 → 清仓：一笔已归档轮次 + 资金记录 + 操作记录（归档前的账本"有东西"）
+        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 1_000, 1_100);
+        // 费用设置与标签都改成非默认值：归档后必须原样留在原账本
+        save_fee_settings(&workspace, TEST_LEDGER_ID, 0.0001, 0, 0.001, 0.00002).unwrap();
+        save_trade_tags(
+            &workspace,
+            TEST_LEDGER_ID,
+            &[consts::STOCK_TAG_ANALYSIS.to_string(), "短线".to_string()],
+        )
+        .unwrap();
+        let ledgers_before = crate::ledger::list_all_ledger(&workspace).unwrap().len();
+
+        let new_id = archive_data(&workspace, TEST_LEDGER_ID, "归档账本").unwrap();
+        assert_ne!(new_id, TEST_LEDGER_ID);
+
+        // ---- 原账本：数据全空（含只会被清空的操作记录），配置原样保留 ----
+        let conn = workspace.connection();
+        assert!(StockDao::list_all_trades_asc(&conn, TEST_LEDGER_ID)
+            .unwrap()
+            .is_empty());
+        assert!(StockDao::list_positions(&conn, TEST_LEDGER_ID)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            StockDao::count_fund_records(&conn, TEST_LEDGER_ID).unwrap(),
+            0
+        );
+        assert!(is_not_found(
+            &StockDao::get_account(&conn, TEST_LEDGER_ID).unwrap_err()
+        ));
+        assert!(
+            StockDao::list_operations(&conn, TEST_LEDGER_ID, STOCK_OPERATION_LIMIT)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(StockDao::list_trade_histories(&conn, TEST_LEDGER_ID)
+            .unwrap()
+            .is_empty());
+        let fee_left = StockDao::get_fee_setting(&conn, TEST_LEDGER_ID).unwrap();
+        assert_eq!(fee_left.commission_rate, 0.0001);
+
+        // ---- 新账本：数据整体搬过来了 ----
+        assert_eq!(
+            StockDao::list_all_trades_asc(&conn, &new_id).unwrap().len(),
+            2
+        );
+        let histories = StockDao::list_trade_histories(&conn, &new_id).unwrap();
+        assert_eq!(histories.len(), 1);
+        assert_eq!(
+            StockDao::count_trade_rounds(&conn, &histories[0].id).unwrap(),
+            1
+        );
+        assert!(StockDao::count_fund_records(&conn, &new_id).unwrap() > 0);
+        assert_eq!(
+            StockDao::get_account(&conn, &new_id).unwrap().principal,
+            10_000_000
+        );
+        // 费用设置是**复制**：值一样、行不同（原账本那行还在）
+        let fee_new = StockDao::get_fee_setting(&conn, &new_id).unwrap();
+        assert_eq!(fee_new.commission_rate, fee_left.commission_rate);
+        assert_eq!(fee_new.min_commission, fee_left.min_commission);
+        assert_eq!(fee_new.stamp_duty_rate, fee_left.stamp_duty_rate);
+        assert_eq!(fee_new.transfer_fee_rate, fee_left.transfer_fee_rate);
+        assert_ne!(fee_new.id, fee_left.id);
+        // 交易标签不迁（新账本按默认标签懒创建），操作记录两边都不留
+        assert!(
+            StockDao::list_operations(&conn, &new_id, STOCK_OPERATION_LIMIT)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            get_trade_tags_in(&conn, TEST_LEDGER_ID).unwrap(),
+            vec![consts::STOCK_TAG_ANALYSIS.to_string(), "短线".to_string()]
+        );
+        drop(conn);
+
+        // 账本列表多出一个归档账本
+        let ledgers = crate::ledger::list_all_ledger(&workspace).unwrap();
+        assert_eq!(ledgers.len(), ledgers_before + 1);
+        let created = ledgers.iter().find(|ledger| ledger.id == new_id).unwrap();
+        assert_eq!(created.name, "归档账本");
+        assert!(created.description.starts_with("股票归档 "));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn archive_rejects_ledger_with_holdings() {
+        let (workspace, dir) = workspace("stock-archive-held");
+
+        seed_principal(&workspace, 10_000_000);
+        // 只建仓不清仓 → 有持仓，归档必须被拒
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            1_000,
+            10,
+            1_700_005_000,
+            "",
+            "",
+        )
+        .unwrap();
+        let ledgers_before = crate::ledger::list_all_ledger(&workspace).unwrap().len();
+
+        let error = archive_data(&workspace, TEST_LEDGER_ID, "归档账本").unwrap_err();
+        assert!(
+            error.to_string().contains("持仓"),
+            "错误文案要说明是持仓挡住了：{error}"
+        );
+
+        // 整笔回滚：没留下那个空账本，交易与持仓都还在原账本
+        assert_eq!(
+            crate::ledger::list_all_ledger(&workspace).unwrap().len(),
+            ledgers_before
+        );
+        let conn = workspace.connection();
+        assert_eq!(
+            StockDao::list_all_trades_asc(&conn, TEST_LEDGER_ID)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            StockDao::list_positions(&conn, TEST_LEDGER_ID)
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(conn);
 
         std::fs::remove_dir_all(&dir).ok();
     }

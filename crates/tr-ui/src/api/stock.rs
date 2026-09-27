@@ -8,6 +8,7 @@
 //! | `stock_tag_settings_get` | `{ ledger_id }` |
 //! | `stock_tag_settings_put` | `{ ledger_id, tags }`（同时接受 `ledgerId`） |
 //! | `stock_reset` | `{ ledger_id }` |
+//! | `stock_archive` | `{ ledger_id, name }` → 新账本 id |
 //!
 //! ## 命名
 //!
@@ -33,9 +34,9 @@ use tr_domain::dto::{
 };
 use tr_domain::models::StockFeeSetting;
 use tr_domain::wire::{
-    LedgerIdRequest, StockAmountDateRequest, StockFeeSettingsRequest, StockFundRecordsRequest,
-    StockNameRequest, StockPositionReviewRequest, StockRoundReviewRequest, StockRoundTagRequest,
-    StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    LedgerIdRequest, StockAmountDateRequest, StockArchiveRequest, StockFeeSettingsRequest,
+    StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest, StockRoundReviewRequest,
+    StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
     StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
     StockTradesRequest,
 };
@@ -110,6 +111,19 @@ pub async fn reset(ledger_id: &str) -> Result<bool, IpcError> {
         "stock_reset",
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
+        },
+    )
+    .await
+}
+
+/// 归档：把该账本的股票数据迁进一个新建的账本，返回新账本 id。
+/// 仍持有股票时后端返回 409（文案里带持仓名）。
+pub async fn archive(ledger_id: &str, name: &str) -> Result<String, IpcError> {
+    ipc::call(
+        "stock_archive",
+        StockArchiveRequest {
+            ledger_id: ledger_id.to_string(),
+            name: name.to_string(),
         },
     )
     .await

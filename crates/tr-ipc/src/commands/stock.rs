@@ -21,11 +21,11 @@ use tr_domain::dto::{
 use tr_domain::error::AppError;
 use tr_domain::models::StockFeeSetting;
 use tr_domain::wire::{
-    LedgerIdRequest, QueryNumber, StockAmountDateRequest, StockFeeSettingsRequest,
-    StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest, StockRoundReviewRequest,
-    StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
-    StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
-    StockTradesRequest,
+    LedgerIdRequest, QueryNumber, StockAmountDateRequest, StockArchiveRequest,
+    StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
+    StockRoundReviewRequest, StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest,
+    StockTradeCreateRequest, StockTradeImpactRequest, StockTradeOrderDeleteRequest,
+    StockTradeUpdateRequest, StockTradesRequest,
 };
 use tr_service::stock::{self, TradeFill};
 
@@ -494,6 +494,18 @@ pub fn stock_reset(state: State<'_, AppState>, req: LedgerIdRequest) -> ApiResul
     let workspace = state.workspace()?;
     stock::reset_data(&workspace, &req.ledger_id)?;
     Ok(true)
+}
+
+/// 归档：把该账本的股票数据迁进一个**新建**的账本（仍持有股票时报 409）。返回新账本 id。
+#[tauri::command]
+pub fn stock_archive(state: State<'_, AppState>, req: StockArchiveRequest) -> ApiResult<String> {
+    require_ledger_id(&req.ledger_id)?;
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(AppError::bad_request("请输入账本名称").into());
+    }
+    let workspace = state.workspace()?;
+    Ok(stock::archive_data(&workspace, &req.ledger_id, name)?)
 }
 
 // ---------- 操作记录 / 回滚 ----------

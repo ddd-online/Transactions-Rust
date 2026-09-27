@@ -15,7 +15,7 @@
 //! | [`edit_modal`] / [`impact_modal`] | 编辑成交 / 删除委托 + 影响预演确认 |
 //! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签（无工具栏） |
 //! | [`statistics_view`] | 结算统计 + 自绘 SVG 曲线（统计）/ 逐笔结算明细分页（明细）；工具栏 = 分栏页签 + 区间/笔数/标签筛选 |
-//! | [`settings_view`] | 交易标签 + 交易费用设置 + 操作记录（查看 / 回滚）+ 重置股票数据 |
+//! | [`settings_view`] | 交易标签 + 交易费用设置 + 操作记录（查看 / 回滚）+ 归档到新账本 + 重置股票数据 |
 //! | 状态组织 | 本文件直接持有信号（不引入 store；与其余页面一致） |
 //!
 //! 切子功能会**重建**该子功能的视图（信号随组件 owner 一起释放），因此来回切会重新拉数据 ——
@@ -75,7 +75,8 @@ pub const PAGE_TITLE: &str = "股票";
 /// 股票页的五个子功能（左侧图标条切换，顺序即渲染顺序）。
 ///
 /// 与记账页同构：子功能走**图标条**，不进侧栏，也不再用顶部页签。
-/// 「设置」是原「应用设置 → 股票」整块（费用设置 / 交易标签 / 重置股票数据）的迁入地。
+/// 「设置」是原「应用设置 → 股票」整块（费用设置 / 交易标签 / 重置股票数据）的迁入地，
+/// 另加「归档到新账本」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StockSub {
     /// 账户：总资产 + 支取/利息归本/追加本金 + 资金变化记录
@@ -86,7 +87,7 @@ pub enum StockSub {
     Trade,
     /// 统计：结算统计 + 曲线 + 逐笔结算明细（原「交易统计」分栏）
     Statistics,
-    /// 设置：交易费用 / 交易标签 / 操作记录与回滚 / 重置股票数据
+    /// 设置：交易费用 / 交易标签 / 操作记录与回滚 / 归档到新账本 / 重置股票数据
     Setting,
 }
 
@@ -4302,6 +4303,11 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     let confirm_open = RwSignal::new(false);
     let resetting = RwSignal::new(false);
 
+    // ---- 归档 ----
+    let archive_open = RwSignal::new(false);
+    let archive_name = RwSignal::new(String::new());
+    let archiving = RwSignal::new(false);
+
     let no_ledger = move || stores.current_ledger_id.get().is_empty();
 
     // 回填：佣金 ×10000、最低佣金（分→元）、印花税/过户费 ×100
@@ -4592,6 +4598,58 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
         });
     };
 
+    // ---- 归档 ----
+    // 「归档」把当前账本的股票数据搬进一个**当场新建**的账本（见 `stock::archive_data`）。
+    // 是不是"无持仓"不在界面预检：设置页不该为了禁用一个按钮去拉行情，交给后端 409 报持仓名。
+    let open_archive = move || {
+        if stores.current_ledger_id.get_untracked().is_empty() {
+            Notifier::global().error("请先选择工作空间", None);
+            return;
+        }
+        archive_name.set(format!(
+            "{} 归档 {}",
+            stores.current_ledger_name(),
+            today_ymd()
+        ));
+        archive_open.set(true);
+    };
+
+    let do_archive = move || {
+        if archiving.get_untracked() {
+            return;
+        }
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().error("归档失败", Some("请先选择工作空间".to_string()));
+            return;
+        }
+        let name = archive_name.get_untracked().trim().to_string();
+        if name.is_empty() {
+            Notifier::global().error("请输入账本名称", None);
+            return;
+        }
+        archiving.set(true);
+        leptos::task::spawn_local(async move {
+            match api::stock::archive(&ledger_id, &name).await {
+                Ok(_) => {
+                    archive_open.set(false);
+                    archive_name.set(String::new());
+                    // 新账本要出现在左栏的账本菜单里；当前账本不变，仍停在这里继续记账
+                    match api::ledger::list_all().await {
+                        Ok(ledgers) => stores.set_ledgers(ledgers),
+                        Err(error) => notify_error("查询账本", &error),
+                    }
+                    // 归档会把操作记录一起清掉，重新拉一遍
+                    load_operations(ledger_id);
+                    Notifier::global().success(format!("已归档到「{name}」"), None);
+                }
+                // 失败保留弹窗（名称还在，改完即可重试）
+                Err(error) => notify_error("归档失败", &error),
+            }
+            archiving.set(false);
+        });
+    };
+
     // 确认框正文（多行，用 `white-space: pre-wrap` 的 `.stock-impact__text` 渲染）
     let rollback_body = move || {
         let Some(preview) = rollback_preview.get() else {
@@ -4834,6 +4892,25 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                     </div>
                 </div>
 
+                // ---- 归档 ----
+                <div class="st-card">
+                    <div class="st-card-info">
+                        <span class="st-card-title">"归档"</span>
+                        <span class="st-card-desc">
+                            "把当前账本的账户本金、资金记录、交易与轮次/复盘迁到一个新账本；原账本只保留交易标签与费用设置。需先清空全部持仓。"
+                        </span>
+                    </div>
+                    <div class="st-card-action">
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            disabled=Signal::derive(no_ledger)
+                            on_click=move |_| open_archive()
+                        >
+                            "归档"
+                        </Button>
+                    </div>
+                </div>
+
                 // ---- 重置 ----
                 <div class="st-card">
                     <div class="st-card-info">
@@ -4867,6 +4944,31 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
             >
                 <p class="st-modal-text">
                     "将清空当前账本的账户本金、持仓、交易记录、资金记录、费用设置与交易标签。此操作不可恢复，确定继续吗？"
+                </p>
+            </Modal>
+
+            // 「归档」确认框：名称是可以改的（预填「<当前账本名> 归档 <今天>」），
+            // 目标账本**当场新建** —— 因此没有"选一个已有账本"的入口。
+            <Modal
+                open=archive_open
+                title="归档到新账本"
+                size=ModalSize::Small
+                ok_text="确认归档"
+                cancel_text="取消"
+                ok_loading=archiving
+                on_close=move || archive_open.set(false)
+                on_ok=move || do_archive()
+            >
+                <div class="modal-form-item">
+                    <p class="modal-form-label">"新账本名称"</p>
+                    <Input
+                        value=archive_name
+                        placeholder="请输入账本名称"
+                        maxlength=20
+                    />
+                </div>
+                <p class="st-modal-text">
+                    "将把当前账本的账户本金、资金记录、交易与轮次/复盘迁到这个新账本；原账本只保留交易标签与费用设置。此操作不可恢复，确定继续吗？"
                 </p>
             </Modal>
 
