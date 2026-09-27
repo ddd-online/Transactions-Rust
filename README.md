@@ -9,23 +9,15 @@
 
 ## 功能
 
-- **记账**（四个子功能走左侧图标条切换）：**记录**负责日常流水，支持模板一键填充、编辑、删除、
+- **记账** ：**记录**负责日常流水，支持模板一键填充、编辑、删除、
   复制到其他账本、按关键词/类型/分类/标签/离群/时间范围筛选、排序、分页，底部有统计条；
   **分析**画图，分类占比、时间趋势、标签云、离群消费都能看，图表引擎是 `charts-rs`，
-  界面层直出 SVG；另外两个子功能是**标签**（分类与标签管理）和**模板**。
-- **股票**：账户（支取 / 利息归本 / 追加本金，资金变化记录分页）与持仓、建仓/加仓/减仓/清仓
-  （真实行情查名与现价）、成交记录与编辑、交易历史归档为轮次、费用设置
-  （佣金/最低佣金/印花税/过户费）、盈亏统计、归档到新账本（无持仓时把整本股票数据迁进一个新账本，
-  原账本只留交易标签与费用设置）、重置股票数据。
-- **事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、
-  图片附件（含 HEIC 在界面层转码后上传）。
-- **日记**：按日期一篇，**按账本隔离**（切账本即切日记，同一天在不同账本各存一篇），
-  Markdown 预览/编辑，导入/导出目录（作用于当前账本），心情标记，字数统计。
+  界面层直出 SVG；另外两个子功能是**标签**和**模板**。
+- **股票**：账户与持仓、建仓/加仓/减仓/清仓、成交记录与编辑、交易历史归档为轮次、费用设置
+  （佣金/最低佣金/印花税/过户费）、盈亏统计、归档到新账本、重置股票数据。
+- **事件**：按日期管理事件、配色、Markdown 描述、关联/解除关联消费记录、图片附件。
+- **日记**：按日期一篇，**按账本隔离**，心情标记，字数统计。
 - **账本与工作空间**：多账本切换/新建/删除，单实例运行，托盘菜单，浅色/深色双主题，关闭行为可选。
-- **代理**：行情查询和更新检查可以走 HTTP 代理。三档，不使用、自动探测（先看环境变量，
-  再看 Windows 系统代理，都没有就直连）、手动填 `http://host:port`（支持 `user:pass@`）。
-  位置在「应用设置 → 通用设置 → 代理」，改完立刻生效，不用重启。
-- **数据自主**：只有行情查询和更新检查要联网，其余功能全部离线可用。这两项也完全可以不用。
 
 ## 技术栈
 
@@ -63,12 +55,9 @@ fixtures/            # schema 基线、端到端脚本（**不含任何真实个
 
 ## 下载安装
 
-到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载
-`Transactions-x64-v0.8.0.exe`（NSIS 安装包，简体中文，按当前用户安装，无需管理员权限）。
+到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载`Transactions-x64-v0.8.0.exe`。
 
-首次启动会让你选一个工作空间目录。空目录按当前 schema 建库，当前格式的目录直接打开，
-更早格式的目录会在打开时自动升级，升级前先备份。
-应用内「设置 → 关于软件」检查本仓库的 Release，有新版本可以下载，装之前校验 `sha256`。
+首次启动会让你选一个工作空间目录。
 
 ## 从源码构建
 
@@ -118,11 +107,8 @@ pwsh -File fixtures/dev-shot.ps1 -Page 股票        # -AllPages 逐页截
 ```
 
 - `dev-hot.ps1` 用独立配置目录 `target\tests\dev-hot\home`，**不碰** `~/.transactions-dev.json`；
-  不给 `-Workspace` 会沿用配置里已有的工作空间（被写空会让外壳进首启动流程，
-  主循环要的侧栏「记账」就不会出现）。
+  不给 `-Workspace` 会沿用配置里已有的工作空间（被写空会让外壳进首启动流程，主循环要的侧栏「记账」就不会出现）。
 - 改 `src-tauri/`（外壳）不适用热更新，用 `cargo tauri dev` 重启。
-- 起不来先看端口：`netsh interface ipv4 show excludedportrange protocol=tcp`；换端口必须同时改
-  `crates/tr-ui/Trunk.toml`、`src-tauri/tauri.conf.json` 与 `fixtures/dev-hot.ps1 -Port`。
 
 ## 验证护栏
 
@@ -135,19 +121,6 @@ cargo xtask schema-diff                     # 建库结构与 fixtures/schema/fr
 cargo xtask validate <workspace-dir>        # 只读校验既有工作空间是否为当前格式
 cargo xtask seed <workspace-dir>            # 播种一份可复现的示例数据（人工冒烟）
 cargo xtask dump <workspace-dir>            # 只读导出业务表为规范化 JSON
-
-# 端到端：真机启动应用，用 UI Automation 驱动窗口
-pwsh -File fixtures/smoke.ps1               # 首次启动/已配置 两种启动形态
-pwsh -File fixtures/ui-about.ps1            # 打包产物自报版本 == tauri.conf.json 的版本
-pwsh -File fixtures/ui-smoke.ps1 -WriteFlow # 5 个顶级功能 + 记账 4 个子功能渲染 + 界面写入闭环
-pwsh -File fixtures/ui-stock.ps1            # 股票全生命周期（138 项断言）
-pwsh -File fixtures/ui-transactions.ps1     # 记账·记录：编辑/模板/排序/筛选
-pwsh -File fixtures/ui-diary-edit.ps1       # 日记编辑链路
-pwsh -File fixtures/ui-diary-ledger.ps1     # 日记按账本隔离（切账本互不可见 + 同日各存一篇）
-pwsh -File fixtures/ui-proxy.ps1            # 代理真的生效（假代理端到端：行情 + 更新检查都经代理）
-pwsh -File fixtures/migrate-workspace.ps1   # 旧格式工作空间自动迁移（数据一字不差 + 升级前备份 + 幂等）
-pwsh -File fixtures/ui-key-event.ps1        # 事件：任选日期新建 + 同日 upsert
-# 其余脚本见 AGENTS.md 的「常用命令」
 ```
 
 ## 文档

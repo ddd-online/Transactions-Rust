@@ -3480,7 +3480,7 @@ const STATS_TAB_SUMMARY: &str = "summary";
 const STATS_TAB_DETAIL: &str = "detail";
 
 /// 逐笔结算明细的默认每页条数（界面侧分页，理由见 [`statistics_view`]）。
-const STATS_DETAIL_PAGE_SIZE: i32 = 20;
+const STATS_DETAIL_PAGE_SIZE: i32 = 15;
 
 /// 统计子功能：工具栏左侧两个分栏（**统计** / **明细**），右侧是**两个分栏共用**的筛选组。
 ///
@@ -4081,9 +4081,6 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                     <div class="stock-panel">
                         <div class="stock-panel__head">
                             <h4 class="stock-panel__title">"逐笔结算明细"</h4>
-                            <span class="stock-panel__hint">
-                                "按结算日期倒序；每一行 = 结算到该笔时的累计结果"
-                            </span>
                         </div>
                         <div class="stock-table-wrap" class:stock-table-wrap--empty=empty>
                             <table class="stock-table stock-table--stats">
