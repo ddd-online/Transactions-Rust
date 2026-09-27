@@ -4,7 +4,7 @@
 
 ## Platform
 
-windows desktop (Tauri 2 + Rust)
+web
 
 ## Users
 
