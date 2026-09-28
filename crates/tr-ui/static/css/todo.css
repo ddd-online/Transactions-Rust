@@ -548,12 +548,6 @@
   gap: var(--transactions-space-lg);
 }
 
-.todo-form-hint {
-  margin: var(--transactions-space-sm) 0 0;
-  color: var(--transactions-color-text-tertiary);
-  font-size: var(--transactions-size-text-caption);
-}
-
 .todo-modal-text {
   margin: 0;
   color: var(--transactions-color-text-secondary);

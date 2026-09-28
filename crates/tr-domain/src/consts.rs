@@ -93,9 +93,47 @@ pub const TODO_STATUS_DONE: &str = "done";
 /// 合法的待办状态集合（校验用，顺序为 doing / done）。
 pub const TODO_STATUSES: [&str; 2] = [TODO_STATUS_DOING, TODO_STATUS_DONE];
 
-/// 紧急度 / 重要度的取值上下限（含端点）。四象限图的坐标范围也用它。
-pub const TODO_LEVEL_MIN: i32 = -5;
-pub const TODO_LEVEL_MAX: i32 = 5;
+/// 紧急度 / 重要度的**六档**（弱 → 强）：低 / 中低 / 次低 / 次高 / 中高 / 高。
+///
+/// 值是**既有类型** `integer`（沿用 `-5..=5` 里的奇数），所以老数据不用换列；
+/// 六档之外的老值（`0` / `±2` / `±4`，来自上一版的 11 档下拉与"没填"默认值）
+/// 由迁移 `20260929_todo_levels_snap` 就近归档。四象限图的坐标范围仍是 `-5..=5`。
+pub const TODO_LEVELS: [i32; 6] = [-5, -3, -1, 1, 3, 5];
+
+/// 与 [`TODO_LEVELS`] **一一对应**的档位文案（顺序一致；界面与错误提示共用这一份）。
+pub const TODO_LEVEL_LABELS: [&str; 6] = ["低", "中低", "次低", "次高", "中高", "高"];
+
+/// 没评估过的默认档（次低）：既不假装紧急 / 重要，也不假装最低。
+///
+/// 上一版这一档是 `0`（"没填"），六档里没有 `0`，所以新建事项与老数据回填都落在这儿。
+pub const TODO_LEVEL_DEFAULT: i32 = -1;
+
+/// 就近取档：幅度向上取到相邻的奇数（`±2→±3`、`±4→±5`），超出 ±5 夹到端点，
+/// `0` 落到 [`TODO_LEVEL_DEFAULT`]。
+pub fn snap_todo_level(value: i32) -> i32 {
+    let magnitude = value.unsigned_abs();
+    let snapped = if magnitude >= 5 {
+        5
+    } else {
+        (magnitude + (1 - magnitude % 2)) as i32
+    };
+    match value.cmp(&0) {
+        std::cmp::Ordering::Less => -snapped,
+        std::cmp::Ordering::Equal => TODO_LEVEL_DEFAULT,
+        std::cmp::Ordering::Greater => snapped,
+    }
+}
+
+/// 档位文案。不在六档里的值先就近取档 —— 手工改过库（或迁移没跑到）也只会看到六档文案，
+/// 不会把裸数字渲染到界面上。
+pub fn todo_level_label(value: i32) -> &'static str {
+    let snapped = snap_todo_level(value);
+    TODO_LEVELS
+        .iter()
+        .position(|level| *level == snapped)
+        .map(|index| TODO_LEVEL_LABELS[index])
+        .unwrap_or(TODO_LEVEL_LABELS[0])
+}
 
 /// 卡片主题最长字符数。
 pub const TODO_CARD_TITLE_MAX: usize = 200;
@@ -116,5 +154,29 @@ mod tests {
         );
         // 列表内的字面量必须始终存在，否则会破坏既有账本的标签校验
         assert!(default_stock_trade_tags().contains(&STOCK_TAG_ANALYSIS.to_string()));
+    }
+
+    /// 六档的取档规则与文案（迁移与界面都依赖它，改规则必须同时改这条）。
+    #[test]
+    fn todo_levels_snap_and_label() {
+        assert_eq!(TODO_LEVELS.len(), TODO_LEVEL_LABELS.len());
+        for (level, label) in TODO_LEVELS.iter().zip(TODO_LEVEL_LABELS) {
+            assert_eq!(snap_todo_level(*level), *level, "{level} 已是档位");
+            assert_eq!(todo_level_label(*level), label);
+        }
+        // 幅度向上取 + 0 落到次低
+        for (raw, snapped) in [
+            (0, -1),
+            (-2, -3),
+            (-4, -5),
+            (2, 3),
+            (4, 5),
+            (6, 5),
+            (-7, -5),
+        ] {
+            assert_eq!(snap_todo_level(raw), snapped, "{raw} 应当取成 {snapped}");
+        }
+        assert_eq!(todo_level_label(4), "高");
+        assert_eq!(todo_level_label(-2), "中低");
     }
 }

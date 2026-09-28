@@ -2,7 +2,7 @@
 #
 # 一条链把这一页的四层串起来（每层都落库断言，不看"点到了没有"）：
 #   1. 建卡片（主题）→ `tbl_billadm_todo_card` 一行；
-#   2. 卡片下加事项（含紧急度 4 / 重要度 -3、开始与截止）→ `tbl_billadm_todo_item`
+#   2. 卡片下加事项（含紧急度「中高」/ 重要度「中低」、开始与截止）→ `tbl_billadm_todo_item`
 #      的 status=doing、urgency/importance 与两个日期都按界面上的选择落库；
 #   3. 展开进度 → 记一条 → `tbl_billadm_todo_progress` 一行（时间 + 正文）；
 #      打勾 / 取消打勾 → 同一条的 `done` 在 1 / 0 之间跟着变；
@@ -114,6 +114,8 @@ function Invoke-ModalButton {
 
 # 弹窗里的下拉触发器（`ui-select__trigger`）：按 X 排——左=紧急度、右=重要度。
 # 选完要**读回触发器的名字**确认真的生效（下拉面板里的选项点偏一次很常见，静默失败最难查）。
+# 六档（低 / 中低 / 次低 / 次高 / 中高 / 高）**没有搜索框**：面板 260px 装得下全部六个选项，
+# 开面板后直接按文案点那一项就行。
 function Select-Level {
     param($Window, [ValidateSet('left', 'right')][string]$Which, [string]$Value, [int]$Tries = 3)
     for ($attempt = 1; $attempt -le $Tries; $attempt++) {
@@ -130,22 +132,21 @@ function Select-Level {
         if ($triggers.Count -lt 2) { return $false }
         $trigger = if ($Which -eq 'left') { $triggers[0] } else { $triggers[$triggers.Count - 1] }
         if ($trigger.Current.Name -eq $Value) { return $true }
-        # 面板是**搜索型**下拉（11 档，260px 高的面板放不下）：先开面板，再把值敲进搜索框，
-        # 目标选项就只剩可见的一两个，按名字点得中（不搜索的话 4/5 在面板外，点了等于点空白）。
+        # 开面板（InvokePattern 优先，没开成退回真实鼠标）
         $opened = $false
         $pattern = $null
         if ($trigger.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
             try { $pattern.Invoke(); $opened = $true } catch { $opened = $false }
         }
         if (-not $opened) { Click-Element $trigger | Out-Null }
-        Start-Sleep -Milliseconds 600
-        if (-not (Set-InputByPaste -Window $Window -Name '搜索' -Text $Value -Retry 2)) {
+        Start-Sleep -Milliseconds 500
+        $option = Wait-Element -Root $Window -Name $Value -TimeoutSec 6
+        if (-not $option) {
             # InvokePattern 没开面板时退回真实鼠标再试一次
             Click-Element $trigger | Out-Null
             Start-Sleep -Milliseconds 700
-            Set-InputByPaste -Window $Window -Name '搜索' -Text $Value -Retry 2 | Out-Null
+            $option = Wait-Element -Root $Window -Name $Value -TimeoutSec 6
         }
-        $option = Wait-Element -Root $Window -Name $Value -TimeoutSec 6
         if ($option) {
             Click-Element $option | Out-Null
             Start-Sleep -Milliseconds 600
@@ -217,28 +218,29 @@ try {
     Assert-True ([bool]$newCard) '找到「新建卡片」'
     if ($newCard) { Invoke-Element $newCard | Out-Null }
     Assert-True ([bool](Wait-Element -Root $window -Name '卡片主题' -TimeoutSec 10)) '弹窗「新建卡片」已打开'
-    Assert-True (Set-InputByPaste -Window $window -Name '如：上线准备' -Text $cardTitle) '填入卡片主题'
+    Assert-True (Set-InputByPaste -Window $window -Name '如：需求开发' -Text $cardTitle) '填入卡片主题'
     Assert-True (Invoke-ModalButton -Window $window -Name '创建') '点「创建」'
     Start-Sleep -Seconds 2
     $cards = Get-TodoRows -Table 'tbl_billadm_todo_card' | Where-Object { $_.title -eq $cardTitle }
     Assert-True ($cards.Count -eq 1) "库里恰好一张卡片（实际 $($cards.Count) 张）"
 
     # ================= 3/7 加事项 =================
-    Write-Host "`n[todo] 3/7 在卡片下添加事项（紧急 4 / 重要 -3）"
+    Write-Host "`n[todo] 3/7 在卡片下添加事项（紧急「中高」/ 重要「中低」）"
     $addItem = Find-VisibleButton -Window $window -Name '添加事项'
     Assert-True ([bool]$addItem) '卡片上有「添加事项」'
     if ($addItem) { Invoke-Element $addItem | Out-Null }
     Assert-True ([bool](Wait-Element -Root $window -Name '紧急度' -TimeoutSec 10)) '事项弹窗已打开'
-    Assert-True (Set-InputByPaste -Window $window -Name '如：写完发布会稿' -Text $itemTitle) '填入事项'
-    Assert-True (Select-Level -Window $window -Which left -Value '4') '紧急度选 4'
-    Assert-True (Select-Level -Window $window -Which right -Value '-3') '重要度选 -3'
+    Assert-True (Set-InputByPaste -Window $window -Name '如：AI辅助研发' -Text $itemTitle) '填入事项'
+    # 六档的档位文案即选项 label（值是 -5 -3 -1 1 3 5）
+    Assert-True (Select-Level -Window $window -Which left -Value '中高') '紧急度选「中高」'
+    Assert-True (Select-Level -Window $window -Which right -Value '中低') '重要度选「中低」'
     Assert-True (Invoke-ModalButton -Window $window -Name '保存') '点「保存」'
     Start-Sleep -Seconds 2
     $items = Get-TodoRows -Table 'tbl_billadm_todo_item' | Where-Object { $_.title -eq $itemTitle }
     Assert-True ($items.Count -eq 1) "库里恰好一条事项（实际 $($items.Count) 条）"
     if ($items.Count -eq 1) {
-        Assert-True ($items[0].urgency -eq 4) "紧急度落库 4（实际 $($items[0].urgency)）"
-        Assert-True ($items[0].importance -eq -3) "重要度落库 -3（实际 $($items[0].importance)）"
+        Assert-True ($items[0].urgency -eq 3) "紧急度落库 3=中高（实际 $($items[0].urgency)）"
+        Assert-True ($items[0].importance -eq -3) "重要度落库 -3=中低（实际 $($items[0].importance)）"
         Assert-True ($items[0].status -eq 'doing') "新事项是进行中（实际 '$($items[0].status)'）"
         Assert-True (([string]$items[0].card_id).Length -gt 0) '事项挂在卡片下'
     }
@@ -349,4 +351,4 @@ finally {
     Stop-TrApp -Process $proc -Failures $failures -OutDir $OutDir
 }
 
-Show-TrSummary -Failures $failures -Tag 'todo' -SuccessMessage "[todo] 全部通过：建卡片 → 加事项（紧急 4 / 重要 -3）→ 记进度（打勾 / 取消打勾）→ 四象限图 → 完成进历史（带主题名 + 进度弹窗）→ 退回进行中 → 删卡片（三张表一起清）"
+Show-TrSummary -Failures $failures -Tag 'todo' -SuccessMessage "[todo] 全部通过：建卡片 → 加事项（紧急「中高」/ 重要「中低」）→ 记进度（打勾 / 取消打勾）→ 四象限图 → 完成进历史（带主题名 + 进度弹窗）→ 退回进行中 → 删卡片（三张表一起清）"

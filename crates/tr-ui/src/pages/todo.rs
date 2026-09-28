@@ -12,8 +12,9 @@
 //!
 //! * **「完成」不是搬运**：状态置成 `done` 之后，卡片视图（只取进行中）里没有它、历史里
 //!   有它 —— 数据只有一份，所以历史里留了一条「退回进行中」的退路（点错了还能回来）。
-//! * **时间只到日**（`YYYY-MM-DD`，与事件日期 / 股票委托时间同口径）；紧急度与重要度是
-//!   `-5..=5` 的整数，四象限图直接把这两个值当坐标：**+紧急向右、+重要向上，0 是原点**。
+//! * **时间只到日**（`YYYY-MM-DD`，与事件日期 / 股票委托时间同口径）；紧急度与重要度是**六档**
+//!   （低 / 中低 / 次低 / 次高 / 中高 / 高 —— 存的是既有整数 `-5 -3 -1 1 3 5`，界面只显示文案），
+//!   四象限图直接把这两个值当坐标：**+紧急向右、+重要向上，0 是原点**。
 //!
 //! 切子功能会**重建**视图（信号随组件 owner 释放），因此来回切会重新拉数据 —— 与"切页面"一致。
 
@@ -134,8 +135,8 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
     let item_title = RwSignal::new(String::new());
     let item_start = RwSignal::new(String::new());
     let item_due = RwSignal::new(String::new());
-    let item_urgency = RwSignal::new("0".to_string());
-    let item_importance = RwSignal::new("0".to_string());
+    let item_urgency = RwSignal::new(consts::TODO_LEVEL_DEFAULT.to_string());
+    let item_importance = RwSignal::new(consts::TODO_LEVEL_DEFAULT.to_string());
     let item_saving = RwSignal::new(false);
 
     // ---- 进度记录：同一时刻只展开一条（列表本来就是一屏），因此输入框只留一份 ----
@@ -303,9 +304,15 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
             Notifier::global().error("请输入事项", None);
             return;
         }
-        // 下拉里的值是字符串；解析失败按 0（选项只有 -5..5，正常不会失败）
-        let urgency = item_urgency.get_untracked().parse::<i32>().unwrap_or(0);
-        let importance = item_importance.get_untracked().parse::<i32>().unwrap_or(0);
+        // 下拉里的值是字符串；解析失败回落到默认档（选项只有六档，正常不会失败）
+        let urgency = item_urgency
+            .get_untracked()
+            .parse::<i32>()
+            .unwrap_or(consts::TODO_LEVEL_DEFAULT);
+        let importance = item_importance
+            .get_untracked()
+            .parse::<i32>()
+            .unwrap_or(consts::TODO_LEVEL_DEFAULT);
         let card_id = item_card.get_untracked();
         let editing = item_editing.get_untracked();
         let start = item_start.get_untracked();
@@ -528,7 +535,7 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
                 <p class="modal-form-label">"卡片主题"</p>
                 <Input
                     value=card_title
-                    placeholder="如：上线准备"
+                    placeholder="如：需求开发"
                     maxlength=200
                     on_enter=move || save_card()
                 />
@@ -578,7 +585,7 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
         >
             <div class="modal-form-item">
                 <p class="modal-form-label">"事项"</p>
-                <Input value=item_title placeholder="如：写完发布会稿" maxlength=500 />
+                <Input value=item_title placeholder="如：AI辅助研发" maxlength=500 />
             </div>
             <div class="todo-form-row">
                 <div class="modal-form-item">
@@ -593,17 +600,14 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
             <div class="todo-form-row">
                 <div class="modal-form-item">
                     <p class="modal-form-label">"紧急度"</p>
-                    // 11 档的下拉：开搜索框，直接敲数字跳过去（面板 260px 高，不搜索就得滚）
-                    <Select value=item_urgency options=level_options() searchable=true />
+                    // 六档：面板 260px 装得下全部选项，不需要搜索框
+                    <Select value=item_urgency options=level_options() />
                 </div>
                 <div class="modal-form-item">
                     <p class="modal-form-label">"重要度"</p>
-                    <Select value=item_importance options=level_options() searchable=true />
+                    <Select value=item_importance options=level_options() />
                 </div>
             </div>
-            <p class="todo-form-hint">
-                "-5 最弱、5 最强；四象限图按这两个值定位（向右更紧急、向上更重要）。"
-            </p>
         </Modal>
     }
     .into_any()
@@ -638,17 +642,19 @@ fn open_item_form(
             item_title.set(String::new());
             item_start.set(String::new());
             item_due.set(String::new());
-            item_urgency.set("0".to_string());
-            item_importance.set("0".to_string());
+            item_urgency.set(consts::TODO_LEVEL_DEFAULT.to_string());
+            item_importance.set(consts::TODO_LEVEL_DEFAULT.to_string());
         }
     }
     item_open.set(true);
 }
 
-/// -5..=5 的下拉选项（紧急度与重要度共用）。
+/// 六档的下拉选项（紧急度与重要度共用）：值是既有整数，界面显示档位文案。
 fn level_options() -> Vec<SelectOption> {
-    (consts::TODO_LEVEL_MIN..=consts::TODO_LEVEL_MAX)
-        .map(|level| SelectOption::same(level.to_string()))
+    consts::TODO_LEVELS
+        .iter()
+        .zip(consts::TODO_LEVEL_LABELS)
+        .map(|(level, label)| SelectOption::new(level.to_string(), label))
         .collect()
 }
 
@@ -816,11 +822,11 @@ fn item_row(
                 <div class="todo-item__line">
                     <span class="todo-item__title">{item.title.clone()}</span>
                     <span class="todo-item__levels">
-                        <span class="todo-level" title="紧急度（-5 ~ 5）">
-                            {format!("紧急 {}", item.urgency)}
+                        <span class="todo-level" title="紧急度">
+                            {format!("紧急 {}", consts::todo_level_label(item.urgency))}
                         </span>
-                        <span class="todo-level" title="重要度（-5 ~ 5）">
-                            {format!("重要 {}", item.importance)}
+                        <span class="todo-level" title="重要度">
+                            {format!("重要 {}", consts::todo_level_label(item.importance))}
                         </span>
                         {elapsed
                             .map(|days| {
@@ -1033,7 +1039,7 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
             <div class="todo-quadrant__head">
                 <h3 class="todo-quadrant__title">"四象限图"</h3>
                 <span class="todo-quadrant__hint">
-                    {format!("{} 项进行中；横轴紧急度，纵轴重要度（-5 ~ 5）", points.len())}
+                    {format!("{} 项进行中；横轴紧急度，纵轴重要度（各六档：低 → 高）", points.len())}
                 </span>
             </div>
             <div class="todo-quadrant__canvas">
@@ -1168,7 +1174,11 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                                     r=9.0
                                 >
                                     <title>
-                                        {format!("{title}\n{card} · 紧急 {urgency} · 重要 {importance}")}
+                                        {format!(
+                                            "{title}\n{card} · 紧急 {} · 重要 {}",
+                                            consts::todo_level_label(*urgency),
+                                            consts::todo_level_label(*importance),
+                                        )}
                                     </title>
                                 </circle>
                             }
@@ -1304,8 +1314,12 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
                                             </td>
                                             <td>{row.card_title.clone()}</td>
                                             <td class="todo-table__title">{row.title.clone()}</td>
-                                            <td class="is-center">{row.urgency}</td>
-                                            <td class="is-center">{row.importance}</td>
+                                            <td class="is-center">
+                                                {consts::todo_level_label(row.urgency)}
+                                            </td>
+                                            <td class="is-center">
+                                                {consts::todo_level_label(row.importance)}
+                                            </td>
                                             <td class="is-center">
                                                 <Button
                                                     variant=ButtonVariant::Text

@@ -82,6 +82,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20260929_todo_card_sort_progress_done",
         apply: todo_card_sort_progress_done,
     },
+    Migration {
+        id: "20260929_todo_levels_snap",
+        apply: todo_levels_snap,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -371,6 +375,45 @@ fn todo_card_sort_progress_done(conn: &Connection) -> MigrateResult {
             "ALTER TABLE tbl_billadm_todo_progress ADD COLUMN done integer NOT NULL DEFAULT 0",
         )
         .map_err(stringify)?;
+    }
+    Ok(())
+}
+
+/// `20260929_todo_levels_snap` —— 紧急度 / 重要度收敛到六档（低 / 中低 / 次低 / 次高 / 中高 / 高）。
+///
+/// 列的类型没变（还是 `integer` 的 `-5..=5`，只是现在只认其中的六个奇数档），所以这条迁移
+/// **只改值**：老库里的 `0`（上一版"没填"的默认值）与 `±2` / `±4` 就近归档，规则见
+/// [`consts::snap_todo_level`]；已经是档位的行原样不动。改之前引擎已备份整个工作空间。
+fn todo_levels_snap(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_todo_item").map_err(stringify)? {
+        return Err("缺少数据表 tbl_billadm_todo_item".to_string());
+    }
+    // 先读全再写：逐行改比在 SQL 里再抄一遍取档规则可靠（规则只写在 `consts` 一处）
+    let rows: Vec<(String, i32, i32)> = {
+        let mut statement = conn
+            .prepare("SELECT id, urgency, importance FROM tbl_billadm_todo_item")
+            .map_err(stringify)?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(stringify)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(stringify)?;
+        rows
+    };
+    let mut update = conn
+        .prepare("UPDATE tbl_billadm_todo_item SET urgency = ?2, importance = ?3 WHERE id = ?1")
+        .map_err(stringify)?;
+    for (id, urgency, importance) in rows {
+        let snapped = (
+            consts::snap_todo_level(urgency),
+            consts::snap_todo_level(importance),
+        );
+        if snapped == (urgency, importance) {
+            continue;
+        }
+        update
+            .execute(params![id, snapped.0, snapped.1])
+            .map_err(stringify)?;
     }
     Ok(())
 }
@@ -804,6 +847,72 @@ mod tests {
         assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
         assert!(column_exists(&conn, "tbl_billadm_todo_card", "sort_order").unwrap());
         assert!(column_exists(&conn, "tbl_billadm_todo_progress", "done").unwrap());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 六档收敛：老库（上一版的 11 档）里的 `0` / `±2` / `±4` 升级后都落进六档，
+    /// 本来就是档位的行一个也不动。
+    #[test]
+    fn todo_levels_snap_migration_normalizes_levels() {
+        let dir = temp_dir("todo-levels");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        conn.execute(
+            "INSERT INTO tbl_billadm_todo_card \
+             (id, ledger_id, title, created_at, updated_at, sort_order) \
+             VALUES ('c1', 'l1', '主题', 1, 1, 1)",
+            [],
+        )
+        .unwrap();
+        // 三种老值各来一条：0（旧的"没填"）、±2 / ±4（11 档里的偶数档）、已经是档位
+        for (id, urgency, importance) in [("i1", 0, 0), ("i2", 2, -4), ("i3", 3, -1)] {
+            conn.execute(
+                "INSERT INTO tbl_billadm_todo_item \
+                 (id, ledger_id, card_id, title, start_date, due_date, urgency, importance, \
+                  status, completed_at, created_at, updated_at) \
+                 VALUES (?1, 'l1', 'c1', '事项', '', '', ?2, ?3, 'doing', 0, 1, 1)",
+                params![id, urgency, importance],
+            )
+            .unwrap();
+        }
+        conn.execute_batch(
+            "DELETE FROM tbl_billadm_schema_migration WHERE id = '20260929_todo_levels_snap';",
+        )
+        .unwrap();
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(applied, vec!["20260929_todo_levels_snap".to_string()]);
+
+        let mut statement = conn
+            .prepare("SELECT id, urgency, importance FROM tbl_billadm_todo_item ORDER BY id")
+            .unwrap();
+        let levels: Vec<(String, i32, i32)> = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        drop(statement);
+        assert_eq!(
+            levels,
+            vec![
+                ("i1".to_string(), -1, -1),
+                ("i2".to_string(), 3, -5),
+                ("i3".to_string(), 3, -1),
+            ]
+        );
+        crate::schema::validate_current(&conn).unwrap();
+
+        // 重复应用：无待应用迁移、值不变
+        assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
+        let after: i32 = conn
+            .query_row(
+                "SELECT urgency FROM tbl_billadm_todo_item WHERE id = 'i2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, 3);
 
         std::fs::remove_dir_all(&dir).ok();
     }

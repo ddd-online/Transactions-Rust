@@ -48,17 +48,16 @@ fn normalize_date(value: &str) -> ServiceResult<String> {
     }
 }
 
-/// 紧急度 / 重要度必须落在 `-5..=5`。
+/// 紧急度 / 重要度只能是六档之一（低 / 中低 / 次低 / 次高 / 中高 / 高）。
 fn check_level(value: i32, label: &str) -> ServiceResult<()> {
-    if !(consts::TODO_LEVEL_MIN..=consts::TODO_LEVEL_MAX).contains(&value) {
-        return Err(AppError::bad_request(format!(
-            "{label}需在 {} 到 {} 之间",
-            consts::TODO_LEVEL_MIN,
-            consts::TODO_LEVEL_MAX
-        ))
-        .into());
+    if consts::TODO_LEVELS.contains(&value) {
+        return Ok(());
     }
-    Ok(())
+    Err(AppError::bad_request(format!(
+        "{label}只能是 {}",
+        consts::TODO_LEVEL_LABELS.join(" / ")
+    ))
+    .into())
 }
 
 /// 事项的四个可变字段一起校验，返回归一化后的 `(标题, 开始, 截止)`。
@@ -419,7 +418,7 @@ mod tests {
             "2026-09-01",
             "2026-09-30",
             3,
-            -2,
+            -3,
         )
         .unwrap();
         add_progress(&workspace, LEDGER, &item.id, "列了大纲").unwrap();
@@ -432,7 +431,7 @@ mod tests {
         assert_eq!(cards[0].items.len(), 1);
         assert_eq!(cards[0].items[0].title, "写完季度复盘");
         assert_eq!(cards[0].items[0].urgency, 3);
-        assert_eq!(cards[0].items[0].importance, -2);
+        assert_eq!(cards[0].items[0].importance, -3);
         assert_eq!(cards[0].items[0].progress.len(), 2);
         assert!(list_history(&workspace, LEDGER).unwrap().is_empty());
 
@@ -460,17 +459,20 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 校验与隔离：空文本、越界的紧急度/重要度、倒挂的日期、跨账本的行。
+    /// 校验与隔离：空文本、不在六档里的紧急度/重要度、倒挂的日期、跨账本的行。
     #[test]
     fn validation_and_ledger_isolation() {
         let (workspace, dir) = workspace("todo-validate");
         let card = card_id(&workspace, "主题");
 
         assert!(create_card(&workspace, LEDGER, "   ").is_err());
-        assert!(create_item(&workspace, LEDGER, &card, "", "", "", 0, 0).is_err());
-        assert!(create_item(&workspace, LEDGER, &card, "事项", "", "", 6, 0).is_err());
-        assert!(create_item(&workspace, LEDGER, &card, "事项", "", "", 0, -6).is_err());
-        assert!(create_item(&workspace, LEDGER, &card, "事项", "2026/09/01", "", 0, 0).is_err());
+        assert!(create_item(&workspace, LEDGER, &card, "", "", "", -1, -1).is_err());
+        assert!(create_item(&workspace, LEDGER, &card, "事项", "", "", 6, -1).is_err());
+        // 上一版的 11 档（偶数档与"没填"的 0）不再是合法值
+        assert!(create_item(&workspace, LEDGER, &card, "事项", "", "", 0, -1).is_err());
+        assert!(create_item(&workspace, LEDGER, &card, "事项", "", "", 4, -1).is_err());
+        assert!(create_item(&workspace, LEDGER, &card, "事项", "", "", -1, -6).is_err());
+        assert!(create_item(&workspace, LEDGER, &card, "事项", "2026/09/01", "", -1, -1).is_err());
         assert!(
             create_item(
                 &workspace,
@@ -479,8 +481,8 @@ mod tests {
                 "事项",
                 "2026-09-30",
                 "2026-09-01",
-                0,
-                0
+                -1,
+                -1
             )
             .is_err(),
             "截止不能早于开始"
@@ -488,11 +490,11 @@ mod tests {
         assert!(set_item_status(&workspace, LEDGER, "nope", "finished").is_err());
 
         // 别的账本看不见、也删不掉
-        let item = create_item(&workspace, LEDGER, &card, "事项", "", "", 0, 0).unwrap();
+        let item = create_item(&workspace, LEDGER, &card, "事项", "", "", -1, -1).unwrap();
         assert!(list_cards(&workspace, "other-ledger").unwrap().is_empty());
         // 删除只按 id（界面上的行本来就来自当前账本），这里删掉之后再确认卡片视图空了
         delete_item(&workspace, &item.id).unwrap();
-        assert!(create_item(&workspace, "other-ledger", &card, "事项", "", "", 0, 0).is_err());
+        assert!(create_item(&workspace, "other-ledger", &card, "事项", "", "", -1, -1).is_err());
         assert!(list_cards(&workspace, LEDGER).unwrap()[0].items.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
@@ -503,7 +505,7 @@ mod tests {
     fn deleting_a_card_removes_its_items_and_progress() {
         let (workspace, dir) = workspace("todo-delete-card");
         let card = card_id(&workspace, "主题");
-        let item = create_item(&workspace, LEDGER, &card, "事项", "", "", 0, 0).unwrap();
+        let item = create_item(&workspace, LEDGER, &card, "事项", "", "", -1, -1).unwrap();
         let progress = add_progress(&workspace, LEDGER, &item.id, "进度一").unwrap();
 
         delete_card(&workspace, &card).unwrap();
@@ -555,7 +557,7 @@ mod tests {
         assert_eq!(titles(&workspace), vec!["乙", "甲"]);
 
         // 进度打勾：卡片视图里读回来就是 done
-        let item = create_item(&workspace, LEDGER, &first, "事项", "", "", 0, 0).unwrap();
+        let item = create_item(&workspace, LEDGER, &first, "事项", "", "", -1, -1).unwrap();
         let progress = add_progress(&workspace, LEDGER, &item.id, "先做了半步").unwrap();
         assert!(!progress.done, "新记的进度默认没打勾");
         set_progress_done(&workspace, &progress.id, true).unwrap();

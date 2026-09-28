@@ -58,7 +58,7 @@ CREATE TABLE `tbl_billadm_todo_progress` (`id` text,`ledger_id` varchar(36) DEFA
 CREATE INDEX `idx_tbl_billadm_todo_progress_item` ON `tbl_billadm_todo_progress`(`ledger_id`,`item_id`,`created_at`);
 CREATE TABLE `tbl_billadm_schema_migration` (`id` text,`applied_at` integer,PRIMARY KEY (`id`));
 
--- 以下 7 条记录是迁移登记（这些迁移对**空库**都是空操作）。
+-- 以下 8 条记录是迁移登记（这些迁移对**空库**都是空操作）。
 -- 本仓库只复刻建库后的最终状态；迁移的执行逻辑在 `tr-store` 的 `migrations` 模块里
 -- （打开既有工作空间时按登记表逐个应用），新建库与升级后的库结构一致。
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260101_key_event_ledger_date_composite_unique', CAST(strftime('%s','now') AS INTEGER));
@@ -68,3 +68,4 @@ INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260920_diar
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260925_stock_operation_log', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260928_todo_tables', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260929_todo_card_sort_progress_done', CAST(strftime('%s','now') AS INTEGER));
+INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260929_todo_levels_snap', CAST(strftime('%s','now') AS INTEGER));
