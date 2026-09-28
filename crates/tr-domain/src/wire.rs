@@ -367,6 +367,22 @@ pub struct TodoProgressCreateRequest {
     pub content: String,
 }
 
+/// 拖动排序：把一张卡片挪到 `sort_order`（只按 id，与其它待办写操作同一约定）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TodoCardSortRequest {
+    pub id: String,
+    pub sort_order: i32,
+}
+
+/// 给一条进度记录打勾 / 取消打勾。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TodoProgressDoneRequest {
+    pub id: String,
+    pub done: bool,
+}
+
 /// 数值参数：界面可能传数字字符串（`"2"`）也可能直接传数字（`2`），两种形态都接受。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]

@@ -181,17 +181,35 @@ pub fn create_card(
     title: &str,
 ) -> ServiceResult<TodoCardDto> {
     let title = require_text(title, "请输入卡片主题", consts::TODO_CARD_TITLE_MAX)?;
+    let conn = workspace.connection();
+    // 新卡片排在最后（拖动排序改的就是这个序号）
+    let sort_order = db(TodoCardDao::get_max_sort(&conn, ledger_id))? + 1;
     let card = TodoCard {
         id: tr_store::util::new_uuid(),
         ledger_id: ledger_id.to_string(),
         title,
         created_at: 0,
         updated_at: 0,
+        sort_order,
     };
-    db(TodoCardDao::create(&workspace.connection(), &card))?;
+    db(TodoCardDao::create(&conn, &card))?;
     // 回读一次拿 DAO 填的时间戳
-    let saved = db(TodoCardDao::get(&workspace.connection(), &card.id))?;
+    let saved = db(TodoCardDao::get(&conn, &card.id))?;
     Ok(TodoCardDto::from_card(&saved, Vec::new()))
+}
+
+/// 改卡片排序号（拖动排序；只按 id，见 [`delete_card`] 的说明）。
+pub fn update_card_sort(
+    workspace: &Workspace,
+    card_id: &str,
+    sort_order: i32,
+) -> ServiceResult<()> {
+    db(TodoCardDao::update_sort(
+        &workspace.connection(),
+        card_id,
+        sort_order,
+    ))?;
+    Ok(())
 }
 
 /// 删卡片：同一个事务里连它的事项与进度记录一起删。
@@ -341,6 +359,7 @@ pub fn add_progress(
         ledger_id: ledger_id.to_string(),
         item_id: item_id.to_string(),
         content,
+        done: false,
         created_at: 0,
     };
     db(TodoProgressDao::create(&conn, &progress))?;
@@ -355,6 +374,20 @@ pub fn add_progress(
 pub fn delete_progress(workspace: &Workspace, progress_id: &str) -> ServiceResult<()> {
     let conn = workspace.connection();
     let affected = db(TodoProgressDao::delete(&conn, progress_id))?;
+    if affected == 0 {
+        return Err(AppError::not_found("进度记录不存在").into());
+    }
+    Ok(())
+}
+
+/// 给一条进度记录打勾 / 取消打勾（打勾后界面上给正文加删除线）。
+pub fn set_progress_done(
+    workspace: &Workspace,
+    progress_id: &str,
+    done: bool,
+) -> ServiceResult<()> {
+    let conn = workspace.connection();
+    let affected = db(TodoProgressDao::update_done(&conn, progress_id, done))?;
     if affected == 0 {
         return Err(AppError::not_found("进度记录不存在").into());
     }
@@ -496,6 +529,50 @@ mod tests {
         assert!(delete_card(&workspace, &card).is_err());
         // 已删除的事项的进度也删不掉
         assert!(delete_progress(&workspace, &progress.id).is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 卡片按 `sort_order` 排（新建的排最后，拖动改的就是这个序号）；
+    /// 进度记录能打勾 / 取消打勾，列表里读回来跟着变。
+    #[test]
+    fn cards_follow_sort_order_and_progress_can_be_checked() {
+        let (workspace, dir) = workspace("todo-sort-done");
+        let first = card_id(&workspace, "甲");
+        let second = card_id(&workspace, "乙");
+        let titles = |workspace: &Workspace| {
+            list_cards(workspace, LEDGER)
+                .unwrap()
+                .into_iter()
+                .map(|card| card.title)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(titles(&workspace), vec!["甲", "乙"], "新建的排在最后");
+
+        // 把第二张拖到第一位（界面拖拽后就是这样两条写回）
+        update_card_sort(&workspace, &second, 0).unwrap();
+        update_card_sort(&workspace, &first, 1).unwrap();
+        assert_eq!(titles(&workspace), vec!["乙", "甲"]);
+
+        // 进度打勾：卡片视图里读回来就是 done
+        let item = create_item(&workspace, LEDGER, &first, "事项", "", "", 0, 0).unwrap();
+        let progress = add_progress(&workspace, LEDGER, &item.id, "先做了半步").unwrap();
+        assert!(!progress.done, "新记的进度默认没打勾");
+        set_progress_done(&workspace, &progress.id, true).unwrap();
+        let done = |workspace: &Workspace| {
+            list_cards(workspace, LEDGER)
+                .unwrap()
+                .into_iter()
+                .find(|card| card.title == "甲")
+                .unwrap()
+                .items[0]
+                .progress[0]
+                .done
+        };
+        assert!(done(&workspace));
+        set_progress_done(&workspace, &progress.id, false).unwrap();
+        assert!(!done(&workspace), "取消打勾也写回库");
+        assert!(set_progress_done(&workspace, "nope", true).is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -14,28 +14,47 @@ pub struct TodoCardDao;
 pub struct TodoItemDao;
 pub struct TodoProgressDao;
 
-const CARD_COLUMNS: &str = "id, ledger_id, title, created_at, updated_at";
+const CARD_COLUMNS: &str = "id, ledger_id, title, created_at, updated_at, sort_order";
 const ITEM_COLUMNS: &str = "id, ledger_id, card_id, title, start_date, due_date, urgency, \
      importance, status, completed_at, created_at, updated_at";
-const PROGRESS_COLUMNS: &str = "id, ledger_id, item_id, content, created_at";
+const PROGRESS_COLUMNS: &str = "id, ledger_id, item_id, content, done, created_at";
 
 impl TodoCardDao {
     /// 新建卡片（时间戳取当前时刻）。
     pub fn create(conn: &Connection, card: &TodoCard) -> rusqlite::Result<()> {
         let now = crate::util::now_unix();
         conn.execute(
-            "INSERT INTO tbl_billadm_todo_card (id, ledger_id, title, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![card.id, card.ledger_id, card.title, now],
+            "INSERT INTO tbl_billadm_todo_card \
+             (id, ledger_id, title, created_at, updated_at, sort_order) \
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+            params![card.id, card.ledger_id, card.title, now, card.sort_order],
         )?;
         Ok(())
     }
 
-    /// 某账本的全部卡片，按创建顺序（同秒时按 rowid，保证稳定）。
+    /// 该账本最大的 `sort_order`（无卡片时为 0）；新建卡片取它 + 1，排在最后。
+    pub fn get_max_sort(conn: &Connection, ledger_id: &str) -> rusqlite::Result<i32> {
+        conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) FROM tbl_billadm_todo_card WHERE ledger_id = ?1",
+            [ledger_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// 改排列序号（拖动排序；卡片只按 id 定位，与其它待办写操作同一约定）。
+    pub fn update_sort(conn: &Connection, id: &str, sort_order: i32) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE tbl_billadm_todo_card SET sort_order = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, sort_order, crate::util::now_unix()],
+        )?;
+        Ok(())
+    }
+
+    /// 某账本的全部卡片，按排列序号（同序号时按创建顺序，保证稳定）。
     pub fn list_by_ledger(conn: &Connection, ledger_id: &str) -> rusqlite::Result<Vec<TodoCard>> {
         let mut statement = conn.prepare(&format!(
             "SELECT {CARD_COLUMNS} FROM tbl_billadm_todo_card WHERE ledger_id = ?1 \
-             ORDER BY created_at, rowid"
+             ORDER BY sort_order, created_at, rowid"
         ))?;
         let rows = statement.query_map([ledger_id], card_from_row)?;
         rows.collect()
@@ -197,17 +216,27 @@ impl TodoProgressDao {
     /// 追加一条进度记录。
     pub fn create(conn: &Connection, progress: &TodoProgress) -> rusqlite::Result<()> {
         conn.execute(
-            "INSERT INTO tbl_billadm_todo_progress (id, ledger_id, item_id, content, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO tbl_billadm_todo_progress \
+             (id, ledger_id, item_id, content, done, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 progress.id,
                 progress.ledger_id,
                 progress.item_id,
                 progress.content,
+                progress.done,
                 crate::util::now_unix(),
             ],
         )?;
         Ok(())
+    }
+
+    /// 打勾 / 取消打勾，返回改动的行数（0 = 本来就没有这一行）。
+    pub fn update_done(conn: &Connection, id: &str, done: bool) -> rusqlite::Result<usize> {
+        conn.execute(
+            "UPDATE tbl_billadm_todo_progress SET done = ?2 WHERE id = ?1",
+            params![id, done],
+        )
     }
 
     /// 某账本的全部进度记录（服务层按 `item_id` 分桶；按记录顺序）。
@@ -255,6 +284,7 @@ fn card_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TodoCard> {
         title: row.get(2)?,
         created_at: row.get(3)?,
         updated_at: row.get(4)?,
+        sort_order: row.get(5)?,
     })
 }
 
@@ -281,6 +311,7 @@ fn progress_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TodoProgress> 
         ledger_id: row.get(1)?,
         item_id: row.get(2)?,
         content: row.get(3)?,
-        created_at: row.get(4)?,
+        done: row.get(4)?,
+        created_at: row.get(5)?,
     })
 }

@@ -9,8 +9,9 @@ use tauri::State;
 
 use tr_domain::dto::{TodoCardDto, TodoHistoryDto, TodoItemDto, TodoProgressDto};
 use tr_domain::wire::{
-    IdRequest, LedgerIdRequest, TodoCardCreateRequest, TodoItemCreateRequest,
+    IdRequest, LedgerIdRequest, TodoCardCreateRequest, TodoCardSortRequest, TodoItemCreateRequest,
     TodoItemStatusRequest, TodoItemUpdateRequest, TodoProgressCreateRequest,
+    TodoProgressDoneRequest,
 };
 use tr_service::todo;
 
@@ -55,6 +56,15 @@ pub fn todo_card_delete(state: State<'_, AppState>, req: IdRequest) -> ApiResult
     super::require(!req.id.is_empty(), "id is required")?;
     let workspace = state.workspace()?;
     todo::delete_card(&workspace, &req.id)?;
+    Ok(())
+}
+
+/// 拖动排序：把一张卡片挪到 `sort_order`。
+#[tauri::command]
+pub fn todo_card_sort(state: State<'_, AppState>, req: TodoCardSortRequest) -> ApiResult<()> {
+    super::require(!req.id.is_empty(), "id is required")?;
+    let workspace = state.workspace()?;
+    todo::update_card_sort(&workspace, &req.id, req.sort_order)?;
     Ok(())
 }
 
@@ -145,5 +155,17 @@ pub fn todo_progress_delete(state: State<'_, AppState>, req: IdRequest) -> ApiRe
     super::require(!req.id.is_empty(), "id is required")?;
     let workspace = state.workspace()?;
     todo::delete_progress(&workspace, &req.id)?;
+    Ok(())
+}
+
+/// 给一条进度记录打勾 / 取消打勾。
+#[tauri::command]
+pub fn todo_progress_done(
+    state: State<'_, AppState>,
+    req: TodoProgressDoneRequest,
+) -> ApiResult<()> {
+    super::require(!req.id.is_empty(), "id is required")?;
+    let workspace = state.workspace()?;
+    todo::set_progress_done(&workspace, &req.id, req.done)?;
     Ok(())
 }

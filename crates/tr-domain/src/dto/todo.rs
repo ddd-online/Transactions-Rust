@@ -18,6 +18,9 @@ pub struct TodoProgressDto {
     pub item_id: String,
     #[serde(rename = "content")]
     pub content: String,
+    /// 是否已打勾完成（打勾后正文加删除线）
+    #[serde(rename = "done")]
+    pub done: bool,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
 }
@@ -28,6 +31,7 @@ impl From<&TodoProgress> for TodoProgressDto {
             id: progress.id.clone(),
             item_id: progress.item_id.clone(),
             content: progress.content.clone(),
+            done: progress.done,
             created_at: progress.created_at,
         }
     }

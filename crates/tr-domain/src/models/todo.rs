@@ -24,6 +24,9 @@ pub struct TodoCard {
     pub created_at: i64,
     #[serde(rename = "updatedAt")]
     pub updated_at: i64,
+    /// 排列序号（拖动排序；新建的取当前最大值 + 1）
+    #[serde(rename = "sortOrder")]
+    pub sort_order: i32,
 }
 
 /// 待办事项。表 `tbl_billadm_todo_item`。
@@ -81,6 +84,9 @@ pub struct TodoProgress {
     /// 进度正文（最长 2000 字符）
     #[serde(rename = "content")]
     pub content: String,
+    /// 这条进度是否已打勾完成
+    #[serde(rename = "done")]
+    pub done: bool,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
 }

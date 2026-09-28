@@ -61,6 +61,14 @@
   font-size: var(--transactions-size-text-body);
 }
 
+/* 标记列的内容（离群值标签 + 关联星标）：并排、居中、留出间距 */
+.tr-cell-marks {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-xs);
+}
+
 .tr-cell-actions {
   display: flex;
   align-items: center;

@@ -24,15 +24,15 @@ use tr_domain::dto::{TodoCardDto, TodoHistoryDto, TodoItemDto, TodoProgressDto};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, DatePicker, Empty, FeaturePage, IconButton,
-    IconButtonVariant, Input, Modal, ModalSize, Popconfirm, Select, SelectOption, TabItem, TabPane,
-    Tabs,
+    Button, ButtonSize, ButtonVariant, DatePicker, DragSortItem, DragSortState, Empty, FeaturePage,
+    IconButton, IconButtonVariant, Input, Modal, ModalSize, Popconfirm, Select, SelectOption,
+    TabItem, TabPane, Tabs,
 };
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::store::AppStores;
-use crate::time::format_timestamp;
+use crate::time::{format_timestamp, today_ymd, ymd_to_seconds, DAY_SECONDS};
 
 /// 页面标题（固定文案，改动即影响界面）。侧栏条目名也用这一个来源。
 pub const PAGE_TITLE: &str = "待办";
@@ -144,6 +144,34 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
     let progress_saving = RwSignal::new(false);
 
     let no_ledger = move || stores.current_ledger_id.get().is_empty();
+
+    // ---- 卡片拖动排序：先把新顺序写进信号，再逐条落库 ----
+    let card_drag = DragSortState::new();
+    let reorder_cards = move |from: usize, to: usize| {
+        let current = cards.get_untracked();
+        if from >= current.len() || to >= current.len() || from == to {
+            return;
+        }
+        let mut reordered = current.clone();
+        let moved = reordered.remove(from);
+        reordered.insert(to, moved);
+        // 拖动会挪动一整段，所以按新下标整体写回（卡片数量很小，不做"只发改动项"的优化）
+        let payload: Vec<(String, i32)> = reordered
+            .iter()
+            .enumerate()
+            .map(|(index, card)| (card.id.clone(), index as i32))
+            .collect();
+        cards.set(reordered);
+        leptos::task::spawn_local(async move {
+            for (id, index) in payload {
+                if let Err(error) = api::todo::card_sort(&id, index).await {
+                    notify_error("保存卡片排序失败", &error);
+                }
+            }
+        });
+    };
+    let drop_card: UnsyncCallback<(usize, usize)> =
+        UnsyncCallback::new(move |(from, to)| reorder_cards(from, to));
 
     // 拉卡片视图。每次改动后整表重拉：一个账本的待办量级很小，局部更新只会更啰嗦。
     let load = move |_: ()| {
@@ -384,6 +412,17 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
             });
         });
 
+    // 进度打勾 / 取消打勾（打勾后正文加删除线）
+    let toggle_progress_done: UnsyncCallback<(String, bool)> =
+        UnsyncCallback::new(move |(progress_id, done): (String, bool)| {
+            leptos::task::spawn_local(async move {
+                match api::todo::progress_done(&progress_id, done).await {
+                    Ok(()) => load(()),
+                    Err(error) => notify_error("更新进度状态失败", &error),
+                }
+            });
+        });
+
     let toolbar = view! {
         <Tabs
             active=tab
@@ -429,20 +468,27 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
                         <div class="todo-cards">
                             {list
                                 .into_iter()
-                                .map(|card| card_view(
-                                    card,
-                                    expanded,
-                                    progress_text,
-                                    progress_saving,
-                                    open_new_item,
-                                    open_edit_item,
-                                    ask_delete_card,
-                                    complete,
-                                    remove_item,
-                                    toggle_progress,
-                                    add_progress,
-                                    remove_progress,
-                                ))
+                                .enumerate()
+                                .map(|(index, card)| {
+                                    card_view(
+                                        card,
+                                        index,
+                                        card_drag,
+                                        drop_card,
+                                        expanded,
+                                        progress_text,
+                                        progress_saving,
+                                        open_new_item,
+                                        open_edit_item,
+                                        ask_delete_card,
+                                        complete,
+                                        remove_item,
+                                        toggle_progress,
+                                        add_progress,
+                                        remove_progress,
+                                        toggle_progress_done,
+                                    )
+                                })
                                 .collect_view()}
                         </div>
                     }
@@ -606,13 +652,30 @@ fn level_options() -> Vec<SelectOption> {
         .collect()
 }
 
+/// 开始时间「已过 N 天」（`None` = 没填开始时间，或开始日期还没到）。
+fn elapsed_days(start_date: &str) -> Option<i64> {
+    if start_date.is_empty() {
+        return None;
+    }
+    let start = ymd_to_seconds(start_date)?;
+    let today = ymd_to_seconds(&today_ymd())?;
+    let days = (today - start) / DAY_SECONDS;
+    (days >= 0).then_some(days)
+}
+
 /// 一张卡片：主题 + 进行中的事项 + 「添加事项」。
 ///
 /// 卡片是这一页唯一的面（Paper + 发丝线）；事项行**不再各自成卡**，只用发丝线分隔
 /// （嵌套卡片是页面里最容易读成"一堆盒子"的写法）。
+///
+/// 拖动排序的抓手是**表头**：`DragSortItem` 只包住表头那一行，卡片里的输入框
+/// （进度记录）因此不会落在可拖区域内 —— 否则在输入框里框选文字会被浏览器当成"拖卡片"。
 #[allow(clippy::too_many_arguments)]
 fn card_view(
     card: TodoCardDto,
+    index: usize,
+    drag: DragSortState,
+    on_drop: UnsyncCallback<(usize, usize)>,
     expanded: RwSignal<String>,
     progress_text: RwSignal<String>,
     progress_saving: RwSignal<bool>,
@@ -624,6 +687,7 @@ fn card_view(
     toggle_progress: UnsyncCallback<String>,
     add_progress: UnsyncCallback<String>,
     remove_progress: UnsyncCallback<String>,
+    toggle_progress_done: UnsyncCallback<(String, bool)>,
 ) -> AnyView {
     let count = card.items.len();
     let delete_id = card.id.clone();
@@ -632,7 +696,10 @@ fn card_view(
     let items = card.items;
     view! {
         <section class="todo-card">
-            <header class="todo-card__head">
+            <DragSortItem index=index state=drag on_drop=on_drop class="todo-card__head">
+                <span class="ui-drag-handle" title="拖动排序">
+                    {icons::icon(Icon::DragHandle)}
+                </span>
                 <h3 class="todo-card__title">{card.title.clone()}</h3>
                 <span class="todo-card__count">{format!("{count} 项进行中")}</span>
                 <div class="todo-card__actions">
@@ -653,7 +720,7 @@ fn card_view(
                         {icons::icon(Icon::Trash)}
                     </IconButton>
                 </div>
-            </header>
+            </DragSortItem>
             {if items.is_empty() {
                 view! { <p class="todo-card__empty">"这张卡片下还没有进行中的事项。"</p> }
                     .into_any()
@@ -673,6 +740,7 @@ fn card_view(
                                 toggle_progress,
                                 add_progress,
                                 remove_progress,
+                                toggle_progress_done,
                             ))
                             .collect_view()}
                     </ul>
@@ -685,6 +753,9 @@ fn card_view(
 }
 
 /// 一条事项：勾选 + 事项 + 起止与强弱 + 进度展开 + 编辑/删除。
+///
+/// **点整行也能收起/展开进度**（进度按钮在行尾，行本身是更大的目标）；
+/// 勾选与行尾动作都在自己的 `on:click` 里 `stop_propagation`，否则点它们会顺带折叠进度。
 #[allow(clippy::too_many_arguments)]
 fn item_row(
     item: TodoItemDto,
@@ -697,6 +768,7 @@ fn item_row(
     toggle_progress: UnsyncCallback<String>,
     add_progress: UnsyncCallback<String>,
     remove_progress: UnsyncCallback<String>,
+    toggle_progress_done: UnsyncCallback<(String, bool)>,
 ) -> AnyView {
     let id = item.id.clone();
     let card_id = item.card_id.clone();
@@ -705,6 +777,7 @@ fn item_row(
     let for_expand = id.clone();
     let for_complete = id.clone();
     let for_delete = id.clone();
+    let for_row = id.clone();
     let for_toggle = id.clone();
     let for_add = id.clone();
     let for_show = id.clone();
@@ -717,15 +790,24 @@ fn item_row(
         (true, false) => format!("{} 截止", item.due_date),
         (false, false) => format!("{} → {}", item.start_date, item.due_date),
     };
+    // 有开始时间才配「已过 N 天」这个标签（开始日期还没到就不显示）
+    let elapsed = elapsed_days(&item.start_date);
 
     view! {
-        <li class="todo-item" class:is-expanded=move || expanded.get() == for_expand>
+        <li
+            class="todo-item"
+            class:is-expanded=move || expanded.get() == for_expand
+            on:click=move |_| toggle_progress.run(for_row.clone())
+        >
             <button
                 type="button"
                 class="todo-item__check"
                 title="标记为已完成"
                 aria-label="标记为已完成"
-                on:click=move |_| complete.run(for_complete.clone())
+                on:click=move |event: web_sys::MouseEvent| {
+                    event.stop_propagation();
+                    complete.run(for_complete.clone())
+                }
             >
                 {icons::icon(Icon::Check)}
             </button>
@@ -740,6 +822,14 @@ fn item_row(
                         <span class="todo-level" title="重要度（-5 ~ 5）">
                             {format!("重要 {}", item.importance)}
                         </span>
+                        {elapsed
+                            .map(|days| {
+                                view! {
+                                    <span class="todo-level todo-level--elapsed">
+                                        {format!("已过 {days} 天")}
+                                    </span>
+                                }
+                            })}
                         {(!dates.is_empty())
                             .then(|| view! { <span class="todo-item__dates">{dates.clone()}</span> })}
                     </span>
@@ -752,11 +842,15 @@ fn item_row(
                         for_add.clone(),
                         add_progress,
                         remove_progress,
+                        toggle_progress_done,
                     )}
                 </Show>
             </div>
 
-            <div class="todo-item__actions">
+            <div
+                class="todo-item__actions"
+                on:click=move |event: web_sys::MouseEvent| event.stop_propagation()
+            >
                 <Button
                     variant=ButtonVariant::Text
                     size=ButtonSize::Small
@@ -765,7 +859,7 @@ fn item_row(
                 >
                     {move || {
                         if expanded.get() == for_label {
-                            format!("收起进度（{progress_count}）")
+                            format!("收起（{progress_count}）")
                         } else {
                             format!("进度（{progress_count}）")
                         }
@@ -783,6 +877,8 @@ fn item_row(
                     title="删除这条事项？"
                     description="它的进度记录会一起删掉。"
                     ok_text="删除"
+                    // 行尾的动作簇贴着卡片右缘：气泡必须右对齐，否则整个面板跑到窗口外点不到
+                    class="ui-popconfirm--end"
                     on_confirm=UnsyncCallback::new(move |()| remove_item.run(for_delete.clone()))
                 >
                     <IconButton variant=IconButtonVariant::Danger label="删除事项">
@@ -795,7 +891,10 @@ fn item_row(
     .into_any()
 }
 
-/// 展开的进度记录：历史条目（时间 + 正文 + 删除）+ 一条新的输入。
+/// 展开的进度记录：历史条目（打勾 + 时间 + 正文 + 删除）+ 一条新的输入。
+///
+/// 面板自己吃掉点击：行本身是"点一下收起进度"，而面板里有输入框与按钮 ——
+/// 点它们不该顺手把面板收起来。
 fn progress_panel(
     progress: Vec<TodoProgressDto>,
     progress_text: RwSignal<String>,
@@ -803,11 +902,15 @@ fn progress_panel(
     item_id: String,
     add_progress: UnsyncCallback<String>,
     remove_progress: UnsyncCallback<String>,
+    toggle_done: UnsyncCallback<(String, bool)>,
 ) -> AnyView {
     let item_for_add = item_id.clone();
     let empty = progress.is_empty();
     view! {
-        <div class="todo-progress">
+        <div
+            class="todo-progress"
+            on:click=move |event: web_sys::MouseEvent| event.stop_propagation()
+        >
             {if empty {
                 view! { <p class="todo-progress__empty">"还没有进度记录。"</p> }.into_any()
             } else {
@@ -817,8 +920,27 @@ fn progress_panel(
                             .into_iter()
                             .map(|row| {
                                 let remove_id = row.id.clone();
+                                let done_id = row.id.clone();
+                                let done = row.done;
+                                let row_class = if done {
+                                    "todo-progress__row is-done"
+                                } else {
+                                    "todo-progress__row"
+                                };
                                 view! {
-                                    <li class="todo-progress__row">
+                                    <li class=row_class>
+                                        <button
+                                            type="button"
+                                            class="todo-progress__check"
+                                            title=if done { "取消打勾" } else { "标记这条进度已完成" }
+                                            aria-label=if done { "取消打勾" } else { "标记这条进度已完成" }
+                                            on:click=move |event: web_sys::MouseEvent| {
+                                                event.stop_propagation();
+                                                toggle_done.run((done_id.clone(), !done))
+                                            }
+                                        >
+                                            {icons::icon(Icon::Check)}
+                                        </button>
                                         <span class="todo-progress__time">
                                             {format_timestamp(row.created_at, "MM-DD HH:mm")}
                                         </span>
@@ -1107,6 +1229,19 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
         });
     });
 
+    // 删除（历史里也留着退路：错记的条目直接删掉）
+    let remove: UnsyncCallback<String> = UnsyncCallback::new(move |item_id: String| {
+        leptos::task::spawn_local(async move {
+            match api::todo::item_delete(&item_id).await {
+                Ok(()) => {
+                    Notifier::global().success("事项已删除", None);
+                    load(());
+                }
+                Err(error) => notify_error("删除事项失败", &error),
+            }
+        });
+    });
+
     let content = view! {
         {move || {
             let list = rows.get();
@@ -1160,6 +1295,7 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
                                 .map(|row| {
                                     let open_row = row.clone();
                                     let restore_id = row.id.clone();
+                                    let delete_id = row.id.clone();
                                     let progress_count = row.progress.len();
                                     view! {
                                         <tr>
@@ -1180,13 +1316,32 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
                                                 </Button>
                                             </td>
                                             <td class="is-center">
-                                                <Button
-                                                    variant=ButtonVariant::Text
-                                                    size=ButtonSize::Small
-                                                    on_click=move |_| restore.run(restore_id.clone())
-                                                >
-                                                    "退回进行中"
-                                                </Button>
+                                                <div class="todo-table__actions">
+                                                    <Button
+                                                        variant=ButtonVariant::Text
+                                                        size=ButtonSize::Small
+                                                        on_click=move |_| restore.run(restore_id.clone())
+                                                    >
+                                                        "退回进行中"
+                                                    </Button>
+                                                    <Popconfirm
+                                                        title="删除这条事项？"
+                                                        description="它的进度记录会一起删掉。"
+                                                        ok_text="删除"
+                                                        cancel_text="取消"
+                                                        class="ui-popconfirm--end"
+                                                        on_confirm=UnsyncCallback::new(move |()| {
+                                                            remove.run(delete_id.clone())
+                                                        })
+                                                    >
+                                                        <Button
+                                                            variant=ButtonVariant::TextDanger
+                                                            size=ButtonSize::Small
+                                                        >
+                                                            "删除"
+                                                        </Button>
+                                                    </Popconfirm>
+                                                </div>
                                             </td>
                                         </tr>
                                     }

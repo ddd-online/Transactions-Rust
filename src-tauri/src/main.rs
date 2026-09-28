@@ -164,12 +164,14 @@ fn main() {
             tr_ipc::commands::todo_history,
             tr_ipc::commands::todo_card_create,
             tr_ipc::commands::todo_card_delete,
+            tr_ipc::commands::todo_card_sort,
             tr_ipc::commands::todo_item_create,
             tr_ipc::commands::todo_item_update,
             tr_ipc::commands::todo_item_status,
             tr_ipc::commands::todo_item_delete,
             tr_ipc::commands::todo_progress_add,
             tr_ipc::commands::todo_progress_delete,
+            tr_ipc::commands::todo_progress_done,
         ])
         .setup(|app| {
             let handle = app.handle();

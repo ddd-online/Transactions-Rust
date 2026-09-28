@@ -886,14 +886,18 @@ fn row_view(
                 <span class=format!("tr-cell-price {price_class}")>{price_text}</span>
             </td>
             <td class="tr-cell tr-cell--center">
-                <Show when=move || outlier>
-                    <Tag kind=TagKind::Outlier>"离群值"</Tag>
-                </Show>
-                <Show when=move || has_key_event>
-                    <span class="tr-cell-mark" title=key_event_date.clone()>
-                        {icons::icon(Icon::Star)}
-                    </span>
-                </Show>
+                // 标记列可能同时有「离群值」标签与关联星标：两个都放进同一个居中的横排，
+                // 否则它们贴在一起、并且各占各的基线
+                <span class="tr-cell-marks">
+                    <Show when=move || outlier>
+                        <Tag kind=TagKind::Outlier>"离群值"</Tag>
+                    </Show>
+                    <Show when=move || has_key_event>
+                        <span class="tr-cell-mark" title=key_event_date.clone()>
+                            {icons::icon(Icon::Star)}
+                        </span>
+                    </Show>
+                </span>
             </td>
             <td class="tr-cell tr-cell--center">
                 <div class="tr-cell-actions">

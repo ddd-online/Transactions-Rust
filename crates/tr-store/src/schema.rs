@@ -19,7 +19,7 @@ use rusqlite::Connection;
 
 use crate::workspace::WorkspaceError;
 
-/// 当前空库 DDL：23 张表 + 25 个索引 + 6 条迁移登记记录。
+/// 当前空库 DDL：23 张表 + 25 个索引 + 7 条迁移登记记录。
 ///
 /// 末尾 6 条 INSERT 是迁移登记记录（那些迁移对空库都是空操作）：新建库直接就是当前格式，
 /// 不需要再跑迁移；保留这些登记行是为了让新建库与"升级到当前格式的库"在数据层面也一致
@@ -259,7 +259,14 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
     ),
     (
         "tbl_billadm_todo_card",
-        &["id", "ledger_id", "title", "created_at", "updated_at"],
+        &[
+            "id",
+            "ledger_id",
+            "title",
+            "created_at",
+            "updated_at",
+            "sort_order",
+        ],
     ),
     (
         "tbl_billadm_todo_item",
@@ -280,7 +287,14 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
     ),
     (
         "tbl_billadm_todo_progress",
-        &["id", "ledger_id", "item_id", "content", "created_at"],
+        &[
+            "id",
+            "ledger_id",
+            "item_id",
+            "content",
+            "created_at",
+            "done",
+        ],
     ),
 ];
 
@@ -389,7 +403,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
         let order_id_indexes: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' \

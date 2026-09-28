@@ -78,6 +78,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20260928_todo_tables",
         apply: todo_tables,
     },
+    Migration {
+        id: "20260929_todo_card_sort_progress_done",
+        apply: todo_card_sort_progress_done,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -340,6 +344,31 @@ fn todo_tables(conn: &Connection) -> MigrateResult {
     if !index_exists(conn, "idx_tbl_billadm_todo_progress_item").map_err(stringify)? {
         conn.execute_batch(
             "CREATE INDEX `idx_tbl_billadm_todo_progress_item` ON `tbl_billadm_todo_progress`(`ledger_id`,`item_id`,`created_at`);",
+        )
+        .map_err(stringify)?;
+    }
+    Ok(())
+}
+
+/// `20260929_todo_card_sort_progress_done` —— 待办补两列：卡片拖动排序（`sort_order`）、
+/// 进度记录打勾（`done`）。
+///
+/// 两列都是**带默认值的整型**：老库里的卡片 / 进度记录一律取默认值
+/// （卡片排序退化回创建顺序，进度一律未打勾），不需要回填。
+///
+/// ⚠ 列定义的文本必须与 `fixtures/schema/fresh.sql` 里的最终形态一致：
+/// `ALTER TABLE ... ADD COLUMN` 会把列定义**追加到列尾**，所以基线里这两列也写在列尾
+/// （建表语句的最后一条列定义之后、`PRIMARY KEY` 之前），两条建库路径才不会分叉。
+fn todo_card_sort_progress_done(conn: &Connection) -> MigrateResult {
+    if !column_exists(conn, "tbl_billadm_todo_card", "sort_order").map_err(stringify)? {
+        conn.execute_batch(
+            "ALTER TABLE tbl_billadm_todo_card ADD COLUMN sort_order integer NOT NULL DEFAULT 0",
+        )
+        .map_err(stringify)?;
+    }
+    if !column_exists(conn, "tbl_billadm_todo_progress", "done").map_err(stringify)? {
+        conn.execute_batch(
+            "ALTER TABLE tbl_billadm_todo_progress ADD COLUMN done integer NOT NULL DEFAULT 0",
         )
         .map_err(stringify)?;
     }
@@ -620,13 +649,21 @@ mod tests {
              DROP TABLE tbl_billadm_todo_item;
              DROP INDEX idx_tbl_billadm_todo_card_ledger;
              DROP TABLE tbl_billadm_todo_card;
-             DELETE FROM tbl_billadm_schema_migration WHERE id = '20260928_todo_tables';",
+             DELETE FROM tbl_billadm_schema_migration \
+                WHERE id IN ('20260928_todo_tables', '20260929_todo_card_sort_progress_done');",
         )
         .unwrap();
         assert!(!table_exists(&conn, "tbl_billadm_todo_card").unwrap());
 
         let applied = apply_all(&mut conn, &dir).unwrap();
-        assert_eq!(applied, vec!["20260928_todo_tables".to_string()]);
+        // 两条一起补：先建三张表，再给卡片 / 进度补上排序与打勾两列
+        assert_eq!(
+            applied,
+            vec![
+                "20260928_todo_tables".to_string(),
+                "20260929_todo_card_sort_progress_done".to_string(),
+            ]
+        );
 
         for table in [
             "tbl_billadm_todo_card",
@@ -673,6 +710,100 @@ mod tests {
         // 重复应用：无待应用迁移、表还在
         assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
         assert!(table_exists(&conn, "tbl_billadm_todo_item").unwrap());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 待办补两列（卡片 `sort_order` / 进度 `done`）：0.9.0 的库（有待办表、没有这两列）升级后
+    /// ① 两列到位且老数据拿默认值（卡片排在原顺序、进度都没打勾）；
+    /// ② 两张表的建表 SQL 与新建库**逐字节一致**（`ALTER ... ADD COLUMN` 只能往列尾追加，
+    ///    所以基线里这两列也必须写在列尾）；③ 重复应用无副作用。
+    #[test]
+    fn todo_sort_and_done_columns_keep_fresh_schema_identical() {
+        let dir = temp_dir("todo-columns");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        // 降级成"还没有待办表"的格式，再用 0.9.0 那条迁移建出**老形状**的表
+        conn.execute_batch(
+            "DROP INDEX idx_tbl_billadm_todo_progress_item;
+             DROP TABLE tbl_billadm_todo_progress;
+             DROP INDEX idx_tbl_billadm_todo_item_card;
+             DROP INDEX idx_tbl_billadm_todo_item_status;
+             DROP TABLE tbl_billadm_todo_item;
+             DROP INDEX idx_tbl_billadm_todo_card_ledger;
+             DROP TABLE tbl_billadm_todo_card;
+             DELETE FROM tbl_billadm_schema_migration \
+                WHERE id = '20260929_todo_card_sort_progress_done';",
+        )
+        .unwrap();
+        todo_tables(&conn).unwrap();
+        // 老格式的卡片与进度记录（列还没加）
+        conn.execute(
+            "INSERT INTO tbl_billadm_todo_card (id, ledger_id, title, created_at, updated_at) \
+             VALUES ('c1', 'l1', '主题', 5, 5)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tbl_billadm_todo_progress \
+             (id, ledger_id, item_id, content, created_at) VALUES ('p1', 'l1', 'i1', '进度', 6)",
+            [],
+        )
+        .unwrap();
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(
+            applied,
+            vec!["20260929_todo_card_sort_progress_done".to_string()]
+        );
+
+        // 老数据拿默认值：卡片序号 0、进度未打勾
+        assert_eq!(
+            conn.query_row(
+                "SELECT sort_order FROM tbl_billadm_todo_card WHERE id = 'c1'",
+                [],
+                |row| row.get::<_, i32>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT done FROM tbl_billadm_todo_progress WHERE id = 'p1'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+
+        // 升级库与新建库不允许分叉：建表 SQL 逐字节一致
+        for table in ["tbl_billadm_todo_card", "tbl_billadm_todo_progress"] {
+            let migrated: String = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let fresh: String = fresh_conn()
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                migrated, fresh,
+                "{table} 的建表 SQL 与基线不一致\n迁移: {migrated}\n基线: {fresh}"
+            );
+        }
+        assert!(pending(&conn).unwrap().is_empty());
+
+        // 重复应用：无待应用迁移、列还在
+        assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
+        assert!(column_exists(&conn, "tbl_billadm_todo_card", "sort_order").unwrap());
+        assert!(column_exists(&conn, "tbl_billadm_todo_progress", "done").unwrap());
 
         std::fs::remove_dir_all(&dir).ok();
     }

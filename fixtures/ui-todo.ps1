@@ -5,6 +5,7 @@
 #   2. 卡片下加事项（含紧急度 4 / 重要度 -3、开始与截止）→ `tbl_billadm_todo_item`
 #      的 status=doing、urgency/importance 与两个日期都按界面上的选择落库；
 #   3. 展开进度 → 记一条 → `tbl_billadm_todo_progress` 一行（时间 + 正文）；
+#      打勾 / 取消打勾 → 同一条的 `done` 在 1 / 0 之间跟着变；
 #   4. 四象限图分栏：进行中的事项应当被画出来（象限名那句图例是它的判据）；
 #   5. 勾选完成 → status=done 且 completed_at>0，**卡片视图里它消失**、历史里出现
 #      （主题名跟着走）→ 历史里的「查看」弹窗能读到那条进度正文；
@@ -259,6 +260,20 @@ try {
         Assert-True ([int64]$progressRows[0].created_at -gt 0) '进度记录带时间'
         Assert-True ([string]$progressRows[0].item_id -eq [string]$items[0].id) '进度记录挂在刚才那条事项下'
     }
+
+    # 进度打勾 / 取消打勾（界面上是那条进度前面的勾选框）
+    $progressCheck = Find-VisibleButton -Window $window -Name '标记这条进度已完成'
+    Assert-True ([bool]$progressCheck) '进度条目上有打勾按钮'
+    if ($progressCheck) { Invoke-Element $progressCheck | Out-Null }
+    Start-Sleep -Seconds 2
+    $checked = Get-TodoRows -Table 'tbl_billadm_todo_progress' | Where-Object { $_.content -eq $progressText }
+    Assert-True ($checked.Count -eq 1 -and [int]$checked[0].done -eq 1) '打勾后 done 落库 = 1'
+    $progressUndo = Find-VisibleButton -Window $window -Name '取消打勾'
+    Assert-True ([bool]$progressUndo) '打勾后按钮变成「取消打勾」'
+    if ($progressUndo) { Invoke-Element $progressUndo | Out-Null }
+    Start-Sleep -Seconds 2
+    $unchecked = Get-TodoRows -Table 'tbl_billadm_todo_progress' | Where-Object { $_.content -eq $progressText }
+    Assert-True ($unchecked.Count -eq 1 -and [int]$unchecked[0].done -eq 0) '取消打勾后 done 落库 = 0'
     Save-Screenshot (Join-Path $OutDir '01-board.png')
 
     # ================= 5/7 四象限图 =================
@@ -334,4 +349,4 @@ finally {
     Stop-TrApp -Process $proc -Failures $failures -OutDir $OutDir
 }
 
-Show-TrSummary -Failures $failures -Tag 'todo' -SuccessMessage "[todo] 全部通过：建卡片 → 加事项（紧急 4 / 重要 -3）→ 记进度 → 四象限图 → 完成进历史（带主题名 + 进度弹窗）→ 退回进行中 → 删卡片（三张表一起清）"
+Show-TrSummary -Failures $failures -Tag 'todo' -SuccessMessage "[todo] 全部通过：建卡片 → 加事项（紧急 4 / 重要 -3）→ 记进度（打勾 / 取消打勾）→ 四象限图 → 完成进历史（带主题名 + 进度弹窗）→ 退回进行中 → 删卡片（三张表一起清）"

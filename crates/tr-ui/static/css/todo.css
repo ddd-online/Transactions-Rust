@@ -50,8 +50,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-md);
-  /* 顶部不留白：卡片列的起点与工具栏底边那条发丝线相接 */
-  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
+  /* 上下左右都留白：卡片列与工具栏底边那条发丝线之间也要有间距（与底部一致） */
+  padding: var(--transactions-space-lg);
 }
 
 .todo-card {
@@ -108,10 +108,17 @@
   align-items: flex-start;
   gap: var(--transactions-space-md);
   padding: var(--transactions-space-md) var(--transactions-space-lg);
+  /* 整行可点（收起 / 展开进度），所以给个可点的指针 */
+  cursor: pointer;
 }
 
 .todo-item + .todo-item {
   border-top: 1px solid var(--transactions-color-divider);
+}
+
+/* 最后一行贴着卡片的下圆角：悬停底色也得跟着圆，否则底色会顶出圆角 */
+.todo-item:last-child {
+  border-radius: 0 0 var(--transactions-radius-lg) var(--transactions-radius-lg);
 }
 
 .todo-item:hover {
@@ -193,6 +200,12 @@
   white-space: nowrap;
 }
 
+.todo-level--elapsed {
+  /* 「已过 N 天」是提醒不是状态：与紧急/重要同一形状，字色更实一点 */
+  color: var(--transactions-color-text-major);
+  font-variant-numeric: tabular-nums;
+}
+
 .todo-item__dates {
   color: var(--transactions-color-text-tertiary);
   font-size: var(--transactions-size-text-caption);
@@ -225,8 +238,55 @@
 
 .todo-progress__row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--transactions-space-sm);
+}
+
+/* 打勾：与事项行的勾选同一套语言，小一号 */
+.todo-progress__check {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--transactions-color-border-l3);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-major-background);
+  color: transparent;
+  cursor: pointer;
+  transition: color var(--transactions-transition-fast),
+    border-color var(--transactions-transition-fast),
+    background-color var(--transactions-transition-fast);
+}
+
+.todo-progress__check svg {
+  width: 100%;
+  height: 100%;
+}
+
+.todo-progress__check:hover {
+  border-color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-primary-tint);
+  color: var(--transactions-color-primary);
+}
+
+/* 打勾后的那一条：填主色 + 正文划掉 —— "做完了"一眼可辨 */
+.todo-progress__row.is-done .todo-progress__check {
+  border-color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-primary);
+  color: var(--transactions-color-text-inverse);
+}
+
+.todo-progress__row.is-done .todo-progress__text {
+  color: var(--transactions-color-text-tertiary);
+  text-decoration: line-through;
+}
+
+/* 没打勾的那条：正文用最实的字色（默认 secondary 会跟打勾的糊在一起） */
+.todo-progress__row:not(.is-done) .todo-progress__text {
+  color: var(--transactions-color-text-major);
 }
 
 .todo-progress__time {
@@ -370,6 +430,10 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* 空态（`.ui-empty` 自带 `flex: 1`）要在整块版心里垂直居中，所以这层也得是弹性列；
+     有数据时表按内容高排，滚动交给本层。 */
+  display: flex;
+  flex-direction: column;
   padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
 }
 
@@ -394,6 +458,74 @@
 
 .todo-table {
   width: 100%;
+  border-collapse: collapse;
+  font-size: var(--transactions-size-text-body-sm);
+}
+
+/* 列宽：**事项**（第 3 列）是唯一会长的内容，给它最大的一份；其余列只要"适中"。
+   用百分比当提示（`table-layout: auto`），内容比提示宽时按内容撑开，不会被裁掉。 */
+.todo-table th:nth-child(1) {
+  width: 18%;
+}
+
+.todo-table th:nth-child(2) {
+  width: 12%;
+}
+
+.todo-table th:nth-child(3) {
+  width: 34%;
+}
+
+.todo-table th:nth-child(4) {
+  width: 8%;
+}
+
+.todo-table th:nth-child(5) {
+  width: 8%;
+}
+
+.todo-table th:nth-child(6) {
+  width: 10%;
+}
+
+.todo-table th:nth-child(7) {
+  width: 10%;
+}
+
+.todo-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: var(--transactions-color-minor-background);
+  color: var(--transactions-color-text-secondary);
+  font-weight: var(--transactions-weight-medium);
+  /* 整张表所有列都居中（表头与单元格同一套对齐） */
+  text-align: center;
+  padding: var(--transactions-space-sm);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  white-space: nowrap;
+}
+
+.todo-table td {
+  padding: var(--transactions-space-sm);
+  border-bottom: 1px solid var(--transactions-color-divider);
+  color: var(--transactions-color-text-major);
+  text-align: center;
+  white-space: nowrap;
+  /* 单元格里常是按钮（比文字高）：靠中线对齐，否则按钮看着"偏下" */
+  vertical-align: middle;
+}
+
+.todo-table tbody tr:hover td {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+/* 操作列：两个按钮并排居中 */
+.todo-table__actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-xs);
 }
 
 .todo-table__time {
@@ -404,6 +536,9 @@
 
 .todo-table__title {
   color: var(--transactions-color-text-major);
+  /* 事项名可能很长：这一列允许换行，别把表格撑出横向滚动 */
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* ---------------- 弹窗里的小结构 ---------------- */
@@ -440,7 +575,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .todo-item__check {
+  .todo-item__check,
+  .todo-progress__check {
     transition: none;
   }
 }

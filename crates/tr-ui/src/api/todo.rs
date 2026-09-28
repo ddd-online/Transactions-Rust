@@ -6,17 +6,20 @@
 //! | `todo_history` | `{ ledger_id }` → 已完成的事项（含主题名与进度记录） |
 //! | `todo_card_create` | `{ ledger_id, title }` |
 //! | `todo_card_delete` | `{ id }` |
+//! | `todo_card_sort` | `{ id, sort_order }`（拖动排序） |
 //! | `todo_item_create` | `{ ledger_id, card_id, title, start_date, due_date, urgency, importance }` |
 //! | `todo_item_update` | `{ ledger_id, id, …同上… }` |
 //! | `todo_item_status` | `{ ledger_id, id, status }`（`doing` / `done`） |
 //! | `todo_item_delete` | `{ id }` |
 //! | `todo_progress_add` | `{ ledger_id, item_id, content }` |
 //! | `todo_progress_delete` | `{ id }` |
+//! | `todo_progress_done` | `{ id, done }`（打勾 / 取消打勾） |
 
 use tr_domain::dto::{TodoCardDto, TodoHistoryDto, TodoItemDto, TodoProgressDto};
 use tr_domain::wire::{
-    IdRequest, LedgerIdRequest, TodoCardCreateRequest, TodoItemCreateRequest,
+    IdRequest, LedgerIdRequest, TodoCardCreateRequest, TodoCardSortRequest, TodoItemCreateRequest,
     TodoItemStatusRequest, TodoItemUpdateRequest, TodoProgressCreateRequest,
+    TodoProgressDoneRequest,
 };
 
 use crate::ipc::{self, IpcError};
@@ -58,6 +61,18 @@ pub async fn card_create(ledger_id: &str, title: &str) -> Result<TodoCardDto, Ip
 /// 删卡片（连它的事项与进度记录一起删）。
 pub async fn card_delete(id: &str) -> Result<(), IpcError> {
     ipc::call_void("todo_card_delete", IdRequest { id: id.to_string() }).await
+}
+
+/// 拖动排序：把一张卡片挪到 `sort_order`。
+pub async fn card_sort(id: &str, sort_order: i32) -> Result<(), IpcError> {
+    ipc::call_void(
+        "todo_card_sort",
+        TodoCardSortRequest {
+            id: id.to_string(),
+            sort_order,
+        },
+    )
+    .await
 }
 
 /// 新建事项。日期是日粒度 `YYYY-MM-DD`（空串 = 没填）。
@@ -150,4 +165,16 @@ pub async fn progress_add(
 /// 删一条进度记录。
 pub async fn progress_delete(id: &str) -> Result<(), IpcError> {
     ipc::call_void("todo_progress_delete", IdRequest { id: id.to_string() }).await
+}
+
+/// 给一条进度记录打勾 / 取消打勾。
+pub async fn progress_done(id: &str, done: bool) -> Result<(), IpcError> {
+    ipc::call_void(
+        "todo_progress_done",
+        TodoProgressDoneRequest {
+            id: id.to_string(),
+            done,
+        },
+    )
+    .await
 }
