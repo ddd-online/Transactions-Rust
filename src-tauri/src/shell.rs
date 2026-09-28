@@ -46,6 +46,20 @@ pub fn create_startup_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// WebView2 的附加启动参数（A 方案：覆盖式滚动条）。
+///
+/// Chromium 默认的滚动条会占掉一份**布局宽度**：列表从"不滚动"变成"滚动"（或反过来）时，
+/// 右侧内容被挤窄/放开、整块重排。打开这两个 feature 之后滚动条画在内容**之上**、
+/// 随滚动淡入淡出，**不占宽度**。
+///
+/// ⚠ 配套前提：界面里**不能再自定义 `::-webkit-scrollbar`**（自定义滚动条必然走"占宽度"那条
+/// 老路，覆盖式就失效了），见 `crates/tr-ui/static/css/base.css`。
+///
+/// 那三个 `--disable-features` 是 wry 的默认值（迷你菜单 / PDF 迷你菜单 / 智能屏幕）；
+/// wry 只在调用方没传参数时用它们，**一旦自己传参数就会被整个替换**，所以必须照抄回来。
+const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+                            --enable-features=OverlayScrollbar,FluentScrollbar,FluentOverlayScrollbar";
+
 /// 主窗口。
 ///
 /// `disable_drag_drop_handler()` **不能删**（曾经的真实缺陷）：
@@ -72,6 +86,7 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             // （1280px 收栏目 / 1080px 折多栏，见 stock.css / data_analysis.css 的 `@media`）。
             // 曾经夹了一个 1500×1000 的下限，结果是：断点永远不触发、窗口在小屏上直接超出桌面。
             // 注意：**单位是逻辑像素**，与 `inner_size` 同一口径（见下方 `logical_bounds` 的注释）。
+            .additional_browser_args(WEBVIEW_ARGS)
             .disable_drag_drop_handler()
             .on_navigation(is_allowed_navigation)
             .decorations(false);

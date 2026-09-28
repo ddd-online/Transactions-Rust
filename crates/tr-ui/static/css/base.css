@@ -54,50 +54,20 @@ textarea {
 }
 
 /* ------------------------------------------------------------------ 浏览器自带的"表面"
- * 滚动条 / 选区 / 光标是界面里**唯一不属于设计系统**的部分，
- * 它们全部由浏览器默认值决定（原生滚动条 17px、带上下箭头、灰色轨道），
- * 也是"这页是设计过的还是拼起来的"最便宜的那个信号。这里一律从调色板取色。
+ * 滚动条 / 选区 / 光标是界面里**唯一不属于设计系统**的部分。
  *
- * 滚动条**全站统一**（不再是一个可选 class）：
- * 原来有个 `.u-custom-scrollbar` mixin，但全仓**一个使用者都没有**，
- * 所以此前所有滚动容器都是原生外观。
+ * **A 方案（正在 dev 窗口里验）：滚动条交给 WebView2 的覆盖式滚动条** ——
+ * 启动参数见 `src-tauri/src/shell.rs` 的 `WEBVIEW_ARGS`。它画在内容**之上**、不占布局宽度、
+ * 随滚动淡入淡出，所以列表从"不滚动"变成"滚动"时右侧内容一动不动。
  *
- * ⚠ **只用 `::-webkit-scrollbar`，绝不写 `scrollbar-width`**：
- * 实测（WebView2 / Chrome 153）两者同时存在时，`scrollbar-width` 会让 webkit 伪元素**整体失效**，
- * 滚动条退回 11px 的原生细条 —— 原来的 mixin 正是两个都写，那套 5px 圆角样式从未真正生效过
- * （实测占用：原生 17px / `scrollbar-width:thin` 11px / 只有 webkit 6px）。
+ * ⚠ **别在这里写 `::-webkit-scrollbar`**（也别写 `scrollbar-width`）：一旦自定义滚动条，
+ * Blink 就退回"占宽度"的那条老路，覆盖式随之失效。这条与旧的"只用 webkit 伪元素"恰好相反：
+ * 自定义能更窄（6px vs 原生 17px），但只有原生能**不占宽度**。
+ * 代价：滚动条的配色不再由我们控制 —— 它跟随 `color-scheme`（见 tokens.css）。
  *
- * 尺寸：6px 槽位 + 1px 透明边框 + `background-clip: content-box` = **4px 实心滑块**，
- * 比原生窄 11px；轨道透明，指针进入该滚动区域时滑块加深，拖动时用主色。
+ * 唯一例外：某个列表**刻意不要滚动条**时仍可在那一处写 `width: 0`
+ * （如 `stock.css` 的 `.stock-history__cards`；宽度本来就是 0，不存在占位问题）。
  * ------------------------------------------------------------------ */
-
-:where(*)::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-:where(*)::-webkit-scrollbar-track,
-:where(*)::-webkit-scrollbar-corner {
-  background-color: transparent;
-}
-
-:where(*)::-webkit-scrollbar-thumb {
-  border: 1px solid transparent;
-  border-radius: var(--transactions-radius-full);
-  background-color: var(--transactions-color-scrollbar-thumb);
-  background-clip: content-box;
-}
-
-/* `:hover` 只命中祖先，所以这条的语义是"指针在这个滚动区域里"（进入哪个区域，哪个区域的滑块醒来） */
-:where(*):hover::-webkit-scrollbar-thumb,
-:where(*)::-webkit-scrollbar-thumb:hover {
-  background-color: var(--transactions-color-scrollbar-thumb-hover);
-}
-
-/* 正在拖动：主色，明确"你正在移动它" */
-:where(*)::-webkit-scrollbar-thumb:active {
-  background-color: var(--transactions-color-primary);
-}
 
 /* 选区：用"选中"的既有配对（主色底 + 反色字），与日历选中格子同一套语言 */
 ::selection {

@@ -302,12 +302,17 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   `.ui-modal__content` 原来带 `overflow: hidden`（只为圆角），小弹窗（如「关联事件」）里日历被裁到只剩月份标题，
   看着像"面板画坏了"。现改成 `overflow: visible`。**下拉面板的正确做法是 portal 到 body。** 排查提示：UIA 里看
   不到"被裁掉"（被裁元素的矩形照样报出来），**只有截图（全屏 PNG）才看得出"元素没画出来"**。
-- **`scrollbar-width` 会让 `::-webkit-scrollbar` 整套失效**：规范里只要 `scrollbar-width` / `scrollbar-color` 被设
-  成非 `auto`，`::-webkit-scrollbar-*` 伪元素就整体不生效（`base.css` 原来的 `.u-custom-scrollbar` 两个都写，那套
-  样式从未渲染过）。本机实测占用宽度（WebView2 / Chrome 153，DPI 1.5）：原生 17px / `scrollbar-width:thin` 11px
-  / 只写 webkit 6px。**只用 `::-webkit-scrollbar`，不要再加 `scrollbar-width`**；另：`body { user-select: none }`
-  让全局 `::selection` 基本只在输入框里可见。排查提示：它的效果从 `getComputedStyle` 读不到，要么查 CSSOM 规则、
-  要么量 `offsetWidth - clientWidth`、要么看像素。
+- **滚动条现在是 WebView2 的"覆盖式"（零占位），别再自己画**：`src-tauri/src/shell.rs` 的 `WEBVIEW_ARGS` 开了
+  `--enable-features=OverlayScrollbar,FluentScrollbar,FluentOverlayScrollbar`，滚动条画在内容**之上**、随滚动
+  淡入淡出，所以列表从"不滚动"变成"滚动"时右侧内容不会被挤窄（用户报过的重排就来自这里）。
+  三条纪律：① **不许再写 `::-webkit-scrollbar` / `scrollbar-width`** —— 一旦自定义滚动条，Blink 就退回"占宽度"
+  那条老路，覆盖式直接失效（`base.css` 里留了这段注释，`stock.css` 只保留"刻意藏掉某条滚动条"的 `width: 0`）；
+  ② 滚动条的**配色不再由我们控制**，它跟随 `color-scheme`（见 `tokens.css` 的三处 `color-scheme`），所以删掉了
+  `--transactions-color-scrollbar-thumb*` 两个令牌；③ `additional_browser_args` 会**整体替换** wry 的默认参数，
+  必须把那三个 `--disable-features` 照抄回去。
+  排查提示：覆盖式的滑块**抓不到**（`PrintWindow` 与 `CopyFromScreen` 都不画它），要确认它浮没浮出来只能人眼看；
+  改这条链路的回归用 `fixtures/test.ps1 -Unit shell,ui-kit`。另：`body { user-select: none }` 让全局 `::selection`
+  基本只在输入框里可见。
 - **Tip 的宽度：只写 `max-width` 会被"包含块"坑死**（设置页过户费 ⓘ 的气泡被压成一列窄条）：气泡是
   `.ui-tooltip::after` 绝对定位伪元素，包含块是触发器本身（那个 ⓘ 只有 ~14px 宽），于是 shrink-to-fit 的可用宽度
   就是 14px。正确写法：先用 `width: max-content` 按文案铺开，再用 `max-width` 收上限（上限同时受视口约束
