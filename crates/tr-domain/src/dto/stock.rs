@@ -32,7 +32,7 @@ pub struct StockOverviewDto {
     /// 已实现总盈亏（Σ 卖出净盈亏，分）
     #[serde(rename = "realizedPnl")]
     pub realized_pnl: i64,
-    /// 浮动盈亏（分）= Σ（最新价×股数 − 持仓总成本），行情缺失部分为 0
+    /// 浮动盈亏（分）= Σ（持仓市值 + 本轮资金变动），行情缺失的持仓按持仓成本计入市值
     #[serde(rename = "unrealizedPnl")]
     pub unrealized_pnl: i64,
     /// 本次行情获取失败的持仓数量
@@ -122,6 +122,12 @@ pub struct StockPositionDto {
     /// 持仓总成本（分，含买入手续费）
     #[serde(rename = "totalCost")]
     pub total_cost: i64,
+    /// 本轮（最近一次清仓之后）建仓 / 加仓的合计成本（分，含手续费）；浮动盈亏率的分母
+    #[serde(rename = "roundCost")]
+    pub round_cost: i64,
+    /// 本轮资金变动合计（分）：买入为负、卖出为正
+    #[serde(rename = "roundCashFlow")]
+    pub round_cash_flow: i64,
     /// 该股累计已实现盈亏（分）
     #[serde(rename = "realizedPnl")]
     pub realized_pnl: i64,
@@ -147,6 +153,8 @@ impl From<&StockPosition> for StockPositionDto {
             stock_name: position.stock_name.clone(),
             quantity: position.quantity,
             total_cost: position.total_cost,
+            round_cost: 0,
+            round_cash_flow: 0,
             realized_pnl: position.realized_pnl,
             review: position.review.clone(),
             latest_price: None,
@@ -586,6 +594,13 @@ mod tests {
         assert!(value.get("latestPrice").is_none());
         assert!(value.get("prevClose").is_none());
         assert!(value.get("quoteTime").is_none());
+    }
+
+    #[test]
+    fn position_dto_uses_camel_case_round_keys() {
+        let value = serde_json::to_value(StockPositionDto::default()).unwrap();
+        assert_eq!(value["roundCost"], 0);
+        assert_eq!(value["roundCashFlow"], 0);
     }
 
     #[test]

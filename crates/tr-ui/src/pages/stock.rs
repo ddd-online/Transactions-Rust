@@ -646,7 +646,7 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
                                 "浮动盈亏",
                                 format::signed_yuan(data.unrealized_pnl),
                                 format::pnl_class(data.unrealized_pnl),
-                                "浮动盈亏 = Σ（最新价 × 股数 − 持仓总成本（含买入手续费））；未卖出持仓的账面盈亏",
+                                "浮动盈亏 = Σ（持仓市值 + 本轮资金变动）；本轮从建仓算到清仓，减仓回款直接冲抵本轮成本（含本轮已卖出的部分）",
                             ),
                             (
                                 "已实现盈亏",
@@ -1451,13 +1451,13 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                         };
                                         let float_pnl = match position.latest_price {
                                             Some(latest) if latest > 0 => {
-                                                Some(latest.saturating_mul(position.quantity).saturating_sub(position.total_cost))
+                                                Some(latest.saturating_mul(position.quantity).saturating_add(position.round_cash_flow))
                                             }
                                             _ => None,
                                         };
                                         let float_rate = float_pnl.and_then(|pnl| {
-                                            if position.total_cost > 0 {
-                                                Some(pnl as f64 / position.total_cost as f64 * 100.0)
+                                            if position.round_cost > 0 {
+                                                Some(pnl as f64 / position.round_cost as f64 * 100.0)
                                             } else {
                                                 None
                                             }
@@ -1584,13 +1584,13 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                             Some(latest) if latest > 0 => Some(
                                 latest
                                     .saturating_mul(position.quantity)
-                                    .saturating_sub(position.total_cost),
+                                    .saturating_add(position.round_cash_flow),
                             ),
                             _ => None,
                         };
                         let float_rate = float_pnl.and_then(|pnl| {
-                            if position.total_cost > 0 {
-                                Some(pnl as f64 / position.total_cost as f64 * 100.0)
+                            if position.round_cost > 0 {
+                                Some(pnl as f64 / position.round_cost as f64 * 100.0)
                             } else {
                                 None
                             }

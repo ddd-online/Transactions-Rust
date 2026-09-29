@@ -278,11 +278,12 @@ pub fn get_overview_with(
     let available_cash =
         account.principal + interest_total + realized_pnl - withdrawn_total - position_cost;
 
-    // 持仓市值与浮动盈亏：最新价 × 股数；行情缺失的股票按持仓成本计入并计数
+    // 持仓市值与浮动盈亏：最新价 × 股数 + 本轮资金变动；行情缺失的股票按持仓成本计入并计数
     let held_positions = db(StockDao::list_positions(&conn, ledger_id))?;
     let quotes = fetch_held_quotes(fetcher, &held_positions);
+    let flows = round_flows(&conn, ledger_id)?;
     let (position_market_value, unrealized_pnl, quote_failed_count) =
-        compute_held_market_value(&held_positions, &quotes);
+        compute_held_market_value(&held_positions, &quotes, &flows);
 
     // 总资产 = 可用现金 + 持仓市值（行情全部缺失时市值=成本）
     let total_assets = available_cash + position_market_value;
@@ -824,11 +825,15 @@ pub fn list_positions_with(
         .filter(|position| position.quantity > 0)
         .collect();
     let quotes = fetch_held_quotes(fetcher, &held);
+    let flows = round_flows(&conn, ledger_id)?;
 
     Ok(held
         .iter()
         .map(|position| {
             let mut item = StockPositionDto::from(position);
+            let flow = flow_of(&flows, position);
+            item.round_cost = flow.buy_cost;
+            item.round_cash_flow = flow.cash_flow;
             if let Some(quote) = quotes.get(&position.stock_code) {
                 if quote.latest_price > 0 {
                     item.latest_price = Some(quote.latest_price);
@@ -924,9 +929,14 @@ fn attach_history_quotes(fetcher: &dyn StockQuoteFetcher, items: &mut [StockTrad
 ///
 /// 行情可用的股票按最新价计价；缺失的按持仓成本计入，避免总资产在行情失败时失真，
 /// 并返回失败数量供界面提示。
+///
+/// 浮动盈亏按**本轮**口径 = 持仓市值 + 本轮资金变动合计（[`RoundFlow`]）：
+/// 减仓的回款直接冲抵建立仓位的成本，所以它是"清仓能拿到多少 − 这一轮投进去多少"，
+/// 与交易历史的轮次盈亏（`round_pnl`）同一个公式 —— 未清仓时市值代替卖出净额。
 fn compute_held_market_value(
     held: &[StockPosition],
     quotes: &HashMap<String, tr_domain::dto::StockQuoteDto>,
+    flows: &HashMap<String, RoundFlow>,
 ) -> (i64, i64, i64) {
     let mut market_value = 0_i64;
     let mut unrealized_pnl = 0_i64;
@@ -935,19 +945,74 @@ fn compute_held_market_value(
         if position.quantity <= 0 {
             continue;
         }
-        match quotes.get(&position.stock_code) {
-            Some(quote) if quote.latest_price > 0 => {
-                let value = quote.latest_price * position.quantity;
-                market_value += value;
-                unrealized_pnl += value - position.total_cost;
-            }
+        let flow = flow_of(flows, position);
+        let value = match quotes.get(&position.stock_code) {
+            Some(quote) if quote.latest_price > 0 => quote.latest_price * position.quantity,
             _ => {
-                market_value += position.total_cost;
                 quote_failed_count += 1;
+                position.total_cost
             }
-        }
+        };
+        market_value += value;
+        unrealized_pnl += value + flow.cash_flow;
     }
     (market_value, unrealized_pnl, quote_failed_count)
+}
+
+/// 一只股票当前轮次的资金口径（单位：分）。
+#[derive(Debug, Clone, Copy, Default)]
+struct RoundFlow {
+    /// 本轮建仓 / 加仓合计成本（含手续费）
+    pub buy_cost: i64,
+    /// 本轮资金变动合计：买入为 −(成交额 + 费用)、卖出为 成交额 − 费用
+    pub cash_flow: i64,
+}
+
+/// 本轮资金口径：按成交记录里「资金变动」列同一套算法，
+/// 把当前轮次（最近一次清仓之后）的成交折成一组金额。
+fn round_flow(trades_asc: &[StockTrade]) -> RoundFlow {
+    let mut flow = RoundFlow::default();
+    for trade in current_round_trades(trades_asc) {
+        if is_buy(&trade.trade_type) {
+            let cost = trade.amount + trade.fee;
+            flow.buy_cost += cost;
+            flow.cash_flow -= cost;
+        } else if is_sell(&trade.trade_type) {
+            flow.cash_flow += trade.amount - trade.fee;
+        }
+    }
+    flow
+}
+
+/// 整个账本按股票切出本轮资金口径（一次查询，避免逐股查库）。
+fn round_flows(
+    conn: &rusqlite::Connection,
+    ledger_id: &str,
+) -> ServiceResult<HashMap<String, RoundFlow>> {
+    let trades = db(StockDao::list_all_trades_asc(conn, ledger_id))?;
+    let mut by_code: HashMap<String, Vec<StockTrade>> = HashMap::new();
+    for trade in trades {
+        by_code
+            .entry(trade.stock_code.clone())
+            .or_default()
+            .push(trade);
+    }
+    Ok(by_code
+        .into_iter()
+        .map(|(code, trades)| (code, round_flow(&trades)))
+        .collect())
+}
+
+/// 某持仓的本轮资金口径；查不到成交（异常数据）时退回剩余成本，
+/// 让浮动盈亏退回"市值 − 持仓成本"的老口径而不是凭空变成市值。
+fn flow_of(flows: &HashMap<String, RoundFlow>, position: &StockPosition) -> RoundFlow {
+    flows
+        .get(&position.stock_code)
+        .copied()
+        .unwrap_or(RoundFlow {
+            buy_cost: position.total_cost,
+            cash_flow: -position.total_cost,
+        })
 }
 
 // ---------- 交易列表 ----------
@@ -4664,6 +4729,112 @@ mod tests {
         assert_eq!(
             overview.total_assets,
             overview.available_cash + overview.position_market_value
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 浮动盈亏 = 持仓市值 + **本轮**资金变动（减仓回款直接冲抵本轮建仓成本）。
+    ///
+    /// 回归：老口径是"市值 − 剩余持仓成本"（平均成本法），减仓那一笔的盈亏只落在
+    /// `realized_pnl` 里，于是画面上看到的浮动盈亏比"本轮净投入 vs 现在的市值"小一截
+    /// （用户报的：市值 8212 + 资金变动 −8644.21 应该等于 −432.21，而不是 −279.41）。
+    #[test]
+    fn unrealized_pnl_counts_current_round_cash_flow() {
+        let (workspace, dir) = workspace("round-cash-flow");
+        let fetcher = StubQuoteFetcher::with(
+            [(TEST_CODE.to_string(), quote(TEST_CODE, 1100, 1050, 12345))]
+                .into_iter()
+                .collect(),
+        );
+        seed_principal(&workspace, 10_000_000);
+
+        // 上一轮：建仓 2 手 → 清仓 2 手（已归档，不计入本轮口径）
+        for (trade_type, price, at) in [
+            (consts::STOCK_TRADE_OPEN, 1000, 1_700_000_000),
+            (consts::STOCK_TRADE_CLOSE, 2000, 1_700_000_100),
+        ] {
+            create_trade(
+                &workspace,
+                TEST_LEDGER_ID,
+                TEST_CODE,
+                TEST_NAME,
+                trade_type,
+                price,
+                2,
+                at,
+                "",
+                "",
+            )
+            .unwrap();
+        }
+        // 本轮：建仓 2 手 → 加仓 2 手 → 减仓 2 手（未清仓）
+        for (trade_type, price, at) in [
+            (consts::STOCK_TRADE_OPEN, 1000, 1_700_000_200),
+            (consts::STOCK_TRADE_ADD, 1200, 1_700_000_300),
+            (consts::STOCK_TRADE_REDUCE, 1300, 1_700_000_400),
+        ] {
+            create_trade(
+                &workspace,
+                TEST_LEDGER_ID,
+                TEST_CODE,
+                TEST_NAME,
+                trade_type,
+                price,
+                2,
+                at,
+                "",
+                "",
+            )
+            .unwrap();
+        }
+
+        let conn = workspace.connection();
+        let round: Vec<StockTrade> = db(StockDao::list_all_trades_asc(&conn, TEST_LEDGER_ID))
+            .unwrap()
+            .into_iter()
+            .filter(|trade| trade.trade_time >= 1_700_000_200)
+            .collect();
+        drop(conn);
+        // 与成交记录里「资金变动」列同一套算法：买入 −(成交额 + 费用)，卖出 成交额 − 费用
+        let want_flow: i64 = round
+            .iter()
+            .map(|trade| {
+                if is_buy(&trade.trade_type) {
+                    -(trade.amount + trade.fee)
+                } else {
+                    trade.amount - trade.fee
+                }
+            })
+            .sum();
+        let want_cost: i64 = round
+            .iter()
+            .filter(|trade| is_buy(&trade.trade_type))
+            .map(|trade| trade.amount + trade.fee)
+            .sum();
+        assert_eq!(round.len(), 3, "本轮应切出建仓 / 加仓 / 减仓三笔");
+
+        let positions = list_positions_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        assert_eq!(positions.len(), 1);
+        let position = &positions[0];
+        assert_eq!(position.quantity, 200);
+        assert_eq!(
+            position.round_cash_flow, want_flow,
+            "持仓的本轮资金变动合计"
+        );
+        assert_eq!(position.round_cost, want_cost, "持仓的本轮建仓成本合计");
+
+        let overview = get_overview_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        assert_eq!(overview.position_market_value, 1100 * 200);
+        assert_eq!(
+            overview.unrealized_pnl,
+            1100 * 200 + want_flow,
+            "浮动盈亏 = 持仓市值 + 本轮资金变动"
+        );
+        assert_ne!(
+            overview.unrealized_pnl,
+            1100 * 200 - position.total_cost,
+            "不能再是「市值 − 剩余持仓成本」的老口径（那会把本轮减仓的盈亏漏掉）"
         );
 
         std::fs::remove_dir_all(&dir).ok();
