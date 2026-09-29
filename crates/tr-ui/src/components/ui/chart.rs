@@ -1602,7 +1602,9 @@ fn system_theme_revision() -> RwSignal<u32> {
 // ==================================================================== 尺寸
 
 /// 观察画布尺寸：挂载后量一次，之后窗口尺寸变化时重量。
-fn watch_canvas_size(canvas: NodeRef<leptos::html::Div>, size: RwSignal<(f64, f64)>) {
+///
+/// 需要"按真实像素出图"的自绘 SVG（折线图、待办的四象限图）共用它。
+pub(crate) fn watch_canvas_size(canvas: NodeRef<leptos::html::Div>, size: RwSignal<(f64, f64)>) {
     let measure = move || {
         let Some(element) = canvas.get() else {
             return;

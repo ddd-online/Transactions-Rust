@@ -106,6 +106,8 @@ pub(super) fn nav_button(
 
 pub use button::{Button, ButtonSize, ButtonVariant, IconButton, IconButtonVariant};
 pub use chart::{ChartConfig, ChartSeries, ChartValueKind, LineChart};
+// 自绘 SVG 的页面（待办的四象限图）也要按真实像素出图，但这不是对外的组件接口
+pub(crate) use chart::watch_canvas_size;
 pub use checkbox::{Checkbox, CheckboxGroup, CheckboxOption};
 pub use date_picker::{add_months, parse_ymd, today, DatePicker, DateRangePicker, Ymd};
 pub use divider::Divider;

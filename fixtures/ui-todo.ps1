@@ -6,7 +6,7 @@
 #      的 status=doing、urgency/importance 与两个日期都按界面上的选择落库；
 #   3. 展开进度 → 记一条 → `tbl_billadm_todo_progress` 一行（时间 + 正文）；
 #      打勾 / 取消打勾 → 同一条的 `done` 在 1 / 0 之间跟着变；
-#   4. 四象限图分栏：进行中的事项应当被画出来（象限名那句图例是它的判据）；
+#   4. 四象限图分栏：进行中的事项应当被画出来（判据 = 工具栏下那句说明 + SVG 撑满版心）；
 #   5. 勾选完成 → status=done 且 completed_at>0，**卡片视图里它消失**、历史里出现
 #      （主题名跟着走）→ 历史里的「查看」弹窗能读到那条进度正文；
 #   6. 「退回进行中」→ status 回到 doing（误点的退路）；
@@ -285,6 +285,19 @@ try {
     # 判据用工具栏下的那句说明（SVG 里的 <text> 不保证进 UIA 树，别拿象限名当标记）
     Assert-True ([bool](Wait-Like -Root $window -Pattern '横轴紧急度' -TimeoutSec 10)) `
         '四象限图画出来了（说明文案在）'
+    # 卡片要**撑满版心**：曾经它只跟着自己的内容高（固定 viewBox 按宽度缩放），窗口越高，
+    # 卡片底下空出来的一大截越明显。SVG 的高度是这件事在 UIA 里唯一量得到的判据
+    # （`role="img"` + aria-label 会以 Image 节点暴露）。
+    $quad = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, '进行中事项的四象限分布')))) |
+        Where-Object { Test-Rect $_.Current.BoundingRectangle } | Select-Object -First 1
+    Assert-True ([bool]$quad) '四象限图的 SVG 在 UIA 树里（role=img）'
+    if ($quad) {
+        $quadHeight = $quad.Current.BoundingRectangle.Height
+        $windowHeight = $window.Current.BoundingRectangle.Height
+        Assert-True ($quadHeight -gt $windowHeight * 0.7) `
+            "四象限图铺满版心（图高 $([int]$quadHeight) / 窗口高 $([int]$windowHeight)）"
+    }
     Save-Screenshot (Join-Path $OutDir '02-quadrant.png')
 
     # ================= 6/7 完成 → 历史 =================

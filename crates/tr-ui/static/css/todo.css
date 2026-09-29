@@ -352,36 +352,41 @@
 }
 
 .todo-quadrant__canvas {
+  /* 撑满工具栏以下的整块高度（`.todo-quadrant` 是弹性列）：卡片不再只跟着内容高，
+     底部也不再留一段空白；象限到卡片边的边距由 SVG 里的 PAD 负责。 */
+  flex: 1;
+  /* 窗口再矮也不把图压没：不够高时由外层的 `overflow: auto` 出滚动条 */
+  min-height: 220px;
   background-color: var(--transactions-color-major-background);
   border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-lg);
-  padding: var(--transactions-space-md);
 }
 
 .todo-quadrant__svg {
   display: block;
   width: 100%;
-  height: auto;
-  /* 别无限放大：坐标与文字都随 viewBox 缩放，超过这个宽度就开始"糊大" */
-  max-width: 880px;
-  margin: 0 auto;
+  /* 高宽都撑满卡片：viewBox 由 `watch_canvas_size` 量到的像素宽高给出（1 单位 = 1px），
+     所以这里是"等比贴合"而不是"拉伸变形"，文字也始终是令牌里的字号。 */
+  height: 100%;
 }
 
-/* 四个象限的底：同一支色（Ink）的四种浓度 —— 越"该马上做"越实 */
+/* 四个象限的底：最"该马上做"的一格用主色浅底（与它的主色水印同源），
+   其余三格是 Ink 的三档浓度（10% / 7% / 4.5%）—— 最浅那档也要和卡片底拉出边界，
+   所以不再是 transparent（原来最浅的一格就和卡片融成了一片）。 */
 .todo-quadrant__ground--now {
-  fill: color-mix(in srgb, var(--transactions-color-text-major) 7%, transparent);
+  fill: var(--transactions-color-active-bg);
 }
 
 .todo-quadrant__ground--plan {
-  fill: color-mix(in srgb, var(--transactions-color-text-major) 4%, transparent);
+  fill: color-mix(in srgb, var(--transactions-color-text-major) 10%, transparent);
 }
 
 .todo-quadrant__ground--delegate {
-  fill: color-mix(in srgb, var(--transactions-color-text-major) 2%, transparent);
+  fill: color-mix(in srgb, var(--transactions-color-text-major) 7%, transparent);
 }
 
 .todo-quadrant__ground--less {
-  fill: transparent;
+  fill: color-mix(in srgb, var(--transactions-color-text-major) 4.5%, transparent);
 }
 
 .todo-quadrant__axis {
@@ -391,31 +396,37 @@
 }
 
 .todo-quadrant__name {
-  fill: var(--transactions-color-text-secondary);
-  font-size: var(--transactions-size-text-body);
+  /* 字号由 SVG 按象限宽度给（见 `quadrant_view`），这里只管颜色与字重。
+     颜色是 secondary 掺 tertiary：比原来淡一档（降到"方位提示"的量级），
+     但在最深的象限底上仍是 3.5:1（大字号门槛 3:1）。 */
+  fill: color-mix(
+    in srgb,
+    var(--transactions-color-text-secondary) 50%,
+    var(--transactions-color-text-tertiary)
+  );
   font-weight: var(--transactions-weight-semibold);
 }
 
-/* 象限名唯一的主色落点：最该被看见的那个象限 */
+/* 水印里唯一带色的一格：主色掺 tertiary，保住"马上做"的身份但不抢数据点 */
 .todo-quadrant__name--now {
-  fill: var(--transactions-color-primary);
+  fill: color-mix(
+    in srgb,
+    var(--transactions-color-primary) 60%,
+    var(--transactions-color-text-tertiary)
+  );
 }
 
 .todo-quadrant__sub {
-  /* 象限里的那行说明是**信息**不是装饰：用 secondary（tertiary 在白底上只有 ~3.4:1） */
+  /* 象限里的那行说明是**信息**不是装饰：用 secondary（tertiary 在浅底上只有 ~3.4:1）；
+     字号同样由 SVG 给。 */
   fill: var(--transactions-color-text-secondary);
-  font-size: var(--transactions-size-text-caption);
 }
 
 .todo-quadrant__axis-label {
-  fill: var(--transactions-color-text-tertiary);
-  font-size: var(--transactions-size-text-caption);
-}
-
-.todo-quadrant__origin {
-  fill: var(--transactions-color-text-tertiary);
-  font-size: var(--transactions-size-text-small);
-  font-variant-numeric: tabular-nums;
+  /* 轴端标注（重要 / 紧急 / 不重要 / 不紧急）：放大到 section 号，颜色用 secondary
+     —— 它们要比水印实，才能在巨大的象限名上照样被读到。 */
+  fill: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-section);
 }
 
 /* 事项点：主色实心 + 白圈（白圈让叠在一起的点也分得出"这里有几个"） */
@@ -423,6 +434,15 @@
   fill: var(--transactions-color-primary);
   stroke: var(--transactions-color-major-background);
   stroke-width: 2;
+  /* hover 略微膨胀。SVG 的几何属性（r）不能用 CSS 动画，所以缩放走 transform：
+     `transform-box: fill-box` 让缩放中心落在点自己身上而不是画布原点。 */
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform var(--transactions-transition-fast);
+}
+
+.todo-quadrant__point:hover {
+  transform: scale(1.35);
 }
 
 /* ---------------- 历史 ---------------- */

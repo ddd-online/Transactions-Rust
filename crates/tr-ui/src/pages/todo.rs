@@ -25,9 +25,9 @@ use tr_domain::dto::{TodoCardDto, TodoHistoryDto, TodoItemDto, TodoProgressDto};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, DatePicker, DragSortItem, DragSortState, Empty, FeaturePage,
-    IconButton, IconButtonVariant, Input, Modal, ModalSize, Popconfirm, Select, SelectOption,
-    TabItem, TabPane, Tabs,
+    watch_canvas_size, Button, ButtonSize, ButtonVariant, DatePicker, DragSortItem, DragSortState,
+    Empty, FeaturePage, IconButton, IconButtonVariant, Input, Modal, ModalSize, Popconfirm, Select,
+    SelectOption, TabItem, TabPane, Tabs,
 };
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
@@ -997,12 +997,22 @@ fn progress_panel(
 /// 坐标：`x = 紧急度`、`y = 重要度`，各 `-5..=5`，0 落在十字轴上（+紧急向右、+重要向上）。
 /// 四个象限用**同一支色的四种深浅**分档（浅 → 深 = 优先级低 → 高）：设计系统里只有一支强调色，
 /// 靠明度分档而不是引入第二种颜色；「马上做」的象限名用强调色点出来。
+///
+/// 版面：卡片（`.todo-quadrant__canvas`）撑满工具栏以下的高度，SVG 再撑满卡片 ——
+/// viewBox 用 `watch_canvas_size` 量到的**真实像素**（1 单位 = 1px），所以四象限是等比贴合、
+/// 不会变形；象限名与说明摆在各自象限的中心（水平垂直居中）。
+///
+/// 象限名是一块**水印**：字号按象限宽度的一半算（四个名字都恰好 3 个字），
+/// 颜色由 CSS 压到 tertiary —— 图上的"重量"留给数据点，文字只做方位提示。
+/// 落在同一坐标的事项按 id 各带一个固定的微小偏移（[`jitter_of`]），否则会叠成一坨。
 fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
-    let points: Vec<(String, String, i32, i32)> = cards
+    // (事项 id, 主题, 事项, 紧急度, 重要度)；id 只用来给点取一个稳定的抖动偏移
+    let points: Vec<(String, String, String, i32, i32)> = cards
         .iter()
         .flat_map(|card| {
             card.items.iter().map(|item| {
                 (
+                    item.id.clone(),
                     card.title.clone(),
                     item.title.clone(),
                     item.urgency,
@@ -1023,16 +1033,14 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
         .into_any();
     }
 
-    // 画布：宽高与内边距用固定值，viewBox 缩放到容器宽度
-    const W: f64 = 720.0;
-    const H: f64 = 460.0;
-    const PAD: f64 = 64.0;
-    let sx = |urgency: i32| PAD + (f64::from(urgency) + 5.0) / 10.0 * (W - 2.0 * PAD);
-    let sy = |importance: i32| H - PAD - (f64::from(importance) + 5.0) / 10.0 * (H - 2.0 * PAD);
-    let axis_x = sx(0);
-    let axis_y = sy(0);
-    let label_x = |urgency: i32| sx(urgency);
-    let label_y = |importance: i32| sy(importance);
+    // 画布按**实测像素**出图（1 个用户单位 = 1px）：固定 viewBox 缩放到卡片宽度时，
+    // 四象限会在卡片里留出大片空白（宽高比不匹配就必然有一边空着），量到的宽高才对得上。
+    // `PAD` 是轴端文字（紧急 / 不紧急 / 重要 / 不重要）的留白，也是象限底到卡片边的边距。
+    const PAD: f64 = 32.0;
+    let canvas = NodeRef::<leptos::html::Div>::new();
+    // 还没量到（首帧 / 面板刚挂载）时的兜底尺寸：沿用旧的 720×460
+    let size = RwSignal::new((720.0_f64, 460.0_f64));
+    watch_canvas_size(canvas, size);
 
     view! {
         <div class="todo-quadrant">
@@ -1042,153 +1050,213 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                     {format!("{} 项进行中；横轴紧急度，纵轴重要度（各六档：低 → 高）", points.len())}
                 </span>
             </div>
-            <div class="todo-quadrant__canvas">
-                <svg
-                    class="todo-quadrant__svg"
-                    viewBox=format!("0 0 {W} {H}")
-                    role="img"
-                    aria-label="进行中事项的四象限分布"
-                >
-                    // 四个象限的底（明度分档：马上做最深、减少做最浅）
-                    <rect
-                        class="todo-quadrant__ground todo-quadrant__ground--now"
-                        x=axis_x
-                        y=PAD
-                        width=W - PAD - axis_x
-                        height=axis_y - PAD
-                    ></rect>
-                    <rect
-                        class="todo-quadrant__ground todo-quadrant__ground--plan"
-                        x=PAD
-                        y=PAD
-                        width=axis_x - PAD
-                        height=axis_y - PAD
-                    ></rect>
-                    <rect
-                        class="todo-quadrant__ground todo-quadrant__ground--less"
-                        x=PAD
-                        y=axis_y
-                        width=axis_x - PAD
-                        height=H - PAD - axis_y
-                    ></rect>
-                    <rect
-                        class="todo-quadrant__ground todo-quadrant__ground--delegate"
-                        x=axis_x
-                        y=axis_y
-                        width=W - PAD - axis_x
-                        height=H - PAD - axis_y
-                    ></rect>
-                    // 十字轴
-                    <line
-                        class="todo-quadrant__axis"
-                        x1=axis_x
-                        y1=PAD
-                        x2=axis_x
-                        y2=H - PAD
-                    ></line>
-                    <line
-                        class="todo-quadrant__axis"
-                        x1=PAD
-                        y1=axis_y
-                        x2=W - PAD
-                        y2=axis_y
-                    ></line>
-                    // 象限名（放在各自象限的左上角）
-                    <text
-                        class="todo-quadrant__name todo-quadrant__name--now"
-                        x=axis_x + 16.0
-                        y=PAD + 28.0
-                    >
-                        "马上做"
-                    </text>
-                    <text
-                        class="todo-quadrant__sub"
-                        x=axis_x + 16.0
-                        y=PAD + 48.0
-                    >
-                        "重要且紧急"
-                    </text>
-                    <text
-                        class="todo-quadrant__name"
-                        x=PAD + 16.0
-                        y=PAD + 28.0
-                    >
-                        "计划做"
-                    </text>
-                    <text class="todo-quadrant__sub" x=PAD + 16.0 y=PAD + 48.0>
-                        "重要但不紧急"
-                    </text>
-                    <text
-                        class="todo-quadrant__name"
-                        x=PAD + 16.0
-                        y=axis_y + 28.0
-                    >
-                        "减少做"
-                    </text>
-                    <text
-                        class="todo-quadrant__sub"
-                        x=PAD + 16.0
-                        y=axis_y + 48.0
-                    >
-                        "不重要且不紧急"
-                    </text>
-                    <text
-                        class="todo-quadrant__name"
-                        x=axis_x + 16.0
-                        y=axis_y + 28.0
-                    >
-                        "授权做"
-                    </text>
-                    <text
-                        class="todo-quadrant__sub"
-                        x=axis_x + 16.0
-                        y=axis_y + 48.0
-                    >
-                        "紧急但不重要"
-                    </text>
-                    // 轴端与原点
-                    <text class="todo-quadrant__axis-label" x=W - PAD y=axis_y - 10.0 text-anchor="end">
-                        "紧急"
-                    </text>
-                    <text class="todo-quadrant__axis-label" x=PAD y=axis_y - 10.0>
-                        "不紧急"
-                    </text>
-                    <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=PAD + 12.0>
-                        "重要"
-                    </text>
-                    <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=H - PAD>
-                        "不重要"
-                    </text>
-                    <text class="todo-quadrant__origin" x=axis_x - 8.0 y=axis_y + 18.0 text-anchor="end">
-                        "0"
-                    </text>
-                    // 事项点：位置就是数据本身（同时落在同一点上的会重叠，靠悬停看名字）
-                    {points
-                        .iter()
-                        .map(|(card, title, urgency, importance)| {
-                            view! {
-                                <circle
-                                    class="todo-quadrant__point"
-                                    cx=label_x(*urgency)
-                                    cy=label_y(*importance)
-                                    r=9.0
-                                >
-                                    <title>
-                                        {format!(
-                                            "{title}\n{card} · 紧急 {} · 重要 {}",
-                                            consts::todo_level_label(*urgency),
-                                            consts::todo_level_label(*importance),
-                                        )}
-                                    </title>
-                                </circle>
-                            }
-                        })
-                        .collect_view()}
-                </svg>
+            <div class="todo-quadrant__canvas" node_ref=canvas>
+                {move || {
+                    let (w, h) = size.get();
+                    let sx = |urgency: i32| {
+                        PAD + (f64::from(urgency) + 5.0) / 10.0 * (w - 2.0 * PAD)
+                    };
+                    let sy = |importance: i32| {
+                        h - PAD - (f64::from(importance) + 5.0) / 10.0 * (h - 2.0 * PAD)
+                    };
+                    let axis_x = sx(0);
+                    let axis_y = sy(0);
+                    // 四个象限的中心：名称在上、说明在下，两行整体在象限里居中
+                    let mid = |a: f64, b: f64| (a + b) / 2.0;
+                    let (plan_x, plan_y) = (mid(PAD, axis_x), mid(PAD, axis_y));
+                    let (now_x, now_y) = (mid(axis_x, w - PAD), mid(PAD, axis_y));
+                    let (less_x, less_y) = (mid(PAD, axis_x), mid(axis_y, h - PAD));
+                    let (delegate_x, delegate_y) = (mid(axis_x, w - PAD), mid(axis_y, h - PAD));
+                    // 水印字号：名称占象限宽度的一半（四个名字都是 3 个字），说明是它的 1/4
+                    let name_px = ((axis_x - PAD) * 0.5 / 3.0).clamp(24.0, 96.0);
+                    let sub_px = (name_px * 0.24).clamp(11.0, 24.0);
+                    let line_gap = name_px * 0.8;
+                    // 两行的**整体**在象限里居中：由名称的大写高、行距、说明的下沿反推基线
+                    let name_dy = (name_px * 0.72 - line_gap - sub_px * 0.13) / 2.0;
+                    let sub_dy = name_dy + line_gap;
+                    view! {
+                        <svg
+                            class="todo-quadrant__svg"
+                            viewBox=format!("0 0 {w} {h}")
+                            role="img"
+                            aria-label="进行中事项的四象限分布"
+                        >
+                            // 四个象限的底（明度分档：马上做最深、减少做最浅）
+                            <rect
+                                class="todo-quadrant__ground todo-quadrant__ground--now"
+                                x=axis_x
+                                y=PAD
+                                width=w - PAD - axis_x
+                                height=axis_y - PAD
+                            ></rect>
+                            <rect
+                                class="todo-quadrant__ground todo-quadrant__ground--plan"
+                                x=PAD
+                                y=PAD
+                                width=axis_x - PAD
+                                height=axis_y - PAD
+                            ></rect>
+                            <rect
+                                class="todo-quadrant__ground todo-quadrant__ground--less"
+                                x=PAD
+                                y=axis_y
+                                width=axis_x - PAD
+                                height=h - PAD - axis_y
+                            ></rect>
+                            <rect
+                                class="todo-quadrant__ground todo-quadrant__ground--delegate"
+                                x=axis_x
+                                y=axis_y
+                                width=w - PAD - axis_x
+                                height=h - PAD - axis_y
+                            ></rect>
+                            // 十字轴
+                            <line
+                                class="todo-quadrant__axis"
+                                x1=axis_x
+                                y1=PAD
+                                x2=axis_x
+                                y2=h - PAD
+                            ></line>
+                            <line
+                                class="todo-quadrant__axis"
+                                x1=PAD
+                                y1=axis_y
+                                x2=w - PAD
+                                y2=axis_y
+                            ></line>
+                            // 象限名与说明（各自象限的**中心**：水平垂直都居中）
+                            <text
+                                class="todo-quadrant__name todo-quadrant__name--now"
+                                x=now_x
+                                y=now_y + name_dy
+                                font-size=name_px
+                                text-anchor="middle"
+                            >
+                                "马上做"
+                            </text>
+                            <text
+                                class="todo-quadrant__sub"
+                                x=now_x
+                                y=now_y + sub_dy
+                                font-size=sub_px
+                                text-anchor="middle"
+                            >
+                                "重要且紧急"
+                            </text>
+                            <text
+                                class="todo-quadrant__name"
+                                x=plan_x
+                                y=plan_y + name_dy
+                                font-size=name_px
+                                text-anchor="middle"
+                            >
+                                "计划做"
+                            </text>
+                            <text
+                                class="todo-quadrant__sub"
+                                x=plan_x
+                                y=plan_y + sub_dy
+                                font-size=sub_px
+                                text-anchor="middle"
+                            >
+                                "重要但不紧急"
+                            </text>
+                            <text
+                                class="todo-quadrant__name"
+                                x=less_x
+                                y=less_y + name_dy
+                                font-size=name_px
+                                text-anchor="middle"
+                            >
+                                "减少做"
+                            </text>
+                            <text
+                                class="todo-quadrant__sub"
+                                x=less_x
+                                y=less_y + sub_dy
+                                font-size=sub_px
+                                text-anchor="middle"
+                            >
+                                "不重要且不紧急"
+                            </text>
+                            <text
+                                class="todo-quadrant__name"
+                                x=delegate_x
+                                y=delegate_y + name_dy
+                                font-size=name_px
+                                text-anchor="middle"
+                            >
+                                "授权做"
+                            </text>
+                            <text
+                                class="todo-quadrant__sub"
+                                x=delegate_x
+                                y=delegate_y + sub_dy
+                                font-size=sub_px
+                                text-anchor="middle"
+                            >
+                                "紧急但不重要"
+                            </text>
+                            // 轴端与原点
+                            <text class="todo-quadrant__axis-label" x=w - PAD y=axis_y - 10.0 text-anchor="end">
+                                "紧急"
+                            </text>
+                            <text class="todo-quadrant__axis-label" x=PAD y=axis_y - 10.0>
+                                "不紧急"
+                            </text>
+                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=PAD + 12.0>
+                                "重要"
+                            </text>
+                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=h - PAD>
+                                "不重要"
+                            </text>
+                            // 事项点：位置就是数据本身（同时落在同一点上的会重叠，靠悬停看名字）
+                                {points
+                                    .iter()
+                                    .map(|(id, card, title, urgency, importance)| {
+                                        let (dx, dy) = jitter_of(id);
+                                        view! {
+                                            <circle
+                                                class="todo-quadrant__point"
+                                                cx=sx(*urgency) + dx
+                                                cy=sy(*importance) + dy
+                                                r=9.0
+                                            >
+                                            <title>
+                                                {format!(
+                                                    "{title}\n{card} · 紧急 {} · 重要 {}",
+                                                    consts::todo_level_label(*urgency),
+                                                    consts::todo_level_label(*importance),
+                                                )}
+                                            </title>
+                                        </circle>
+                                    }
+                                    })
+                                    .collect_view()}
+                        </svg>
+                    }
+                }}
             </div>
         </div>
     }
     .into_any()
+}
+
+/// 事项点的抖动偏移（单位：px）：紧急度与重要度都相同的事项会叠成一坨，
+/// 按 id 给每个点一个固定的小偏移，远近只够分开两颗点、不改变它落在哪个象限。
+///
+/// 用 `DefaultHasher`（标准库、固定种子）而不是随机数：同一份数据每次渲染都落在同一处，
+/// 重渲染不会让点自己抖。
+fn jitter_of(id: &str) -> (f64, f64) {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    let bits = hasher.finish();
+    // ±10px（点半径 9px）
+    let dx = (bits % 21) as f64 - 10.0;
+    let dy = ((bits >> 21) % 21) as f64 - 10.0;
+    (dx, dy)
 }
 
 // ==================================================================== 子功能二：历史
