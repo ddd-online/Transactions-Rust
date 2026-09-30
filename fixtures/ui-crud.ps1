@@ -49,15 +49,19 @@ $failures = New-Object System.Collections.Generic.List[string]
 #
 # 为什么必须换掉"取最后一个叫『删除』的元素"：页面上的行内删除按钮也叫「删除」，
 # 而 UIA 树里会留下**陈旧/幽灵节点**，取到的那一个未必是浮层里的（实测整段删除断言
-# 因此连坐变红）。按类名 + 可见性 + 在窗口内筛，才是"真的点了浮层那颗按钮"。
+# 因此连坐变红）。按类名 + 有效矩形筛，才是"真的点了浮层那颗按钮"。
+#
+# ⚠ **不要用 `IsOffscreen` 当判据**（AGENTS 里同一条）：浮层是 portal 出去的节点，
+# 可见性报得很不稳。实测过一次「模板删除」整段红了：气泡里的确认键被 `IsOffscreen=True`
+# 滤掉，函数退回去返回**工具栏那颗**同名同类名的「新建模板」（`ui-btn--primary`），
+# 于是点出一个新建弹窗、行还在库里。判据改成"矩形有效（宽 > 0 且四个分量都有限）"。
 function Find-ConfirmButton { param($Window, [string]$ClassPart = 'ui-btn--primary-danger')
     $best = $null
     foreach ($element in @(Get-Elements $Window)) {
         if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
         if ($element.Current.ClassName -notlike "*$ClassPart*") { continue }
-        if ($element.Current.IsOffscreen) { continue }
         $rect = $element.Current.BoundingRectangle
-        if ($rect.Width -le 0) { continue }
+        if (-not (Test-Rect $rect)) { continue }
         # 浮层在 DOM 末尾、确认键在同一行末尾：取最靠下（其次最靠右）的那个
         if (-not $best) { $best = $element; continue }
         $bestRect = $best.Current.BoundingRectangle
