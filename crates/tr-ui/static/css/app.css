@@ -602,6 +602,10 @@
   width: 44px;
   height: 44px;
   padding: 0;
+  /* 内容在方块里居中。展开态不做这件事（那是"图标在左、文字跟上"的横向排法），
+   * 而收起态里没名字的那个按钮（「收起 / 展开侧边栏」）也必须居中 ——
+   * 少了这一条它就贴在方块左边，一眼就看得出来是歪的（实测左 0.7px / 右 24.7px）。 */
+  justify-content: center;
 }
 
 /* 功能项：竖排两行。`:not(.sidebar-toggle-btn)` 是因为「收起 / 展开」是**控件**
@@ -610,12 +614,6 @@
   flex-direction: column;
   gap: var(--transactions-space-2xs);
   justify-content: center;
-}
-
-/* 图标：还是原来那个线性字形，只是比展开态大一档（18 → 20px） */
-.app-left-bar.is-collapsed .nav-btn-icon svg {
-  width: 20px;
-  height: 20px;
 }
 
 /* 名字：最小一档字号（11px）。五个功能项都是两个字（22px），52px 里绰绰有余；
