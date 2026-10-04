@@ -146,11 +146,13 @@
  *
  * 预览方块：与侧栏左上角那个入口**同一个视觉**（同取 `workspace_mark`），
  * 只是放大一档 —— 同一个东西在设置里必须长得一样，否则用户改完认不出来改的是哪个。
- * 32px 的按钮里看不清一张照片，所以这里给 44px。 */
+ * **高度与同一行的按钮一致（36px）**：它不是卡片里的独立元素，是「选择图片 / 恢复默认」
+ * 这一组动作里的第一件，比旁边两个按钮高出一截会显得错位。
+ * 圆角与侧栏那个方块同档（8px），两处才是同一个形状语言。 */
 .st-icon-preview {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--transactions-radius-lg);
+  width: var(--transactions-btn-height-md);
+  height: var(--transactions-btn-height-md);
+  border-radius: var(--transactions-radius-md);
   flex-shrink: 0;
 }
 
