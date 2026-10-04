@@ -49,12 +49,11 @@ web-sys = { version = "0.3", features = [
     "HtmlImageElement",
     "HtmlInputElement",
     "HtmlTextAreaElement",
-    "ImageBitmap",
+    "ImageData",
     "MediaQueryList",
     "Node",
     "ScrollIntoViewOptions",
     "ScrollLogicalPosition",
-    "Url",
     "Window",
     "console",
 ] }

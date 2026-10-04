@@ -14,3 +14,10 @@ license.workspace = true
 # * native 与 wasm32 两种目标都要能编 —— 不许出现 web-sys / leptos / charts-rs。
 # * 本 crate 是这些算法**唯一的测试面**：`cargo test -p tr-draw`。
 [dependencies]
+# HEIC/HEIF → RGBA8。核是 no_std + alloc、零 I/O（`io` 模块在默认特性里，已关掉），
+# 所以本 crate 的两条纪律（双可编、零 I/O）都不破。
+heic-rs = { workspace = true }
+
+[dev-dependencies]
+# 只给测试用：读 `flat-64.ref.png` 当参照物（见 fixtures/heic/README.md）。
+png = "0.17"

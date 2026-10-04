@@ -431,8 +431,11 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   并存）。数据库列名恒为 snake_case，列映射在 DAO 层显式书写，不依赖 serde。
 - **图片资产**：`<workspace>/data/assets/key_events/<date>/<uuid>.<ext>` + `thumb_<uuid>.jpg`，库里存相对
   `data/assets` 的路径，界面走 `trasset://` 自定义协议（处理器带路径穿越校验，只允许 `data/assets` 下的相对路径）。
-  **后端只接受 JPEG/PNG/GIF/WebP**：HEIC 转换留在界面层（web-sys canvas 交给 WebView2/系统解码器转 JPEG 再上传），
-  后端不引入 libheif/WIC。缩略图：宽度 > 300 时等比缩到 300（CatmullRom）、JPEG q75。
+  **后端只接受 JPEG/PNG/GIF/WebP**：HEIC/HEIF 在界面层就转成 JPEG（`tr-draw` 的 `heic` 模块 ——
+  随程序分发的纯 Rust 解码器 `heic-rs` 出 RGBA8，再写进 canvas 编 JPEG），后端不引入 libheif/WIC。
+  **别改回"交给 WebView2 解 HEIF"**：Chromium 内核里根本没有 HEIF 解码器，Windows 侧要靠商店里的
+  「HEIF 图像扩展」，而它默认不装 —— 那条路在干净机器上必然失败（`fixtures/heic/README.md` 有实测）。
+  缩略图：宽度 > 300 时等比缩到 300（CatmullRom）、JPEG q75。
 - **没有本地网络面**：不监听端口、没有 API 令牌、没有 CORS、没有子进程后端。进程即应用。
 - **只有一个窗口，首启动也不例外**：`workspaceDir` 为空时同样是主窗口 —— 界面在里面渲染**完整的外壳**
   （侧栏 + 版心，页面照常挂载，只是显示空态），再把不可关闭的「选择工作空间」屏叠在它上面；背景那层带

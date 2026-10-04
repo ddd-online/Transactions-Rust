@@ -40,6 +40,17 @@ cargo xtask dump <dir> --table tbl_billadm_stock_trade
 人工冒烟：`cargo xtask seed <dir>` 后把 `~/.transactions-dev.json` 的 `workspaceDir` 指向该目录，
 再 `cargo tauri dev`（详见 AGENTS.md 的端口注意事项）。
 
+## `heic/`（HEIC 测试图片）
+
+`flat-64.heic` + `flat-64.ref.png` + `gradient-512.heic`：**从 `heic-rs` 的测试套件里拿来的合成图**
+（由上游的 `scripts/gen-pngs.py` 逐像素生成、macOS `sips` 编码，MIT OR Apache-2.0，
+不含任何第三方图片数据 —— 细节见该目录的 `README.md`）。之所以要外借：本机没有任何 HEIC
+**编码器**（Windows 的 WIC 解不了、纯 Rust 的 `still265` 是 GPL-2.0 且要 rustc 1.97），
+这三张图没法在仓库里现造。
+
+用途两处：`cargo test -p tr-draw`（拿 `flat-64.ref.png` —— **Apple 的解码结果** —— 逐像素比，
+避免用自己的输出当基线）与 `ui-upload.ps1`（真跑一次 HEIC 上传，断言它被**转成 JPEG** 落盘）。
+
 ## 测试分层（`test.ps1` 是唯一入口）
 
 | 档位 | 命令 | 含义 |

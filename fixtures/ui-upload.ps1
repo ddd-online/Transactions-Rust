@@ -23,6 +23,10 @@
 #
 # 断言：UIA 文案出现「下载图片」；资产目录出现 `<uuid>.png` + `thumb_<uuid>.jpg`；
 #       缩略图宽度 300（原图 600×400 按比例缩放）；数据库 `tbl_billadm_key_event_image` 多一行。
+#       随后用一张 **HEIC**（`fixtures/heic/gradient-512.heic`）再走一遍：本机**没有任何
+#       HEIF 解码器**（WIC 也不行，见 fixtures/heic/README.md），所以这条正是
+#       "iPhone 照片上传失败"那个 bug 的回归 —— 判据是它被**转成 JPEG** 落盘：
+#       `.jpg` + 512×512 + 缩略图 300×300，且解出来确实是那张渐变图（不是一张空图）。
 #       最后**删掉这个事件**并断言：该日期的图片记录清空、原图/缩略图文件被清理、事件行消失，
 #       且别的日期的图片不受影响（`remove_image_files` 只有"文件缺失容错"的单测，这条补集成验证）。
 #
@@ -176,6 +180,81 @@ function Dismiss-PathUnavailable {
     }
 }
 
+# 点「添加图片」，把原生文件框开到指定文件上并提交。
+#
+# 返回 `$true` 表示**提交被接受**（文件框自己关掉了）；调用方只管断言结果（资产目录/库里有没有东西）。
+# 这条路上全是坑，集中在这里，别在每个用例里抄一遍：
+#   * 文件框不是桌面顶层窗口，是应用窗口的子孙（见文件头）；
+#   * 文件名框没有 ValuePattern，只能点进去用**剪贴板粘贴**（中文输入法会把 `\` 变 `、`）；
+#   * 提交用「右方向键（收起自动补全）+ 回车」，不能用 TAB/WM_COMMAND/坐标点「打开」。
+function Add-PictureFromFile {
+    param($Window, [string]$Path, [string]$Label)
+
+    $hwnd = [IntPtr]$Window.Current.NativeWindowHandle
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
+    Start-Sleep -Milliseconds 300
+
+    $pickButton = Find-First $Window '添加图片'
+    if (-not $pickButton) { throw '找不到「添加图片」按钮' }
+    $rect = $pickButton.Current.BoundingRectangle
+    if ($rect.Height -le 0) { throw '「添加图片」没有可点击的包围盒' }
+    [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2)) | Out-Null
+
+    $dialog = Find-FileDialog -Window $Window -TimeoutSec 20
+    if (-not $dialog) { throw '文件选择框没有出现（见文件头关于窗口归属的说明）' }
+    Write-Host "  [$Label] 文件框: name='$($dialog.Current.Name)' pid=$($dialog.Current.ProcessId)"
+
+    Dismiss-PathUnavailable -Window $Window
+    $dialog = Find-FileDialog -Window $Window -TimeoutSec 10
+    if (-not $dialog) { throw '文件框在「位置不可用」之后就找不到了' }
+
+    # 文件名框（AutomationId=1148）：这个对话框的控件全是 Pane（没有 ValuePattern），
+    # 所以点进内层 Edit 再用键盘输入。
+    $combo = $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        (New-Object System.Windows.Automation.PropertyCondition($UIA::AutomationIdProperty, '1148')))
+    $editBox = $null
+    if ($combo) {
+        $editBox = $combo.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition($UIA::ClassNameProperty, 'Edit')))
+        if (-not $editBox) { $editBox = $combo }
+    }
+    if (-not (Click-Element $editBox)) { throw "点不进文件名输入框（$Label）" }
+    Start-Sleep -Milliseconds 500
+
+    Set-Clipboard -Value $Path
+    Start-Sleep -Milliseconds 300
+    [System.Windows.Forms.SendKeys]::SendWait('^a')
+    Start-Sleep -Milliseconds 250
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
+    Start-Sleep -Milliseconds 800
+    [System.Windows.Forms.SendKeys]::SendWait('{RIGHT}')
+    Start-Sleep -Milliseconds 500
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+    # 提交被接受 = 文件框自己关掉（最多等 20 秒）；仍开着就再回车一次
+    $stillOpen = $null
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 800
+        $stillOpen = Find-FileDialog -Window $Window -TimeoutSec 1
+    } while ($stillOpen -and (Get-Date) -lt $deadline)
+
+    if ($stillOpen) {
+        Write-Host "  [$Label] 文件框没关，再回车一次" -ForegroundColor DarkYellow
+        $dialogHwnd = [IntPtr]$stillOpen.Current.NativeWindowHandle
+        [TrUia]::SetForegroundWindow($dialogHwnd) | Out-Null
+        Start-Sleep -Milliseconds 300
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+        $deadline = (Get-Date).AddSeconds(15)
+        do {
+            Start-Sleep -Milliseconds 800
+            $stillOpen = Find-FileDialog -Window $Window -TimeoutSec 1
+        } while ($stillOpen -and (Get-Date) -lt $deadline)
+    }
+
+    return (-not [bool]$stillOpen)
+}
+
 # ---- 播种一个全新工作空间 ----
 if (-not $Workspace -or -not (Test-Path (Join-Path $ws 'transactions.db'))) {
     if (Test-Path $ws) { Remove-Item $ws -Recurse -Force }
@@ -216,14 +295,21 @@ try {
     }
 
     # ---- 等窗口 + 等 UIA 树建好（惰性构建，必须轮询）----
-    $deadline = (Get-Date).AddSeconds(40)
+    # **不能按"进程的第一个窗口"取**：这个进程有 3 个顶层窗口 —— 真正的界面
+    # （class `Tauri Window`）、单实例插件的隐藏窗口（`com.github.Transactions-siw`，
+    # 22×22、零个子孙）、以及 Tao 的 `Thread Event Target`。取错那个的现象是
+    # "UIA 可读元素 0 个"、后面所有按名字的查找全落空（看着像界面没渲染，其实渲染得好好的）。
+    # 判据改成"这个窗口里有侧栏的「记账」"——工作空间是脚本预先写好的，不会停在选择屏。
     $window = $null
-    while ((Get-Date) -lt $deadline -and -not $window) {
-        $window = $UIA::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
-            (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $process.Id)))
+    $deadline = (Get-Date).AddSeconds(40)
+    do {
+        $windowCondition = New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $process.Id)
+        foreach ($candidate in @($UIA::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $windowCondition))) {
+            if (Find-First $candidate '记账') { $window = $candidate; break }
+        }
         if (-not $window) { Start-Sleep -Milliseconds 500 }
-    }
-    if (-not $window) { throw '启动后 40 秒内没有拿到应用窗口' }
+    } while (-not $window -and (Get-Date) -lt $deadline)
+    if (-not $window) { throw '启动后 40 秒内没有拿到主窗口（按侧栏「记账」认）' }
 
     $deadline = (Get-Date).AddSeconds(40)
     do {
@@ -259,7 +345,7 @@ try {
     Write-Host "[ui-upload] 基线：原图 $($baseline.Originals) 张 / 缩略图 $($baseline.Thumbs) 张 / 库 $baselineRows 行" -ForegroundColor DarkGray
 
     # ---- 建一个事件（新事件会被自动选中，详情区才会出现「添加图片」）----
-    Write-Host "`n[ui-upload] 1/4 建事件"
+    Write-Host "`n[ui-upload] 1/6 建事件"
     Assert-True (Invoke-Element (Find-First $window '事件')) '打开「事件」页'
     Start-Sleep -Seconds 2
     Assert-True (Invoke-Element (Find-First $window '新增事件')) '打开「新增事件」弹窗'
@@ -274,63 +360,10 @@ try {
     Assert-True (-not $modal) '弹窗已关闭'
     Start-Sleep -Milliseconds 800
 
-    # ---- 点「添加图片」→ 原生文件框 ----
-    Write-Host "`n[ui-upload] 2/4 点「添加图片」并驱动原生文件框"
-    $pickButton = Find-First $window '添加图片'
-    if (-not $pickButton) { throw '找不到「添加图片」按钮' }
-    $rect = $pickButton.Current.BoundingRectangle
-    if ($rect.Height -le 0) { throw '「添加图片」没有可点击的包围盒' }
-    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
-    Start-Sleep -Milliseconds 300
-    [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-
-    $dialog = Find-FileDialog -Window $window -TimeoutSec 20
-    Assert-True ([bool]$dialog) '原生文件选择框已弹出'
-    if (-not $dialog) { throw '文件选择框没有出现（见文件头关于窗口归属的说明）' }
-    Write-Host "  文件框: name='$($dialog.Current.Name)' pid=$($dialog.Current.ProcessId)"
-
-    Dismiss-PathUnavailable -Window $window
-    $dialog = Find-FileDialog -Window $window -TimeoutSec 10
-
-    # ---- 文件名框（AutomationId=1148）→ 键盘输入绝对路径 → 点「打开(O)」（AutomationId=1）----
-    Write-Host "`n[ui-upload] 3/4 提交文件路径"
-    $combo = $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($UIA::AutomationIdProperty, '1148')))
-    Assert-True ([bool]$combo) '找到文件名控件（AutomationId=1148）'
-
-    # 这个对话框的控件全是 Pane（没有 ValuePattern）：点进编辑框再用键盘输入
-    $editBox = $null
-    if ($combo) {
-        $editBox = $combo.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-            (New-Object System.Windows.Automation.PropertyCondition($UIA::ClassNameProperty, 'Edit')))
-        if (-not $editBox) { $editBox = $combo }
-    }
-    Assert-True (Click-Element $editBox) '点进文件名输入框'
-    Start-Sleep -Milliseconds 500
-
-    # **必须用剪贴板粘贴，不能 SendKeys 逐字符输入**：本机开着中文输入法，SendKeys 打出来的
-    # 路径会被输入法接走——反斜杠 `\` 变成顿号 `、`，于是"路径"根本不存在，
-    # 表现是回车后弹「找不到文件」。Ctrl+A / Ctrl+V 不受输入法影响。
-    Set-Clipboard -Value $picture
-    Start-Sleep -Milliseconds 300
-    [System.Windows.Forms.SendKeys]::SendWait('^a')
-    Start-Sleep -Milliseconds 250
-    [System.Windows.Forms.SendKeys]::SendWait('^v')
-    Start-Sleep -Milliseconds 800
-
-    # 提交这个 Win32 文件框有三个坑（都踩过）：
-    #   1. **不能用 UIA 坐标点「打开(O)」**：底部一行是 legacy provider，报出来的矩形不可信
-    #      （实测「打开」的 rect 恰好等于对话框下边缘，点下去什么都不会发生）；
-    #   2. **不能直接回车**：输入路径会弹出 shell 自动补全下拉，回车会"接受补全"，
-    #      把完整路径换成裸文件名，于是去当前目录找文件 → 弹「找不到文件」；
-    #   3. **不能 TAB 再回车**：TAB 确实收起了下拉，但焦点也移到"文件类型"下拉上，回车不再触发默认按钮；
-    #      也**不要**用 `WM_COMMAND(IDOK)`：那会直接关掉对话框、跳过 modern 对话框
-    #      "把文件名变成选中项"的内部步骤，结果等同于取消（界面什么都不会发生）。
-    # 正确做法：右方向键收起补全下拉（焦点仍在编辑框、文本不变）→ 回车 = 按「打开」。
-    [System.Windows.Forms.SendKeys]::SendWait('{RIGHT}')
-    Start-Sleep -Milliseconds 500
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-    Start-Sleep -Seconds 3
+    # ---- 点「添加图片」→ 原生文件框（坑都在 Add-PictureFromFile 里）----
+    Write-Host "`n[ui-upload] 2/6 上传 PNG（点「添加图片」并驱动原生文件框）"
+    Assert-True ([bool](Add-PictureFromFile -Window $window -Path $picture -Label 'PNG')) `
+        '原生文件选择框已弹出并提交（PNG）'
 
     # 判定标准是**结果**（资产目录出现文件），不是"对话框关掉了"
     $assetsRootEarly = Join-Path $ws 'data\assets\key_events'
@@ -341,23 +374,7 @@ try {
             Where-Object { $_.Name -notlike 'thumb_*' })
     } while ($landed.Count -eq 0 -and (Get-Date) -lt $deadline)
 
-    if ($landed.Count -eq 0) {
-        # 兜底：对话框还开着就再回车一次；仍不行就按 UIA 矩形点「打开」（矩形若不是明显离群值才用）
-        if (Find-FileDialog -Window $window -TimeoutSec 2) {
-            Write-Host '  第一次提交没生效，再回车一次' -ForegroundColor DarkYellow
-            $dialogHwnd = [IntPtr]$dialog.Current.NativeWindowHandle
-            [TrUia]::SetForegroundWindow($dialogHwnd) | Out-Null
-            Start-Sleep -Milliseconds 300
-            [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-            Start-Sleep -Seconds 4
-        }
-        $deadline = (Get-Date).AddSeconds(10)
-        do {
-            Start-Sleep -Seconds 1
-            $landed = @(Get-ChildItem $assetsRootEarly -Recurse -File -Filter '*.png' -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -notlike 'thumb_*' })
-        } while ($landed.Count -eq 0 -and (Get-Date) -lt $deadline)
-    }
+    Assert-True ($landed.Count -ge 1) 'PNG 已落盘（资产目录出现 *.png）'
 
     # 若弹出「找不到文件」之类的提示框，点掉它（避免挡住后面的界面断言）
     $errorBox = $null
@@ -371,15 +388,8 @@ try {
         Start-Sleep -Milliseconds 800
     }
 
-    # ---- 等上传完成：文件框关闭 + 界面出现「下载图片」 ----
-    Write-Host "`n[ui-upload] 4/4 等上传完成并校验"
-    $deadline = (Get-Date).AddSeconds(30)
-    do {
-        Start-Sleep -Milliseconds 800
-        $stillOpen = Find-FileDialog -Window $window -TimeoutSec 1
-    } while ($stillOpen -and (Get-Date) -lt $deadline)
-    Assert-True (-not $stillOpen) '文件选择框已关闭（提交被接受）'
-
+    # ---- 等上传完成：界面出现「下载图片」 ----
+    Write-Host "`n[ui-upload] 3/6 等 PNG 上传完成并校验"
     $deadline = (Get-Date).AddSeconds(30)
     do {
         Start-Sleep -Seconds 1
@@ -446,10 +456,68 @@ try {
             }
         }
     }
+    # ---- HEIC：界面层解码 → 转成 JPEG 再落盘 ----
+    # 这条是"iPhone 照片上传失败"的回归：本机**没有任何 HEIF 解码器**
+    # （WebView2/Chromium 没有 HEIF，Windows 侧要靠商店里的「HEIF 图像扩展」，
+    # 而它没装 —— 实测连 WIC 都解不了这张图）。所以能落盘 = 用的是随程序分发的解码器。
+    Write-Host "`n[ui-upload] 4/6 上传 HEIC（应转成 JPEG）"
+    $heic = Join-Path $OutDir 'gradient-512.heic'
+    Copy-Item -LiteralPath (Join-Path $repo 'fixtures\heic\gradient-512.heic') -Destination $heic -Force
+    $beforeHeic = Get-AssetCounts $assetsRoot
+    Assert-True ([bool](Add-PictureFromFile -Window $window -Path $heic -Label 'HEIC')) `
+        '原生文件选择框已弹出并提交（HEIC）'
+
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        Start-Sleep -Seconds 1
+        $afterHeic = Get-AssetCounts $assetsRoot
+    } while ($afterHeic.Originals -le $beforeHeic.Originals -and (Get-Date) -lt $deadline)
+
+    Write-Host "`n[ui-upload] 5/6 校验 HEIC 的落盘结果"
+    Assert-True ($afterHeic.Originals -eq $beforeHeic.Originals + 1) `
+        "HEIC 落盘 1 张原图（$($beforeHeic.Originals) → $($afterHeic.Originals)）"
+    Assert-True ($afterHeic.Thumbs -eq $beforeHeic.Thumbs + 1) `
+        "HEIC 落盘 1 张缩略图（$($beforeHeic.Thumbs) → $($afterHeic.Thumbs)）"
+
+    # 取"最新写入"的那张原图（就是刚上传的 HEIC 转码结果）
+    $heicOriginal = @(Get-ChildItem $assetsRoot -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike 'thumb_*' } | Sort-Object LastWriteTime -Descending)[0]
+    # 判据一：落盘的是 JPEG（后端只认 JPEG/PNG/GIF/WebP，HEIC 不许原样落盘）
+    Assert-True ($heicOriginal.Extension -eq '.jpg') "HEIC 被转成 JPEG 落盘（$($heicOriginal.Name)）"
+    # 判据二：分辨率与颜色都还在 —— 解出来的是**那张渐变图**，不是一张空图/黑图
+    $heicImage = [System.Drawing.Bitmap]::FromFile($heicOriginal.FullName)
+    Assert-True ($heicImage.Width -eq 512 -and $heicImage.Height -eq 512) `
+        "转码保持 512×512（实际 $($heicImage.Width)×$($heicImage.Height)）"
+    $leftPixel = $heicImage.GetPixel(2, 256)
+    $rightPixel = $heicImage.GetPixel(509, 256)
+    Assert-True (($rightPixel.R - $leftPixel.R) -gt 150) `
+        "像素确实是那张渐变图（红通道 左 $($leftPixel.R) → 右 $($rightPixel.R)）"
+    $heicImage.Dispose()
+
+    $heicThumb = @(Get-ChildItem $assetsRoot -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'thumb_*' } | Sort-Object LastWriteTime -Descending)[0]
+    $heicThumbImage = [System.Drawing.Image]::FromFile($heicThumb.FullName)
+    Assert-True ($heicThumbImage.Width -eq 300 -and $heicThumbImage.Height -eq 300) `
+        "HEIC 缩略图缩到 300×300（实际 $($heicThumbImage.Width)×$($heicThumbImage.Height)）"
+    $heicThumbImage.Dispose()
+
+    # 数据库里也该多一行、且指向那张 .jpg
+    $heicDumpPath = Join-Path $OutDir 'heic-image.json'
+    Push-Location $repo
+    & cargo -q xtask dump $ws --table tbl_billadm_key_event_image *> $heicDumpPath
+    Pop-Location
+    $heicRows = @((Get-Content $heicDumpPath -Raw | ConvertFrom-Json).'tbl_billadm_key_event_image')
+    Assert-True ($heicRows.Count -eq $baselineRows + 2) `
+        "数据库新增 2 行图片记录（PNG + HEIC：$baselineRows → $($heicRows.Count)）"
+    Assert-True (@($heicRows | Where-Object { $_.file_path -like '*.jpg' }).Count -ge 1) `
+        '库里有一行的 file_path 指向转码后的 .jpg'
+    Assert-True (@($heicRows | Where-Object { $_.file_path -like '*.heic' -or $_.file_path -like '*.HEIC' }).Count -eq 0) `
+        '库里没有任何一行指向原始 .heic（HEIC 从不落盘）'
+
     # ---- 删除事件应当把图片文件一并清理 ----
     # 这条只能端到端验：`remove_image_files` 的单测只覆盖"文件不存在时容错"，
     # 而"删事件 → 资产被清掉"要走完整条 UI → 服务层链路。
-    Write-Host "`n[ui-upload] 5/5 删除事件应清理图片文件"
+    Write-Host "`n[ui-upload] 6/6 删除事件应清理图片文件"
     $eventCardTitle = $title
     $deleteButton = $null
     $deadline = (Get-Date).AddSeconds(20)
@@ -513,4 +581,4 @@ try {
 }
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Show-TrSummary -Failures $failures -Tag 'ui-upload' -SuccessMessage "[ui-upload] 全部通过：原生文件框 → 落盘 → 缩略图 → 入库 → 界面刷新 → 删事件清理资产"
+Show-TrSummary -Failures $failures -Tag 'ui-upload' -SuccessMessage "[ui-upload] 全部通过：原生文件框 → 落盘 → 缩略图 → 入库 → HEIC 转 JPEG → 界面刷新 → 删事件清理资产"

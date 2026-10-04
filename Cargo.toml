@@ -29,6 +29,13 @@ tr-ipc = { path = "crates/tr-ipc" }
 # Windows 注册表（只用于读系统代理设置；版本与 Cargo.lock 里已有的传递依赖一致）
 winreg = "0.55"
 
+# HEIC/HEIF 解码（iPhone 照片）：纯 Rust，无 C 依赖、无 unsafe。
+# **必须关掉默认特性**：`parallel` 会拉 rayon（wasm32 编不了），
+# 剩下 no_std + alloc 的核（`decode(&[u8])`）native 与 wasm32 都能编。
+# 为什么不用 libheif/WIC：见 AGENTS.md「图片资产」——HEIC 转换留在界面层，
+# 而后端与 WIC 两条路在本机都不可用（没有 HEIF 图像扩展）。
+heic-rs = { version = "0.1", default-features = false }
+
 # 桌面发行版：体积与速度优先（Tauri 官方推荐配置）
 [profile.release]
 codegen-units = 1

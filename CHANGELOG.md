@@ -24,6 +24,33 @@
 `fixtures/ui-transactions.ps1` 的筛选那一段新增一条断言 —— 筛到唯一那条 88.88 的支出后，
 页面上 "88.88" 必须出现**至少两次**（行内 + 统计条），旧实现下它只出现一次。
 
+**iPhone 的 HEIC 照片现在能上传了**
+
+- 现象：一次选 3 张 `IMG_xxxx.HEIC`，三张全是 `HEIC 转换失败: 图片解码失败`（用户报的截图）。
+- 根因：转码这一步原来是"把 HEIC 丢给 WebView2 解"（`createImageBitmap` / `<img>`），
+  而**这条路根本走不通** —— Chromium 内核里没有 HEIF 解码器（HEVC 图片受专利约束），
+  Windows 侧要靠商店里的「HEIF 图像扩展」，而它默认不装。本机实测更直接：
+  Windows 自己的 WIC 解同一张图也是 `No imaging component suitable to complete this operation`，
+  也就是说**系统里根本没有可用的 HEIC 解码器**。
+- 改法：换成随程序分发的纯 Rust 解码器（`heic-rs`，MIT OR Apache-2.0，
+  `default-features = false` —— 只要 no_std + alloc 的核，native 与 wasm32 共用）。
+  解码落在 `tr-draw::heic`（界面侧纯算法层，字节进像素出，所以能在 native 上断言）；
+  界面侧改成：读字节（`readAsArrayBuffer`）→ 解出 RGBA8 → 写进 canvas 的 `ImageData`
+  → `toDataURL("image/jpeg", 0.92)`。**后端契约一个字没动**：仍然只接受
+  JPEG/PNG/GIF/WebP，HEIC 依旧不落盘；工作空间图标的方形裁剪走同一条路，一并修好。
+- 代价：wasm 大了一点 —— 打进安装包的那份（brotli 压缩后）1.50 MiB → 1.59 MiB。
+- 回归：`cargo test -p tr-draw` 拿 `fixtures/heic/flat-64.heic` 与**别人的解码器**的解码结果
+  （Apple `sips`，`flat-64.ref.png`）逐像素比 —— mean abs ≈ 0.7、max 2，都在 HEVC 有损的预期内；
+  `fixtures/ui-upload.ps1` 新增一条真跑：上传 `gradient-512.heic`，断言落盘的是 `.jpg`、
+  512×512、缩略图 300×300，且像素仍是那张渐变图（红通道左→右递增，排除"解成一张空图"）。
+  那三张测试图是合成图（上游生成脚本产出、MIT OR Apache-2.0），来历见 `fixtures/heic/README.md`。
+  真机再走一遍：iPhone 24MP（`IMG_1222.HEIC`，4284×5712，2.1 MiB）→ 提交到**原图落盘 3.1 秒**、
+  到**缩略图 + 入库 3.7 秒**，落盘 4284×5712 的 `.jpg`、缩略图 300×400（解码在 WebView 主线程上跑，
+  这段时间界面不响应；24MP 这个量级可接受，真卡了再谈挪进 Worker）。
+- 顺带修了 `fixtures/ui-upload.ps1` 取窗口的方式：原来按"进程的第一个窗口"取，而进程里有 3 个顶层窗口
+  （界面、单实例插件的隐藏窗口、Tao 的 `Thread Event Target`），取错就是"UIA 可读元素 0 个"、
+  后面所有按名字的查找全落空（看着像界面没渲染）。现在按"这个窗口里有侧栏「记账」"认。
+
 ## [0.13.0] - 2026-10-05
 
 ### 调整

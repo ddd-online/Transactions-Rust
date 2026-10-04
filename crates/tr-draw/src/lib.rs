@@ -9,6 +9,8 @@
 //! * [`query`]：页面取数的决策核心（去重键与 generation 的推进、要不要发这次请求、
 //!   缓存复核的判定、失效规则）—— 绘制只是本 crate 的第一批住户，见
 //!   `docs/adr/0001-pure-draw-crate.md` 的补充说明。
+//! * [`heic`]：HEIC/HEIF（iPhone 照片）→ RGBA8 —— 界面侧解码，
+//!   因为 WebView2/系统那条路根本走不通（见该模块的说明）。
 //!
 //! 为什么单开一个 crate，见 `docs/adr/0001-pure-draw-crate.md`。
 //!
@@ -20,4 +22,5 @@
 
 pub mod chart;
 pub mod crop;
+pub mod heic;
 pub mod query;

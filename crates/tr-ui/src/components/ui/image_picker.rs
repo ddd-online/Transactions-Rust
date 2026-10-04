@@ -9,15 +9,18 @@
 //! ## HEIC 的分工（与 AGENTS.md 一致）
 //!
 //! 后端只接受 JPEG/PNG/GIF/WebP，因此 **HEIC/HEIF 必须在界面层转成 JPEG**。
-//! 本仓库界面层不引入 JS 库，改为交给 **WebView2（Edge/Windows）自带的解码器 + canvas**：
+//! 但**不能指望 WebView2 解 HEIF**：Chromium 内核里根本没有 HEIF 解码器
+//! （HEVC 图片受专利约束），Windows 那条路要靠商店里的「HEIF 图像扩展」，
+//! 而它默认不装 —— 于是 iPhone 照片一律报「图片解码失败」（用户报过的就是这个）。
 //!
-//! 1. 先把 HEIC 读成 `Blob`；
-//! 2. 优先 `createImageBitmap`（对 HEIF 支持最好的路径），失败再退回
-//!    `<img src=objectURL>`（部分 WebView2 版本只在这条路径上解 HEIF）；
-//! 3. 画进 `<canvas>` → `toDataURL("image/jpeg", 0.92)` 直接得到 **JPEG data URI**；
-//! 4. 把该 data URI 交给 `key_event_image_add`。
+//! 现在改成随程序分发的纯 Rust 解码器（`tr-draw` 的 `heic` 模块，字节进像素出）：
 //!
-//! 两条路径都失败时给出明确提示（[`HEIC_CONVERT_FAILED`]）。
+//! 1. 先把 HEIC 读成**字节**（`FileReader.readAsArrayBuffer`）；
+//! 2. 交给 `tr_draw::heic::decode_rgba8` 解出 RGBA8（不依赖系统装了什么）；
+//! 3. 写进 `<canvas>` 的 `ImageData` → `toDataURL("image/jpeg", 0.92)` 得到 **JPEG data URI**；
+//! 4. 把该 data URI 交给 `key_event_image_add`（工作空间图标走同一条路）。
+//!
+//! 任意一步失败都给出明确提示（[`HEIC_CONVERT_FAILED`] + 具体原因）。
 
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
@@ -47,7 +50,7 @@ pub type ReadOutcome = Result<String, String>;
 
 /// 把一个文件读成可直接交给后端的 base64 data URI（HEIC 会先转 JPEG）。
 ///
-/// `on_progress` 在关键节点回调（0 → 读取完成 30 → 转换完成 60），
+/// `on_progress` 在关键节点回调（0 → 可以交给后端了 60），
 /// 供上传进度条显示阶段；真实上传进度由后端/桥接层决定，这里只保底 60→100。
 pub async fn read_as_data_url(file: &web_sys::File, on_progress: &dyn Fn(u8)) -> ReadOutcome {
     let name = file.name();
@@ -68,21 +71,34 @@ pub async fn read_as_data_url(file: &web_sys::File, on_progress: &dyn Fn(u8)) ->
 
 /// HEIC/HEIF blob → JPEG data URI。
 ///
-/// 为什么直接用 `canvas.toDataURL("image/jpeg", 0.92)` 而不是 `toBlob` + `FileReader`：
+/// 解码走 `tr_draw::heic::decode_rgba8`（纯 Rust，随程序分发），
+/// 再把像素写进画布、让 canvas 编成 JPEG。
+///
+/// 为什么用 `canvas.toDataURL("image/jpeg", 0.92)` 而不是 `toBlob` + `FileReader`：
 /// 前者同步返回**同一个** data URI 结果，少一次 JS 回调与一次 blob 中转，
 /// 而且 `to_blob_with_type_and_quality` 需要 `web-sys` 的 `BlobEvent` feature
 /// （本仓库刻意不扩大 web-sys 的 feature 面）。
 ///
-/// 失败时返回 `Err("HEIC 转换失败: ...")`（含具体原因，便于用户判断是不是
-/// 当前 WebView2 缺少 HEIF 解码器）。
+/// 失败时返回 `Err("HEIC 转换失败: ...")`：前缀之后是解码器给的具体原因。
 pub async fn convert_heic_to_jpeg(source: &web_sys::Blob) -> Result<String, String> {
-    let (canvas, width, height) = match draw_source_to_canvas(source).await {
-        Ok(value) => value,
-        Err(reason) => return Err(format!("{HEIC_CONVERT_FAILED}: {reason}")),
-    };
-    if width == 0 || height == 0 {
-        return Err(format!("{HEIC_CONVERT_FAILED}: 图片尺寸无效"));
-    }
+    let bytes = blob_to_bytes(source)
+        .await
+        .map_err(|reason| format!("{HEIC_CONVERT_FAILED}: {reason}"))?;
+    let image = tr_draw::heic::decode_rgba8(&bytes)
+        .map_err(|reason| format!("{HEIC_CONVERT_FAILED}: {reason}"))?;
+
+    let canvas = create_canvas(image.width, image.height)?;
+    let context = canvas_context(&canvas)?;
+    let data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
+        wasm_bindgen::Clamped(image.pixels.as_slice()),
+        image.width,
+        image.height,
+    )
+    .map_err(|_| format!("{HEIC_CONVERT_FAILED}: 写入画布失败"))?;
+    context
+        .put_image_data(&data, 0.0, 0.0)
+        .map_err(|_| format!("{HEIC_CONVERT_FAILED}: 写入画布失败"))?;
+
     // web-sys 暴露的是标准 `toDataURL(type, encoderOptions)` 的命名变体
     // （`_with_type_and_encoder_options`），质量参数走 JS 对象 `{quality: 0.92}`。
     let options = js_sys::Object::new();
@@ -96,69 +112,10 @@ pub async fn convert_heic_to_jpeg(source: &web_sys::Blob) -> Result<String, Stri
         .map_err(|_| format!("{HEIC_CONVERT_FAILED}: canvas.toDataURL 调用失败"))
 }
 
-/// 把源 blob 画进新建的 canvas，返回 `(canvas, 宽, 高)`。
-///
-/// 优先 `createImageBitmap`；失败退回 `<img>` + `objectURL`（见模块说明）。
-async fn draw_source_to_canvas(
-    source: &web_sys::Blob,
-) -> Result<(web_sys::HtmlCanvasElement, u32, u32), String> {
-    if let Ok((canvas, width, height)) = bitmap_path(source).await {
-        return Ok((canvas, width, height));
-    }
-    image_element_path(source).await
-}
-
-/// 路径 1：`createImageBitmap(blob)` → canvas。
-async fn bitmap_path(
-    source: &web_sys::Blob,
-) -> Result<(web_sys::HtmlCanvasElement, u32, u32), String> {
-    let promise = create_image_bitmap(source)?;
-    let value = JsFuture::from(promise)
-        .await
-        .map_err(|error| js_error_text(&error))?;
-    let bitmap: web_sys::ImageBitmap = value
-        .dyn_into()
-        .map_err(|_| "浏览器未能解码该 HEIC 图片".to_string())?;
-    let (width, height) = (bitmap.width(), bitmap.height());
-    let canvas = create_canvas(width, height)?;
-    let context = canvas_context(&canvas)?;
-    context
-        .draw_image_with_image_bitmap(&bitmap, 0.0, 0.0)
-        .map_err(|_| "绘制图片到画布失败".to_string())?;
-    Ok((canvas, width, height))
-}
-
-/// 路径 2：`<img src=objectURL>` → canvas。
-async fn image_element_path(
-    source: &web_sys::Blob,
-) -> Result<(web_sys::HtmlCanvasElement, u32, u32), String> {
-    let url = web_sys::Url::create_object_url_with_blob(source)
-        .map_err(|_| "创建预览地址失败".to_string())?;
-
-    let result = image_element_path_inner(&url, source).await;
-    let _ = web_sys::Url::revoke_object_url(&url);
-    result
-}
-
-async fn image_element_path_inner(
-    url: &str,
-    _source: &web_sys::Blob,
-) -> Result<(web_sys::HtmlCanvasElement, u32, u32), String> {
-    let image = load_image(url).await?;
-    let width = image.natural_width();
-    let height = image.natural_height();
-    let canvas = create_canvas(width, height)?;
-    let context = canvas_context(&canvas)?;
-    context
-        .draw_image_with_html_image_element(&image, 0.0, 0.0)
-        .map_err(|_| "绘制图片到画布失败".to_string())?;
-    Ok((canvas, width, height))
-}
-
 /// 用 `<img>` 解码一个 URL（data URL 或 objectURL），**等它 load 完**再交还元素。
 ///
-/// 与 `createImageBitmap` 并列的第二条解码路径（部分 WebView2 版本只在这条路上解
-/// HEIF），同时也被「方形裁剪」弹窗拿去量自然尺寸与当 `drawImage` 的源。
+/// 「方形裁剪」弹窗拿它量自然尺寸、并当 `drawImage` 的源。
+/// （HEIC 不走这里：进弹窗前已经转成 JPEG 了。）
 pub async fn load_image(url: &str) -> Result<web_sys::HtmlImageElement, String> {
     let document = web_sys::window()
         .and_then(|window| window.document())
@@ -253,18 +210,40 @@ pub async fn blob_to_data_url(blob: &web_sys::Blob) -> ReadOutcome {
     }
 }
 
-/// `createImageBitmap` 是全局函数（可能不存在），这里封装成 `Result<Promise>`。
-fn create_image_bitmap(source: &web_sys::Blob) -> Result<js_sys::Promise, String> {
-    let global = js_sys::global();
-    let function = js_sys::Reflect::get(&global, &JsValue::from_str("createImageBitmap"))
-        .ok()
-        .and_then(|value| value.dyn_into::<js_sys::Function>().ok())
-        .ok_or_else(|| "当前环境不支持 createImageBitmap".to_string())?;
-    function
-        .call1(&global, source)
-        .map_err(|_| "当前环境不支持 createImageBitmap".to_string())?
-        .dyn_into::<js_sys::Promise>()
-        .map_err(|_| "当前环境不支持 createImageBitmap".to_string())
+/// blob → 原始字节（HEIC 解码要用的是字节，不是 base64）。
+///
+/// 与 [`blob_to_data_url`] 同一条 `FileReader` 路子，只是读 `ArrayBuffer`：
+/// data URL 那一步（base64 编码整张 2 MB 的图）在这里纯属浪费。
+async fn blob_to_bytes(blob: &web_sys::Blob) -> Result<Vec<u8>, String> {
+    let reader = web_sys::FileReader::new().map_err(|_| "读取文件失败".to_string())?;
+    let promise = {
+        let captured = reader.clone();
+        js_sys::Promise::new(&mut |resolve, reject| {
+            let reader_for_load = captured.clone();
+            let loaded = Closure::<dyn FnMut()>::new(move || {
+                let value = reader_for_load
+                    .result()
+                    .unwrap_or_else(|_| JsValue::from_str(""));
+                let _ = resolve.call1(&JsValue::UNDEFINED, &value);
+            });
+            let failed = Closure::<dyn FnMut()>::new(move || {
+                let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str("读取文件失败"));
+            });
+            reader.set_onload(Some(loaded.as_ref().unchecked_ref()));
+            reader.set_onerror(Some(failed.as_ref().unchecked_ref()));
+            loaded.forget();
+            failed.forget();
+        })
+    };
+
+    if reader.read_as_array_buffer(blob).is_err() {
+        return Err("读取文件失败".to_string());
+    }
+    let value = JsFuture::from(promise)
+        .await
+        .map_err(|error| js_error_text(&error))?;
+    let buffer: js_sys::ArrayBuffer = value.dyn_into().map_err(|_| "读取文件失败".to_string())?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
 /// 任意 JS 错误 → 可读文案（不 panic）。
