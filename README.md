@@ -5,7 +5,7 @@
 
 记账数据放在你自己选的本地工作空间里，一个工作空间就是一个 SQLite 数据库。没有云端账户，也没有常驻后台。
 
-本文档描述 **0.13.0**。
+本文档描述 **0.13.1**。
 
 ## 功能
 
@@ -58,7 +58,7 @@ fixtures/            # schema 基线、端到端脚本（**不含任何真实个
 
 ## 下载安装
 
-到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载 `Transactions-x64-v0.13.0.exe`。
+到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载 `Transactions-x64-v0.13.1.exe`。
 
 首次启动会让你选一个工作空间目录。
 
@@ -79,7 +79,7 @@ cargo tauri dev
 pwsh -File build/build.ps1
 ```
 
-产物：`build\target\Transactions-x64-v0.13.0.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
+产物：`build\target\Transactions-x64-v0.13.1.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
 发布流程：`build/clean.ps1` → `build/build.ps1` → `build/release.ps1`（`gh release create` + 上传安装包）。
 版本号唯一来源是 `src-tauri/tauri.conf.json`。
 
