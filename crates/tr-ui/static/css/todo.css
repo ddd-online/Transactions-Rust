@@ -33,6 +33,12 @@
   gap: var(--transactions-space-sm);
 }
 
+/* 切到「四象限图」时「新建卡片」收起来：那张表的主动作只对卡片有意义。
+   常驻 DOM + `is-hidden`（见 ui.css 里那条通用隐藏类的注释），不做条件渲染。 */
+.todo-toolbar-actions.is-hidden {
+  display: none;
+}
+
 .todo-loading {
   flex: 1;
   display: flex;
@@ -169,13 +175,11 @@
 .todo-item__main {
   flex: 1;
   min-width: 0;
-}
-
-.todo-item__line {
+  /* 两行：第一行事项描述（`__title`），第二行两档标签 + 已过天数 + 时间区间（`__levels`）——
+     与四象限图弹窗里的行同一个写法 */
   display: flex;
-  align-items: baseline;
-  gap: var(--transactions-space-sm);
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: var(--transactions-space-xs);
 }
 
 .todo-item__title {

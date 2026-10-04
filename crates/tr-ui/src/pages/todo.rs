@@ -438,7 +438,10 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
                 TabItem::new(TAB_QUADRANT, "四象限图"),
             ]
         />
-        <div class="todo-toolbar-actions">
+        // 「新建卡片」是**待办视图**那张表的主动作（卡片 = 主题）：四象限图上的点全部来自
+        // 已有卡片，切过去时把它收起来。用常驻 DOM + `is-hidden` 而不是 `Show` —— 后者会把
+        // 闭包逼成 `FnOnce`（见 CSS 里那条通用隐藏类的注释）。
+        <div class="todo-toolbar-actions" class:is-hidden=move || tab.get() == TAB_QUADRANT>
             <Button
                 variant=ButtonVariant::Primary
                 size=ButtonSize::Small
@@ -819,27 +822,27 @@ fn item_row(
             </button>
 
             <div class="todo-item__main">
-                <div class="todo-item__line">
-                    <span class="todo-item__title">{item.title.clone()}</span>
-                    <span class="todo-item__levels">
-                        <span class="todo-level" title="紧急度">
-                            {format!("紧急 {}", consts::todo_level_label(item.urgency))}
-                        </span>
-                        <span class="todo-level" title="重要度">
-                            {format!("重要 {}", consts::todo_level_label(item.importance))}
-                        </span>
-                        {elapsed
-                            .map(|days| {
-                                view! {
-                                    <span class="todo-level todo-level--elapsed">
-                                        {format!("已过 {days} 天")}
-                                    </span>
-                                }
-                            })}
-                        {(!dates.is_empty())
-                            .then(|| view! { <span class="todo-item__dates">{dates.clone()}</span> })}
+                // 两行：第一行事项描述，第二行两档标签 + 已过天数 + 时间区间
+                // （与四象限图那个弹窗里的行同一套写法）
+                <span class="todo-item__title">{item.title.clone()}</span>
+                <span class="todo-item__levels">
+                    <span class="todo-level" title="紧急度">
+                        {format!("紧急 {}", consts::todo_level_label(item.urgency))}
                     </span>
-                </div>
+                    <span class="todo-level" title="重要度">
+                        {format!("重要 {}", consts::todo_level_label(item.importance))}
+                    </span>
+                    {elapsed
+                        .map(|days| {
+                            view! {
+                                <span class="todo-level todo-level--elapsed">
+                                    {format!("已过 {days} 天")}
+                                </span>
+                            }
+                        })}
+                    {(!dates.is_empty())
+                        .then(|| view! { <span class="todo-item__dates">{dates.clone()}</span> })}
+                </span>
                 <Show when=move || expanded.get() == for_show>
                     {progress_panel(
                         progress.clone(),
