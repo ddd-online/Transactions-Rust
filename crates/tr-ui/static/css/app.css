@@ -505,11 +505,7 @@
   align-items: center;
   gap: var(--transactions-space-sm);
   width: 100%;
-  /* 高度两态同一档（44px）：收起时那格就是 44×44，展开时也 44 高 ——
-   * 高度若在收放时跳一下，下面几项会跟着瞬移，动画就没法只动横向了。
-   * 44 也是页脚带子的高度，底栏那一格因此正好填满。 */
-  height: 44px;
-  padding: 0 var(--transactions-space-md);
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
   border: none;
   background: none;
   border-radius: var(--transactions-radius-md);
@@ -582,14 +578,19 @@
  * 收放那一拍的"交接"（`is-sidebar-morphing` 由 `shell.rs` 在点收起 / 展开时挂上）
  *
  * 两个状态的排法不同（图标**旁** ↔ 图标**下**），而 `flex-direction` 没法过渡 ——
- * 于是让文字**先让位、再从上方 4px 落回**（与 `tr-rise-in` 同一档）：
- * 重排发生在文字不可见的那 45% 里，看到的就是一次交接，不是一次跳。
+ * 于是让内容**先让位、再从上方 4px 落回**（与 `tr-rise-in` 同一档）：
+ * 重排发生在内容不可见的那 25% 里（80ms，够遮住那一帧，又不至于让侧栏空太久），
+ * 看到的就是一次交接，不是一次跳。
  *
  * 这个类由 Rust 在点击时挂上、360ms 后摘掉，所以它**只在收放那一下**跑 ——
  * 首屏挂载时不演（那是 `.page-content > *` 的 settle 负责的事），
  * 也不必担心"每次进页面都重播一次"（侧栏根本不会重挂）。
  *
- * 图标不参与交接：它的位置没变，只按上面的 `scale` 长大 / 收小。
+ * **图标也一起交接**：展开态的行高（34px）与收起态的方块（44px）不同档 ——
+ * 那一格高 10px 是"图标 + 名字"两行需要的，压不下来；于是那 10px 的重排也和文字
+ * 一起发生在不可见的窗口里。留下的"结构"（方块底色、选中态）不参与，
+ * 所以看到的是"内容换了一遍"，而不是整栏闪一下。
+ * 图标的 18 ↔ 20px 仍按上面的 `scale` 长大 / 收小，只是在窗口结束前就位。
  * ============================================ */
 
 @keyframes tr-sidebar-hand-over {
@@ -598,7 +599,7 @@
     transform: translateY(-4px);
   }
 
-  45% {
+  25% {
     opacity: 0;
     transform: translateY(-4px);
   }
@@ -609,6 +610,7 @@
   }
 }
 
+.app-shell.is-sidebar-morphing .nav-btn-icon,
 .app-shell.is-sidebar-morphing .nav-btn-text,
 .app-shell.is-sidebar-morphing .ledger-btn-name,
 .app-shell.is-sidebar-morphing .ledger-btn-arrow {
