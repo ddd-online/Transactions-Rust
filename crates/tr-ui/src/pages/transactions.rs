@@ -45,6 +45,12 @@
 //! * 查询统一走 `api::tr::query`，参数由 `api::tr::default_condition` 打底再覆盖
 //!   `ts_range` / `items` / `sort_fields`。
 //! * 绝不 `unwrap()` 用户数据：所有解析失败都走 `Option`/`Result` 分支。
+//!
+//! ## 取数为什么不用 `ListQuery`
+//!
+//! 这里是**分页 + 多条件**查询：key 是 `QueryInputs` 结构（账本 + 页码 + 筛选），而且必须区分
+//! "首次结果还没回来"（显示加载中）与"确实是空"（显示空态）—— 后者靠 `loaded` 标志。
+//! [`crate::query::ListQuery`] 的 key 是字符串，也没有"是否加载过"这一档。
 
 use std::collections::BTreeMap;
 
