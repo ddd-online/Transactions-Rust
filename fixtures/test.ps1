@@ -203,6 +203,10 @@ function Resolve-Groups {
     param([string[]]$Names)
     $ids = New-Object System.Collections.Generic.List[string]
     $unknown = New-Object System.Collections.Generic.List[string]
+    # 每轮必跑的三条便宜的（fmt / clippy / design-audit）—— 这是 AGENTS.md 对单元档的承诺，
+    # 所以在这里统一补：显式分组（`-Unit stock`）、`-Unit changed`、单步名走的是同一条路。
+    # `-Unit core` 或 `-Unit all` 会补重，交给 Get-Plan 的 HashSet 去重。
+    $ids.AddRange([string[]]($Groups['core']))
     foreach ($name in $Names) {
         # ⚠ 必须写成 [string[]]($Groups[...])：`[string[]]$Groups[$name]` 会被解析成
         # "先把 $Groups 转成数组、再按 $name 索引" → 拿到 $null（PowerShell 的经典坑）
@@ -242,8 +246,6 @@ function Resolve-Changed {
     if ($ignored.Count -gt 0) {
         Write-Host ('（以下改动不是测试步骤，已忽略：' + ($ignored -join ', ') + '）') -ForegroundColor DarkGray
     }
-    # 每轮必跑的三条便宜的（fmt / clippy / design-audit）永远带上
-    $hit.Add('core')
     return @($hit | Sort-Object -Unique)
 }
 
@@ -338,7 +340,7 @@ elseif ($Unit -and $Unit.Count -gt 0) {
     }
 }
 else {
-    Write-Host '没有指定要跑什么 —— 默认只跑 core（每轮必跑的四条）。用 -List 看全部分组。' -ForegroundColor Yellow
+    Write-Host '没有指定要跑什么 —— 默认只跑 core（每轮必跑的三条）。用 -List 看全部分组。' -ForegroundColor Yellow
     $selectedGroups = @('core')
 }
 

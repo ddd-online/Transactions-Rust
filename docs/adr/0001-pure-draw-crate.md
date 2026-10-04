@@ -16,6 +16,17 @@
 都没过），外加 3 处 clippy 违规（代码从未被 lint：`tr-ui` 是 wasm-only，而仓库的 clippy 只跑 host）。
 界面侧只留渲染：charts-rs 出图、CSS 变量解析、DOM 测量。
 
+## 切在哪条线上
+
+**"纯"还不够，判据是：能在 native 上断言、且不是渲染配置本身。**
+
+只按"不依赖 leptos / web-sys / charts-rs"来切，会连 `ChartConfig`、`POINT_RADIUS`、`ANIM_MS`
+一起划进来 —— 它们确实是纯数据，但它们是**渲染器的输入**（画布高度、动画时长、点半径、图例开关、
+参考线与上下界），没有任何一个被搬走的算法消费它们，搬过去只会把渲染旋钮摆进数学 crate。
+
+反过来，只要一个函数/类型是为了在 native 上被断言而存在的，它就该在这儿 ——
+哪怕名字听起来很界面（`place_tooltip`、`thin_labels`、`hit_index` 都是这么进来的）。
+
 ## 考虑过的其它选项
 
 - **塞进 `tr-domain`**：零新 crate，且它已经在标准测试命令里。但 `tr-domain` 是**领域语言**层

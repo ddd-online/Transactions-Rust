@@ -6,6 +6,8 @@
 //!
 //! 分界就是这条：**能在 native 上断言的东西放这里**（`cargo test -p tr-draw`），
 //! 需要 `getComputedStyle` / `charts_rs::Color` / 真实布局的留在界面侧。
+//! 另外，渲染配置本身（`ChartConfig`、`POINT_RADIUS`、`ANIM_MS`）虽然也是纯数据，
+//! 但只有渲染用得到，所以留在界面侧 —— 判据的完整表述见 `docs/adr/0001-pure-draw-crate.md`。
 
 /// 一条序列。
 #[derive(Debug, Clone, PartialEq)]
