@@ -32,6 +32,7 @@ use crate::components::ui::{
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
+use crate::query::ListQuery;
 use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd, ymd_to_seconds, DAY_SECONDS};
 
@@ -117,8 +118,15 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
     let stores = AppStores::global();
 
     let tab = RwSignal::new(TAB_BOARD.to_string());
-    let cards = RwSignal::new(Vec::<TodoCardDto>::new());
-    let loading = RwSignal::new(false);
+    // 卡片列表随账本重拉；失败提示「读取待办失败」（协议见 crate::query）
+    let cards = ListQuery::new(
+        "读取待办失败",
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        |ledger_id| async move { api::todo::cards(&ledger_id).await },
+    );
 
     // ---- 新建卡片 ----
     let card_open = RwSignal::new(false);
@@ -149,7 +157,7 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
     // ---- 卡片拖动排序：先把新顺序写进信号，再逐条落库 ----
     let card_drag = DragSortState::new();
     let reorder_cards = move |from: usize, to: usize| {
-        let current = cards.get_untracked();
+        let current = cards.value.get_untracked();
         if from >= current.len() || to >= current.len() || from == to {
             return;
         }
@@ -162,7 +170,7 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
             .enumerate()
             .map(|(index, card)| (card.id.clone(), index as i32))
             .collect();
-        cards.set(reordered);
+        cards.value.set(reordered);
         leptos::task::spawn_local(async move {
             for (id, index) in payload {
                 if let Err(error) = api::todo::card_sort(&id, index).await {
@@ -174,28 +182,14 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
     let drop_card: UnsyncCallback<(usize, usize)> =
         UnsyncCallback::new(move |(from, to)| reorder_cards(from, to));
 
-    // 拉卡片视图。每次改动后整表重拉：一个账本的待办量级很小，局部更新只会更啰嗦。
-    let load = move |_: ()| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            cards.set(Vec::new());
-            return;
-        }
-        loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::todo::cards(&ledger_id).await {
-                Ok(list) => cards.set(list),
-                Err(error) => notify_error("读取待办失败", &error),
-            }
-            loading.set(false);
-        });
-    };
+    // 每次改动后整表重拉：一个账本的待办量级很小，局部更新只会更啰嗦。
+    // 取数协议（去重 / 失败通知 / 空账本清空）在 `ListQuery` 里，这里只剩"重拉"。
+    let load = move |_: ()| cards.reload();
 
-    // 账本变化（含首屏）→ 重新拉；顺手收起进度展开
+    // 账本变化（含首屏）→ 顺手收起进度展开（列表本身由 ListQuery 按 key 重拉）
     Effect::new(move |_: Option<()>| {
         stores.current_ledger_id.get();
         expanded.set(String::new());
-        load(());
     });
 
     let open_card_modal = move || {
@@ -459,9 +453,9 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
             // ---- 待办视图：竖直排列的卡片 ----
             <TabPane active=tab key=TAB_BOARD class="todo-pane">
                 {move || {
-                    let list = cards.get();
+                    let list = cards.value.get();
                     if list.is_empty() {
-                        if loading.get() {
+                        if cards.loading.get() {
                             return view! { <div class="todo-loading">"正在加载…"</div> }
                                 .into_any();
                         }
@@ -508,7 +502,7 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
 
             // ---- 四象限图 ----
             <TabPane active=tab key=TAB_QUADRANT class="todo-pane">
-                {move || quadrant_view(&cards.get())}
+                {move || quadrant_view(&cards.value.get())}
             </TabPane>
         </div>
     }
@@ -1434,31 +1428,20 @@ fn jitter_of(id: &str) -> (f64, f64) {
 /// 历史子功能：已完成的事项（按完成时刻倒序）+ 进度记录弹窗。
 fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
     let stores = AppStores::global();
-    let rows = RwSignal::new(Vec::<TodoHistoryDto>::new());
-    let loading = RwSignal::new(false);
+    // 历史列表随账本重拉；失败提示「读取历史失败」（协议见 crate::query）
+    let rows = ListQuery::new(
+        "读取历史失败",
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        |ledger_id| async move { api::todo::history(&ledger_id).await },
+    );
     // 进度记录弹窗（历史里进度记录收进按钮，不占行内空间）
     let progress_open = RwSignal::new(Option::<TodoHistoryDto>::None);
 
-    let load = move |_: ()| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            rows.set(Vec::new());
-            return;
-        }
-        loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::todo::history(&ledger_id).await {
-                Ok(list) => rows.set(list),
-                Err(error) => notify_error("读取历史失败", &error),
-            }
-            loading.set(false);
-        });
-    };
-
-    Effect::new(move |_: Option<()>| {
-        stores.current_ledger_id.get();
-        load(());
-    });
+    // 变更后整表重拉（取数协议见 crate::query）
+    let load = move |_: ()| rows.reload();
 
     // 退回进行中（误点的退路：状态是同一个字段，改回去就行）。
     let restore: UnsyncCallback<String> = UnsyncCallback::new(move |item_id: String| {
@@ -1492,7 +1475,7 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
 
     let content = view! {
         {move || {
-            let list = rows.get();
+            let list = rows.value.get();
             let total = list.len();
             // 分节标题**任何数据状态下都在**：空态也看得见"这是历史"，而不是一片空白
             // （ui-smoke 的页面标记就挂在它上面）。
@@ -1506,7 +1489,7 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
                 return view! {
                     <div class="todo-history">
                         {head}
-                        {if loading.get() {
+                        {if rows.loading.get() {
                             view! { <div class="todo-loading">"正在加载…"</div> }.into_any()
                         } else {
                             view! {
