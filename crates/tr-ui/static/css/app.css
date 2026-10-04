@@ -616,14 +616,15 @@
   justify-content: center;
 }
 
-/* 只有图标的两个入口（「收起 / 展开侧边栏」与「应用设置」）用**贴住图标的小方块**：
- * 它们没有第二行文字，44px 的方块只是给图标留了一圈空 —— 收到图标按钮的既有尺寸
- * （`--transactions-icon-btn-size` = 28px）就够了，也与全仓其它图标按钮同一档。
+/* 只有图标的两个入口（「收起 / 展开侧边栏」与「应用设置」）用**比功能项小一档的方块**：
+ * 它们没有第二行文字，44px 的方块只是给图标留了一圈空；但 28px 又贴着图标太紧
+ * （实测那样一圈只有 4px）。**36px** 是两个都不能算错的中间档：20px 图标四周各留 8px，
+ * 既是稳的点击目标，也和下面 44px 的功能项拉出清楚的层次。
  * 居中是必须的：这一列的列向对齐是 `stretch`，给死宽度后它会贴到左边。 */
 .app-left-bar.is-collapsed .sidebar-toggle-btn,
 .app-left-bar.is-collapsed .sidebar-bottom .nav-btn {
-  width: var(--transactions-icon-btn-size);
-  height: var(--transactions-icon-btn-size);
+  width: 36px;
+  height: 36px;
   margin-left: auto;
   margin-right: auto;
 }
