@@ -46,11 +46,12 @@
 //!   `ts_range` / `items` / `sort_fields`。
 //! * 绝不 `unwrap()` 用户数据：所有解析失败都走 `Option`/`Result` 分支。
 //!
-//! ## 取数为什么不用 `ListQuery`
+//! ## 取数
 //!
-//! 这里是**分页 + 多条件**查询：key 是 `QueryInputs` 结构（账本 + 页码 + 筛选），而且必须区分
-//! "首次结果还没回来"（显示加载中）与"确实是空"（显示空态）—— 后者靠 `loaded` 标志。
-//! [`crate::query::ListQuery`] 的 key 是字符串，也没有"是否加载过"这一档。
+//! 这里是**分页 + 多条件**查询：key 是 `QueryInputs` 结构（账本 + 页码 + 筛选），
+//! 结果是一整份 `RecordPage`（记录 + 总数 + 页数 + 底栏统计），并且要区分
+//! "首次结果还没回来"（显示加载中）与"确实是空"（显示空态）。三条都走
+//! [`crate::query::Query`]：key 不限于是字符串、结果不限于是列表、`loaded` 由 module 提供。
 
 use std::collections::BTreeMap;
 
@@ -75,6 +76,7 @@ use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
+use crate::query::{OnError, Query};
 use crate::store::AppStores;
 use crate::time::{format_timestamp, range_to_seconds, today_ymd, ymd_to_seconds};
 
@@ -131,15 +133,11 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
     let stores = AppStores::global();
 
     // ---- 列表数据 ----
-    let items = RwSignal::new(Vec::<TransactionRecordDto>::new());
-    let total = RwSignal::new(0_i64);
+    //
+    // 取数过 `query` module：这一页只声明「拉什么（整页结果）、key 是什么」，
+    // 「什么时候发、同一个 key 要不要去重、变更后怎么重拉、失败怎么提示」都在那边。
     let page = RwSignal::new(1_i32);
     let page_size = RwSignal::new(DEFAULT_PAGE_SIZE);
-    let total_pages = RwSignal::new(0_i32);
-    let loading = RwSignal::new(false);
-    // 首屏是否已经跑过一次查询（区分「正在加载」与「确实没有记录」）
-    let loaded = RwSignal::new(false);
-    let error_message = RwSignal::new(Option::<String>::None);
 
     // ---- 账本元信息（空态三态用）----
     let has_any_records = RwSignal::new(Option::<bool>::None);
@@ -172,19 +170,9 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
     // 当前打开的「同步到其他账本」气泡所属记录 id（空串表示没有打开的面板）
     let sync_popover_id = RwSignal::new(String::new());
 
-    // ---- 查询：`fetch_page` 是普通函数，输入全部显式传入（动作闭包因此都是 `Copy`）----
+    // ---- 查询：输入从信号里读成快照（`QueryInputs`），动作闭包因此都是 `Copy` ----
     // 事件回调里用 `_untracked`（不建立依赖）；`Effect` 里必须用**跟踪读**，
     // 否则账本/分页/筛选变化时不会重跑——启动时账本尚未拉到时会出现"页面永远空着"。
-    let read_inputs = move || QueryInputs {
-        ledger_id: stores.current_ledger_id.get_untracked(),
-        page: page.get_untracked(),
-        size: page_size.get_untracked(),
-        start: range_start.get_untracked(),
-        end: range_end.get_untracked(),
-        filters: condition_items.get_untracked(),
-        sorts: sort_items.get_untracked(),
-    };
-
     let read_inputs_tracked = move || QueryInputs {
         ledger_id: stores.current_ledger_id.get(),
         page: page.get(),
@@ -195,23 +183,53 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
         sorts: sort_items.get(),
     };
 
-    let run_fetch = move |input: QueryInputs| {
-        fetch_page(
-            input,
-            items,
-            total,
-            total_pages,
-            loading,
-            loaded,
-            error_message,
-            stores,
-        )
-    };
+    // 已经**提交**的查询输入：时间范围只点了起点时不提交（保持上一次的结果，
+    // 等终点落定再查）。提交由下面那个 Effect 负责，取数 module 只观察它。
+    let committed = RwSignal::new(Option::<QueryInputs>::None);
+    let records = Query::<RecordPage>::new(
+        move || match committed.get() {
+            Some(input) if !input.ledger_id.is_empty() => Some(input),
+            _ => None,
+        },
+        move |input: QueryInputs| async move {
+            let mut condition =
+                api::tr::default_condition(&input.ledger_id, input.page, input.size);
+            if let Some((from, to)) = range_to_seconds(&input.start, &input.end) {
+                condition.ts_range = vec![from, to];
+            }
+            condition.items = input.filters;
+            condition.sort_fields = sort_fields(&input.sorts);
+            let result = api::tr::query(condition).await?;
+            Ok(RecordPage {
+                items: result.items,
+                total: result.total,
+                total_pages: result.total_pages,
+                statistics: result.tr_statistics,
+            })
+        },
+    )
+    .on_error(OnError::Notify(QUERY_ERROR_PREFIX))
+    .start();
+
+    // 页面其余部分照旧读这几个名字，只是改成从整份结果派生（内容变了才通知）。
+    let items = Signal::derive(move || records.value.get().items);
+    let total = Signal::derive(move || records.value.get().total);
+    let total_pages = Signal::derive(move || records.value.get().total_pages);
+    let loading = Signal::derive(move || records.loading.get());
+    // 首屏是否已经跑过一次查询（区分「正在加载」与「确实没有记录」）—— module 提供
+    let loaded = Signal::derive(move || records.loaded.get());
+    let error_message = Signal::derive(move || records.failed.get());
+
+    // 底栏的收支统计跟着列表结果走（`AppStores::statistics` 是共享槽位，不是取数）
+    Effect::new(move |_| {
+        let statistics = records.value.get().statistics;
+        if stores.statistics.get_untracked() != statistics {
+            stores.statistics.set(statistics);
+        }
+    });
 
     // 手动刷新（保持当前页码）
-    let do_refresh = move || {
-        run_fetch(read_inputs());
-    };
+    let do_refresh = move || records.reload();
 
     // 账本 / 页码 / 每页条数 / 时间范围 / 筛选 / 排序 任一变化即重查。
     //
@@ -257,7 +275,11 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
             }
         }
 
-        run_fetch(current.clone());
+        // 提交本次输入：取数 module 观察 `committed`，key 变了就重拉
+        RANGE_SNAPSHOT.with(|slot| {
+            *slot.borrow_mut() = (current.start.clone(), current.end.clone());
+        });
+        committed.set(Some(current.clone()));
         current
     });
 
@@ -617,66 +639,17 @@ struct QueryInputs {
     sorts: Vec<SortItem>,
 }
 
-/// 拉取一页并写入各信号。
+/// 一页记录的整体结果：记录 + 总数 + 页数 + 底栏统计。
 ///
 /// 查询条件按固定顺序组装：
 /// `ledgerId` / `offset` / `limit` 由 `api::tr::default_condition` 打底，
 /// 再按需覆盖 `tsRange` / `items` / `sortFields`（`timeRange` 为空时不传 `tsRange`）。
-#[allow(clippy::too_many_arguments)]
-fn fetch_page(
-    input: QueryInputs,
-    items: RwSignal<Vec<TransactionRecordDto>>,
-    total: RwSignal<i64>,
-    total_pages: RwSignal<i32>,
-    loading: RwSignal<bool>,
-    loaded: RwSignal<bool>,
-    error_message: RwSignal<Option<String>>,
-    stores: AppStores,
-) {
-    // 当前时间范围快照：供「新增记录默认日期」读取
-    RANGE_SNAPSHOT.with(|slot| {
-        *slot.borrow_mut() = (input.start.clone(), input.end.clone());
-    });
-
-    if input.ledger_id.is_empty() {
-        items.set(Vec::new());
-        total.set(0);
-        total_pages.set(0);
-        stores.statistics.set(BTreeMap::new());
-        error_message.set(None);
-        loaded.set(true);
-        return;
-    }
-
-    loading.set(true);
-    leptos::task::spawn_local(async move {
-        let mut condition = api::tr::default_condition(&input.ledger_id, input.page, input.size);
-        if let Some((from, to)) = range_to_seconds(&input.start, &input.end) {
-            condition.ts_range = vec![from, to];
-        }
-        condition.items = input.filters;
-        condition.sort_fields = sort_fields(&input.sorts);
-
-        match api::tr::query(condition).await {
-            Ok(result) => {
-                error_message.set(None);
-                items.set(result.items);
-                total.set(result.total);
-                total_pages.set(result.total_pages);
-                stores.statistics.set(result.tr_statistics);
-            }
-            Err(error) => {
-                items.set(Vec::new());
-                total.set(0);
-                total_pages.set(0);
-                stores.statistics.set(BTreeMap::new());
-                error_message.set(Some(error.prefixed(QUERY_ERROR_PREFIX)));
-                notify_error(QUERY_ERROR_PREFIX, &error);
-            }
-        }
-        loading.set(false);
-        loaded.set(true);
-    });
+#[derive(Clone, Default, PartialEq)]
+struct RecordPage {
+    items: Vec<TransactionRecordDto>,
+    total: i64,
+    total_pages: i32,
+    statistics: BTreeMap<String, i64>,
 }
 
 /// 交易类型下拉选项（收入 / 支出 / 转账）。
@@ -1089,9 +1062,9 @@ fn statistics_bar() -> AnyView {
 /// 空态（未选择账本 / 加载中 / 查询失败 / 无记录引导）。
 #[allow(clippy::too_many_arguments)]
 fn empty_state_view(
-    loading: RwSignal<bool>,
-    loaded: RwSignal<bool>,
-    error_message: RwSignal<Option<String>>,
+    loading: Signal<bool>,
+    loaded: Signal<bool>,
+    error_message: Signal<Option<String>>,
     has_any_records: RwSignal<Option<bool>>,
     has_any_categories: RwSignal<Option<bool>>,
     range_start: RwSignal<String>,
