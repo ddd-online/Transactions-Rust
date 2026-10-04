@@ -116,9 +116,12 @@ pub fn Modal(
     /// 确认按钮加载态
     #[prop(optional, into)]
     ok_loading: Option<Signal<bool>>,
-    /// 确认按钮用危险样式（删除类确认框）
-    #[prop(optional)]
-    ok_danger: bool,
+    /// 确认按钮用危险样式（删除类确认框）。
+    ///
+    /// 可以是**信号**：同一个弹窗里"确认"未必永远是安全动作 —— 「关联事件」弹窗在
+    /// 这笔记录已经关联时，确认按钮本身就是"解除关联"（破坏性），那一下该变红。
+    #[prop(optional, into)]
+    ok_danger: Option<Signal<bool>>,
     /// 锁定：**不可关闭** —— 不渲染右上角 ×、不渲染「取消」，点遮罩也不关。
     /// 用于"必须先完成这一步"的强制流程（如尚未选定工作空间）。
     #[prop(optional)]
@@ -132,6 +135,7 @@ pub fn Modal(
     children: ChildrenFn,
 ) -> impl IntoView {
     let ok_loading = ok_loading.unwrap_or_else(|| Signal::derive(|| false));
+    let ok_danger = ok_danger.unwrap_or_else(|| Signal::derive(|| false));
     let show_footer = footer.unwrap_or(true);
     let ok_text = ok_text.unwrap_or_else(|| Signal::derive(|| "确认".to_string()));
     let cancel_text = cancel_text.unwrap_or_else(|| Signal::derive(|| "取消".to_string()));
@@ -195,8 +199,8 @@ pub fn Modal(
                         <button
                             type="button"
                             class="ui-btn ui-btn--primary"
-                            class:ui-btn--primary=!ok_danger
-                            class:ui-btn--primary-danger=ok_danger
+                            class:ui-btn--primary=move || !ok_danger.get()
+                            class:ui-btn--primary-danger=move || ok_danger.get()
                             disabled=move || ok_loading.get()
                             on:click=move |_| {
                                 if let Some(callback) = on_ok {

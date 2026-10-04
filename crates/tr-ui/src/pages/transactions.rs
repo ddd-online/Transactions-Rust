@@ -2451,6 +2451,14 @@ fn sort_row_view(
 // ==================================================================== 关联事件弹窗
 
 /// 关联事件弹窗。
+///
+/// 两个状态共用一个弹窗、**一个确认键**：
+/// * 还没关联 → 「确认关联」：把日期写进这笔记录的 `key_event_date`；
+/// * 已经关联 → 「解除关联」（危险色）：把这笔记录的关联清掉。
+///
+/// 早先"解除关联"是弹窗正文里另加的一颗红按钮（日期下面），而底栏那颗还叫「确认关联」——
+/// 同一件事有两个入口、其中一个还顶着相反的名字。现在收成底栏那一颗，
+/// 由 `has_link` 决定它的文案、配色与动作。
 fn link_modal(
     open: RwSignal<bool>,
     target: RwSignal<Option<TransactionRecordDto>>,
@@ -2470,30 +2478,28 @@ fn link_modal(
             open=Signal::derive(move || open.get())
             title="关联事件"
             size=ModalSize::Medium
-            ok_text="确认关联"
+            ok_text=Signal::derive(move || {
+                if has_link() { "解除关联" } else { "确认关联" }
+            })
+            ok_danger=Signal::derive(move || has_link())
             cancel_text="取消"
             on_close=move || {
                 open.set(false);
                 target.set(None);
             }
-            on_ok=move || on_confirm.run(())
+            on_ok=move || {
+                if has_link() {
+                    on_unlink.run(());
+                } else {
+                    on_confirm.run(());
+                }
+            }
         >
             <Form layout=FormLayout::Vertical>
                 <FormItem label="选择日期">
                     <DatePicker value=link_date placeholder="选择要关联的日期" />
                 </FormItem>
             </Form>
-            <Show when=has_link>
-                <div class="tr-link__footer">
-                    <Button
-                        variant=ButtonVariant::PrimaryDanger
-                        size=ButtonSize::Small
-                        on_click=move || on_unlink.run(())
-                    >
-                        "解除关联"
-                    </Button>
-                </div>
-            </Show>
         </Modal>
     }
     .into_any()
