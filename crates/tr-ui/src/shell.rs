@@ -495,10 +495,25 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
                             if stores.sidebar_collapsed.get() { "workspace-btn" } else { "ledger-btn" }
                         }
                         class:is-open=move || menu_open.get()
-                        // 收起态触发器里没有可见文字 → 悬浮提示在那里是**必要**的
-                        // （与 `.nav-btn` 那条"别把旁边的字再说一遍"同一条判据：有没有可见文字）。
-                        title=move || format!("切换账本（当前：{}）", current_ledger_name())
-                        aria-label="切换账本"
+                        // **展开态的可访问名就是账本名**（与重构前逐字一致）：按钮里显示什么，
+                        // 读屏与 UIA 就念什么 —— 两个账本相关的护栏（`ui-diary-ledger` /
+                        // `ui-sync-ledger`）正是靠"名字里含当前账本名"认出这个触发器的。
+                        // 收起态没有可见文字，才补一句带上下文的话。
+                        aria-label=move || {
+                            if stores.sidebar_collapsed.get() {
+                                format!("切换账本，当前 {}", current_ledger_name())
+                            } else {
+                                current_ledger_name()
+                            }
+                        }
+                        // 悬浮提示只在收起态给（与 `.nav-btn` 同一条判据：有没有可见文字）
+                        title=move || {
+                            if stores.sidebar_collapsed.get() {
+                                format!("切换账本（当前：{}）", current_ledger_name())
+                            } else {
+                                String::new()
+                            }
+                        }
                         aria-haspopup="menu"
                         aria-expanded=move || if menu_open.get() { "true" } else { "false" }
                         on:click=move |_| menu_open.update(|open| *open = !*open)
