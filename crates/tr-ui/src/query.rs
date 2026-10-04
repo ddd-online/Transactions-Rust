@@ -44,13 +44,27 @@ use crate::error_handler::notify_error;
 use crate::ipc::IpcError;
 
 /// 失败档次（interface 的一部分：页面不必自己发明失败语义）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum OnError {
     /// 弹一句提示（标题 = 前缀，沿用各页原文案），并把 `"{前缀}: {msg}"` 记进
     /// [`Query::failed`]（空态里要显示那句话）。
-    Notify(&'static str),
+    ///
+    /// 前缀是一个**闭包**而不是字符串：有的页面前缀随 key / 交易类型变
+    /// （「查询 支出 消费分类失败」），失败的那一刻现算才拿得到。
+    Notify(Rc<dyn Fn() -> String>),
     /// 静默：既不弹提示也不记 `failed` —— "日记不存在 = 空条目"这类业务语义。
     Silent,
+    /// 把 `Err` 当**业务上的空**：按 `fallback` 显示、不弹提示、不记 `failed`。
+    /// 与 [`OnError::Silent`] 的差别在结果：Silent 是"这次没取到，手上留旧的"，
+    /// BusinessEmpty 是"没有就是空"（日记不存在、事件没有图片）。
+    BusinessEmpty,
+}
+
+impl OnError {
+    /// 固定前缀的 [`OnError::Notify`]。
+    pub fn notify(prefix: &'static str) -> Self {
+        OnError::Notify(Rc::new(move || prefix.to_string()))
+    }
 }
 
 /// 跨视图缓存策略。
@@ -99,7 +113,7 @@ impl<T: Default + 'static> Query<T> {
         QueryBuilder {
             cache: Cache::Mount,
             on_error: OnError::Silent,
-            fallback: Rc::new(T::default),
+            fallback: Rc::new(|_: Option<&K>| T::default()),
             key,
             fetch,
             _marker: std::marker::PhantomData,
@@ -127,7 +141,7 @@ impl<T: 'static> Query<T> {
 pub struct QueryBuilder<T: 'static, K, KF, F> {
     cache: Cache,
     on_error: OnError,
-    fallback: Rc<dyn Fn() -> T>,
+    fallback: Rc<dyn Fn(Option<&K>) -> T>,
     key: KF,
     fetch: F,
     _marker: std::marker::PhantomData<K>,
@@ -152,7 +166,10 @@ where
     }
 
     /// 失败 / 清空时对外显示什么（默认 `T::default()`）。
-    pub fn fallback(mut self, fallback: impl Fn() -> T + 'static) -> Self {
+    ///
+    /// 闭包拿到的是"当前 key"：`None` 表示这次是被清空（例如还没选账本），
+    /// `Some(&key)` 表示失败时手上那一份 key（「不存在 = 某日期的空条目」要它）。
+    pub fn fallback(mut self, fallback: impl Fn(Option<&K>) -> T + 'static) -> Self {
         self.fallback = Rc::new(fallback);
         self
     }
@@ -189,7 +206,7 @@ where
                 RwSignal::new(None::<String>),
             ),
             None => (
-                RwSignal::new(fallback()),
+                RwSignal::new(fallback(None)),
                 RwSignal::new(false),
                 RwSignal::new(false),
                 RwSignal::new(None::<String>),
@@ -220,7 +237,7 @@ where
             match step {
                 Step::Idle => {}
                 Step::Clear => {
-                    value.set(fallback());
+                    value.set(fallback(None));
                     failed.set(None);
                     loading.set(false);
                     loaded.set(true);
@@ -237,6 +254,7 @@ where
                     let core = Rc::clone(&core);
                     let fetch = Rc::clone(&fetch);
                     let fallback = Rc::clone(&fallback);
+                    let on_error = on_error.clone();
                     let keep = keep.clone();
                     leptos::task::spawn_local(async move {
                         let result = fetch(key.clone()).await;
@@ -264,13 +282,21 @@ where
                                 }
                             }
                             Err(error) => {
-                                value.set(fallback());
+                                let fallback_value = fallback(Some(&key));
                                 match on_error {
-                                    OnError::Notify(prefix) => {
-                                        failed.set(Some(error.prefixed(prefix)));
-                                        notify_error(prefix, &error);
+                                    OnError::Notify(ref prefix) => {
+                                        let prefix = prefix();
+                                        value.set(fallback_value);
+                                        failed.set(Some(error.prefixed(&prefix)));
+                                        notify_error(&prefix, &error);
                                     }
                                     OnError::Silent => {
+                                        // 手上留着上一次的结果（不发请求的语义是"这次没取到"）
+                                        failed.set(None);
+                                    }
+                                    OnError::BusinessEmpty => {
+                                        // 没有就是空：按 fallback 显示，且算"已经跑完一次"
+                                        value.set(fallback_value);
                                         failed.set(None);
                                     }
                                 }
@@ -313,7 +339,7 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-fn keep_slot<K, T>(id: &'static str, fallback: &Rc<dyn Fn() -> T>) -> Rc<KeepSlot<K, T>>
+fn keep_slot<K, T>(id: &'static str, fallback: &Rc<dyn Fn(Option<&K>) -> T>) -> Rc<KeepSlot<K, T>>
 where
     K: Clone + PartialEq + 'static,
     T: Clone + 'static,
@@ -330,7 +356,7 @@ where
         }
         let slot = Rc::new(KeepSlot {
             core: Rc::new(RefCell::new(QueryCore::new())),
-            value: RefCell::new(fallback()),
+            value: RefCell::new(fallback(None)),
             loading: Cell::new(false),
             loaded: Cell::new(false),
         });
@@ -376,7 +402,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> ListQuery<T> {
         Fut: Future<Output = Result<Vec<T>, IpcError>> + 'static,
     {
         let inner = Query::<Vec<T>>::new(key, fetch)
-            .on_error(OnError::Notify(prefix))
+            .on_error(OnError::notify(prefix))
             .start();
         Self {
             value: inner.value,

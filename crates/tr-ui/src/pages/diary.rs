@@ -34,11 +34,12 @@
 //! * 单栏编辑区，没有分栏。
 //! * 编辑器的时间防抖用 `set_timeout` + 句柄，切日期时显式清掉。
 //!
-//! ## 取数为什么不用 `ListQuery`
+//! ## 取数
 //!
-//! 这一页的失败语义是私有的：日期列表**静默失败**（失败就不画树、不弹提示）且带"账本已切走
-//! 就丢弃响应"的守卫；"取条目"把 `Err` 当**空条目**（日记不存在不是错误），并连带重置草稿 /
-//! 心情 / 保存状态。[`crate::query::ListQuery`] 的失败路径是"提示 + 回落空列表"，套过来会改行为。
+//! 两条取数都走 [`crate::query::Query`]，失败语义写在声明里：
+//! 日期列表 [`OnError::Silent`]（失败就不画树、不弹提示）；条目 [`OnError::BusinessEmpty`]
+//! （"日记不存在 = 空条目"不是错误）。"账本已切走就丢弃响应"由 module 的 key/generation
+//! 判定接管（key 里带着账本）。**自动保存的防抖状态机不进 module**（那是写入，不是取数）。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,6 +54,7 @@ use crate::components::ui::{
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
+use crate::query::{OnError, Query};
 use crate::store::AppStores;
 use crate::time::{format_ymd_cn, split_ymd, today_ymd, weekday_cn};
 
@@ -113,8 +115,6 @@ pub fn DiaryPage() -> impl IntoView {
     let stores = AppStores::global();
     let today = today_ymd();
     let selected_date = RwSignal::new(today.clone());
-    let dates = RwSignal::new(Vec::<DiaryDateItem>::new());
-    let entry = RwSignal::new(Option::<DiaryEntry>::None);
     let draft = RwSignal::new(String::new());
     let mood = RwSignal::new(String::new());
     let save_status = RwSignal::new(SaveStatus::Idle);
@@ -147,47 +147,73 @@ pub fn DiaryPage() -> impl IntoView {
         });
     };
 
-    let load_dates = move |ledger_id: String| {
-        leptos::task::spawn_local(async move {
-            if let Ok(items) = api::diary::list_dates(&ledger_id).await {
-                // 陈旧响应守卫：账本已经切走就丢弃，别把上一个账本的日期树画出来
-                if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
-                    return;
-                }
-                dates.set(items);
-            }
-        });
-    };
+    // ---- 取数：日期树（静默失败）与条目（「不存在 = 空条目」）----
+    //
+    // 两条都过 `query` module：key 是账本（条目再加日期），失败语义写在声明里。
+    // "账本已切走就丢弃响应"由 module 的 key 判定接管 —— 不用每处再手写守卫。
+    let dates_query = Query::<Vec<DiaryDateItem>>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::diary::list_dates(&ledger_id).await },
+    )
+    // 日期树只是列表的点缀：失败就不画树，不打扰用户
+    .on_error(OnError::Silent)
+    .start();
+    let dates = dates_query.value;
 
-    let load_entry = move |ledger_id: String, date: String| {
-        selected_date.set(date.clone());
-        // 换日期后状态从零起算：否则上一条的「编辑中 / 保存中… / 保存失败」会被带过来
-        save_status.set(SaveStatus::Idle);
-        leptos::task::spawn_local(async move {
-            let loaded = api::diary::get(&date, &ledger_id).await;
-            // 陈旧响应守卫：账本已经切走就丢弃
-            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
-                return;
-            }
-            match loaded {
-                Ok(item) => {
+    let entry_query = Query::<Option<DiaryEntry>>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            let date = selected_date.get();
+            (!ledger_id.is_empty() && !date.is_empty()).then(|| (ledger_id, date))
+        },
+        move |(ledger_id, date): (String, String)| async move {
+            api::diary::get(&date, &ledger_id).await.map(Some)
+        },
+    )
+    // 日记不存在不是错误：把 `Err` 当业务空 —— 空条目（可编辑）
+    .on_error(OnError::BusinessEmpty)
+    .fallback(|key: Option<&(String, String)>| {
+        key.map(|(ledger_id, date)| DiaryEntry {
+            date: date.clone(),
+            ledger_id: ledger_id.clone(),
+            ..DiaryEntry::default()
+        })
+    })
+    .start();
+    let entry = entry_query.value;
+
+    // 新的一条日记：把草稿与心情铺上去。
+    //
+    // 只在"这一份 key **第一次**拿到数据"时做一次 —— 保存成功后 `entry` 也会变，
+    // 那时草稿已经在手上（再铺一次就会把「已保存」打回「编辑中」）。
+    let seeded = RwSignal::new(String::new());
+    Effect::new(move |previous: Option<String>| {
+        let ledger_id = stores.current_ledger_id.get();
+        let date = selected_date.get();
+        let key = format!("{ledger_id}|{date}");
+        if ledger_id.is_empty() {
+            seeded.set(String::new());
+            return key;
+        }
+        if previous.as_ref() != Some(&key) {
+            // 换日期 / 换账本：保存状态从零起算，别把上一条的带过来
+            save_status.set(SaveStatus::Idle);
+        }
+        if seeded.get_untracked() != key {
+            if let Some(item) = entry.get() {
+                // 还在加载（手上这份属于别的 key）时先不铺
+                if item.date == date && item.ledger_id == ledger_id {
+                    seeded.set(key.clone());
                     draft.set(item.content.clone());
                     mood.set(item.mood.clone());
-                    entry.set(Some(item));
-                }
-                Err(_) => {
-                    // 不存在 → 空条目（可编辑）
-                    draft.set(String::new());
-                    mood.set(String::new());
-                    entry.set(Some(DiaryEntry {
-                        date: date.clone(),
-                        ledger_id: ledger_id.clone(),
-                        ..DiaryEntry::default()
-                    }));
                 }
             }
-        });
-    };
+        }
+        key
+    });
 
     let do_save = move || {
         // 草稿属于哪个账本就写哪个账本（切账本后仍在飞的这次保存不会串账本）
@@ -293,18 +319,16 @@ pub fn DiaryPage() -> impl IntoView {
         // ② 换账本后让日期树对新数据重新做一次"首次收起"
         tree_initialized.set(false);
         // ③ 一个账本都没有 → 清空并展示「未选择账本」引导
+        //    （日期树与条目由取数 module 的 key=None 清掉）
         if ledger_id.is_empty() {
-            dates.set(Vec::new());
-            entry.set(None);
             draft.set(String::new());
             mood.set(String::new());
             save_status.set(SaveStatus::Idle);
             draft_ledger.set(String::new());
             return;
         }
-        // ④ 账本内换数据：日期树重拉，**保持同一天**（同记账页保留时间范围的做法）
-        load_dates(ledger_id.clone());
-        load_entry(ledger_id, selected_date.get_untracked());
+        // ④ 账本内换数据：日期树与条目按 key 重拉，**保持同一天**
+        //    （同记账页保留时间范围的做法）
     });
 
     let go_to_date = move |date: String| {
@@ -313,7 +337,8 @@ pub fn DiaryPage() -> impl IntoView {
             return;
         }
         clear_pending_save();
-        load_entry(ledger_id, date);
+        // 换日期 = 换 key：取数 module 会重拉条目，铺草稿的 Effect 跟着走
+        selected_date.set(date);
     };
 
     // 日期选择器**选到某天就直接跳过去**（不再需要「跳转日期」按钮）。
