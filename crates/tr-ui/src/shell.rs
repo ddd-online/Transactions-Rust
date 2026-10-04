@@ -484,10 +484,16 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
                 <div class="ledger-anchor">
                     <button
                         type="button"
-                        class="workspace-btn"
+                        // **两副形态、一个按钮**：展开时是原来那个下拉选择器（软件图标 + 账本名 + ⌄），
+                        // 收起时只留那个方块图标（名字与箭头由 CSS `display: none` 收掉）。
+                        // 用一个按钮而不是两个 `Show` 分支：否则同一个「切换账本」在无障碍树里
+                        // 会出现两次，按名字取元素的脚本与读屏都得先做一遍去重。
+                        class=move || {
+                            if stores.sidebar_collapsed.get() { "workspace-btn" } else { "ledger-btn" }
+                        }
                         class:is-open=move || menu_open.get()
-                        // 触发器里没有可见文字了 → 悬浮提示在这里是**必要**的
-                        // （与 `.nav-btn` 那条"别把旁边的字再说一遍"相反，那条针对的是有文字的按钮）。
+                        // 收起态触发器里没有可见文字 → 悬浮提示在那里是**必要**的
+                        // （与 `.nav-btn` 那条"别把旁边的字再说一遍"同一条判据：有没有可见文字）。
                         title=move || format!("切换账本（当前：{}）", current_ledger_name())
                         aria-label="切换账本"
                         aria-haspopup="menu"
@@ -500,6 +506,8 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
                         }
                     >
                         {workspace_mark("workspace-mark")}
+                        <span class="ledger-btn-name">{current_ledger_name}</span>
+                        <span class="ledger-btn-arrow">{icons::icon(Icon::Down)}</span>
                     </button>
 
                     <Show when=move || menu_open.get()>

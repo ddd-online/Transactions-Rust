@@ -87,18 +87,17 @@
   width: 100%;
 }
 
-/* 顶部容器（与右侧「标题 + 窗口三按钮」等高、同起点）：里面只有**一个方形软件 ICON**。
+/* 顶部容器（与右侧「标题 + 窗口三按钮」等高、同起点）：里面是**账本切换入口**。
  * 底边一条发丝线把它与下方内容分开，与页面顶部的分隔线**同一条水平线**。
  *
- * 左内边距 24px 是**对齐用的**，不是随手取的数：侧栏导航项的图标左缘也在 24px
- * （导航组 12px + 按钮自己的 12px 内边距）。于是顶部这个方块与下面那一列图标
- * 共用同一条左基准线 —— 侧栏看起来才是"一列"，而不是"一个标志 +一堆按钮"。 */
+ * 左右各 12px 与导航组同档：展开态那个下拉按钮因此与下面的导航项**同宽同左缘**，
+ * 里面的软件图标自然落在 24px 那条图标基准线上（12 + 按钮自己的 12）。 */
 .sidebar-ledger {
   position: relative;
   display: flex;
   align-items: center;
   height: var(--transactions-size-top-band);
-  padding-left: var(--transactions-space-xl);
+  padding-left: var(--transactions-space-md);
   padding-right: var(--transactions-space-md);
   border-bottom: 1px solid var(--transactions-color-divider);
 }
@@ -115,17 +114,93 @@
  *  3) **每行带账本身份色点**（DESIGN.md 的 Ledger identity，此前从未被使用）。
  * ============================================ */
 
-/* 触发器 + 菜单的定位锚点：菜单相对**触发器**定位（`width` 收成内容宽，
-   锚点就是那个方块），菜单自己的宽度在下面单独给。
+/* 触发器 + 菜单的定位锚点：菜单相对**触发器**定位，菜单宽度在下面单独给。
  * 收起后侧栏只有 64px，菜单（176px）必然溢出栏外 —— 这不靠任何 `z-index` 兜底：
    沿途的祖先都没有 `position` + `z-index`，也没有 `overflow`，所以 `.ledger-menu`
    的 `z-index: 1050` 直接与整层界面同比；`.app-shell-body` 的 `overflow: hidden`
    只裁窗口边界，176px 的菜单离右边界远得很。 */
 .ledger-anchor {
   position: relative;
+  width: 100%;
 }
 
-/* 方形软件 ICON = 账本切换入口。
+/* ============================================
+ * 账本切换入口的**两副形态**（同一个按钮）
+ *
+ * 展开态 `.ledger-btn`：与改动前逐字一致的下拉选择器（软件图标 + 账本名 + ⌄）——
+ *   侧栏有 200px 的时候，**"我在哪个账本"必须看得见**，一个方块图标替代不了名字。
+ * 收起态 `.workspace-btn`：只剩那个 32px 方块，名字与箭头收掉。
+ * 两态点开的都是同一个菜单。
+ * ============================================ */
+
+/* 展开态：无边框 + hover 填充 + 展开时主色 tint（与侧栏导航项同一套语言） */
+.ledger-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--transactions-space-md);
+  border: none;
+  border-radius: var(--transactions-radius-md);
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--transactions-size-text-body-sm);
+  font-weight: var(--transactions-weight-medium);
+  color: var(--transactions-color-text-major);
+  text-align: left;
+  transition: background-color var(--transactions-transition-fast),
+    color var(--transactions-transition-fast);
+}
+
+.ledger-btn:hover {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.ledger-btn.is-open {
+  background-color: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
+}
+
+.ledger-btn:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+/* 触发器里的软件图标：**接管原来那颗账本身份色点**的位置。
+ * 它属于工作空间、名字属于账本 —— 两者本来就是"这个工作空间里的这个账本"，
+ * 一行里读下来是完整的。身份色点仍然在每个菜单行里（那里的主体就是账本）。 */
+.ledger-btn .workspace-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--transactions-radius-sm);
+  flex-shrink: 0;
+}
+
+.ledger-btn-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.ledger-btn-arrow {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: currentColor;
+  opacity: 0.7;
+}
+
+.ledger-btn-arrow svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+}
+
+/* 收起态：方形软件 ICON = 账本切换入口。
  *
  * 为什么是"环绕高光"而不是"填一个底色"：方块本身就是一张**图片**
  * （用户自定义的图标，或内置的「Tr」标志），给它垫底色会被图的透明区漏出来；
@@ -159,6 +234,13 @@
 .workspace-btn:focus-visible {
   outline: 2px solid var(--transactions-color-primary);
   outline-offset: 3px;
+}
+
+/* 收起态把下拉选择器的另外两件东西收掉：名字与箭头在 64px 里没有位置，
+ * 剩下的那个方块就是"工作空间 / 账本入口"的全部表达。 */
+.workspace-btn .ledger-btn-name,
+.workspace-btn .ledger-btn-arrow {
+  display: none;
 }
 
 /* 工作空间标志：铺满所在方块，**圆角继承宿主**（按钮 8px / 设置页预览 12px）。
@@ -501,6 +583,11 @@
   justify-content: center;
   padding-left: 0;
   padding-right: 0;
+}
+
+/* 收起态：锚点收成方块那么宽（展开态是"铺满一行"，菜单因此与按钮同宽） */
+.app-left-bar.is-collapsed .ledger-anchor {
+  width: auto;
 }
 
 .app-left-bar.is-collapsed .nav-btn {
