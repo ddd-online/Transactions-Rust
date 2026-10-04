@@ -598,13 +598,31 @@
   padding-right: var(--transactions-space-sm);
 }
 
-/* 功能项：竖排两行（图标 / 名字）。`:not(.sidebar-toggle-btn)` 是因为
+/* 收起态每个按钮的上下内边距都收到 4px：方块 36px 因此刚好落在页脚那条 44px 的带子里 */
+.app-left-bar.is-collapsed .nav-btn {
+  padding: var(--transactions-space-xs) 0;
+}
+
+/* 功能项：竖排两行（方块图标 / 名字）。`:not(.sidebar-toggle-btn)` 是因为
  * 「收起 / 展开」是**控件**不是功能页 —— 它收起后仍然只留那个折叠图标。 */
 .app-left-bar.is-collapsed .nav-btn:not(.sidebar-toggle-btn) {
   flex-direction: column;
   gap: var(--transactions-space-2xs);
   justify-content: center;
-  padding: var(--transactions-space-xs) 0;
+}
+
+/* 收起态的图标是**一个圆角方块**（与顶部那个软件图标同一套形状语言）：
+ * 一排裸字形看着像"挂着的图标"，方块看着才像"一组按钮"。
+ *
+ * 底色用 `elevated` 而不是 `minor-background` / `major-background`：
+ * `minor-background` 与侧栏底色**完全同值**（浅色与深色都一样），`major-background`
+ * 在深色下只比侧栏亮 2 级 —— 两种情况方块都会直接隐形。 */
+.app-left-bar.is-collapsed .nav-btn-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-elevated);
+  transition: background-color var(--transactions-transition-fast);
 }
 
 .app-left-bar.is-collapsed .nav-btn-icon svg {
@@ -612,7 +630,23 @@
   height: 20px;
 }
 
-/* 名字：最小一档字号（11px）。四个字的「应用设置」是 44px，52px 里放得下；
+/* 「选中 / 悬停」整块落在方块上：行本身不再填色，
+ * 否则会叠出"方块 + 药丸"两层。 */
+.app-left-bar.is-collapsed .nav-btn,
+.app-left-bar.is-collapsed .nav-btn:hover,
+.app-left-bar.is-collapsed .nav-btn.active {
+  background-color: transparent;
+}
+
+.app-left-bar.is-collapsed .nav-btn:hover .nav-btn-icon {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+.app-left-bar.is-collapsed .nav-btn.active .nav-btn-icon {
+  background-color: var(--transactions-color-active-bg);
+}
+
+/* 名字：最小一档字号（11px）。五个功能项都是两个字（22px），52px 里绰绰有余；
  * 真遇上更长的名字就省略号收尾，不挤出去。 */
 .app-left-bar.is-collapsed .nav-btn:not(.sidebar-toggle-btn) .nav-btn-text {
   max-width: 100%;
@@ -620,6 +654,12 @@
   text-overflow: ellipsis;
   font-size: var(--transactions-size-text-small);
   line-height: var(--transactions-height-tight);
+}
+
+/* 「应用设置」收起后**不要文字**：它是页脚那一行唯一的工具项，
+ * 一颗齿轮已经说清了自己是"设置"，写不写名字都要占掉那 44px 的一半。 */
+.app-left-bar.is-collapsed .sidebar-bottom .nav-btn-text {
+  display: none;
 }
 
 .app-left-bar.is-collapsed .sidebar-toggle-btn .nav-btn-text {
