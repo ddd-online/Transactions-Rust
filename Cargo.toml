@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/tr-domain",
+    "crates/tr-draw",
     "crates/tr-store",
     "crates/tr-service",
     "crates/tr-ipc",
@@ -20,6 +21,7 @@ repository = "https://github.com/ddd-online/Transactions-Rust"
 
 [workspace.dependencies]
 tr-domain = { path = "crates/tr-domain" }
+tr-draw = { path = "crates/tr-draw" }
 tr-store = { path = "crates/tr-store" }
 tr-service = { path = "crates/tr-service" }
 tr-ipc = { path = "crates/tr-ipc" }

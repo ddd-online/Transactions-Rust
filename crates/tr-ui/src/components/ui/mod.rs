@@ -118,9 +118,7 @@ pub use dropdown::{Dropdown, DropdownItem};
 pub use empty::Empty;
 pub use feature_page::FeaturePage;
 pub use form::{Form, FormItem, FormLayout};
-pub use image_crop::{
-    cover_scale, crop_rect, max_offset, CropRect, ImageCropDialog, CROP_VIEWPORT,
-};
+pub use image_crop::ImageCropDialog;
 pub use image_picker::{
     blob_to_data_url, convert_heic_to_jpeg, is_heic, read_as_data_url, FileStatus, ImagePicker,
     UploadFileProgress, UploadProgress, UploadProgressBar, UploadStatus, HEIC_CONVERT_FAILED,
@@ -128,6 +126,8 @@ pub use image_picker::{
 pub use input::Input;
 pub use markdown::{render_markdown, Markdown};
 pub use modal::{Modal, ModalSize};
+// 裁剪几何住在 tr-draw（native 上可测）；对外路径保持不变。
+pub use tr_draw::crop::{cover_scale, crop_rect, max_offset, CropRect, CROP_VIEWPORT};
 // 关闭按钮（×）：弹窗 / 抽屉 / 通知共用，见 `modal::close_button`
 pub(crate) use modal::close_button;
 pub use page_header::PageHeader;

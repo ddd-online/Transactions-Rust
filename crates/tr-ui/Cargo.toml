@@ -14,6 +14,10 @@ crate-type = ["cdylib"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tr-domain = { workspace = true }
+# 纯绘制算法（坐标 / 刻度 / 路径 / 裁剪几何）：native 与 wasm32 都能编，
+# 所以它的断言在 `cargo test -p tr-draw` 里真跑 —— 而不是像本 crate 的
+# `#[cfg(test)]` 那样只当规格说明（见 docs/adr/0001-pure-draw-crate.md）。
+tr-draw = { workspace = true }
 leptos = { version = "0.8", features = ["csr"] }
 # 折线图引擎：纯 Rust 出 SVG（默认特性为 0；raster/image-encoder 才会拉 image + resvg）
 charts-rs = { version = "1.0", default-features = false }

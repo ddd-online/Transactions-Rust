@@ -77,12 +77,14 @@ $Steps = [ordered]@{
     'test-store'        = @{ Title='cargo test -p tr-store';                         Kind='cargo'; Args=@('test','-p','tr-store'); Needs='none' }
     'test-service'      = @{ Title='cargo test -p tr-service';                       Kind='cargo'; Args=@('test','-p','tr-service'); Needs='none' }
     'test-ipc'          = @{ Title='cargo test -p tr-ipc';                           Kind='cargo'; Args=@('test','-p','tr-ipc'); Needs='none' }
-    'check-ui-wasm'     = @{ Title='cargo check -p tr-ui --target wasm32';           Kind='cargo'; Args=@('check','-p','tr-ui','--target','wasm32-unknown-unknown'); Needs='none' }
+    'test-draw'         = @{ Title='cargo test -p tr-draw（图表 / 裁剪的纯算法）';    Kind='cargo'; Args=@('test','-p','tr-draw'); Needs='none' }
+    # --all-targets 不能省：界面的 `#[cfg(test)]` 在 native 上跑不到（跑到了也是 0 个），
+    # 少了它连**类型检查**都没有 —— 实测曾积累 7 处 `vec![100, 300]` 这类错误（整数当 f64）
+    # 却一路绿灯。纯算法的断言现在归 tr-draw，这里兜住剩下的"规格说明"至少能编译。
+    'check-ui-wasm'     = @{ Title='cargo check -p tr-ui --target wasm32（含测试目标）'; Kind='cargo'; Args=@('check','-p','tr-ui','--target','wasm32-unknown-unknown','--all-targets'); Needs='none' }
 
     # ---- 结构 / 纯函数 ----
     'schema-diff'       = @{ Title='建库护栏：Rust 建库 vs fixtures/schema/fresh.sql'; Kind='cargo'; Args=@('xtask','schema-diff'); Needs='none' }
-    'chart-tests'       = @{ Title='图表纯函数（Y 轴范围 / 填充基线）';              Kind='pwsh';  Script='fixtures\chart-tests.ps1'; Needs='none' }
-    'crop-tests'        = @{ Title='方形裁剪几何（铺满比例 / 位移夹紧 / 裁剪框）';   Kind='pwsh';  Script='fixtures\crop-tests.ps1'; Needs='none' }
 
     # ---- 界面护栏（真实启动 + UIA 驱动）----
     'smoke'             = @{ Title='冒烟：已配置 → 只开主窗口；首启动 → 主窗口 + 选工作空间屏（背景 inert）'; Kind='pwsh'; Script='fixtures\smoke.ps1'; Needs='exe' }
@@ -118,12 +120,12 @@ $Groups = [ordered]@{
     'service'      = @('test-service')
     'ipc'          = @('test-ipc')
     'ui'           = @('check-ui-wasm', 'design-audit')
-    'chart'        = @('chart-tests')
+    'chart'        = @('test-draw')
     'schema'       = @('schema-diff', 'migrate-workspace')
     # 记账 · 记录：记一笔 / 编辑 / 排序 / 筛选 / 模板，以及"同步到其他账本"（ui-sync-ledger 属于这条链路）
     'accounting'   = @('ui-transactions', 'ui-sync-ledger')
     'category-tag' = @('ui-crud', 'ui-drag')
-    'analysis'     = @('chart-tests', 'ui-crud')
+    'analysis'     = @('test-draw', 'ui-crud')
     'templates'    = @('ui-crud', 'ui-transactions')
     'key-event'    = @('ui-key-event', 'ui-link-event')
     'diary'        = @('ui-diary-edit', 'ui-diary-ledger', 'ui-diary-io')
@@ -133,8 +135,8 @@ $Groups = [ordered]@{
     'assets'       = @('ui-upload')
     'shell'        = @('smoke', 'window-bounds', 'close-behavior')
     # 共享组件 / 全局样式 / 侧栏骨架：影响面按 AGENTS.md 的约定放大到"覆盖到的代表页"
-    # crop-tests：`components/ui/image_crop.rs` 是 wasm-only，单测平时跑不到，用纯函数护栏接住
-    'ui-kit'       = @('design-audit', 'check-ui-wasm', 'crop-tests', 'ui-smoke', 'ui-shots', 'ui-transactions', 'ui-stock')
+    # 图表与裁剪的纯算法已搬进 tr-draw（native 可编），由 test-draw 真跑 —— 见 docs/adr/0001
+    'ui-kit'       = @('design-audit', 'check-ui-wasm', 'test-draw', 'ui-smoke', 'ui-shots', 'ui-transactions', 'ui-stock')
     'update'       = @('ui-update-restore')
 }
 
@@ -162,6 +164,9 @@ $PathMap = @(
     @{ Re='^crates/tr-service/src/proxy\.rs$';            Groups=@('settings') }
     @{ Re='^crates/tr-service/';                          Groups=@('service') }
     @{ Re='^crates/tr-ipc/';                              Groups=@('ipc') }
+    @{ Re='^crates/tr-draw/src/chart\.rs$';               Groups=@('chart', 'analysis') }
+    @{ Re='^crates/tr-draw/src/crop\.rs$';                Groups=@('ui-kit') }
+    @{ Re='^crates/tr-draw/';                             Groups=@('chart', 'analysis', 'ui-kit') }
     @{ Re='^crates/tr-ui/src/api/';                       Groups=@('ipc') }
     @{ Re='^crates/tr-ui/src/pages/stock\.rs$';           Groups=@('stock') }
     @{ Re='^crates/tr-ui/src/pages/todo\.rs$';            Groups=@('todo', 'ui-kit') }

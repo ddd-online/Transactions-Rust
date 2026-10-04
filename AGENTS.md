@@ -10,6 +10,7 @@ Transactions 是一款桌面个人记账应用，每个工作空间是一个独�
 
 ```
 crates/tr-domain/    # 纯领域层：models / dto / 金额换算 / 费用分摊（native + wasm 双可编，无 I/O）
+crates/tr-draw/      # 纯绘制算法层：坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何（同上，无 I/O）
 crates/tr-store/     # 存储层：建库 + 迁移引擎（migrations）+ 格式校验 + 各 Dao（rusqlite）
 crates/tr-service/   # 服务层：业务规则（账本/交易/…/股票），不依赖 tauri
 crates/tr-ipc/       # IPC 命令面：全部 #[tauri::command] + 统一错误信封
@@ -22,13 +23,16 @@ fixtures/            # schema 基线（fresh.sql）+ 种子与端到端脚本（
 分层纪律：`tr-domain` 不得引入任何 I/O 依赖（rusqlite / reqwest / tauri 都不行）—— 它同时被 native 与 wasm
 依赖，界面和后端因此共用同一份金额与费用算法；只有 `tr-ipc` 依赖 `tauri`，业务规则必须能在没有窗口的环境里用
 `cargo test` 验证；`tr-store` / `tr-service` 不参与 wasm 编译（`cfg(not(target_arch = "wasm32"))`）。
+`tr-draw` 与 `tr-domain` 同规格（双可编、零 I/O）：**界面里凡是"能在 native 上断言"的纯算法都放那儿**，
+否则它们会退回"`#[cfg(test)]` 只是规格说明"的状态 —— 起因见 `docs/adr/0001-pure-draw-crate.md`。
 
 ## 常用命令
 
 ```powershell
 # 类型检查 / 测试（不含桌面外壳）
 cargo check -p tr-domain -p tr-store -p tr-service -p xtask --all-targets
-cargo test  -p tr-domain -p tr-store -p tr-service
+cargo test  -p tr-domain -p tr-draw -p tr-store -p tr-service
+cargo check -p tr-draw --all-targets                       # 纯绘制算法（native 上就能测）
 cargo check -p tr-ui --target wasm32-unknown-unknown       # 界面只编 wasm32
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -74,7 +78,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 | `ui-upload` | 图片按原字节落盘 + 缩略图 + `trasset://` 资产协议 |
 | `ui-proxy` / `ui-about` / `ui-features` / `ui-update-restore` | 假代理日志当判据（行情 `qt.gtimg.cn`、更新 `api.github.com`）；版本自报；功能开关落盘并重启生效；下载状态跨页面恢复（依赖真实 GitHub API，离线用 `-SkipNetwork`） |
 | `migrate-workspace` | 降级 → 升级 → 备份 → 幂等（**迁移引擎这条最高风险路径就靠它**） |
-| `chart-tests` | 图表纯函数真跑一遍（`tr-ui` 是 wasm-only，native 上跑不了它的 `#[cfg(test)]`） |
+| `test-draw` | 图表与裁剪的**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 |
 
 护栏总原则：一律真的启动应用、用 UI Automation 或真实鼠标键盘驱动；**断言落在库/磁盘上**，不落在"点到了没有"。
 
@@ -103,7 +107,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 - **单元档**（`-Unit <分组>`）= `core`（`fmt` / `clippy` / `design-audit`，每次必跑的三条便宜的）
   ＋ 该功能的 Rust 包单测与该功能的界面护栏。分组名以 `test.ps1 -List` 为准。
 - **全量档**（`-All`）= 发布前跑：先 `build-ui` + `build-app`（release + custom-protocol，界面护栏用的就是它），
-  再按序跑全部静态检查、Rust 单测、`schema-diff`、`chart-tests` 与全部界面/外壳护栏。`-SkipBuild` 复用现有
+  再按序跑全部静态检查、Rust 单测、`schema-diff` 与全部界面/外壳护栏。`-SkipBuild` 复用现有
   产物；离线时 `-SkipNetwork` 跳过依赖外网的 `ui-stock` / `ui-update-restore`（跳过算"跳过"不算失败）。
 - **结果落盘**：`target\tests\_runs\<时间>-<档位>\`（`summary.md` / `summary.json` + 每步一个 `.log`），
   失败会打印日志尾部并以非零码退出。
@@ -347,9 +351,10 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   值，否则它静默退回自己的阶梯）；② 面积填充的基线它写死成绘图区底边（跨零时负的那段被填成"从折线一路铺到图底"
   的大色块）⇒ 在生成的 SVG 上定点改写（`anchor_fill_at_zero`；该公式假设**绘图区顶边 = `margin.top`**，所以本组件
   始终把 charts-rs 的标题/副标题置空、自带图例关掉）；③ `{t}` 千分位**对负数不生效**（同一根轴上 `50,000` 与
-  `-50000` 并存），已知、未修。另：`tr-ui` 的 `#[cfg(test)]` 在 native 上 `cargo test` 跑 0 个（crate 只编
-  wasm32），要真跑就把函数**原文**抽出来配桩在 native 上执行 —— 现成例子 `fixtures/chart-tests.ps1`（含用
-  charts-rs **真实输出**的 SVG 做的定点断言）。
+  `-50000` 并存），已知、未修。另：`tr-ui` 只编 wasm32，native 上 `cargo test -p tr-ui --lib` 是**绿的 0 个测试**
+  —— 留在那儿的 `#[cfg(test)]` 只当规格说明（渲染侧那几条），所以**能在 native 上断言的纯算法一律放 `tr-draw`**
+  （刻度、填充基线、几何拼装、裁剪几何都在那儿，`cargo test -p tr-draw` 真跑，含用 charts-rs **真实输出**的
+  SVG 做的定点断言）。见 `docs/adr/0001-pure-draw-crate.md`。
 
 ### 更新与代理
 
@@ -497,3 +502,17 @@ PR）只会生成一行 `Full Changelog` 链接 —— 想给正文就自己填�
   信任一次；命令用仓库根相对路径，故请在仓库根启动会话。
 - 界面设计与审查的裁决标准仍是 `DESIGN.md` 加 `.impeccable/surfaces/` 的表面简报；动界面之前按 `impeccable` 的
   Setup 第 1 步跑一次 `impeccable context`。
+
+## Agent skills
+
+### Issue tracker
+
+问题与规格记在 GitHub Issues（`ddd-online/Transactions-Rust`），一律走 `gh` CLI。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+沿用 `triage` 的五个默认状态标签，字符串与角色名一致。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文（single-context）：根 `CONTEXT.md` + `docs/adr/`。见 `docs/agents/domain.md`。

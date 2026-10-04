@@ -45,7 +45,7 @@ cargo xtask dump <dir> --table tbl_billadm_stock_trade
 | 档位 | 命令 | 含义 |
 |---|---|---|
 | 单元档 | `pwsh -File fixtures/test.ps1 -Unit <分组>` | 改某个功能时跑的相关测试：`core`（fmt / clippy / design-audit）+ 该功能的包单测与界面护栏；`-Unit changed` 按 git 改动自动挑 |
-| 全量档 | `pwsh -File fixtures/test.ps1 -All` | 发布前跑：先构建（trunk + `cargo build --release --features tauri/custom-protocol`），再跑全部静态检查、Rust 单测、schema-diff、chart-tests 与 20 个界面/外壳护栏 |
+| 全量档 | `pwsh -File fixtures/test.ps1 -All` | 发布前跑：先构建（trunk + `cargo build --release --features tauri/custom-protocol`），再跑全部静态检查、Rust 单测（含 `tr-draw` 的纯算法）、schema-diff 与 20 个界面/外壳护栏 |
 
 ```powershell
 pwsh -File fixtures/test.ps1 -List                       # 分组与步骤的权威清单
@@ -68,8 +68,9 @@ pwsh -File fixtures/test.ps1 -All -SkipBuild -SkipNetwork
   显式给了就只补齐缺失的库。
 - 每个脚本都能单独跑，也都支持 `-Exe` / `-SmokeHome` / `-Workspace` / `-OutDir` 覆盖；默认 `-Exe`
   一律是 `target\release\transactions.exe`（要核验 `build\` 里的打包产物时显式传 `-Exe`）。
-- 例外：`chart-tests.ps1` **不驱动界面** —— 它把 `chart.rs` 里 wasm-only 的单元测试抽出来在 native 上跑
-  一遍（`cargo test -p tr-ui` 跑不到它们），所以不 dot-source `lib/TrUia.ps1`。
+- 图表与裁剪的**纯算法**（坐标、刻度、SVG 定点改写、裁剪几何）不在 `fixtures/` 里 —— 它们住在
+  `crates/tr-draw`，由 `test-draw` 这一步跑 `cargo test -p tr-draw`（native 上真跑，见
+  `docs/adr/0001-pure-draw-crate.md`）。以前那两个"抽源码配桩"的脚本已经删掉。
 
 ## 加一个新护栏的步骤
 
@@ -84,7 +85,7 @@ pwsh -File fixtures/test.ps1 -All -SkipBuild -SkipNetwork
 
 ## `lib/TrUia.ps1`（共享 UIA 底座）
 
-所有**驱动界面的** `fixtures/*.ps1`（`chart-tests.ps1` 除外）共用**同一份**界面自动化底座：`fixtures/lib/TrUia.ps1`。
+所有**驱动界面的** `fixtures/*.ps1` 共用**同一份**界面自动化底座：`fixtures/lib/TrUia.ps1`。
 每个脚本在 `param()` 之后（`$ErrorActionPreference = 'Stop'` 之后）dot-source 它：
 
 ```powershell

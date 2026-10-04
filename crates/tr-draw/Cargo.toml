@@ -1,0 +1,15 @@
+[package]
+name = "tr-draw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 纯绘制算法层：坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何。
+#
+# 为什么单开一个 crate（而不是塞进 tr-domain、也不把 tr-ui 改成双目标）：
+# 见 docs/adr/0001-pure-draw-crate.md。
+#
+# 两条纪律：
+# * native 与 wasm32 两种目标都要能编 —— 不许出现 web-sys / leptos / charts-rs。
+# * 本 crate 是这些算法**唯一的测试面**：`cargo test -p tr-draw`。
+[dependencies]
