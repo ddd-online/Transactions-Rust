@@ -44,6 +44,7 @@ use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
+use crate::query::ListQuery;
 use crate::store::AppStores;
 use crate::time::{range_to_seconds, today_ymd};
 
@@ -90,9 +91,16 @@ fn series_color(transaction_type: &str, index: usize) -> String {
 #[component]
 pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
     let stores = AppStores::global();
-    let charts = RwSignal::new(Vec::<ChartDto>::new());
+    // 图表列表随账本重拉；失败提示「查询图表列表」并回落空数组（协议见 crate::query）
+    let charts = ListQuery::new(
+        "查询图表列表",
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        |ledger_id| async move { api::chart::list(&ledger_id).await },
+    );
     let selected = RwSignal::new(String::new());
-    let loading = RwSignal::new(false);
     let data_cache = RwSignal::new(BTreeMap::<String, ChartQueryResponse>::new());
     let create_open = RwSignal::new(false);
     let create_title = RwSignal::new(String::new());
@@ -109,40 +117,11 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
 
     let current_chart = move || {
         let id = selected.get();
-        charts.get().into_iter().find(|chart| chart.chart_id == id)
-    };
-
-    let load_charts = move || {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            charts.set(Vec::new());
-            selected.set(String::new());
-            return;
-        }
-        loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::chart::list(&ledger_id).await {
-                Ok(items) => {
-                    let current = selected.get_untracked();
-                    let still_exists = items.iter().any(|chart| chart.chart_id == current);
-                    let next = if still_exists {
-                        current
-                    } else {
-                        items
-                            .first()
-                            .map(|chart| chart.chart_id.clone())
-                            .unwrap_or_default()
-                    };
-                    charts.set(items);
-                    selected.set(next);
-                }
-                Err(error) => {
-                    charts.set(Vec::new());
-                    notify_error("查询图表列表", &error);
-                }
-            }
-            loading.set(false);
-        });
+        charts
+            .value
+            .get()
+            .into_iter()
+            .find(|chart| chart.chart_id == id)
     };
 
     let fetch_data = move |chart: ChartDto| {
@@ -180,7 +159,7 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
         });
     };
 
-    // 账本变化 → 重拉列表
+    // 账本变化 → 清缓存与选中（列表本身由 ListQuery 按 key 重拉）
     Effect::new(move |prev: Option<String>| {
         let ledger_id = stores.current_ledger_id.get();
         if prev.as_deref() == Some(ledger_id.as_str()) {
@@ -188,8 +167,22 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
         }
         data_cache.set(BTreeMap::new());
         selected.set(String::new());
-        load_charts();
         ledger_id
+    });
+
+    // 列表变了（首次加载 / 新建 / 删除）→ 选中的图表必须仍然存在，否则退回第一个
+    Effect::new(move |_: Option<()>| {
+        let items = charts.value.get();
+        let current = selected.get_untracked();
+        if items.iter().any(|chart| chart.chart_id == current) {
+            return;
+        }
+        selected.set(
+            items
+                .first()
+                .map(|chart| chart.chart_id.clone())
+                .unwrap_or_default(),
+        );
     });
 
     // 选中图表、时间范围或粒度变化 → 拉数据（返回去重键避免重复请求）
@@ -246,9 +239,7 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
                     create_title.set(String::new());
                     create_granularity.set("year".to_string());
                     selected.set(chart.chart_id.clone());
-                    if let Ok(items) = api::chart::list(&ledger_id).await {
-                        charts.set(items);
-                    }
+                    charts.reload();
                 }
                 Err(_) => Notifier::global().error("图表创建失败".to_string(), None),
             }
@@ -257,7 +248,6 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
     };
 
     let delete_chart = move |chart: ChartDto| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
         let chart_id = chart.chart_id.clone();
         leptos::task::spawn_local(async move {
             match api::chart::delete(&chart_id).await {
@@ -266,19 +256,7 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
                     data_cache.update(|cache| {
                         cache.remove(&chart_id);
                     });
-                    if selected.get_untracked() == chart_id {
-                        selected.set(String::new());
-                    }
-                    if let Ok(items) = api::chart::list(&ledger_id).await {
-                        let next = items
-                            .first()
-                            .map(|item| item.chart_id.clone())
-                            .unwrap_or_default();
-                        charts.set(items);
-                        if selected.get_untracked().is_empty() {
-                            selected.set(next);
-                        }
-                    }
+                    charts.reload();
                 }
                 Err(_) => Notifier::global().error("删除图表失败".to_string(), None),
             }
@@ -286,7 +264,6 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
     };
 
     let save_chart = move |(chart, lines): (ChartDto, Vec<ChartLine>)| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
         leptos::task::spawn_local(async move {
             match api::chart::update(UpdateChartRequest {
                 chart_id: chart.chart_id.clone(),
@@ -300,9 +277,7 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
             {
                 Ok(_) => {
                     Notifier::global().success("图表更新成功".to_string(), None);
-                    if let Ok(items) = api::chart::list(&ledger_id).await {
-                        charts.set(items);
-                    }
+                    charts.reload();
                 }
                 Err(_) => Notifier::global().error("图表更新失败".to_string(), None),
             }
@@ -310,7 +285,6 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
     };
 
     let rename_chart = move || {
-        let ledger_id = stores.current_ledger_id.get_untracked();
         let Some(chart) = current_chart() else {
             return;
         };
@@ -334,9 +308,7 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
                 Ok(_) => {
                     Notifier::global().success("图表更新成功".to_string(), None);
                     rename_open.set(false);
-                    if let Ok(items) = api::chart::list(&ledger_id).await {
-                        charts.set(items);
-                    }
+                    charts.reload();
                 }
                 Err(_) => Notifier::global().error("图表更新失败".to_string(), None),
             }
@@ -348,7 +320,6 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
         let Some(chart) = current_chart() else {
             return;
         };
-        let ledger_id = stores.current_ledger_id.get_untracked();
         leptos::task::spawn_local(async move {
             match api::chart::update(UpdateChartRequest {
                 chart_id: chart_id.clone(),
@@ -362,9 +333,7 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
             {
                 Ok(_) => {
                     Notifier::global().success("图表更新成功".to_string(), None);
-                    if let Ok(items) = api::chart::list(&ledger_id).await {
-                        charts.set(items);
-                    }
+                    charts.reload();
                 }
                 Err(_) => Notifier::global().error("图表更新失败".to_string(), None),
             }
@@ -397,12 +366,12 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
 
                 <div class="da-list">
                     {move || {
-                        let items = charts.get();
+                        let items = charts.value.get();
                         if items.is_empty() {
                             return view! {
                                 <div class="da-list__empty">
                                     {move || {
-                                        if loading.get() { "正在加载…" } else { "暂无图表" }
+                                        if charts.loading.get() { "正在加载…" } else { "暂无图表" }
                                     }}
                                 </div>
                             }

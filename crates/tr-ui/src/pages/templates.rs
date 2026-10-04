@@ -25,6 +25,7 @@ use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
+use crate::query::ListQuery;
 use crate::store::AppStores;
 
 use super::accounting::{SubFunction, SubFunctionRail};
@@ -34,8 +35,15 @@ use super::accounting::{SubFunction, SubFunctionRail};
 pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
     let stores = AppStores::global();
 
-    let templates = RwSignal::new(Vec::<TransactionTemplateDto>::new());
-    let loading = RwSignal::new(false);
+    // 列表随当前账本重新拉取；失败提示「查询模板失败」并回落空数组（协议见 crate::query）
+    let templates = ListQuery::new(
+        "查询模板失败",
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        |ledger_id| async move { api::template::list(&ledger_id).await },
+    );
     let drag = DragSortState::new();
 
     // 新建模板弹窗
@@ -59,32 +67,9 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
         form_outlier.set(false);
     };
 
-    // ---- 加载：`template_list(ledgerId)`（错误前缀「查询模板失败」，回落空数组） ----
-    let load = move |ledger_id: String| {
-        if ledger_id.is_empty() {
-            templates.set(Vec::new());
-            loading.set(false);
-            return;
-        }
-        loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::template::list(&ledger_id).await {
-                Ok(list) => templates.set(list),
-                Err(error) => {
-                    templates.set(Vec::new());
-                    notify_error("查询模板失败", &error);
-                }
-            }
-            loading.set(false);
-        });
-    };
-
-    // 账本变化 → 重新加载
-    Effect::new(move |_: Option<()>| load(stores.current_ledger_id.get()));
-
     // ---- 拖拽排序：只对 `sort_order` 变化的项发请求，且逐条互不中断 ----
     let reorder = move |from: usize, to: usize| {
-        let mut list = templates.get_untracked();
+        let mut list = templates.value.get_untracked();
         if from >= list.len() || to >= list.len() || from == to {
             return;
         }
@@ -111,7 +96,7 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
             .map(|(index, item)| (item.template_id.clone(), index as i32))
             .collect();
 
-        templates.set(list);
+        templates.value.set(list);
 
         if ledger_id.is_empty() {
             return;
@@ -131,7 +116,7 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
             match api::template::delete(&template_id).await {
                 Ok(()) => {
                     Notifier::global().success("删除模板成功", None);
-                    load(stores.current_ledger_id.get_untracked());
+                    templates.reload();
                 }
                 Err(error) => notify_error("删除模板失败", &error),
             }
@@ -237,7 +222,7 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
                     Notifier::global().success("保存模板成功", None);
                     create_open.set(false);
                     reset_form();
-                    load(ledger_id);
+                    templates.reload();
                 }
                 Err(error) => notify_error("保存模板失败", &error),
             }
@@ -271,9 +256,9 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
 
                 <div class="tpl-tbody">
                     {move || {
-                        let list = templates.get();
+                        let list = templates.value.get();
                         if list.is_empty() {
-                            if loading.get() {
+                            if templates.loading.get() {
                                 view! {
                                     <div class="tpl-loading">
                                         <Spin spinning=true size=SpinSize::Small />

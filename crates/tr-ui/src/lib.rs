@@ -31,6 +31,7 @@ pub mod icons;
 pub mod ipc;
 pub mod notify;
 pub mod pages;
+pub mod query;
 pub mod shell;
 pub mod store;
 pub mod time;
