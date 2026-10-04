@@ -7,8 +7,9 @@
 //! **`recent`**：从请求里取字符串再解析，非正整数报
 //! `recent 必须为正整数`。这里用 `Option<String>` 保留"显式传了非法值"与"没传"的差异。
 //!
-//! **价格**：`(price_yuan * 100.0).round() as i64`。**不用** `money::yuan_to_cents`——它的入参是
-//! 字符串且小数第三位进位规则不同，会改变边界行为。
+//! **价格**：元 → 分走 `money::price_yuan_to_cents`（浮点那条）—— 别改用
+//! `money::yuan_to_cents`（字符串那条）：两者在"第三位小数恰好进位"的边界上口径不同，
+//! 换过去会改变行为。规则本体与断言在 `tr-domain`，这里只调用。
 
 use tauri::State;
 
@@ -20,6 +21,7 @@ use tr_domain::dto::{
 };
 use tr_domain::error::AppError;
 use tr_domain::models::StockFeeSetting;
+use tr_domain::money::price_yuan_to_cents;
 use tr_domain::wire::{
     LedgerIdRequest, QueryNumber, StockAmountDateRequest, StockArchiveRequest,
     StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
@@ -33,11 +35,6 @@ use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
 use super::require_ledger_id;
-
-/// 价格（元）→ 分，四舍五入到整数分。
-fn yuan_to_price_cents(price_yuan: f64) -> i64 {
-    (price_yuan * 100.0).round() as i64
-}
 
 // ---------- 账户 / 费用设置 ----------
 
@@ -271,13 +268,13 @@ fn parse_trade_fills(req: &StockTradeCreateRequest) -> Result<Vec<TradeFill>, Ap
             .fills
             .iter()
             .map(|fill| TradeFill {
-                price_cents: yuan_to_price_cents(fill.price),
+                price_cents: price_yuan_to_cents(fill.price),
                 lots: fill.lots as i64,
             })
             .collect());
     }
     Ok(vec![TradeFill {
-        price_cents: yuan_to_price_cents(req.price),
+        price_cents: price_yuan_to_cents(req.price),
         lots: req.lots as i64,
     }])
 }
@@ -318,7 +315,7 @@ pub fn stock_trade_update(
         &workspace,
         &req.ledger_id,
         &req.id,
-        yuan_to_price_cents(req.price),
+        price_yuan_to_cents(req.price),
         req.lots as i64,
         req.trade_time as i64,
     )?)
@@ -350,7 +347,7 @@ pub fn stock_trade_impact(
         &req.action,
         &req.trade_id,
         &req.order_id,
-        yuan_to_price_cents(req.price),
+        price_yuan_to_cents(req.price),
         req.lots as i64,
         req.trade_time as i64,
     )?)
@@ -651,16 +648,6 @@ mod tests {
             Some(QueryNumber::Integer(value)) => assert_eq!(value, 5),
             other => panic!("意外的解析结果: {other:?}"),
         }
-    }
-
-    #[test]
-    fn price_conversion_rounds_to_cents() {
-        assert_eq!(yuan_to_price_cents(10.0), 1000);
-        assert_eq!(yuan_to_price_cents(38.06), 3806);
-        assert_eq!(yuan_to_price_cents(36.61), 3661);
-        // 浮点边界：10.005 在 f64 里略小于 10.005，因此四舍五入得到 1001 分
-        assert_eq!(yuan_to_price_cents(10.005), 1001);
-        assert_eq!(yuan_to_price_cents(0.005), 1);
     }
 
     #[test]

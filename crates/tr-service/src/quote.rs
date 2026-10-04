@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use tr_domain::dto::StockQuoteDto;
 use tr_domain::fee::{is_valid_stock_code, market_prefix};
+use tr_domain::money::price_yuan_to_cents;
 
 /// 腾讯行情字段分隔符。
 const FIELD_SEPARATOR: char = '~';
@@ -214,9 +215,9 @@ pub fn parse_tencent_quote_payload(payload: &str) -> HashMap<String, StockQuoteD
             code.to_string(),
             StockQuoteDto {
                 stock_code: code.to_string(),
-                // 价格由元换算为整数分：四舍五入
-                latest_price: (latest_yuan * 100.0).round() as i64,
-                prev_close: (prev_close_yuan * 100.0).round() as i64,
+                // 价格由元换算为整数分：规则在 tr-domain::money（别在这儿再写一遍）
+                latest_price: price_yuan_to_cents(latest_yuan),
+                prev_close: price_yuan_to_cents(prev_close_yuan),
                 quote_time,
             },
         );

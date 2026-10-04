@@ -54,7 +54,7 @@ use tr_domain::dto::{
 };
 use tr_domain::fee::{compute_order_fee, is_shanghai_code, is_valid_stock_code};
 use tr_domain::models::StockFeeSetting;
-use tr_domain::money::{cents_to_yuan, yuan_to_cents};
+use tr_domain::money::{cents_to_yuan, price_yuan_to_cents, yuan_to_cents};
 
 use crate::api;
 use crate::components::ui::{
@@ -146,7 +146,7 @@ struct FillRow {
 
 impl FillRow {
     fn amount_cents(self) -> i64 {
-        let price_cents = (self.price * 100.0).round() as i64;
+        let price_cents = price_yuan_to_cents(self.price);
         price_cents.saturating_mul(self.lots).saturating_mul(100)
     }
 }
@@ -1334,7 +1334,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                             title: "确认修改这笔成交？".to_string(),
                             summary: impact_summary(&preview, &trade, lots, None),
                             trade: Some(StockTradeDto {
-                                price: (price * 100.0).round() as i64,
+                                price: price_yuan_to_cents(price),
                                 lots,
                                 trade_time,
                                 ..trade.clone()
@@ -2333,7 +2333,7 @@ fn trade_modal(
                                     format!(
                                         "¥{}",
                                         format::amount(
-                                            ((price_value * 100.0).round() as i64)
+                                            price_yuan_to_cents(price_value)
                                                 .saturating_mul(lots_value)
                                                 .saturating_mul(100),
                                         ),

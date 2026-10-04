@@ -1,6 +1,12 @@
 //! 金额换算：**金额一律以整数分存储**，界面层负责分/元换算。
 //!
-//! 这两个函数是"金额恒为整数分"纪律的守门人，行为是硬契约（含负号、`.5` 这类输入）。
+//! 这几个函数是"金额恒为整数分"纪律的守门人，行为是硬契约（含负号、`.5` 这类输入）。
+//!
+//! 两条"元 → 分"的分工要看清，**别互相替换、也别在别处再手写一遍**：
+//! * [`yuan_to_cents`]：走**字符串**（界面输入框里的文本）；
+//! * [`price_yuan_to_cents`]：走**浮点**（wire 上的价格是 `f64`）。
+//!
+//! 两者在"第三位小数恰好进位"的边界上可能给出不同结果，各自都有测试钉着。
 
 use std::fmt;
 
@@ -81,6 +87,18 @@ fn is_ascii_digits(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// 价格（元，浮点）→ 分，四舍五入到整数分。
+///
+/// wire 上的价格是 `f64` 元（见 `tr-ipc` 的股票命令），四分五入到分这件事
+/// 早先被抄在三处（`tr-ipc` 一个私有包装 + `tr-ui` 的股票页两处），
+/// 现在只有这一份 —— 抄写时的口径差异是真金白银，别退回各自的 `(x * 100.0).round()`。
+///
+/// 与 [`yuan_to_cents`] 的差别在**输入形态**（浮点 vs 字符串）与边界进位规则，
+/// 两者都保留：界面输入框给的是字符串，不能为了统一而先过一遍 `f64`（会引入浮点误差）。
+pub fn price_yuan_to_cents(price_yuan: f64) -> i64 {
+    (price_yuan * 100.0).round() as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,6 +146,21 @@ mod tests {
         assert_eq!(yuan_to_cents("1.2.3"), Err(MoneyError::InvalidFormat));
         assert_eq!(yuan_to_cents("1a"), Err(MoneyError::InvalidFormat));
         assert_eq!(yuan_to_cents("--1"), Err(MoneyError::InvalidFormat));
+    }
+
+    #[test]
+    fn price_yuan_to_cents_rounds_floats_to_cents() {
+        assert_eq!(price_yuan_to_cents(10.0), 1000);
+        assert_eq!(price_yuan_to_cents(38.06), 3806);
+        assert_eq!(price_yuan_to_cents(36.61), 3661);
+        assert_eq!(price_yuan_to_cents(0.0), 0);
+        // 浮点边界：10.005 在 f64 里略小于 10.005，乘 100 后四舍五入仍是 1001 分。
+        // 这条与 `yuan_to_cents("10.005")` 同值但路径不同（那条按字符串第 3 位进位），
+        // 两边都有断言钉着 —— 改任何一边都会被这两条测试看见。
+        assert_eq!(price_yuan_to_cents(10.005), 1001);
+        assert_eq!(price_yuan_to_cents(0.005), 1);
+        // 负数（价格不应出现，但口径要写全）：四舍五入远离 0
+        assert_eq!(price_yuan_to_cents(-12.34), -1234);
     }
 
     #[test]
