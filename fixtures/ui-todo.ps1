@@ -7,6 +7,8 @@
 #   3. 展开进度 → 记一条 → `tbl_billadm_todo_progress` 一行（时间 + 正文）；
 #      打勾 / 取消打勾 → 同一条的 `done` 在 1 / 0 之间跟着变；
 #   4. 四象限图分栏：进行中的事项应当被画出来（判据 = 工具栏下那句说明 + SVG 撑满版心）；
+#      象限名是按钮（role=button）：点开 = 该象限的事项列表，紧急度降序 → 重要度降序
+#      （每格名字里的条数、列表里的行与顺序都拿库里的 `urgency` / `importance` 当判据）；
 #   5. 勾选完成 → status=done 且 completed_at>0，**卡片视图里它消失**、历史里出现
 #      （主题名跟着走）→ 历史里的「查看」弹窗能读到那条进度正文；
 #   6. 「退回进行中」→ status 回到 doing（误点的退路）；
@@ -287,16 +289,92 @@ try {
         '四象限图画出来了（说明文案在）'
     # 卡片要**撑满版心**：曾经它只跟着自己的内容高（固定 viewBox 按宽度缩放），窗口越高，
     # 卡片底下空出来的一大截越明显。SVG 的高度是这件事在 UIA 里唯一量得到的判据
-    # （`role="img"` + aria-label 会以 Image 节点暴露）。
+    # （`role="group"` + aria-label；`role="img"` 会让子元素在无障碍树里变装饰，象限名就点不到了）。
     $quad = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
             (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, '进行中事项的四象限分布')))) |
         Where-Object { Test-Rect $_.Current.BoundingRectangle } | Select-Object -First 1
-    Assert-True ([bool]$quad) '四象限图的 SVG 在 UIA 树里（role=img）'
+    Assert-True ([bool]$quad) '四象限图的 SVG 在 UIA 树里（role=group）'
     if ($quad) {
         $quadHeight = $quad.Current.BoundingRectangle.Height
         $windowHeight = $window.Current.BoundingRectangle.Height
         Assert-True ($quadHeight -gt $windowHeight * 0.7) `
             "四象限图铺满版心（图高 $([int]$quadHeight) / 窗口高 $([int]$windowHeight)）"
+    }
+
+    # 象限名是**按钮**：点开 = 这一格里的事项列表（紧急度降序 → 重要度降序）。
+    # 判据全落在库上：每格名字里的条数按 `urgency` / `importance` 的正负算出来，分类或计数对不上
+    # 就找不到那颗按钮；列表的顺序也是拿库里两行的档位逐对比出来的。
+    Write-Host "`n[todo] 5/7·b 点象限名 → 事项列表"
+    $doing = @(Get-TodoRows -Table 'tbl_billadm_todo_item') | Where-Object { $_.status -eq 'doing' }
+    # 六档（-5 -3 -1 1 3 5）里没有 0：**正负就是象限**（与界面 `Quadrant::of` 同一口径）
+    $delegateRows = @($doing | Where-Object { [int]$_.importance -le 0 -and [int]$_.urgency -gt 0 })
+    $planRows = @($doing | Where-Object { [int]$_.importance -gt 0 -and [int]$_.urgency -le 0 })
+    $delegateButton = Find-VisibleButton -Window $window -Name "授权做 · $($delegateRows.Count) 项进行中"
+    Assert-True ([bool]$delegateButton) `
+        "「授权做 · $($delegateRows.Count) 项进行中」在 UIA 里是按钮（库里有 $($delegateRows.Count) 条落这格）"
+    if ($delegateButton) {
+        Click-Element $delegateButton | Out-Null
+        $modalTitle = Wait-Like -Root $window -Pattern '授权做 · 紧急但不重要' -TimeoutSec 10
+        Assert-True ([bool]$modalTitle) '弹窗标题 = 象限名 + 含义'
+        # "N 项进行中 · 按紧急度、重要度降序" 这行只在有事项时才画（空格子走空态）
+        if ($delegateRows.Count -gt 0) {
+            Assert-True ([bool](Wait-Like -Root $window -Pattern '· 按紧急度、重要度降序' -TimeoutSec 10)) `
+                '弹窗写明条数与排序口径'
+        }
+        if ($modalTitle) {
+            # 一行是 `li.todo-quadrant-modal__row`（UIA = ListItem，名字 = 整行的文字）：
+            # 按类名取、按 Y 排，就是画面上的先后。
+            $levelLabel = @{ -5 = '低'; -3 = '中低'; -1 = '次低'; 1 = '次高'; 3 = '中高'; 5 = '高' }
+            $rowEls = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                    [System.Windows.Automation.Condition]::TrueCondition)) |
+                Where-Object {
+                    ([string]$_.Current.ClassName).StartsWith('todo-quadrant-modal__row') -and
+                    (Test-Rect $_.Current.BoundingRectangle)
+                } | Sort-Object { $_.Current.BoundingRectangle.Y }
+            Assert-True ($rowEls.Count -eq $delegateRows.Count) `
+                "弹窗里列全这一格的事项（库里 $($delegateRows.Count) 条，弹窗里 $($rowEls.Count) 行）"
+            $shown = @()
+            $index = 0
+            foreach ($rowEl in $rowEls) {
+                $index++
+                $text = [string]$rowEl.Current.Name
+                $found = @($delegateRows | Where-Object { $text.Contains([string]$_.title) })
+                Assert-True ($found.Count -eq 1) "第 $index 行对得上库里的一条事项（行文字 '$text'）"
+                if ($found.Count -ne 1) { continue }
+                $item = $found[0]
+                Assert-True ($text.Contains("紧急 $($levelLabel[[int]$item.urgency])") -and
+                    $text.Contains("重要 $($levelLabel[[int]$item.importance])")) `
+                    "第 $index 行写着库里的两档（紧急 $($item.urgency) / 重要 $($item.importance)）"
+                $shown += $item
+            }
+            # 顺序：紧急度降序 → 重要度降序（同档不要求次序，稳定排序保持卡片视图的顺序）
+            for ($i = 1; $i -lt $shown.Count; $i++) {
+                $prev = $shown[$i - 1]
+                $curr = $shown[$i]
+                $ordered = ([int]$prev.urgency -gt [int]$curr.urgency) -or
+                    ([int]$prev.urgency -eq [int]$curr.urgency -and [int]$prev.importance -ge [int]$curr.importance)
+                Assert-True $ordered `
+                    "第 $i 行排在后面那行之前（紧急 $($prev.urgency)/重要 $($prev.importance) → 紧急 $($curr.urgency)/重要 $($curr.importance)）"
+            }
+            Save-Screenshot (Join-Path $OutDir '03-quadrant-modal.png')
+        }
+        # 换一格之前**必须先关掉弹窗**：遮罩盖着整张图，直接点下一格的按钮会点到遮罩上
+        # （干跑时踩到：那条路径会静默关掉弹窗、后面整段连坐变红）。
+        Assert-True (Invoke-ModalButton -Window $window -Name '关闭') '按类名点弹窗底栏「关闭」'
+        Start-Sleep -Milliseconds 700
+        # 库里这格是空的就该给空态（象限归属算错会在这条红）
+        $planButton = Wait-Element -Root $window -Name "计划做 · $($planRows.Count) 项进行中" -TimeoutSec 10
+        Assert-True ([bool]$planButton) "「计划做 · $($planRows.Count) 项进行中」按钮在（与库一致）"
+        if ($planButton) {
+            Click-Element $planButton | Out-Null
+            Start-Sleep -Milliseconds 700
+            if ($planRows.Count -eq 0) {
+                Assert-True ([bool](Wait-Like -Root $window -Pattern '还没有进行中的事项' -TimeoutSec 10)) `
+                    '空的象限给空态'
+            }
+            Assert-True (Invoke-ModalButton -Window $window -Name '关闭') '再关一次弹窗'
+            Start-Sleep -Milliseconds 600
+        }
     }
     Save-Screenshot (Join-Path $OutDir '02-quadrant.png')
 

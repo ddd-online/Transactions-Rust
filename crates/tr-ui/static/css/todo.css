@@ -398,14 +398,17 @@
 .todo-quadrant__name {
   /* 字号由 SVG 按象限宽度给（见 `quadrant_view`），这里只管颜色与字重。
      颜色是**低浓度的墨**（`text-major` 只留一成二）—— 这是真正的水印：只给象限留一个
-     方位轮廓，不承担阅读（语义由下面那行说明承担，它仍是 4.6:1 的 secondary），
-     所以不套"大字号 3:1"那条门槛；浓度调这一处即可整档加减。 */
+     方位轮廓，不承担阅读（语义由点开后的弹窗承担），所以不套"大字号 3:1"那条门槛；
+     浓度调这一处即可整档加减。 */
   fill: color-mix(
     in srgb,
     var(--transactions-color-text-major) 12%,
     transparent
   );
   font-weight: var(--transactions-weight-semibold);
+  /* 名字是个**按钮**（点开该象限的事项列表）：悬停 / 键盘聚焦时"亮起"，按压下沉 1px */
+  cursor: pointer;
+  transition: fill var(--transactions-transition-fast);
 }
 
 /* 水印里唯一带色的一格：同样只留低浓度，但用主色 —— 这一格是画面里唯一的强调色，
@@ -417,6 +420,38 @@
     var(--transactions-color-primary) 24%,
     transparent
   );
+}
+
+/* 亮起：水印浓度 → 可读的实色（三格灰、`--now` 一格蓝）。两者选择器同权重，靠顺序分胜负。 */
+.todo-quadrant__name:hover,
+.todo-quadrant__name:focus-visible {
+  fill: var(--transactions-color-text-secondary);
+}
+
+.todo-quadrant__name--now:hover,
+.todo-quadrant__name--now:focus-visible {
+  fill: var(--transactions-color-primary);
+}
+
+/* ⚠ Chromium 在 **SVG 文本**上连"鼠标点一下"都画一圈默认焦点环（实测是 currentColor 的黑框，
+   而且不认 `outline-color`）—— 那圈不属于这套设计系统，先关掉，键盘的环下面自己画。 */
+.todo-quadrant__name:focus {
+  outline: none;
+}
+
+/* 键盘焦点：用 SVG 自己的描边画环（`paint-order: stroke` 把描边压在填充下面，观感是
+   字形外面套了一圈主色）。`outline` 在 SVG 文本上不可靠，所以不靠它。 */
+.todo-quadrant__name:focus-visible {
+  outline: none;
+  stroke: var(--transactions-color-primary);
+  stroke-width: 6px;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+
+/* 按压反馈：与全站按钮同一档（用 `translate`，别碰 x/y 属性定位） */
+.todo-quadrant__name:active {
+  translate: 0 1px;
 }
 
 .todo-quadrant__axis-label {
@@ -440,6 +475,48 @@
 
 .todo-quadrant__point:hover {
   transform: scale(1.35);
+}
+
+/* ---------------- 四象限图的象限弹窗（点象限名打开） ---------------- */
+.todo-quadrant-modal__meta {
+  margin: 0 0 var(--transactions-space-md);
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.todo-quadrant-modal__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  /* 事项多时在**弹窗内**滚动：`.ui-modal__content` 是 `overflow: visible`（为了弹窗里的
+     下拉面板不被裁），列表要自己收住高度，否则会把弹窗顶出视口 */
+  max-height: min(48vh, 420px);
+  overflow-y: auto;
+}
+
+.todo-quadrant-modal__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+  padding: var(--transactions-space-sm) 0;
+}
+
+.todo-quadrant-modal__row + .todo-quadrant-modal__row {
+  border-top: 1px solid var(--transactions-color-divider);
+}
+
+.todo-quadrant-modal__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-sm);
+  flex-wrap: wrap;
+}
+
+/* 主题名：图上没有它的位置（点是纯坐标），弹窗里补在事项名下面 */
+.todo-quadrant-modal__card {
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-caption);
 }
 
 /* ---------------- 历史 ---------------- */

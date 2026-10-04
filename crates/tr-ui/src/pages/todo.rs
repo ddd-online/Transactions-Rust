@@ -992,6 +992,178 @@ fn progress_panel(
 
 // ==================================================================== 四象限图
 
+/// 四个象限（四象限管理法则）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Quadrant {
+    /// 重要且紧急
+    Now,
+    /// 重要但不紧急
+    Plan,
+    /// 不重要且不紧急
+    Less,
+    /// 紧急但不重要
+    Delegate,
+}
+
+impl Quadrant {
+    /// 象限名（画面上的水印字，也是弹窗标题的前半）
+    fn name(self) -> &'static str {
+        match self {
+            Self::Now => "马上做",
+            Self::Plan => "计划做",
+            Self::Less => "减少做",
+            Self::Delegate => "授权做",
+        }
+    }
+
+    /// 象限的含义（弹窗标题的后半）：图上不再写这行说明，弹窗里要写 —— 点开就是为了看它。
+    fn meaning(self) -> &'static str {
+        match self {
+            Self::Now => "重要且紧急",
+            Self::Plan => "重要但不紧急",
+            Self::Less => "不重要且不紧急",
+            Self::Delegate => "紧急但不重要",
+        }
+    }
+
+    /// 事项落在哪个象限：纵轴 = 重要度、横轴 = 紧急度。
+    /// 两轴是六档（`TODO_LEVELS`：-5 / -3 / -1 / 1 / 3 / 5），**没有 0** —— 所以"正负"
+    /// 就是判据，不用处理"正好压在轴上"这类边界。
+    fn of(urgency: i32, importance: i32) -> Self {
+        match (importance > 0, urgency > 0) {
+            (true, true) => Self::Now,
+            (true, false) => Self::Plan,
+            (false, false) => Self::Less,
+            (false, true) => Self::Delegate,
+        }
+    }
+
+    /// 水印里唯一带色的那一格（见 CSS 的 `.todo-quadrant__name--now`）
+    fn is_accent(self) -> bool {
+        matches!(self, Self::Now)
+    }
+}
+
+/// 四象限图里的一个事项：图上是一个点，弹窗里是一行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QuadrantItem {
+    /// 事项 id（只用来给点取一个稳定的抖动偏移）
+    id: String,
+    /// 主题（卡片名）—— 图上没有它的位置，弹窗里补上
+    card_title: String,
+    title: String,
+    start_date: String,
+    due_date: String,
+    urgency: i32,
+    importance: i32,
+}
+
+impl QuadrantItem {
+    /// 它落在哪个象限
+    fn quadrant(&self) -> Quadrant {
+        Quadrant::of(self.urgency, self.importance)
+    }
+}
+
+/// 弹窗里列哪些、按什么顺序：该象限的**进行中事项**，先按紧急度降序、再按重要度降序。
+///
+/// `sort_by` 是**稳定**排序 —— 同紧急同重要的两条保持卡片视图里的顺序（卡片序 → 事项序），
+/// 同一份数据每次打开弹窗都排成一个样。
+fn quadrant_rows(items: &[QuadrantItem], open: Option<Quadrant>) -> Vec<QuadrantItem> {
+    let Some(quad) = open else {
+        return Vec::new();
+    };
+    let mut rows: Vec<QuadrantItem> = items
+        .iter()
+        .filter(|item| item.quadrant() == quad)
+        .cloned()
+        .collect();
+    rows.sort_by(|a, b| {
+        b.urgency
+            .cmp(&a.urgency)
+            .then(b.importance.cmp(&a.importance))
+    });
+    rows
+}
+
+/// 一个象限名：静置是水印，**鼠标悬停 / 键盘聚焦时亮起**（见 CSS），点击打开该象限的事项列表。
+///
+/// 它是 SVG 里的 `<text role="button">` 而不是叠一层 HTML 按钮：hover 的正是"这几个字"本身，
+/// 也不用把象限名的排布算两遍。代价是 `<svg>` 不能再挂 `role="img"`（img 的子元素在无障碍树里
+/// 是装饰、拿不到焦点），改成 `role="group"` + 同一句 `aria-label`。
+fn quadrant_name(
+    quad: Quadrant,
+    count: usize,
+    x: f64,
+    y: f64,
+    name_px: f64,
+    name_dy: f64,
+    open: RwSignal<Option<Quadrant>>,
+) -> AnyView {
+    // 悬停/聚焦的"亮起"色由 CSS 给：这里只管挂类名（「马上做」是唯一带色的那格）
+    let class = if quad.is_accent() {
+        "todo-quadrant__name todo-quadrant__name--now"
+    } else {
+        "todo-quadrant__name"
+    };
+    view! {
+        <text
+            class=class
+            x=x
+            y=y + name_dy
+            font-size=name_px
+            text-anchor="middle"
+            role="button"
+            tabindex="0"
+            aria-label=format!("{} · {} 项进行中", quad.name(), count)
+            on:click=move |_| open.set(Some(quad))
+            on:keydown=move |event: web_sys::KeyboardEvent| {
+                // 键盘激活：Enter / Space 与按钮一致（`role=button` 的约定）
+                let key = event.key();
+                if key == "Enter" || key == " " {
+                    event.prevent_default();
+                    open.set(Some(quad));
+                }
+            }
+        >
+            <title>
+                {format!("{} · {}（{} 项进行中，点击查看列表）", quad.name(), quad.meaning(), count)}
+            </title>
+            {quad.name()}
+        </text>
+    }
+    .into_any()
+}
+
+/// 弹窗里的一行：事项名 + 紧急 / 重要两档 + 起止日期，下面一行是它所属的主题。
+fn quadrant_item_row(item: &QuadrantItem) -> AnyView {
+    let dates = match (item.start_date.is_empty(), item.due_date.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => format!("{} 起", item.start_date),
+        (true, false) => format!("{} 截止", item.due_date),
+        (false, false) => format!("{} → {}", item.start_date, item.due_date),
+    };
+    view! {
+        <li class="todo-quadrant-modal__row">
+            <div class="todo-quadrant-modal__line">
+                <span class="todo-item__title">{item.title.clone()}</span>
+                <span class="todo-item__levels">
+                    <span class="todo-level" title="紧急度">
+                        {format!("紧急 {}", consts::todo_level_label(item.urgency))}
+                    </span>
+                    <span class="todo-level" title="重要度">
+                        {format!("重要 {}", consts::todo_level_label(item.importance))}
+                    </span>
+                    {(!dates.is_empty())
+                        .then(|| view! { <span class="todo-item__dates">{dates.clone()}</span> })}
+                </span>
+            </div>
+            <span class="todo-quadrant-modal__card">{item.card_title.clone()}</span>
+        </li>
+    }
+    .into_any()
+}
+
 /// 四象限图：把**进行中**的事项按（紧急度, 重要度）画成点。
 ///
 /// 坐标：`x = 紧急度`、`y = 重要度`，各 `-5..=5`，0 落在十字轴上（+紧急向右、+重要向上）。
@@ -1005,25 +1177,25 @@ fn progress_panel(
 /// 象限名是一块**水印**：字号按象限宽度的三成算（四个名字都恰好 3 个字），
 /// 颜色由 CSS 压成低浓度的墨 —— 图上的"重量"留给数据点，文字只做方位提示。象限的语义不必
 /// 在象限里复述一遍：「重要」那一行 + 「不紧急」那一列 已经就是"计划做"。
+/// 四个名字同时是**按钮**：悬停亮起、点击打开该象限的事项列表（见 [`quadrant_name`]）。
 /// 落在同一坐标的事项按 id 各带一个固定的微小偏移（[`jitter_of`]），否则会叠成一坨。
 fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
-    // (事项 id, 主题, 事项, 紧急度, 重要度)；id 只用来给点取一个稳定的抖动偏移
-    let points: Vec<(String, String, String, i32, i32)> = cards
+    let items: Vec<QuadrantItem> = cards
         .iter()
         .flat_map(|card| {
-            card.items.iter().map(|item| {
-                (
-                    item.id.clone(),
-                    card.title.clone(),
-                    item.title.clone(),
-                    item.urgency,
-                    item.importance,
-                )
+            card.items.iter().map(|item| QuadrantItem {
+                id: item.id.clone(),
+                card_title: card.title.clone(),
+                title: item.title.clone(),
+                start_date: item.start_date.clone(),
+                due_date: item.due_date.clone(),
+                urgency: item.urgency,
+                importance: item.importance,
             })
         })
         .collect();
 
-    if points.is_empty() {
+    if items.is_empty() {
         return view! {
             <Empty
                 title="还没有进行中的事项"
@@ -1042,13 +1214,31 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
     // 还没量到（首帧 / 面板刚挂载）时的兜底尺寸：沿用旧的 720×460
     let size = RwSignal::new((720.0_f64, 460.0_f64));
     watch_canvas_size(canvas, size);
+    // 点开了哪个象限（`None` = 没有弹窗）
+    let open_quad = RwSignal::new(Option::<Quadrant>::None);
+    // 每个象限各有多少项（水印名的 tooltip / 无障碍名要用）。四个 `usize` 是 Copy —— 下面
+    // 那两个 `move` 闭包各自带走一份，不用把 `items` 借出去（闭包要活在函数返回之后）。
+    let count = |quad: Quadrant| items.iter().filter(|item| item.quadrant() == quad).count();
+    let (now_count, plan_count, less_count, delegate_count) = (
+        count(Quadrant::Now),
+        count(Quadrant::Plan),
+        count(Quadrant::Less),
+        count(Quadrant::Delegate),
+    );
+    // 画点与列事项各要一份数据（同上：闭包得拿走所有权）
+    let items_for_points = items.clone();
+    // 弹窗要列的行：由"点开的是哪个象限"推出来。这份数据藏在 `Memo` 里，视图里的闭包只捕获
+    // 它的句柄（Copy）—— 否则整份 Vec 会被 move 进弹窗的 children 工厂，那个工厂要能被
+    // 求值多次（每次打开弹窗），move 出去就退化成 `FnOnce` 编不过。
+    let items_for_rows = items.clone();
+    let rows_of = Memo::new(move |_| quadrant_rows(&items_for_rows, open_quad.get()));
 
     view! {
         <div class="todo-quadrant">
             <div class="todo-quadrant__head">
                 <h3 class="todo-quadrant__title">"四象限图"</h3>
                 <span class="todo-quadrant__hint">
-                    {format!("{} 项进行中；横轴紧急度，纵轴重要度（各六档：低 → 高）", points.len())}
+                    {format!("{} 项进行中；横轴紧急度，纵轴重要度（各六档：低 → 高）", items.len())}
                 </span>
             </div>
             <div class="todo-quadrant__canvas" node_ref=canvas>
@@ -1077,7 +1267,9 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                         <svg
                             class="todo-quadrant__svg"
                             viewBox=format!("0 0 {w} {h}")
-                            role="img"
+                            // `group` 而不是 `img`：`img` 的子元素在无障碍树里是装饰 —— 象限名
+                            // 挂在上面的 `role=button` / 焦点就都没了。名字本身还是那句 aria-label。
+                            role="group"
                             aria-label="进行中事项的四象限分布"
                         >
                             // 四个象限的底（明度分档：马上做最深、减少做最浅）
@@ -1124,43 +1316,11 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                                 x2=w - PAD
                                 y2=axis_y
                             ></line>
-                            // 象限名（各自象限的**中心**：水平垂直都居中）
-                            <text
-                                class="todo-quadrant__name todo-quadrant__name--now"
-                                x=now_x
-                                y=now_y + name_dy
-                                font-size=name_px
-                                text-anchor="middle"
-                            >
-                                "马上做"
-                            </text>
-                            <text
-                                class="todo-quadrant__name"
-                                x=plan_x
-                                y=plan_y + name_dy
-                                font-size=name_px
-                                text-anchor="middle"
-                            >
-                                "计划做"
-                            </text>
-                            <text
-                                class="todo-quadrant__name"
-                                x=less_x
-                                y=less_y + name_dy
-                                font-size=name_px
-                                text-anchor="middle"
-                            >
-                                "减少做"
-                            </text>
-                            <text
-                                class="todo-quadrant__name"
-                                x=delegate_x
-                                y=delegate_y + name_dy
-                                font-size=name_px
-                                text-anchor="middle"
-                            >
-                                "授权做"
-                            </text>
+                            // 象限名（各自象限的**中心**：水平垂直都居中；可点，点开看这一格的事项）
+                            {quadrant_name(Quadrant::Now, now_count, now_x, now_y, name_px, name_dy, open_quad)}
+                            {quadrant_name(Quadrant::Plan, plan_count, plan_x, plan_y, name_px, name_dy, open_quad)}
+                            {quadrant_name(Quadrant::Less, less_count, less_x, less_y, name_px, name_dy, open_quad)}
+                            {quadrant_name(Quadrant::Delegate, delegate_count, delegate_x, delegate_y, name_px, name_dy, open_quad)}
                             // 轴端标注（紧急 / 不紧急 / 重要 / 不重要）：贴着各自的轴，但**四个
                             // 都要离象限底的边线 8px 以上** —— 横轴这两个原来顶在版心的左右边线上
                             // （和纵轴那两个原来骑在上下边线上是同一个毛病），现在四个一致。
@@ -1187,22 +1347,24 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                                 "不重要"
                             </text>
                             // 事项点：位置就是数据本身（同时落在同一点上的会重叠，靠悬停看名字）
-                                {points
+                                {items_for_points
                                     .iter()
-                                    .map(|(id, card, title, urgency, importance)| {
-                                        let (dx, dy) = jitter_of(id);
+                                    .map(|item| {
+                                        let (dx, dy) = jitter_of(&item.id);
                                         view! {
                                             <circle
                                                 class="todo-quadrant__point"
-                                                cx=sx(*urgency) + dx
-                                                cy=sy(*importance) + dy
+                                                cx=sx(item.urgency) + dx
+                                                cy=sy(item.importance) + dy
                                                 r=9.0
                                             >
                                             <title>
                                                 {format!(
-                                                    "{title}\n{card} · 紧急 {} · 重要 {}",
-                                                    consts::todo_level_label(*urgency),
-                                                    consts::todo_level_label(*importance),
+                                                    "{}\n{} · 紧急 {} · 重要 {}",
+                                                    item.title,
+                                                    item.card_title,
+                                                    consts::todo_level_label(item.urgency),
+                                                    consts::todo_level_label(item.importance),
                                                 )}
                                             </title>
                                         </circle>
@@ -1214,6 +1376,41 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                 }}
             </div>
         </div>
+
+        // 象限弹窗：这一格里的事项，按**紧急度降序、再按重要度降序**
+        <Modal
+            open=Signal::derive(move || open_quad.get().is_some())
+            title=Signal::derive(move || match open_quad.get() {
+                Some(quad) => format!("{} · {}", quad.name(), quad.meaning()),
+                None => String::new(),
+            })
+            size=ModalSize::Medium
+            footer=false
+            on_close=move || open_quad.set(None)
+        >
+            {move || {
+                let rows = rows_of.get();
+                if rows.is_empty() {
+                    view! { <p class="todo-progress__empty">"这个象限里还没有进行中的事项。"</p> }
+                        .into_any()
+                } else {
+                    view! {
+                        <p class="todo-quadrant-modal__meta">
+                            {format!("{} 项进行中 · 按紧急度、重要度降序", rows.len())}
+                        </p>
+                        <ul class="todo-quadrant-modal__list">
+                            {rows.iter().map(quadrant_item_row).collect_view()}
+                        </ul>
+                    }
+                        .into_any()
+                }
+            }}
+            <div class="todo-modal-actions">
+                <Button variant=ButtonVariant::Secondary on_click=move |_| open_quad.set(None)>
+                    "关闭"
+                </Button>
+            </div>
+        </Modal>
     }
     .into_any()
 }
