@@ -46,6 +46,7 @@ use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
+use crate::query::{OnError, Query};
 use crate::store::AppStores;
 use crate::time::{split_ymd, today_ymd};
 
@@ -88,6 +89,16 @@ const SUMMARY_MAX: usize = 30;
 /// 上传完成后进度条停留时长（2000ms）。
 const PROGRESS_LINGER_MS: u64 = 2000;
 
+/// 某一年的**事件列表 + 日期集合**（取数 module 把这两条响应当作一份整体结果）。
+///
+/// `dates` 今天没有消费方（界面只画左侧列表），但 `datesByYear` 这条请求与
+/// "失败时静默用列表推导"的行为是既有口径，先原样留着 —— 本票不改请求形状。
+#[derive(Clone, Default, PartialEq)]
+struct YearList {
+    events: Vec<KeyEvent>,
+    dates: BTreeSet<String>,
+}
+
 /// 一次待上传的图片集合（`web_sys::File` 不是 `Send`，状态机留在界面线程）。
 struct PendingUpload {
     target_date: String,
@@ -117,9 +128,40 @@ pub fn KeyEventPage() -> impl IntoView {
             .map(|(year, _, _)| year)
             .unwrap_or(1970),
     );
-    let events = RwSignal::new(Vec::<KeyEvent>::new());
-    let event_dates = RwSignal::new(BTreeSet::<String>::new());
-    let list_loading = RwSignal::new(false);
+
+    // ---- 取数：某一年的**事件列表 + 日期集合**（复合拉取，key = 账本 + 年份）----
+    //
+    // 两个响应一起回来：列表失败提示并回落空列表；日期集合只是列表的点缀，
+    // 失败时用列表自行推导、不打扰用户 —— 都写在 fetch 闭包里（见 module 头的"复合拉取"）。
+    let year_query = Query::<YearList>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            let current_year = year.get();
+            (!ledger_id.is_empty()).then(|| (ledger_id, current_year))
+        },
+        move |(ledger_id, year): (String, i32)| async move {
+            let year_text = year.to_string();
+            let list = api::key_event::list_by_year(&year_text, &ledger_id).await;
+            let dates = api::key_event::dates_by_year(&year_text, &ledger_id).await;
+            let events = match list {
+                Ok(items) => items,
+                Err(error) => {
+                    notify_error("查询事件失败", &error);
+                    Vec::new()
+                }
+            };
+            let dates = match dates {
+                Ok(items) => items.into_iter().collect(),
+                // 日期集合失败：用事件列表自行推导（静默）
+                Err(_) => events.iter().map(|event| event.date.clone()).collect(),
+            };
+            Ok(YearList { events, dates })
+        },
+    )
+    .on_error(OnError::Silent)
+    .start();
+    let events = Signal::derive(move || year_query.value.get().events);
+    let list_loading = Signal::derive(move || year_query.loading.get());
 
     // ---- 选中事件 ----
     let selected_date = RwSignal::new(String::new());
@@ -162,7 +204,8 @@ pub fn KeyEventPage() -> impl IntoView {
     let add_title = RwSignal::new(String::new());
     let add_loading = RwSignal::new(false);
 
-    // 账本或年份变化 → 清空选中并重拉该年事件
+    // 账本或年份变化 → 清空选中（该年事件由取数 module 按 key 重拉）。
+    // 年份换了就丢掉旧年份的按日期缓存，避免无限增长。
     Effect::new(move |_| {
         let ledger_id = stores.current_ledger_id.get();
         let current_year = year.get();
@@ -179,19 +222,11 @@ pub fn KeyEventPage() -> impl IntoView {
             pending,
         );
         if ledger_id.is_empty() {
-            events.set(Vec::new());
-            event_dates.set(BTreeSet::new());
             return;
         }
-        load_year(
-            ledger_id,
-            current_year,
-            events,
-            event_dates,
-            list_loading,
-            image_cache,
-            tr_cache,
-        );
+        let year_prefix = format!("{current_year:04}-");
+        image_cache.update(|cache| cache.retain(|key, _| key.starts_with(&year_prefix)));
+        tr_cache.update(|cache| cache.retain(|key, _| key.starts_with(&year_prefix)));
     });
 
     // 选中一个日期：先取事件本体，再惰性加载图片与关联交易
@@ -245,8 +280,9 @@ pub fn KeyEventPage() -> impl IntoView {
                     Notifier::global().success("事件已保存".to_string(), None);
                     is_editing.set(false);
                     // 就地同步列表与当前事件
-                    events.update(
-                        |items| match items.iter_mut().find(|item| item.date == date) {
+                    year_query.value.update(|list| {
+                        let items = &mut list.events;
+                        match items.iter_mut().find(|item| item.date == date) {
                             Some(existing) => {
                                 existing.title = title.clone();
                                 existing.content = content.clone();
@@ -260,8 +296,8 @@ pub fn KeyEventPage() -> impl IntoView {
                                 ledger_id: ledger_id.clone(),
                                 ..KeyEvent::default()
                             }),
-                        },
-                    );
+                        }
+                    });
                     current_event.update(|slot| {
                         if let Some(event) = slot.as_mut() {
                             event.title = title.clone();
@@ -269,11 +305,11 @@ pub fn KeyEventPage() -> impl IntoView {
                             event.color = color.clone();
                         }
                     });
-                    event_dates.update(|dates| {
-                        dates.insert(date.clone());
+                    year_query.value.update(|list| {
+                        list.dates.insert(date.clone());
                     });
                     // 标题变更会影响列表显示；只刷新列表，不动缓存
-                    refresh_list(ledger_id, year.get_untracked(), events, event_dates);
+                    year_query.reload();
                 }
                 Err(error) => notify_error("保存事件失败", &error),
             }
@@ -315,7 +351,7 @@ pub fn KeyEventPage() -> impl IntoView {
                             pending,
                         );
                     }
-                    refresh_list(ledger_id, year.get_untracked(), events, event_dates);
+                    year_query.reload();
                     // 确认弹窗到这一步才关：失败时它还在，用户能直接再点一次「删除」
                     pending_delete.set(None);
                 }
@@ -369,12 +405,8 @@ pub fn KeyEventPage() -> impl IntoView {
                     add_open.set(false);
                     add_title.set(String::new());
                     Notifier::global().success("事件已保存".to_string(), None);
-                    refresh_list(
-                        ledger_for_refresh,
-                        year.get_untracked(),
-                        events,
-                        event_dates,
-                    );
+                    let _ = ledger_for_refresh;
+                    year_query.reload();
                     // 立即选中新事件
                     if let Ok(items) =
                         api::key_event::list_by_year(&year.get_untracked().to_string(), &ledger_id)
@@ -788,72 +820,6 @@ fn publish_statistics(stores: AppStores, records: &[TransactionRecordDto]) {
     stores.statistics.set(totals);
 }
 
-/// 拉取某年的事件列表与日期集合，并写入各信号。
-fn load_year(
-    ledger_id: String,
-    year: i32,
-    events: RwSignal<Vec<KeyEvent>>,
-    event_dates: RwSignal<BTreeSet<String>>,
-    list_loading: RwSignal<bool>,
-    image_cache: RwSignal<BTreeMap<String, Vec<KeyEventImage>>>,
-    tr_cache: RwSignal<BTreeMap<String, Vec<TransactionRecordDto>>>,
-) {
-    list_loading.set(true);
-    leptos::task::spawn_local(async move {
-        let year_text = year.to_string();
-        let list = api::key_event::list_by_year(&year_text, &ledger_id).await;
-        let dates = api::key_event::dates_by_year(&year_text, &ledger_id).await;
-        // 账本在请求途中被切换时丢弃过期结果
-        if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
-            return;
-        }
-        match list {
-            Ok(items) => {
-                // 年份换了就丢掉旧年份的缓存（避免无限增长）
-                let year_prefix = format!("{year:04}-");
-                image_cache.update(|cache| cache.retain(|key, _| key.starts_with(&year_prefix)));
-                tr_cache.update(|cache| cache.retain(|key, _| key.starts_with(&year_prefix)));
-                events.set(items);
-            }
-            Err(error) => {
-                events.set(Vec::new());
-                notify_error("查询事件失败", &error);
-            }
-        }
-        match dates {
-            Ok(items) => event_dates.set(items.into_iter().collect()),
-            Err(_) => {
-                // 日期集合只是列表的点缀，失败时用事件列表自行推导，不打扰用户
-                let derived = events
-                    .get_untracked()
-                    .into_iter()
-                    .map(|event| event.date)
-                    .collect::<BTreeSet<_>>();
-                event_dates.set(derived);
-            }
-        }
-        list_loading.set(false);
-    });
-}
-
-/// 只刷新列表（保存/删除后），保留缓存。
-fn refresh_list(
-    ledger_id: String,
-    year: i32,
-    events: RwSignal<Vec<KeyEvent>>,
-    event_dates: RwSignal<BTreeSet<String>>,
-) {
-    load_year(
-        ledger_id,
-        year,
-        events,
-        event_dates,
-        RwSignal::new(false),
-        RwSignal::new(BTreeMap::new()),
-        RwSignal::new(BTreeMap::new()),
-    );
-}
-
 /// 选中日期后的惰性加载（图片 + 关联交易，命中缓存则跳过）。
 #[allow(clippy::too_many_arguments)]
 fn select_date(
@@ -1149,8 +1115,8 @@ fn mark_file(controls: UploadControls, index: usize, mutate: impl FnOnce(&mut Up
 /// `request_delete` 里放的是**待确认**的 `(标题, 日期)`：卡片上的删除按钮只登记，
 /// 真正的删除由页面级的确认弹窗执行（见 `confirm_delete_modal`）。
 fn event_list(
-    events: RwSignal<Vec<KeyEvent>>,
-    loading: RwSignal<bool>,
+    events: Signal<Vec<KeyEvent>>,
+    loading: Signal<bool>,
     selected_date: RwSignal<String>,
     on_select: UnsyncCallback<String>,
     request_delete: RwSignal<Option<(String, String)>>,

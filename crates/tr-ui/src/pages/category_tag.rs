@@ -23,12 +23,15 @@
 //! * 取分类时会把**每个分类**的标签一次性查出来缓存；切换分类不再发请求
 //! * 空名称静默返回，重名分别提示「该分类已存在」「该标签已存在」
 //!
-//! ## 取数为什么不用 `ListQuery`
+//! ## 取数
 //!
-//! 这里一次"加载"是**复合**的：分类列表 → 每个分类的标签 → 逐类型探测"账本里有没有分类"，
-//! 而且失败前缀随交易类型变（`查询 {类型} 消费分类失败`）。[`crate::query::ListQuery`] 的形状是
-//! "一个 key → 一个列表 + 一个静态前缀"，硬套会把它撑成框架；
-//! 边界与"第二个需求出现时再抽"的判据写在那个模块的注释里。
+//! 两条**复合**声明，都走 [`crate::query::Query`]：
+//!
+//! * 分类列表 + 每个分类的标签缓存（key = 账本 + 交易类型，结果是一整份 `CategoryPage`）；
+//! * "账本里有没有分类"的逐类型探测（key = 账本）。
+//!
+//! 失败前缀随交易类型变（`查询 {类型} 消费分类失败`）—— 那是"复合拉取里的每一腿各自提示"，
+//! 写在 fetch 闭包里；整体 loading 取两条的并集（本页没有加载态，但语义在那儿）。
 
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
@@ -43,6 +46,7 @@ use crate::error_handler::{get_error_message, notify_error};
 use crate::format;
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
+use crate::query::{OnError, Query};
 use crate::store::AppStores;
 
 /// 交易类型顺序（支出 / 收入 / 转账，顺序即渲染顺序）。
@@ -54,6 +58,14 @@ const TRANSACTION_TYPES: [(&str, &str); 3] = [
 
 /// 名称最长 20 字（输入框 `maxlength`）。
 const NAME_MAX_LENGTH: u32 = 20;
+
+/// 一次「分类 + 标签缓存」的复合结果（取数 module 把它当作一份整体结果）。
+#[derive(Clone, Default, PartialEq)]
+struct CategoryPage {
+    categories: Vec<CategoryDto>,
+    /// 每个分类名 → 该分类下的标签（取分类时一次性缓存）
+    tag_cache: std::collections::BTreeMap<String, Vec<TagDto>>,
+}
 
 // ------------------------------------------------------------------ 文案常量
 //
@@ -140,12 +152,77 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
     // ---- 交易类型 / 分类 / 标签 ----
     let active_type = RwSignal::new(TRANSACTION_TYPES[0].0.to_string());
     let selected_category = RwSignal::new(String::new());
-    let categories = RwSignal::new(Vec::<CategoryDto>::new());
-    // 每个分类名 → 该分类下的标签（取分类时一次性缓存）
-    let tag_cache = RwSignal::new(std::collections::BTreeMap::<String, Vec<TagDto>>::new());
-    // 账本里是否存在任意类型的分类
-    let has_any_categories = RwSignal::new(false);
     let init_loading = RwSignal::new(false);
+
+    // ---- 取数：分类 + 每个分类的标签缓存（复合拉取）----
+    let ct_page = Query::<CategoryPage>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            let transaction_type = active_type.get();
+            (!ledger_id.is_empty()).then(|| (ledger_id, transaction_type))
+        },
+        move |(ledger_id, transaction_type): (String, String)| async move {
+            let list = match api::category::list(&transaction_type, &ledger_id).await {
+                Ok(list) => list,
+                Err(error) => {
+                    let prefix = format!(
+                        "查询 {} 消费分类失败",
+                        format::transaction_type_text(&transaction_type)
+                    );
+                    notify_error(&prefix, &error);
+                    Vec::new()
+                }
+            };
+
+            let mut cache = std::collections::BTreeMap::<String, Vec<TagDto>>::new();
+            for category in &list {
+                let category_transaction_type = format!("{}:{}", category.name, transaction_type);
+                match api::tag::list(&category_transaction_type, &ledger_id).await {
+                    Ok(tags) => {
+                        cache.insert(category.name.clone(), tags);
+                    }
+                    Err(error) => {
+                        let prefix = format!("查询「{}」标签失败", category.name);
+                        notify_error(&prefix, &error);
+                        cache.insert(category.name.clone(), Vec::new());
+                    }
+                }
+            }
+            Ok(CategoryPage {
+                categories: list,
+                tag_cache: cache,
+            })
+        },
+    )
+    // 每一腿的失败在闭包里按原前缀提示过了；这里不再重复一档提示
+    .on_error(OnError::Silent)
+    .start();
+    let categories = Signal::derive(move || ct_page.value.get().categories);
+    let tag_cache = Signal::derive(move || ct_page.value.get().tag_cache);
+
+    // "账本里有没有分类"：逐类型探测，任一非空即为 true（key 只有账本 —— 换交易类型不必重探）。
+    let has_any_query = Query::<bool>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move {
+            for (value, label) in TRANSACTION_TYPES {
+                match api::category::list(value, &ledger_id).await {
+                    Ok(list) if !list.is_empty() => return Ok(true),
+                    Ok(_) => {}
+                    Err(error) => {
+                        let prefix = format!("查询{label}分类失败");
+                        notify_error(&prefix, &error);
+                    }
+                }
+            }
+            Ok(false)
+        },
+    )
+    .on_error(OnError::Silent)
+    .start();
+    let has_any_categories = has_any_query.value;
 
     // ---- 新增分类 / 新增标签 ----
     let open_category_modal = RwSignal::new(false);
@@ -165,8 +242,8 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
 
     // ================================================================ 联动
 
-    // 账本 id 或交易类型变化时（首次挂载也一样）：
-    // 清空选中分类与标签 → 重新取分类并检查账本内是否已有分类。
+    // 账本 id 或交易类型变化时（首次挂载也一样）：清空选中分类。
+    // （分类与标签缓存由取数 module 按 key 重取，不用在这里手写。）
     Effect::new(move |previous: Option<(String, String)>| {
         let ledger_id = stores.current_ledger_id.get();
         let transaction_type = active_type.get();
@@ -174,144 +251,16 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         let previous = previous.as_ref();
         if previous != Some(&(ledger_id.clone(), transaction_type.clone())) {
             selected_category.set(String::new());
-            categories.set(Vec::new());
-            tag_cache.set(std::collections::BTreeMap::new());
-            if ledger_id.is_empty() {
-                has_any_categories.set(false);
-            }
         }
         (ledger_id, transaction_type)
-    });
-
-    // 先取分类，再为每个分类取标签并缓存。
-    // 分类列表与标签缓存都从信号里现读，所以账本/类型一变就会重跑。
-    Effect::new(move |_previous: Option<()>| {
-        let ledger_id = stores.current_ledger_id.get();
-        let transaction_type = active_type.get();
-        if ledger_id.is_empty() {
-            categories.set(Vec::new());
-            tag_cache.set(std::collections::BTreeMap::new());
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            let list = match api::category::list(&transaction_type, &ledger_id).await {
-                Ok(list) => list,
-                Err(error) => {
-                    let prefix = format!(
-                        "查询 {} 消费分类失败",
-                        format::transaction_type_text(&transaction_type)
-                    );
-                    notify_error(&prefix, &error);
-                    categories.set(Vec::new());
-                    tag_cache.set(std::collections::BTreeMap::new());
-                    return;
-                }
-            };
-
-            let mut cache = std::collections::BTreeMap::<String, Vec<TagDto>>::new();
-            for category in &list {
-                let category_transaction_type = format!("{}:{}", category.name, transaction_type);
-                match api::tag::list(&category_transaction_type, &ledger_id).await {
-                    Ok(tags) => {
-                        cache.insert(category.name.clone(), tags);
-                    }
-                    Err(error) => {
-                        let prefix = format!("查询「{}」标签失败", category.name);
-                        notify_error(&prefix, &error);
-                        cache.insert(category.name.clone(), Vec::new());
-                    }
-                }
-            }
-            categories.set(list);
-            tag_cache.set(cache);
-        });
-    });
-
-    // checkHasAnyCategories()：逐类型探测，任一非空即为 true。
-    Effect::new(move |_previous: Option<()>| {
-        let ledger_id = stores.current_ledger_id.get();
-        if ledger_id.is_empty() {
-            has_any_categories.set(false);
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            for (value, label) in TRANSACTION_TYPES {
-                match api::category::list(value, &ledger_id).await {
-                    Ok(list) if !list.is_empty() => {
-                        has_any_categories.set(true);
-                        return;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        let prefix = format!("查询{label}分类失败");
-                        notify_error(&prefix, &error);
-                    }
-                }
-            }
-            has_any_categories.set(false);
-        });
     });
 
     // ================================================================ 操作
 
     // 重新加载分类 + 标签缓存 + `hasAnyCategories`（成功变更后共用）。
     let reload_categories = move || {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        let transaction_type = active_type.get_untracked();
-        if ledger_id.is_empty() {
-            categories.set(Vec::new());
-            tag_cache.set(std::collections::BTreeMap::new());
-            has_any_categories.set(false);
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            let list = match api::category::list(&transaction_type, &ledger_id).await {
-                Ok(list) => list,
-                Err(error) => {
-                    let prefix = format!(
-                        "查询 {} 消费分类失败",
-                        format::transaction_type_text(&transaction_type)
-                    );
-                    notify_error(&prefix, &error);
-                    categories.set(Vec::new());
-                    tag_cache.set(std::collections::BTreeMap::new());
-                    return;
-                }
-            };
-
-            let mut cache = std::collections::BTreeMap::<String, Vec<TagDto>>::new();
-            for category in &list {
-                let category_transaction_type = format!("{}:{}", category.name, transaction_type);
-                match api::tag::list(&category_transaction_type, &ledger_id).await {
-                    Ok(tags) => {
-                        cache.insert(category.name.clone(), tags);
-                    }
-                    Err(error) => {
-                        let prefix = format!("查询「{}」标签失败", category.name);
-                        notify_error(&prefix, &error);
-                        cache.insert(category.name.clone(), Vec::new());
-                    }
-                }
-            }
-            categories.set(list);
-            tag_cache.set(cache);
-
-            // checkHasAnyCategories
-            for (value, label) in TRANSACTION_TYPES {
-                match api::category::list(value, &ledger_id).await {
-                    Ok(list) if !list.is_empty() => {
-                        has_any_categories.set(true);
-                        return;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        let prefix = format!("查询{label}分类失败");
-                        notify_error(&prefix, &error);
-                    }
-                }
-            }
-            has_any_categories.set(false);
-        });
+        ct_page.reload();
+        has_any_query.reload();
     };
 
     // 选中某个分类（标签列表由渲染层从 `tag_cache` 取）。
@@ -498,7 +447,7 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
             return;
         };
 
-        categories.set(reordered);
+        ct_page.value.update(|page| page.categories = reordered);
         leptos::task::spawn_local(async move {
             for (index, name) in changed {
                 // 逐条 withErrorHandling：失败只提示，不中断后续项
@@ -521,8 +470,10 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         let transaction_type = active_type.get_untracked();
         let category_transaction_type = format!("{category}:{transaction_type}");
 
-        let current = tag_cache
+        let current = ct_page
+            .value
             .get_untracked()
+            .tag_cache
             .get(&category)
             .cloned()
             .unwrap_or_default();
@@ -533,8 +484,8 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         };
 
         let cache_key = category.clone();
-        tag_cache.update(|cache| {
-            cache.insert(cache_key, reordered);
+        ct_page.value.update(|page| {
+            page.tag_cache.insert(cache_key, reordered);
         });
         leptos::task::spawn_local(async move {
             for (index, name) in changed {
@@ -572,7 +523,6 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
                         ),
                         None,
                     );
-                    has_any_categories.set(true);
                     reload_categories();
                 }
                 Err(error) => {
