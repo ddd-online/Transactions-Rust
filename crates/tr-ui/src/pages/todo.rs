@@ -1002,7 +1002,7 @@ fn progress_panel(
 /// viewBox 用 `watch_canvas_size` 量到的**真实像素**（1 单位 = 1px），所以四象限是等比贴合、
 /// 不会变形；象限名与说明摆在各自象限的中心（水平垂直居中）。
 ///
-/// 象限名是一块**水印**：字号按象限宽度的一半算（四个名字都恰好 3 个字），
+/// 象限名是一块**水印**：字号按象限宽度的三成算（四个名字都恰好 3 个字），
 /// 颜色由 CSS 压到 tertiary —— 图上的"重量"留给数据点，文字只做方位提示。
 /// 落在同一坐标的事项按 id 各带一个固定的微小偏移（[`jitter_of`]），否则会叠成一坨。
 fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
@@ -1067,8 +1067,8 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                     let (now_x, now_y) = (mid(axis_x, w - PAD), mid(PAD, axis_y));
                     let (less_x, less_y) = (mid(PAD, axis_x), mid(axis_y, h - PAD));
                     let (delegate_x, delegate_y) = (mid(axis_x, w - PAD), mid(axis_y, h - PAD));
-                    // 水印字号：名称占象限宽度的一半（四个名字都是 3 个字），说明是它的 1/4
-                    let name_px = ((axis_x - PAD) * 0.5 / 3.0).clamp(24.0, 96.0);
+                    // 水印字号：名称占象限宽度的三成（四个名字都是 3 个字），说明是它的 1/4
+                    let name_px = ((axis_x - PAD) * 0.30 / 3.0).clamp(22.0, 72.0);
                     let sub_px = (name_px * 0.24).clamp(11.0, 24.0);
                     let line_gap = name_px * 0.8;
                     // 两行的**整体**在象限里居中：由名称的大写高、行距、说明的下沿反推基线
@@ -1198,17 +1198,22 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                             >
                                 "紧急但不重要"
                             </text>
-                            // 轴端与原点
+                            // 轴端标注（紧急 / 不紧急 / 重要 / 不重要）
                             <text class="todo-quadrant__axis-label" x=w - PAD y=axis_y - 10.0 text-anchor="end">
                                 "紧急"
                             </text>
                             <text class="todo-quadrant__axis-label" x=PAD y=axis_y - 10.0>
                                 "不紧急"
                             </text>
-                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=PAD + 12.0>
+                            // 纵轴这两个要离象限底的**边线** 8px 以上：标注 16px（见 CSS 的
+                            // `.todo-quadrant__axis-label`），中文字形高约 0.88em、下缘只越出基线
+                            // 一点点 —— 所以顶部基线落在 PAD+21、底部落在 h−PAD−10。原来直接写
+                            // PAD / h−PAD，字正好骑在边线上（顶部的字顶冒到线外侧、底部的字底
+                            // 沉到线外侧），看着像被截断。
+                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=PAD + 21.0>
                                 "重要"
                             </text>
-                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=h - PAD>
+                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=h - PAD - 10.0>
                                 "不重要"
                             </text>
                             // 事项点：位置就是数据本身（同时落在同一点上的会重叠，靠悬停看名字）

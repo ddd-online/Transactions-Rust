@@ -424,7 +424,7 @@
 
 .todo-quadrant__axis-label {
   /* 轴端标注（重要 / 紧急 / 不重要 / 不紧急）：放大到 section 号，颜色用 secondary
-     —— 它们要比水印实，才能在巨大的象限名上照样被读到。 */
+     —— 它们要比水印实，才能在象限名上照样被读到。 */
   fill: var(--transactions-color-text-secondary);
   font-size: var(--transactions-size-text-section);
 }
