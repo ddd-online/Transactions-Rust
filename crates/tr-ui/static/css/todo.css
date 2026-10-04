@@ -397,22 +397,25 @@
 
 .todo-quadrant__name {
   /* 字号由 SVG 按象限宽度给（见 `quadrant_view`），这里只管颜色与字重。
-     颜色是 secondary 掺 tertiary：比原来淡一档（降到"方位提示"的量级），
-     但在最深的象限底上仍是 3.5:1（大字号门槛 3:1）。 */
+     颜色是**低浓度的墨**（`text-major` 只留一成二）—— 这是真正的水印：只给象限留一个
+     方位轮廓，不承担阅读（语义由下面那行说明承担，它仍是 4.6:1 的 secondary），
+     所以不套"大字号 3:1"那条门槛；浓度调这一处即可整档加减。 */
   fill: color-mix(
     in srgb,
-    var(--transactions-color-text-secondary) 50%,
-    var(--transactions-color-text-tertiary)
+    var(--transactions-color-text-major) 12%,
+    transparent
   );
   font-weight: var(--transactions-weight-semibold);
 }
 
-/* 水印里唯一带色的一格：主色掺 tertiary，保住"马上做"的身份但不抢数据点 */
+/* 水印里唯一带色的一格：同样只留低浓度，但用主色 —— 这一格是画面里唯一的强调色，
+   水印也要保住"马上做"的身份。比其余三格浓一点（它的底本身就是主色浅底，
+   同浓度会被底吃掉）。 */
 .todo-quadrant__name--now {
   fill: color-mix(
     in srgb,
-    var(--transactions-color-primary) 60%,
-    var(--transactions-color-text-tertiary)
+    var(--transactions-color-primary) 24%,
+    transparent
   );
 }
 
