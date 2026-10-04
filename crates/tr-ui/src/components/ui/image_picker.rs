@@ -144,6 +144,22 @@ async fn image_element_path_inner(
     url: &str,
     _source: &web_sys::Blob,
 ) -> Result<(web_sys::HtmlCanvasElement, u32, u32), String> {
+    let image = load_image(url).await?;
+    let width = image.natural_width();
+    let height = image.natural_height();
+    let canvas = create_canvas(width, height)?;
+    let context = canvas_context(&canvas)?;
+    context
+        .draw_image_with_html_image_element(&image, 0.0, 0.0)
+        .map_err(|_| "绘制图片到画布失败".to_string())?;
+    Ok((canvas, width, height))
+}
+
+/// 用 `<img>` 解码一个 URL（data URL 或 objectURL），**等它 load 完**再交还元素。
+///
+/// 与 `createImageBitmap` 并列的第二条解码路径（部分 WebView2 版本只在这条路上解
+/// HEIF），同时也被「方形裁剪」弹窗拿去量自然尺寸与当 `drawImage` 的源。
+pub async fn load_image(url: &str) -> Result<web_sys::HtmlImageElement, String> {
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or_else(|| "当前环境缺少 document".to_string())?;
@@ -172,19 +188,11 @@ async fn image_element_path_inner(
     JsFuture::from(promise)
         .await
         .map_err(|error| js_error_text(&error))?;
-
-    let width = image.natural_width();
-    let height = image.natural_height();
-    let canvas = create_canvas(width, height)?;
-    let context = canvas_context(&canvas)?;
-    context
-        .draw_image_with_html_image_element(&image, 0.0, 0.0)
-        .map_err(|_| "绘制图片到画布失败".to_string())?;
-    Ok((canvas, width, height))
+    Ok(image)
 }
 
 /// 创建指定尺寸的 canvas（尺寸为 0 时给 1×1，避免 `toBlob` 直接失败）。
-fn create_canvas(width: u32, height: u32) -> Result<web_sys::HtmlCanvasElement, String> {
+pub(crate) fn create_canvas(width: u32, height: u32) -> Result<web_sys::HtmlCanvasElement, String> {
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or_else(|| "当前环境缺少 document".to_string())?;
@@ -198,7 +206,7 @@ fn create_canvas(width: u32, height: u32) -> Result<web_sys::HtmlCanvasElement, 
     Ok(canvas)
 }
 
-fn canvas_context(
+pub(crate) fn canvas_context(
     canvas: &web_sys::HtmlCanvasElement,
 ) -> Result<web_sys::CanvasRenderingContext2d, String> {
     canvas

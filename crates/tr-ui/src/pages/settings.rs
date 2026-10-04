@@ -51,13 +51,15 @@ use tr_domain::proxy::{
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, FeaturePage, Input, Progress, Segmented, SegmentedOption,
-    Select, SelectOption, Spin, SpinSize, Switch, TabItem, TabPane, Tabs, Tooltip,
+    read_as_data_url, Button, ButtonSize, ButtonVariant, FeaturePage, ImageCropDialog, ImagePicker,
+    Input, Progress, Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, Switch,
+    TabItem, TabPane, Tabs, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
 use crate::ipc;
 use crate::notify::Notifier;
+use crate::shell::workspace_mark;
 use crate::store::{AppStores, APPEARANCE_DARK, APPEARANCE_LIGHT, APPEARANCE_SYSTEM};
 
 /// 页面标题（固定文案「应用设置」，改动即影响界面）。
@@ -130,6 +132,71 @@ fn GeneralSetting() -> impl IntoView {
     // 开发者工具的按钮忙状态（防连点开出两个窗口）
     let devtools_opening = RwSignal::new(false);
     let switching = RwSignal::new(false);
+    // 软件图标：待裁剪的源图（data URL）+ 两个忙状态（读文件 / 存图标）
+    let icon_source = RwSignal::new(String::new());
+    let icon_crop_open = RwSignal::new(false);
+    let icon_reading = RwSignal::new(false);
+    let icon_saving = RwSignal::new(false);
+
+    // ---- 软件图标 ----
+    // 选图后**不直接存**，先过一遍方形裁剪：图标显示成 32px 的方块，
+    // 原图比例不对时会被 `object-fit: cover` 随手切掉一角 —— 让用户自己决定切哪一块。
+    // HEIC 也在这条路上被转成 JPEG（`read_as_data_url` 的既有能力），
+    // 后端因此永远只面对四种它认识的格式。
+    let pick_icon = move |files: Vec<web_sys::File>| {
+        let Some(file) = files.into_iter().next() else {
+            return;
+        };
+        if icon_reading.get_untracked() {
+            return;
+        }
+        icon_reading.set(true);
+        leptos::task::spawn_local(async move {
+            match read_as_data_url(&file, &|_| {}).await {
+                Ok(data) => {
+                    icon_source.set(data);
+                    icon_crop_open.set(true);
+                }
+                Err(error) => Notifier::global().error("读取图片失败", Some(error)),
+            }
+            icon_reading.set(false);
+        });
+    };
+
+    let apply_icon = move |data_url: String| {
+        icon_saving.set(true);
+        leptos::task::spawn_local(async move {
+            let stores = AppStores::global();
+            match api::desktop::workspace_icon_set(&data_url).await {
+                Ok(relative) => {
+                    stores.apply_workspace_icon(&relative);
+                    icon_crop_open.set(false);
+                    icon_source.set(String::new());
+                    Notifier::global().success("已更新软件图标", None);
+                }
+                Err(error) => notify_error("保存图标", &error),
+            }
+            icon_saving.set(false);
+        });
+    };
+
+    let clear_icon = move || {
+        if icon_saving.get_untracked() {
+            return;
+        }
+        icon_saving.set(true);
+        leptos::task::spawn_local(async move {
+            let stores = AppStores::global();
+            match api::desktop::workspace_icon_set("").await {
+                Ok(_) => {
+                    stores.apply_workspace_icon("");
+                    Notifier::global().success("已恢复默认图标", None);
+                }
+                Err(error) => notify_error("清除图标", &error),
+            }
+            icon_saving.set(false);
+        });
+    };
 
     // ---- 代理 ----
     // 「当前生效」那一行：后端按**当前设置**解析（`auto` 会现场探测环境变量/系统代理），
@@ -271,6 +338,12 @@ fn GeneralSetting() -> impl IntoView {
                         match api::desktop::workspace_open(&directory).await {
                             Ok(()) => {
                                 stores.workspace_dir.set(directory);
+                                // 图标是**每个工作空间一份**的：换库之后必须重读，
+                                // 否则侧栏左上角还挂着上一个工作空间的图
+                                match api::desktop::workspace_icon_get().await {
+                                    Ok(relative) => stores.apply_workspace_icon(&relative),
+                                    Err(error) => notify_error("读取工作空间图标", &error),
+                                }
                                 match api::ledger::list_all().await {
                                     Ok(ledgers) => stores.set_ledgers(ledgers),
                                     Err(error) => notify_error("查询账本", &error),
@@ -365,6 +438,37 @@ fn GeneralSetting() -> impl IntoView {
                     >
                         "切换"
                     </Button>
+                </div>
+            </div>
+
+            // 软件图标：**每个工作空间一份**（图就存在工作空间目录里，跟着目录走）
+            <div class="st-card">
+                <div class="st-card-info">
+                    <span class="st-card-title">"软件图标"</span>
+                    <span class="st-card-desc">
+                        "侧栏左上角的方形图标；保存在当前工作空间里，切换工作空间会跟着换"
+                    </span>
+                </div>
+                <div class="st-card-action">
+                    {workspace_mark("workspace-mark st-icon-preview")}
+                    <ImagePicker
+                        label="选择图片"
+                        multiple=false
+                        accept="image/*"
+                        disabled=Signal::derive(move || icon_reading.get() || icon_saving.get())
+                        on_files=move |files| pick_icon(files)
+                    />
+                    // 「恢复默认」只在**已经设过**图标时出现：没设过时它点了也没有变化，
+                    // 属于"看着像能点、点完什么都没发生"的那种按钮。
+                    <Show when=move || !AppStores::global().workspace_icon.get().is_empty()>
+                        <Button
+                            variant=ButtonVariant::Secondary
+                            disabled=Signal::derive(move || icon_saving.get())
+                            on_click=move |_| clear_icon()
+                        >
+                            "恢复默认"
+                        </Button>
+                    </Show>
                 </div>
             </div>
 
@@ -501,6 +605,17 @@ fn GeneralSetting() -> impl IntoView {
                 </div>
             </div>
         </div>
+
+        <ImageCropDialog
+            open=Signal::derive(move || icon_crop_open.get())
+            source=Signal::derive(move || icon_source.get())
+            ok_loading=Signal::derive(move || icon_saving.get())
+            on_confirm=move |data_url| apply_icon(data_url)
+            on_close=move |_| {
+                icon_crop_open.set(false);
+                icon_source.set(String::new());
+            }
+        />
     }
 }
 
@@ -1447,22 +1562,9 @@ fn AboutSetting() -> impl IntoView {
             <div class="st-about-main">
                 <div class="st-about-header">
                     <div class="st-app-logo">
-                        <svg width="1024" height="1024" viewBox="0 0 1024 1024">
-                            <rect
-                                x="0"
-                                y="0"
-                                width="1024"
-                                height="1024"
-                                rx="200"
-                                ry="200"
-                                style="fill: var(--transactions-color-primary)"
-                            ></rect>
-                            <path
-                                transform="translate(220.909996509552 49.1699676513672)"
-                                fill="var(--transactions-color-text-inverse)"
-                                d="M363.01 322.09 L236.22 322.09 L236.22 685.1 L135.78 685.1 L135.78 322.09 L9.61 322.09 L9.61 240.56 L363.01 240.56 Z M572.57 456.01 C560.79 449.6 547.05 446.4 531.34 446.4 C510.05 446.4 493.42 454.2 481.43 469.81 C469.44 485.41 463.45 506.64 463.45 533.51 L463.45 685.1 L365.49 685.1 L365.49 367.66 L463.45 367.66 L463.45 426.56 L464.69 426.56 C480.19 383.57 508.09 362.08 548.39 362.08 C558.72 362.08 566.78 363.32 572.57 365.8 Z"
-                            ></path>
-                        </svg>
+                        // 与侧栏左上角那个方块**共用同一份** markup（`icons::app_mark`）：
+                        // 品牌图形只有一处定义，改配色不会只改到一半。
+                        {icons::app_mark()}
                     </div>
                     <h2 class="st-app-name">
                         {move || {

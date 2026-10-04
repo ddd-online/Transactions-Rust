@@ -50,6 +50,18 @@ pub struct AppStores {
     /// 放在全局状态里而不是页面局部：换页回来时不必再等一次 IPC 往返，
     /// 也就不会先按"展开"渲染一帧再收起来（闪一下）。
     pub key_event_linked_open: RwSignal<bool>,
+    /// 侧边栏是否收起（只剩图标）。`config_get` 读入，点收起按钮时写回配置。
+    ///
+    /// 与事件页右栏同理放在全局：外壳、设置页、跳转逻辑都可能读到它。
+    pub sidebar_collapsed: RwSignal<bool>,
+    /// 当前工作空间自定义图标的 `trasset://` URL（**空串 = 用内置的应用标志**）。
+    ///
+    /// 存 URL 而不是"有没有图标"：`<img src>` 直接吃它，省掉每次渲染的往返。
+    /// 值里带一个自增的查询串（缓存击穿）—— `trasset` 按路径取文件、忽略查询串，
+    /// 但 WebView2 会按完整 URL 缓存，换图标后不加这一条就会一直显示上一张。
+    pub workspace_icon: RwSignal<String>,
+    /// 图标 URL 的缓存击穿计数（只增，见 [`AppStores::apply_workspace_icon`]）。
+    pub workspace_icon_version: RwSignal<u32>,
     /// **还没选定工作空间**：由外壳（`shell.rs` 的 [`App`](crate::shell::App)）读写，
     /// [`crate::error_handler`] 也读它。
     ///
@@ -74,6 +86,9 @@ impl AppStores {
             appearance: RwSignal::new(APPEARANCE_SYSTEM.to_string()),
             enabled_features: RwSignal::new(FeatureFlags::defaults()),
             key_event_linked_open: RwSignal::new(true),
+            sidebar_collapsed: RwSignal::new(false),
+            workspace_icon: RwSignal::new(String::new()),
+            workspace_icon_version: RwSignal::new(0),
             workspace_required: RwSignal::new(false),
         }
     }
@@ -163,6 +178,32 @@ impl AppStores {
     /// 用后端返回的开关集合覆盖本地状态（`config_set_feature` 的返回值）。
     pub fn set_enabled_features(&self, features: FeatureFlags) {
         self.enabled_features.set(features);
+    }
+
+    /// 工作空间图标变化：把相对路径翻成 `<img src>` 可用的 URL 并写入共享状态。
+    ///
+    /// `relative` 为空 = 用户清掉了图标（或这个工作空间从没设过）→ 状态清空，
+    /// 侧栏回落成内置标志。
+    pub fn apply_workspace_icon(&self, relative: &str) {
+        if relative.is_empty() {
+            self.workspace_icon.set(String::new());
+            return;
+        }
+        let relative = relative.to_string();
+        leptos::task::spawn_local(async move {
+            let stores = AppStores::global();
+            match crate::api::desktop::asset_url(&relative).await {
+                Ok(url) => {
+                    let version = stores.workspace_icon_version.get_untracked() + 1;
+                    stores.workspace_icon_version.set(version);
+                    stores.workspace_icon.set(format!("{url}?v={version}"));
+                }
+                Err(error) => {
+                    stores.workspace_icon.set(String::new());
+                    crate::error_handler::notify_error("读取工作空间图标", &error);
+                }
+            }
+        });
     }
 }
 

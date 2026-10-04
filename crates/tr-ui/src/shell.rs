@@ -203,6 +203,8 @@ pub fn App() -> impl IntoView {
                 stores
                     .key_event_linked_open
                     .set(config.key_event_linked_open);
+                // 侧栏开合是**会话无关**的界面偏好：重启后保持用户上一次的选择
+                stores.sidebar_collapsed.set(config.sidebar_collapsed);
 
                 if config.workspace_dir.is_empty() {
                     // 从未配置过：直接进强制选择屏（不再先渲染界面再弹窗）
@@ -246,7 +248,14 @@ pub fn App() -> impl IntoView {
         // 那一层同时 `inert`：鼠标、键盘、读屏都进不去，直到选定工作空间为止
         // （`inert` 是 Chromium 原生支持的标准属性，WebView2 上可用）。
         <Show when=move || config_loaded.get()>
-            <div class="app-shell" inert=move || workspace_required.get()>
+            // `is-sidebar-collapsed` 只做一件事：把 `--transactions-size-sidebar`
+            // 换成一档更窄的值。侧栏宽度与标题栏的居中补偿读的都是**同一个**变量，
+            // 于是收起时两者一起动，不会出现"侧栏窄了、标题还按 200px 偏着"（见 app.css）。
+            <div
+                class="app-shell"
+                class:is-sidebar-collapsed=move || stores.sidebar_collapsed.get()
+                inert=move || workspace_required.get()
+            >
                 <div class="app-shell-body">
                     <aside class="app-sidebar">
                         <AppLeftBar current_page=current_page />
@@ -336,6 +345,7 @@ async fn open_workspace(directory: String) -> bool {
         Ok(()) => {
             stores.workspace_dir.set(directory);
             refresh_ledgers().await;
+            refresh_workspace_icon().await;
             true
         }
         Err(error) => {
@@ -382,9 +392,25 @@ async fn refresh_ledgers() {
     }
 }
 
+/// 读当前工作空间的自定义图标并写进共享状态（没有就回落成内置标志）。
+///
+/// **有工作空间之后才能读**：图标就存在工作空间目录里，所以切换工作空间也必须再读一次 ——
+/// 否则侧栏左上角还挂着上一个工作空间的图。
+async fn refresh_workspace_icon() {
+    let stores = AppStores::global();
+    match api::desktop::workspace_icon_get().await {
+        Ok(relative) => stores.apply_workspace_icon(&relative),
+        // 读不到图标不该打断启动：回落成内置标志即可（后端也只在"没打开工作空间"时才会失败）
+        Err(error) => {
+            stores.apply_workspace_icon("");
+            notify_error("读取工作空间图标", &error);
+        }
+    }
+}
+
 // ---------------------------------------------------------------- 左侧导航
 
-/// 左侧导航：账本切换 + 6 项导航 + 底部设置。
+/// 左侧导航：顶部软件图标（点开是账本切换）+ 功能项 + 底部「收起侧边栏」与「应用设置」。
 #[component]
 fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
     let stores = AppStores::global();
@@ -446,16 +472,24 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
     };
 
     view! {
-        <div class="app-left-bar">
+        <div class="app-left-bar" class:is-collapsed=move || stores.sidebar_collapsed.get()>
             <div class="sidebar-ledger">
-                // 账本切换：触发器 + 下拉菜单共用一个定位锚点，
-                // 菜单因此**贴齐触发器**、只隔 4px，不会像以前那样压在触发器上。
+                // 账本切换：**触发器就是那个方形软件 ICON**（每个工作空间一张自定义图标，
+                // 没设过时用内置的「Tr」标志）。点它弹出的账本选择器与以前完全一样 ——
+                // 变的只是入口的形状：一行"点名 + 箭头"的信息量全在账本名上，
+                // 而侧栏顶部真正的身份是**这个工作空间**，一个方块比一行被截断的字更像标题。
+                //
+                // 触发器 + 下拉菜单仍共用一个定位锚点（`.ledger-anchor`），
+                // 菜单贴齐触发器下沿只隔 4px。
                 <div class="ledger-anchor">
                     <button
                         type="button"
-                        class="ledger-btn"
+                        class="workspace-btn"
                         class:is-open=move || menu_open.get()
-                        title="切换账本"
+                        // 触发器里没有可见文字了 → 悬浮提示在这里是**必要**的
+                        // （与 `.nav-btn` 那条"别把旁边的字再说一遍"相反，那条针对的是有文字的按钮）。
+                        title=move || format!("切换账本（当前：{}）", current_ledger_name())
+                        aria-label="切换账本"
                         aria-haspopup="menu"
                         aria-expanded=move || if menu_open.get() { "true" } else { "false" }
                         on:click=move |_| menu_open.update(|open| *open = !*open)
@@ -465,14 +499,7 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
                             }
                         }
                     >
-                        <span class=move || {
-                            format!(
-                                "ledger-dot ledger-dot--{}",
-                                ledger_tone(&stores.current_ledger_id.get()),
-                            )
-                        }></span>
-                        <span class="ledger-btn-name">{current_ledger_name}</span>
-                        <span class="ledger-btn-arrow">{icons::icon(Icon::Down)}</span>
+                        {workspace_mark("workspace-mark")}
                     </button>
 
                     <Show when=move || menu_open.get()>
@@ -583,6 +610,12 @@ fn AppLeftBar(current_page: RwSignal<Page>) -> impl IntoView {
 
             <div class="sidebar-spacer"></div>
 
+            // 收起 / 展开：落在功能列表的**底部**（「应用设置」上方）。
+            // 之所以不放进 `.sidebar-bottom`：那一带是 44px 的页脚带，
+            // 高度与版心底栏（`.page-footer-bar`）对齐 —— 两栏的底边因此齐平。
+            // 多塞一行会把这个对齐关系打破，所以它属于上面的导航组。
+            <div class="sidebar-toggle-row">{sidebar_toggle(stores)}</div>
+
             <div class="sidebar-bottom">
                 {nav_button(Page::Settings, current_page)}
             </div>
@@ -642,9 +675,34 @@ fn ledger_tone(id: &str) -> usize {
     (hash % 8) as usize
 }
 
+/// 当前工作空间的标志：自定义图标，没设过时回落到内置的「Tr」。
+///
+/// **只有这一处知道"有没有自定义图标"**：侧栏左上角的按钮与设置页的预览共用它，
+/// 于是两处永远显示同一张图（改一处忘另一处是这种"同一事实两处渲染"的典型翻车方式）。
+/// 尺寸与圆角交给 `class`（两侧要的大小不同：按钮里 32px、设置页预览 44px）。
+pub(crate) fn workspace_mark(class: &'static str) -> AnyView {
+    let stores = AppStores::global();
+    view! {
+        <span class=class>
+            <Show
+                when=move || !stores.workspace_icon.get().is_empty()
+                fallback=|| icons::app_mark()
+            >
+                <img
+                    class="workspace-mark__image"
+                    alt=""
+                    src=move || stores.workspace_icon.get()
+                />
+            </Show>
+        </span>
+    }
+    .into_any()
+}
+
 /// 一个导航按钮。
 fn nav_button(page: Page, current_page: RwSignal<Page>) -> impl IntoView {
     let is_secondary = page == Page::Settings;
+    let collapsed = AppStores::global().sidebar_collapsed;
     let mut classes = String::from("nav-btn");
     if is_secondary {
         classes.push_str(" nav-btn-secondary");
@@ -654,16 +712,70 @@ fn nav_button(page: Page, current_page: RwSignal<Page>) -> impl IntoView {
             type="button"
             class=classes
             class:active=move || current_page.get() == page
-            // **不给 `title`**：按钮里本来就有可见文字（`.nav-btn-text`），
-            // 再挂一个同名悬浮提示只是"把旁边的字又说一遍"，还多出一块盖住界面的浮层。
+            // `title` 只在**收起状态**下给：那时 `.nav-btn-text` 是 `display: none`，
+            // 光看图标的快捷入口需要一个名字（悬浮提示是唯一的来源）。
+            // 展开时它必须是空串 —— 按钮里本来就有可见文字，再挂一个同名提示
+            // 只是"把旁边的字又说一遍"，还多出一块盖住界面的浮层。
             // （历史上这里写过 `title=page.route()`，于是提示全是 `/accounting_view` 这类
             // 内部标识 —— 那是"页面的稳定标识"，只该出现在调试里。）
+            title=move || if collapsed.get() { page.label().to_string() } else { String::new() }
             // 无障碍名保留 `aria-label`，读屏仍然能念出功能名。
             aria-label=page.label()
             on:click=move |_| current_page.set(page)
         >
             <span class="nav-btn-icon">{icons::icon(page.icon())}</span>
             <span class="nav-btn-text">{page.label()}</span>
+        </button>
+    }
+}
+
+/// 「收起 / 展开侧边栏」按钮。
+///
+/// 与导航项同一套外壳（`.nav-btn`）：尺寸、hover、焦点环都跟着走，收起后同样只剩图标。
+/// 图标是面板 + 三角（Ant Design `menu-fold` / `menu-unfold`）——
+/// 光一个箭头读不出"这是在动侧栏"，带面板轮廓的版本一眼就懂。
+///
+/// 写入是**乐观**的：先翻本地状态（点击立刻有动画），成功后再用后端落盘的值回填 ——
+/// 失败时回滚，界面不会停在一个磁盘上并不存在的状态。
+fn sidebar_toggle(stores: AppStores) -> impl IntoView {
+    let collapsed = stores.sidebar_collapsed;
+    let label = move || {
+        if collapsed.get() {
+            "展开侧边栏"
+        } else {
+            "收起侧边栏"
+        }
+    };
+    view! {
+        <button
+            type="button"
+            class="nav-btn nav-btn-secondary sidebar-toggle-btn"
+            title=label
+            aria-label=label
+            on:click=move |_| {
+                let next = !collapsed.get_untracked();
+                collapsed.set(next);
+                leptos::task::spawn_local(async move {
+                    match api::desktop::config_set_sidebar_collapsed(next).await {
+                        Ok(saved) => collapsed.set(saved),
+                        Err(error) => {
+                            collapsed.set(!next);
+                            notify_error("保存侧边栏状态", &error);
+                        }
+                    }
+                });
+            }
+        >
+            <span class="nav-btn-icon">
+                {move || {
+                    if collapsed.get() {
+                        icons::icon(Icon::MenuUnfold)
+                    } else {
+                        icons::icon(Icon::MenuFold)
+                    }
+                }}
+            </span>
+            <span class="nav-btn-text">{label}</span>
         </button>
     }
 }

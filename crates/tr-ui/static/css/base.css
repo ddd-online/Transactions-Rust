@@ -198,6 +198,9 @@ textarea,
   /* 居中补偿：侧栏宽的一半（往左）。见上面那段说明与 tokens.css 的
    * `--transactions-size-sidebar`。 */
   transform: translateX(calc(-0.5 * var(--transactions-size-sidebar)));
+  /* 侧栏收起 / 展开时补偿量跟着变（同一个变量），让它与侧栏宽度**同步**走完，
+   * 否则标题会先跳一下、栏再慢慢收。 */
+  transition: transform var(--transactions-transition-settle);
 }
 
 /* 区块标题行 */

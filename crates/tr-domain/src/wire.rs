@@ -599,6 +599,23 @@ pub struct SetKeyEventLinkedOpenRequest {
     pub open: bool,
 }
 
+/// 侧边栏是否收起（收起后只剩图标）。
+///
+/// 与事件页右栏同一套路：这是**界面偏好**，写进配置是为了换页/重启后保持用户上一次的选择。
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct SetSidebarCollapsedRequest {
+    pub collapsed: bool,
+}
+
+/// 工作空间图标的写入请求。
+///
+/// `data` 是一条 `data:image/...;base64,...` 的 URI（界面在方形裁剪后编码 PNG）；
+/// **空串 = 清除**，恢复成内置的应用标志。
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct WorkspaceIconRequest {
+    pub data: String,
+}
+
 /// 功能开关：哪些顶级功能在侧边栏出现。
 ///
 /// **默认全开**：老配置里没有 `features` 这个键、或外壳漏发该字段时，
@@ -684,6 +701,10 @@ pub struct ConfigSnapshot {
     /// 事件页右栏（关联交易）是否展开（**缺省 = 展开**）。
     #[serde(rename = "keyEventLinkedOpen", default = "default_true")]
     pub key_event_linked_open: bool,
+    /// 侧边栏是否收起（只剩图标）。**缺省 = 展开**：老配置里没有这个键时
+    /// 行为与升级前一致。
+    #[serde(rename = "sidebarCollapsed", default)]
+    pub sidebar_collapsed: bool,
 }
 
 /// `bool` 字段的 serde 缺省值：**true**。
@@ -960,6 +981,8 @@ mod tests {
         // 响应侧：缺字段走默认（外壳漏发时界面不能炸）
         let snapshot: ConfigSnapshot = serde_json::from_str("{}").unwrap();
         assert!(snapshot.key_event_linked_open);
+        // 侧边栏缺省是**展开**（缺字段时不能静默变成收起）
+        assert!(!snapshot.sidebar_collapsed);
         assert_eq!(snapshot.features, FeatureFlags::defaults());
     }
 }

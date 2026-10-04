@@ -31,7 +31,7 @@ pub use tr_domain::wire::{
     AppInfoRequest, AssetUrlRequest, ConfigSnapshot, DevToolsToggleRequest, DialogOpenRequest,
     DialogOpenResponse, FeatureFlags, FileSaveRequest, FileSaveResponse, ProxyDetectResponse,
     SetAppearanceRequest, SetCloseBehaviorRequest, SetFeatureRequest, SetKeyEventLinkedOpenRequest,
-    WindowControlRequest, WorkspaceDirRequest,
+    SetSidebarCollapsedRequest, WindowControlRequest, WorkspaceDirRequest, WorkspaceIconRequest,
 };
 
 use crate::ipc::{self, IpcError};
@@ -150,6 +150,31 @@ pub async fn config_set_key_event_linked_open(open: bool) -> Result<bool, IpcErr
     ipc::call(
         "config_set_key_event_linked_open",
         SetKeyEventLinkedOpenRequest { open },
+    )
+    .await
+}
+
+/// 记住侧边栏是收起还是展开；返回落盘后的值（与事件页右栏偏好同一套路）。
+pub async fn config_set_sidebar_collapsed(collapsed: bool) -> Result<bool, IpcError> {
+    ipc::call(
+        "config_set_sidebar_collapsed",
+        SetSidebarCollapsedRequest { collapsed },
+    )
+    .await
+}
+
+/// 当前工作空间的自定义图标：相对 `data/assets` 的路径，**空串 = 用内置标志**。
+pub async fn workspace_icon_get() -> Result<String, IpcError> {
+    ipc::call_no_args("workspace_icon_get").await
+}
+
+/// 写入（`data_url` 非空）或清除（空串）当前工作空间的图标，返回落盘后的相对路径。
+pub async fn workspace_icon_set(data_url: &str) -> Result<String, IpcError> {
+    ipc::call(
+        "workspace_icon_set",
+        WorkspaceIconRequest {
+            data: data_url.to_string(),
+        },
     )
     .await
 }

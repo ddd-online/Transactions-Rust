@@ -33,6 +33,7 @@ mod dropdown;
 mod empty;
 mod feature_page;
 mod form;
+mod image_crop;
 mod image_picker;
 mod input;
 mod markdown;
@@ -117,6 +118,9 @@ pub use dropdown::{Dropdown, DropdownItem};
 pub use empty::Empty;
 pub use feature_page::FeaturePage;
 pub use form::{Form, FormItem, FormLayout};
+pub use image_crop::{
+    cover_scale, crop_rect, max_offset, CropRect, ImageCropDialog, CROP_VIEWPORT,
+};
 pub use image_picker::{
     blob_to_data_url, convert_heic_to_jpeg, is_heic, read_as_data_url, FileStatus, ImagePicker,
     UploadFileProgress, UploadProgress, UploadProgressBar, UploadStatus, HEIC_CONVERT_FAILED,

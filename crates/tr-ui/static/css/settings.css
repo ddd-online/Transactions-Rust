@@ -142,6 +142,27 @@
   gap: var(--transactions-space-sm);
 }
 
+/* ---------------------------------------------------------------- 软件图标
+ *
+ * 预览方块：与侧栏左上角那个入口**同一个视觉**（同取 `workspace_mark`），
+ * 只是放大一档 —— 同一个东西在设置里必须长得一样，否则用户改完认不出来改的是哪个。
+ * 32px 的按钮里看不清一张照片，所以这里给 44px。 */
+.st-icon-preview {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--transactions-radius-lg);
+  flex-shrink: 0;
+}
+
+/* 缩略图选择器在本页当正常按钮用：与同排的「切换」「恢复默认」同一档（36px），
+ * 不跟着事件页详情底栏那套 28px 走。 */
+.st-card-action .image-picker__button {
+  height: var(--transactions-btn-height-md);
+  padding: 0 var(--transactions-btn-padding-h-md);
+  font-size: var(--transactions-btn-font-size-md);
+  border-radius: var(--transactions-radius-md);
+}
+
 /* ---------------------------------------------------------------- 日记配置 */
 
 .st-scope-row {
@@ -574,11 +595,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.st-app-logo svg {
-  width: 96px;
-  height: 96px;
 }
 
 .st-app-name {

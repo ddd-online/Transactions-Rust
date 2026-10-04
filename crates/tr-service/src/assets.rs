@@ -12,6 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
+use tr_domain::error::AppError;
 use tr_store::Workspace;
 
 use crate::ServiceError;
@@ -19,6 +20,81 @@ use crate::ServiceError;
 /// 资产根目录（`data/assets`）。
 pub fn assets_root(workspace: &Workspace) -> PathBuf {
     workspace.assets_directory()
+}
+
+/// 工作空间图标在资产目录里的**固定基名**（不含扩展名）。
+///
+/// 图标与关键事件图片放在同一棵树里（`data/assets`），但只有一张、**不落库**：
+/// 磁盘上有没有这个文件就是唯一事实来源，于是图标跟着工作空间目录走 ——
+/// 换机器、拷目录、备份都不会丢。
+pub const WORKSPACE_ICON_STEM: &str = "workspace-icon";
+
+/// 允许的图标扩展名（顺序即查找顺序）。
+///
+/// 界面固定编码 PNG；其余三种是"万一将来换了编码方式"的兼容位 ——
+/// 写入时会先清掉别的扩展名，所以同一时刻最多只有一个文件。
+const WORKSPACE_ICON_EXTENSIONS: [&str; 4] = [".png", ".jpg", ".webp", ".gif"];
+
+/// 工作空间图标相对 `data/assets` 的路径；**未设置时返回空串**。
+pub fn workspace_icon_relative(workspace: &Workspace) -> String {
+    let root = assets_root(workspace);
+    for extension in WORKSPACE_ICON_EXTENSIONS {
+        let name = format!("{WORKSPACE_ICON_STEM}{extension}");
+        if root.join(&name).is_file() {
+            return name;
+        }
+    }
+    String::new()
+}
+
+/// 保存工作空间图标：解码 data URI → 校验确实是一张图片 → 落盘。
+///
+/// 校验放在写盘**之前**：坏数据（不是图片、或是被截断的 base64）不该在
+/// 资产目录里留下一个打不开的图标 —— 那会让侧栏显示成一块裂图。
+/// 返回写入后的相对路径（界面拿它拼 `trasset://` URL）。
+pub fn save_workspace_icon(workspace: &Workspace, data_uri: &str) -> Result<String, ServiceError> {
+    let (mime, bytes) = decode_base64_data(data_uri)?;
+    let extension = match mime.as_str() {
+        "image/png" => ".png",
+        "image/jpeg" => ".jpg",
+        "image/webp" => ".webp",
+        "image/gif" => ".gif",
+        _ => {
+            return Err(ServiceError::from(AppError::bad_request(
+                "图标只支持 PNG / JPEG / WebP / GIF",
+            )))
+        }
+    };
+    image::load_from_memory(&bytes).map_err(|error| {
+        ServiceError::from(AppError::bad_request(format!(
+            "图标不是可解码的图片: {error}"
+        )))
+    })?;
+
+    let root = assets_root(workspace);
+    std::fs::create_dir_all(&root)
+        .map_err(|error| ServiceError::Internal(format!("create assets dir: {error}")))?;
+    // 先清掉其它扩展名：同一时刻只留一个文件，"有没有图标"就只有一个判据
+    remove_workspace_icon(workspace);
+
+    let name = format!("{WORKSPACE_ICON_STEM}{extension}");
+    let path = root.join(&name);
+    std::fs::write(&path, &bytes)
+        .map_err(|error| ServiceError::Internal(format!("write workspace icon: {error}")))?;
+    Ok(name)
+}
+
+/// 删除工作空间图标（不存在不算失败：用户可能没设过，或手工清理过）。
+pub fn remove_workspace_icon(workspace: &Workspace) {
+    let root = assets_root(workspace);
+    for extension in WORKSPACE_ICON_EXTENSIONS {
+        let path = root.join(format!("{WORKSPACE_ICON_STEM}{extension}"));
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => tracing::warn!("删除图标失败: {} err: {}", path.display(), error),
+        }
+    }
 }
 
 /// 把数据库中的相对路径解析为绝对路径。
@@ -193,6 +269,75 @@ mod tests {
             .join("assets")
             .join("key_events/2026-01-01/a.jpg");
         assert_eq!(path, expected);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 工作空间图标的完整生命周期：没有 → 保存 → 换扩展名时不留旧文件 → 删除。
+    ///
+    /// 关键不变量：**同一时刻最多一个 `workspace-icon.*` 文件**。
+    /// 否则"有没有图标"就有两个来源，`trasset://` 也可能取到上一版。
+    #[test]
+    fn workspace_icon_roundtrips_and_keeps_a_single_file() {
+        let (dir, workspace) = temp_workspace("icon");
+        assert_eq!(workspace_icon_relative(&workspace), "");
+
+        let saved = save_workspace_icon(&workspace, &png_data_uri(64, 64)).unwrap();
+        assert_eq!(saved, "workspace-icon.png");
+        assert_eq!(workspace_icon_relative(&workspace), "workspace-icon.png");
+
+        // 换一种编码 → 旧文件必须消失
+        let jpeg = {
+            use base64::Engine;
+            let image = image::DynamicImage::new_rgb8(32, 32);
+            let mut bytes = Vec::new();
+            image
+                .write_to(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    image::ImageFormat::Jpeg,
+                )
+                .unwrap();
+            format!(
+                "data:image/jpeg;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            )
+        };
+        assert_eq!(
+            save_workspace_icon(&workspace, &jpeg).unwrap(),
+            "workspace-icon.jpg"
+        );
+        assert!(!assets_root(&workspace).join("workspace-icon.png").exists());
+        assert_eq!(workspace_icon_relative(&workspace), "workspace-icon.jpg");
+
+        remove_workspace_icon(&workspace);
+        assert_eq!(workspace_icon_relative(&workspace), "");
+        // 再删一次不该 panic
+        remove_workspace_icon(&workspace);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 坏数据必须在**写盘之前**被拒：不然侧栏会显示成一块裂图。
+    #[test]
+    fn workspace_icon_rejects_non_images_and_unknown_mime() {
+        use base64::Engine;
+
+        let (dir, workspace) = temp_workspace("icon-bad");
+
+        let not_an_image = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(b"not an image")
+        );
+        let error = save_workspace_icon(&workspace, &not_an_image).unwrap_err();
+        assert_eq!(error.into_app_error().status, 400);
+
+        let bitmap = format!(
+            "data:image/bmp;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(b"BM")
+        );
+        assert!(save_workspace_icon(&workspace, &bitmap).is_err());
+
+        assert_eq!(workspace_icon_relative(&workspace), "", "失败不得留下文件");
+
         std::fs::remove_dir_all(&dir).ok();
     }
 

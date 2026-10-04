@@ -82,6 +82,7 @@ $Steps = [ordered]@{
     # ---- 结构 / 纯函数 ----
     'schema-diff'       = @{ Title='建库护栏：Rust 建库 vs fixtures/schema/fresh.sql'; Kind='cargo'; Args=@('xtask','schema-diff'); Needs='none' }
     'chart-tests'       = @{ Title='图表纯函数（Y 轴范围 / 填充基线）';              Kind='pwsh';  Script='fixtures\chart-tests.ps1'; Needs='none' }
+    'crop-tests'        = @{ Title='方形裁剪几何（铺满比例 / 位移夹紧 / 裁剪框）';   Kind='pwsh';  Script='fixtures\crop-tests.ps1'; Needs='none' }
 
     # ---- 界面护栏（真实启动 + UIA 驱动）----
     'smoke'             = @{ Title='冒烟：已配置 → 只开主窗口；首启动 → 主窗口 + 选工作空间屏（背景 inert）'; Kind='pwsh'; Script='fixtures\smoke.ps1'; Needs='exe' }
@@ -132,7 +133,8 @@ $Groups = [ordered]@{
     'assets'       = @('ui-upload')
     'shell'        = @('smoke', 'window-bounds', 'close-behavior')
     # 共享组件 / 全局样式 / 侧栏骨架：影响面按 AGENTS.md 的约定放大到"覆盖到的代表页"
-    'ui-kit'       = @('design-audit', 'check-ui-wasm', 'ui-smoke', 'ui-shots', 'ui-transactions', 'ui-stock')
+    # crop-tests：`components/ui/image_crop.rs` 是 wasm-only，单测平时跑不到，用纯函数护栏接住
+    'ui-kit'       = @('design-audit', 'check-ui-wasm', 'crop-tests', 'ui-smoke', 'ui-shots', 'ui-transactions', 'ui-stock')
     'update'       = @('ui-update-restore')
 }
 

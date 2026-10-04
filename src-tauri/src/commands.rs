@@ -24,7 +24,7 @@ use tr_domain::wire::{
     AppInfoRequest, AssetUrlRequest, ConfigSnapshot, DevToolsToggleRequest, DialogOpenRequest,
     DialogOpenResponse, FeatureFlags, FileSaveRequest, FileSaveResponse, ProxyDetectResponse,
     SetAppearanceRequest, SetCloseBehaviorRequest, SetFeatureRequest, SetKeyEventLinkedOpenRequest,
-    WindowControlRequest, WorkspaceDirRequest,
+    SetSidebarCollapsedRequest, WindowControlRequest, WorkspaceDirRequest, WorkspaceIconRequest,
 };
 use tr_ipc::{ApiError, ApiResult, AppState};
 
@@ -166,6 +166,7 @@ pub fn config_get(state: State<'_, DesktopState>) -> ApiResult<ConfigSnapshot> {
         proxy: config.proxy,
         features: config.features,
         key_event_linked_open: config.key_event_linked_open,
+        sidebar_collapsed: config.sidebar_collapsed,
     })
 }
 
@@ -260,6 +261,24 @@ pub fn config_set_key_event_linked_open(
     });
     tracing::info!("IPC config_set_key_event_linked_open: open={open}");
     Ok(open)
+}
+
+// ------------------------------------------------------------ 侧边栏偏好
+
+/// 侧边栏收起 / 展开：写配置并返回落盘后的值（与事件页右栏偏好同一套路）。
+///
+/// 外壳只负责落盘，界面调成功后用返回值回显 —— 于是换页与重启都保持用户上一次的选择。
+#[tauri::command]
+pub fn config_set_sidebar_collapsed(
+    state: State<'_, DesktopState>,
+    req: SetSidebarCollapsedRequest,
+) -> ApiResult<bool> {
+    let collapsed = state.config.update(|config| {
+        config.sidebar_collapsed = req.collapsed;
+        config.sidebar_collapsed
+    });
+    tracing::info!("IPC config_set_sidebar_collapsed: collapsed={collapsed}");
+    Ok(collapsed)
 }
 
 // ------------------------------------------------------------ 代理设置
@@ -390,6 +409,40 @@ pub fn workspace_init(state: State<'_, DesktopState>, req: WorkspaceDirRequest) 
         .update(|config| config.workspace_dir = raw.clone());
 
     Ok(())
+}
+
+// ------------------------------------------------------------ 工作空间图标
+
+/// 当前工作空间的自定义图标（相对 `data/assets` 的路径；**未设置时是空串**）。
+///
+/// 图标放在工作空间里（见 `tr_service::assets` 的说明），所以它天然跟着目录走。
+/// 未打开工作空间时返回空串而不是报错：界面在打开失败的分支里也会读一次。
+#[tauri::command]
+pub fn workspace_icon_get(ipc_state: State<'_, AppState>) -> ApiResult<String> {
+    Ok(ipc_state
+        .workspace()
+        .map(|workspace| tr_service::assets::workspace_icon_relative(&workspace))
+        .unwrap_or_default())
+}
+
+/// 写入（或清除）当前工作空间的图标，返回落盘后的相对路径。
+///
+/// `data` 为空串 = 清除，恢复成内置的应用标志 —— 与「写一张新图标」走同一条命令，
+/// 界面因此只需要一个入口。
+#[tauri::command]
+pub fn workspace_icon_set(
+    ipc_state: State<'_, AppState>,
+    req: WorkspaceIconRequest,
+) -> ApiResult<String> {
+    let workspace = ipc_state.workspace()?;
+    if req.data.trim().is_empty() {
+        tr_service::assets::remove_workspace_icon(&workspace);
+        tracing::info!("IPC workspace_icon_set: 已清除工作空间图标");
+        return Ok(String::new());
+    }
+    let relative = tr_service::assets::save_workspace_icon(&workspace, &req.data)?;
+    tracing::info!("IPC workspace_icon_set: 已保存工作空间图标 {relative}");
+    Ok(relative)
 }
 
 // ------------------------------------------------------------ 对话框
@@ -617,6 +670,7 @@ mod tests {
             proxy: ProxySetting::manual("http://127.0.0.1:7890"),
             features: FeatureFlags::defaults(),
             key_event_linked_open: false,
+            sidebar_collapsed: true,
         };
         let value = serde_json::to_value(&snapshot).unwrap();
         let mut keys: Vec<&str> = value
@@ -636,6 +690,7 @@ mod tests {
                 "isDev",
                 "keyEventLinkedOpen",
                 "proxy",
+                "sidebarCollapsed",
                 "workspaceDir"
             ]
         );
@@ -648,6 +703,8 @@ mod tests {
         assert_eq!(value["features"]["diary"], true);
         // 事件页右栏偏好同样是契约（界面共用 `tr_domain::wire::ConfigSnapshot`）
         assert_eq!(value["keyEventLinkedOpen"], false);
+        // 侧边栏偏好同理
+        assert_eq!(value["sidebarCollapsed"], true);
     }
 
     #[test]

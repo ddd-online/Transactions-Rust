@@ -37,6 +37,18 @@
   border-right: 1px solid var(--transactions-color-border-l1);
   display: flex;
   flex-direction: column;
+  /* 收起 / 展开是一档宽度到另一档：让它**走完**这 200→64 的过程，
+   * 而不是"啪"地跳（跳变时标题栏的居中补偿也会跟着闪一下）。
+   * 曲线与"落位"同源（expo），收尾干脆。 */
+  transition: width var(--transactions-transition-settle),
+    min-width var(--transactions-transition-settle);
+}
+
+/* 收起：**只换一个变量**。侧栏宽度与标题栏的居中补偿读的都是
+ * `--transactions-size-sidebar`，覆盖在这里（而不是分别写两条规则）之后，
+ * 两者必然同步 —— 这条是"标题在收起状态下仍然居中"的唯一保证。 */
+.app-shell.is-sidebar-collapsed {
+  --transactions-size-sidebar: var(--transactions-size-sidebar-collapsed);
 }
 
 /* 内容区 */
@@ -75,14 +87,18 @@
   width: 100%;
 }
 
-/* 账本切换容器 —— 顶部容器（与右侧「标题 + 窗口三按钮」等高、同起点），内容垂直居中。
- * 底边一条发丝线把它与下方内容分开，与页面顶部的分隔线**同一条水平线**。 */
+/* 顶部容器（与右侧「标题 + 窗口三按钮」等高、同起点）：里面只有**一个方形软件 ICON**。
+ * 底边一条发丝线把它与下方内容分开，与页面顶部的分隔线**同一条水平线**。
+ *
+ * 左内边距 24px 是**对齐用的**，不是随手取的数：侧栏导航项的图标左缘也在 24px
+ * （导航组 12px + 按钮自己的 12px 内边距）。于是顶部这个方块与下面那一列图标
+ * 共用同一条左基准线 —— 侧栏看起来才是"一列"，而不是"一个标志 +一堆按钮"。 */
 .sidebar-ledger {
   position: relative;
   display: flex;
   align-items: center;
   height: var(--transactions-size-top-band);
-  padding-left: var(--transactions-space-md);
+  padding-left: var(--transactions-space-xl);
   padding-right: var(--transactions-space-md);
   border-bottom: 1px solid var(--transactions-color-divider);
 }
@@ -99,46 +115,83 @@
  *  3) **每行带账本身份色点**（DESIGN.md 的 Ledger identity，此前从未被使用）。
  * ============================================ */
 
-/* 触发器 + 菜单的定位锚点：菜单相对**触发器**定位，而不是相对顶部容器，
-   这样不必用魔法数字去补容器居中造成的偏移。 */
+/* 触发器 + 菜单的定位锚点：菜单相对**触发器**定位（`width` 收成内容宽，
+   锚点就是那个方块），菜单自己的宽度在下面单独给。
+ * 收起后侧栏只有 64px，菜单（176px）必然溢出栏外 —— 这不靠任何 `z-index` 兜底：
+   沿途的祖先都没有 `position` + `z-index`，也没有 `overflow`，所以 `.ledger-menu`
+   的 `z-index: 1050` 直接与整层界面同比；`.app-shell-body` 的 `overflow: hidden`
+   只裁窗口边界，176px 的菜单离右边界远得很。 */
 .ledger-anchor {
   position: relative;
-  width: 100%;
 }
 
-.ledger-btn {
+/* 方形软件 ICON = 账本切换入口。
+ *
+ * 为什么是"环绕高光"而不是"填一个底色"：方块本身就是一张**图片**
+ * （用户自定义的图标，或内置的「Tr」标志），给它垫底色会被图的透明区漏出来；
+ * 悬停时在外面套一圈光环，图的像素一个都不动。 */
+.workspace-btn {
   display: flex;
   align-items: center;
-  gap: var(--transactions-space-sm);
-  width: 100%;
-  height: 34px;                      /* 与 .nav-btn 同高（侧栏按钮统一尺寸） */
-  padding: 0 var(--transactions-space-md);
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border: none;
   border-radius: var(--transactions-radius-md);
   background: none;
   cursor: pointer;
-  font-family: inherit;
-  font-size: var(--transactions-size-text-body-sm);
-  font-weight: var(--transactions-weight-medium);
-  color: var(--transactions-color-text-major);
-  text-align: left;
-  transition: background-color var(--transactions-transition-fast),
-    color var(--transactions-transition-fast);
+  /* `overflow: hidden` + 自身圆角 = 用户上传的**方形**图也被切进同一个圆角，
+     不会出现"内置标志是圆角、自定义图标是直角"这种不一致。 */
+  overflow: hidden;
+  transition: box-shadow var(--transactions-transition-fast);
 }
 
-.ledger-btn:hover {
-  background-color: var(--transactions-color-hover-bg);
+.workspace-btn:hover {
+  box-shadow: 0 0 0 3px var(--transactions-color-hover-bg);
 }
 
-/* 展开中 = 侧栏导航项的"选中"语言：主色 tint + 主色文字 */
-.ledger-btn.is-open {
-  background-color: var(--transactions-color-active-bg);
-  color: var(--transactions-color-primary);
+/* 展开中 = 侧栏导航项的"选中"语言：主色 tint 光环 */
+.workspace-btn.is-open {
+  box-shadow: 0 0 0 3px var(--transactions-color-active-bg);
 }
 
-.ledger-btn:focus-visible {
+.workspace-btn:focus-visible {
   outline: 2px solid var(--transactions-color-primary);
-  outline-offset: 2px;
+  outline-offset: 3px;
+}
+
+/* 工作空间标志：铺满所在方块，**圆角继承宿主**（按钮 8px / 设置页预览 12px）。
+ * 方形裁剪在导入时就做完了，这里只负责不拉伸。 */
+.workspace-mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.workspace-mark__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 内置「Tr」标志（`icons::app_mark`）—— 与「关于软件」页共用同一条配色。
+ * SVG 自己只声明 1024 的坐标系，尺寸由这里给。 */
+.app-mark {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.app-mark__plate {
+  fill: var(--transactions-color-primary);
+}
+
+.app-mark__glyph {
+  fill: var(--transactions-color-text-inverse);
 }
 
 /* 账本身份色点：8 个自然色（DESIGN.md 的 Ledger identity），由账本 id 稳定哈希选色。
@@ -179,27 +232,6 @@
   background-color: var(--transactions-ledger-camel);
 }
 
-.ledger-btn-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-}
-
-.ledger-btn-arrow {
-  display: inline-flex;
-  flex-shrink: 0;
-  color: currentColor;
-  opacity: 0.7;
-}
-
-.ledger-btn-arrow svg {
-  width: 10px;
-  height: 10px;
-  fill: currentColor;
-}
-
 /* 定位层本身不参与定位（static），让 `.ledger-menu` 相对 `.ledger-anchor` 计算 */
 .ledger-menu-layer {
   position: static;
@@ -217,7 +249,10 @@
   z-index: 1050;
   top: calc(100% + var(--transactions-space-xs));
   left: 0;
-  right: 0;
+  /* 宽度**写死**而不是 `left:0; right:0`：锚点现在只有 32px（触发方块那么宽），
+   * 跟着锚点走的话菜单会缩成一条。176px = 侧栏展开态的可用宽度
+   * （200 - 12×2），收起后它会溢到内容区上方 —— 这是刻意的，菜单该有字的宽度。 */
+  width: 176px;
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-2xs);
@@ -362,6 +397,14 @@
   flex: 1;
 }
 
+/* 「收起侧边栏」那一行：落在导航组的底部、页脚带之上。
+ * 内边距与 `.sidebar-nav` 同一档（左右 12、底部 8），按钮因此与导航项同宽同左缘。 */
+.sidebar-toggle-row {
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--transactions-space-md) var(--transactions-space-sm);
+}
+
 .sidebar-bottom {
   display: flex;
   flex-direction: column;
@@ -441,6 +484,33 @@
 
 .nav-btn-text {
   white-space: nowrap;
+}
+
+/* ============================================
+ * 收起态（`.app-left-bar.is-collapsed`）
+ *
+ * 一条规则：**只留图标**。文字整块 `display: none`（不是淡出）——
+ * 64px 里放不下任何中文词，截成两个字比不显示更糟；名字改由 `title` 与
+ * `aria-label` 给（见 `shell.rs` 的 `nav_button` / `sidebar_toggle`）。
+ *
+ * 对齐：顶部方块与下面每个导航图标都落在侧栏的**中轴**上（中心 32px）——
+ * 顶部容器去掉左右内边距后靠 `justify-content: center` 居中，导航项靠按钮内居中，
+ * 两者算出来是同一个数。
+ * ============================================ */
+.app-left-bar.is-collapsed .sidebar-ledger {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.app-left-bar.is-collapsed .nav-btn {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.app-left-bar.is-collapsed .nav-btn-text {
+  display: none;
 }
 
 /* ============================================

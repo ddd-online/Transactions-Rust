@@ -2264,3 +2264,91 @@
     stroke-dashoffset: 0 !important;
   }
 }
+
+/* ============================================
+ * 方形裁剪（共享组件 `ImageCropDialog`）
+ *
+ * 视口**就是**裁剪框：里面看到什么，存下来就是什么 ——
+ * 所以它没有内边距、没有内框，只有一圈圆角与一条极淡的三分线。
+ * 图像的位置与尺寸由组件算好写在 `style` 上（见 `image_crop.rs` 的几何注释），
+ * 这里只管"怎么摆"和"手感"。
+ * ============================================ */
+
+.icon-crop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--transactions-space-lg);
+}
+
+.icon-crop__viewport {
+  position: relative;
+  width: 260px;
+  height: 260px;
+  overflow: hidden;
+  border-radius: var(--transactions-radius-lg);
+  background-color: var(--transactions-color-minor-background);
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: grab;
+  /* 触屏上的拖拽要归我们处理，别让浏览器顺手滚动页面 */
+  touch-action: none;
+}
+
+.icon-crop__viewport.is-dragging {
+  cursor: grabbing;
+}
+
+/* 图像：位置与尺寸都靠行内 style（拖动时**不能**加过渡，否则图会追着指针飘） */
+.icon-crop__image {
+  position: absolute;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* 三分线 + 外沿发丝线：纯装饰，不吃指针事件（否则拖动会在正中间断线） */
+.icon-crop__grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: inherit;
+  background-image: linear-gradient(
+      to right,
+      transparent calc(33.333% - 0.5px),
+      var(--transactions-color-divider) calc(33.333% - 0.5px),
+      var(--transactions-color-divider) calc(33.333% + 0.5px),
+      transparent calc(33.333% + 0.5px),
+      transparent calc(66.666% - 0.5px),
+      var(--transactions-color-divider) calc(66.666% - 0.5px),
+      var(--transactions-color-divider) calc(66.666% + 0.5px),
+      transparent calc(66.666% + 0.5px)
+    ),
+    linear-gradient(
+      to bottom,
+      transparent calc(33.333% - 0.5px),
+      var(--transactions-color-divider) calc(33.333% - 0.5px),
+      var(--transactions-color-divider) calc(33.333% + 0.5px),
+      transparent calc(33.333% + 0.5px),
+      transparent calc(66.666% - 0.5px),
+      var(--transactions-color-divider) calc(66.666% - 0.5px),
+      var(--transactions-color-divider) calc(66.666% + 0.5px),
+      transparent calc(66.666% + 0.5px)
+    );
+}
+
+.icon-crop__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+  width: 100%;
+}
+
+.icon-crop__hint {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
+  text-align: right;
+}
