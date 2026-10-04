@@ -167,6 +167,13 @@
 
 ### 调整
 
+**发布流程：Release 正文取 CHANGELOG，而不是自动生成的提交列表**
+
+- `build/release.ps1` 原来用 `gh release create --generate-notes`，正文是一串提交标题；
+  而 v0.11.0 及之前的每个 release 正文都是 CHANGELOG 里那一版的内容 —— 应用内
+  「更新说明」显示的正是它。现在脚本从 `CHANGELOG.md` 截出 `## [版本]` 那一节作为正文
+  （找不到时退回自动生成），更新已有 release 时也一并刷新。
+
 **账本切换入口：展开态保留下拉选择器，收起态只剩方形软件 ICON**
 
 - **一个按钮、两副形态**（`class` 在 `ledger-btn` / `workspace-btn` 之间切）：展开态是原来那个

@@ -60,11 +60,34 @@ foreach ($other in $otherTags) {
 Write-Success "自检通过：与其它 $($otherTags.Count) 个 release 的资产都不相同"
 
 Write-Step "创建/更新 Release $tag"
+
+# Release 正文用仓库里的 CHANGELOG 那一节：v0.11.0 及之前每个 release 的正文都是它
+# （应用内「更新说明」显示的就是这段文字）。`--generate-notes` 给的是提交列表，
+# 读起来是"改了哪些文件"，不是"这一版是什么"；只有在 CHANGELOG 里找不到这一版时
+# 才退回它。
+$notesArgs = @('--generate-notes')
+$changelogPath = Join-Path $projectRoot 'CHANGELOG.md'
+if (Test-Path $changelogPath) {
+    $pattern = "(?ms)^##\s*\[$([Regex]::Escape($version))\][^\n]*\n(.*?)(?=^##\s|\z)"
+    $section = [Regex]::Match((Get-Content -Raw $changelogPath), $pattern).Value
+    if ($section) {
+        $bodyFile = Join-Path $env:TEMP "transactions-release-$version.md"
+        ($section.TrimEnd() + "`n") | Set-Content -Path $bodyFile -Encoding UTF8
+        $notesArgs = @('--notes-file', $bodyFile)
+    } else {
+        Write-Host "  （CHANGELOG 里没有 $version 一节，改用自动生成的说明）" -ForegroundColor Yellow
+    }
+}
+
 & gh release view $tag --repo $repo *> $null
 if ($LASTEXITCODE -eq 0) {
     & gh release upload $tag @assets --repo $repo --clobber
+    # 补上/刷新正文（`gh release edit` 不一定认 `--generate-notes`，这里只在有正文文件时改）
+    if ($notesArgs[0] -eq '--notes-file') {
+        & gh release edit $tag --repo $repo --title $tag --notes-file $notesArgs[1]
+    }
 } else {
-    & gh release create $tag @assets --repo $repo --title $tag --generate-notes
+    & gh release create $tag @assets --repo $repo --title $tag @notesArgs
 }
 if ($LASTEXITCODE -ne 0) { Fail "gh 发布失败，退出码: $LASTEXITCODE" }
 
