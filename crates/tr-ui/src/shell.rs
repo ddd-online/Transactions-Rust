@@ -15,6 +15,8 @@
 //! * 没有"内核状态指示灯"：Rust 版没有子进程内核，进程即应用，该指示灯无对应语义
 //! * 没有内核重启后的恢复逻辑（同上），只有工作空间切换
 
+use std::time::Duration;
+
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
 
@@ -254,6 +256,7 @@ pub fn App() -> impl IntoView {
             <div
                 class="app-shell"
                 class:is-sidebar-collapsed=move || stores.sidebar_collapsed.get()
+                class:is-sidebar-morphing=move || stores.sidebar_morphing.get()
                 inert=move || workspace_required.get()
             >
                 <div class="app-shell-body">
@@ -742,8 +745,13 @@ fn nav_button(page: Page, current_page: RwSignal<Page>) -> impl IntoView {
 ///
 /// 写入是**乐观**的：先翻本地状态（点击立刻有动画），成功后再用后端落盘的值回填 ——
 /// 失败时回滚，界面不会停在一个磁盘上并不存在的状态。
+///
+/// 点下去的那一下还会挂一个 360ms 的 `sidebar_morphing`：侧栏里的文字在这一拍里
+/// **交接**（让位 → 从上方 4px 落回），与列宽的 320ms 同一拍收尾。
+/// 360 比 320 长一点是刻意的：标记多留 40ms，动画绝不会被提前摘掉。
 fn sidebar_toggle(stores: AppStores) -> impl IntoView {
     let collapsed = stores.sidebar_collapsed;
+    let morphing = stores.sidebar_morphing;
     let label = move || {
         if collapsed.get() {
             "展开侧边栏"
@@ -769,6 +777,8 @@ fn sidebar_toggle(stores: AppStores) -> impl IntoView {
             on:click=move |_| {
                 let next = !collapsed.get_untracked();
                 collapsed.set(next);
+                morphing.set(true);
+                set_timeout(move || morphing.set(false), Duration::from_millis(360));
                 leptos::task::spawn_local(async move {
                     match api::desktop::config_set_sidebar_collapsed(next).await {
                         Ok(saved) => collapsed.set(saved),

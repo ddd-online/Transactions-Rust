@@ -54,6 +54,13 @@ pub struct AppStores {
     ///
     /// 与事件页右栏同理放在全局：外壳、设置页、跳转逻辑都可能读到它。
     pub sidebar_collapsed: RwSignal<bool>,
+    /// 侧栏**正在收放**（点击后挂 360ms 的那个短命标记）。
+    ///
+    /// 它只有一个用处：给 `.app-shell` 挂上 `is-sidebar-morphing`，
+    /// 让里面那些"会重排的文字"演一次交接（见 app.css 的同名注释）。
+    /// 放在共享状态而不是外壳局部信号：收起按钮在 [`crate::shell::AppLeftBar`] 里，
+    /// 类名要挂在外壳最外层那层 —— 两边都得读它。
+    pub sidebar_morphing: RwSignal<bool>,
     /// 当前工作空间自定义图标的 `trasset://` URL（**空串 = 用内置的应用标志**）。
     ///
     /// 存 URL 而不是"有没有图标"：`<img src>` 直接吃它，省掉每次渲染的往返。
@@ -87,6 +94,7 @@ impl AppStores {
             enabled_features: RwSignal::new(FeatureFlags::defaults()),
             key_event_linked_open: RwSignal::new(true),
             sidebar_collapsed: RwSignal::new(false),
+            sidebar_morphing: RwSignal::new(false),
             workspace_icon: RwSignal::new(String::new()),
             workspace_icon_version: RwSignal::new(0),
             workspace_required: RwSignal::new(false),

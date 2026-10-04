@@ -21,27 +21,30 @@
   -webkit-user-select: none;
 }
 
+/* 骨架用**网格**而不是弹性盒：收起 / 展开要动的是"一列宽度"，
+ * 而 `grid-template-columns` 是这套设计里**唯一**被允许动画的布局属性
+ * （见 DESIGN.md「Motion」的 Budget；事件页右轨的收起用的就是它）。
+ * 收起时只换 `--transactions-size-sidebar` 一个变量，列宽自己走过去 ——
+ * 侧栏、内容区、标题栏的居中补偿因此**同一条曲线、同一拍**，不会各走各的。 */
 .app-shell-body {
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--transactions-size-sidebar) minmax(0, 1fr);
   flex: 1;
   overflow: hidden;
+  transition: grid-template-columns var(--transactions-transition-settle);
 }
 
-/* 侧边栏 —— 固定宽度（`--transactions-size-sidebar`：标题栏的居中补偿要用同一个值） */
+/* 侧边栏 —— 宽度唯一来源是所在网格列（`--transactions-size-sidebar`：
+ * 标题栏的居中补偿读的也是它）。这里**只管排在那一列里**，
+ * 自己不再动宽度：动画只有列宽一个动因。 */
 .app-sidebar {
-  width: var(--transactions-size-sidebar);
-  min-width: var(--transactions-size-sidebar);
+  width: 100%;
+  min-width: 0;
   height: 100%;
   background-color: var(--transactions-color-sidebar-fill);
-  flex-shrink: 0;
   border-right: 1px solid var(--transactions-color-border-l1);
   display: flex;
   flex-direction: column;
-  /* 收起 / 展开是一档宽度到另一档：让它**走完**这 200→64 的过程，
-   * 而不是"啪"地跳（跳变时标题栏的居中补偿也会跟着闪一下）。
-   * 曲线与"落位"同源（expo），收尾干脆。 */
-  transition: width var(--transactions-transition-settle),
-    min-width var(--transactions-transition-settle);
 }
 
 /* 收起：**只换一个变量**。侧栏宽度与标题栏的居中补偿读的都是
@@ -502,7 +505,11 @@
   align-items: center;
   gap: var(--transactions-space-sm);
   width: 100%;
-  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  /* 高度两态同一档（44px）：收起时那格就是 44×44，展开时也 44 高 ——
+   * 高度若在收放时跳一下，下面几项会跟着瞬移，动画就没法只动横向了。
+   * 44 也是页脚带子的高度，底栏那一格因此正好填满。 */
+  height: 44px;
+  padding: 0 var(--transactions-space-md);
   border: none;
   background: none;
   border-radius: var(--transactions-radius-md);
@@ -562,10 +569,50 @@
   width: 18px;
   height: 18px;
   fill: currentColor;
+  /* 收起态那个 20px 是**缩放**出来的（见下），所以这里过渡的是 transform ——
+   * 改 width/height 属于布局属性，Budget 里没有它。 */
+  transition: transform var(--transactions-transition-settle);
 }
 
 .nav-btn-text {
   white-space: nowrap;
+}
+
+/* ============================================
+ * 收放那一拍的"交接"（`is-sidebar-morphing` 由 `shell.rs` 在点收起 / 展开时挂上）
+ *
+ * 两个状态的排法不同（图标**旁** ↔ 图标**下**），而 `flex-direction` 没法过渡 ——
+ * 于是让文字**先让位、再从上方 4px 落回**（与 `tr-rise-in` 同一档）：
+ * 重排发生在文字不可见的那 45% 里，看到的就是一次交接，不是一次跳。
+ *
+ * 这个类由 Rust 在点击时挂上、360ms 后摘掉，所以它**只在收放那一下**跑 ——
+ * 首屏挂载时不演（那是 `.page-content > *` 的 settle 负责的事），
+ * 也不必担心"每次进页面都重播一次"（侧栏根本不会重挂）。
+ *
+ * 图标不参与交接：它的位置没变，只按上面的 `scale` 长大 / 收小。
+ * ============================================ */
+
+@keyframes tr-sidebar-hand-over {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  45% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.app-shell.is-sidebar-morphing .nav-btn-text,
+.app-shell.is-sidebar-morphing .ledger-btn-name,
+.app-shell.is-sidebar-morphing .ledger-btn-arrow {
+  animation: tr-sidebar-hand-over var(--transactions-transition-settle);
 }
 
 /* ============================================
@@ -599,7 +646,10 @@
  * 方块本身**不填色**：图标与文字就是全部内容。底色只在悬停 / 选中时出现，
  * 而那两处本来就是方的（按钮就是正方形），不必再往图标上叠一层底。 */
 .app-left-bar.is-collapsed .nav-btn {
-  width: 44px;
+  /* 宽度**跟着列走**（`100%`）而不是写死 44：动画期间这一格就是"正在缩窄的那一列"，
+   * 收放时格子与栏同步变窄，不会先跳再等。
+   * 收起态的可用宽度 = 68 - 12×2 = 44，所以它仍然是一个 44×44 的方块。 */
+  width: 100%;
   height: 44px;
   padding: 0;
   /* 内容在方块里居中。展开态不做这件事（那是"图标在左、文字跟上"的横向排法），
@@ -631,10 +681,11 @@
 
 /* 收起态的图标比展开态大一档（18 → 20px）：它和名字挤在同一格里，
  * 名字已经是最小一号字，图标得撑住那一格的重量。
- * **只改收起态** —— 展开态是"图标在左、文字在右"的横向排法，图标跟文字同一档更稳。 */
+ * **只改收起态** —— 展开态是"图标在左、文字在右"的横向排法，图标跟文字同一档更稳。
+ * 用 `scale` 而不是 width/height：缩放只影响绘制，且它让"图标跟着一起长大"这件事
+ * 顺着收放那一拍演完（transition 写在上面那条基础规则里）。 */
 .app-left-bar.is-collapsed .nav-btn-icon svg {
-  width: 20px;
-  height: 20px;
+  transform: scale(1.1111);
 }
 
 /* 名字：最小一档字号（11px）。五个功能项都是两个字（22px），52px 里绰绰有余；
