@@ -710,7 +710,6 @@ pub(crate) fn workspace_mark(class: &'static str) -> AnyView {
 /// 一个导航按钮。
 fn nav_button(page: Page, current_page: RwSignal<Page>) -> impl IntoView {
     let is_secondary = page == Page::Settings;
-    let collapsed = AppStores::global().sidebar_collapsed;
     let mut classes = String::from("nav-btn");
     if is_secondary {
         classes.push_str(" nav-btn-secondary");
@@ -720,13 +719,11 @@ fn nav_button(page: Page, current_page: RwSignal<Page>) -> impl IntoView {
             type="button"
             class=classes
             class:active=move || current_page.get() == page
-            // `title` 只在**收起状态**下给：那时 `.nav-btn-text` 是 `display: none`，
-            // 光看图标的快捷入口需要一个名字（悬浮提示是唯一的来源）。
-            // 展开时它必须是空串 —— 按钮里本来就有可见文字，再挂一个同名提示
-            // 只是"把旁边的字又说一遍"，还多出一块盖住界面的浮层。
+            // **不给 `title`**：按钮里本来就有可见文字（`.nav-btn-text`），
+            // 展开时在图标右边、收起时在图标下面 —— 两种形态都看得见，
+            // 再挂一个同名悬浮提示只是"把旁边的字又说一遍"，还多出一块盖住界面的浮层。
             // （历史上这里写过 `title=page.route()`，于是提示全是 `/accounting_view` 这类
             // 内部标识 —— 那是"页面的稳定标识"，只该出现在调试里。）
-            title=move || if collapsed.get() { page.label().to_string() } else { String::new() }
             // 无障碍名保留 `aria-label`，读屏仍然能念出功能名。
             aria-label=page.label()
             on:click=move |_| current_page.set(page)
@@ -754,11 +751,20 @@ fn sidebar_toggle(stores: AppStores) -> impl IntoView {
             "收起侧边栏"
         }
     };
+    // 悬浮提示只在**收起态**给：那时按钮里没有可见文字（与 `.nav-btn` 同一条判据）。
+    // 展开态给空串，免得提示把旁边那四个字再说一遍。
+    let tooltip = move || {
+        if collapsed.get() {
+            label().to_string()
+        } else {
+            String::new()
+        }
+    };
     view! {
         <button
             type="button"
             class="nav-btn nav-btn-secondary sidebar-toggle-btn"
-            title=label
+            title=tooltip
             aria-label=label
             on:click=move |_| {
                 let next = !collapsed.get_untracked();

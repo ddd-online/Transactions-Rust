@@ -571,11 +571,11 @@
 /* ============================================
  * 收起态（`.app-left-bar.is-collapsed`）
  *
- * 一条规则：**只留图标**。文字整块 `display: none`（不是淡出）——
- * 64px 里放不下任何中文词，截成两个字比不显示更糟；名字改由 `title` 与
- * `aria-label` 给（见 `shell.rs` 的 `nav_button` / `sidebar_toggle`）。
+ * **图标在上、名字在下**：68px 放不下一行"图标 + 名字"（那是展开态 200px 的排法），
+ * 但放得下两行的"图标 / 名字" —— 功能名因此从"要悬浮才知道"变成一直看得见。
+ * 图标同时从 18px 涨到 20px：收起后它是唯一的入口，看不清就只剩猜。
  *
- * 对齐：顶部方块与下面每个导航图标都落在侧栏的**中轴**上（中心 32px）——
+ * 对齐：顶部方块与下面每个导航图标都落在侧栏的**中轴**上（中心 34px）——
  * 顶部容器去掉左右内边距后靠 `justify-content: center` 居中，导航项靠按钮内居中，
  * 两者算出来是同一个数。
  * ============================================ */
@@ -590,13 +590,39 @@
   width: auto;
 }
 
-.app-left-bar.is-collapsed .nav-btn {
-  justify-content: center;
-  padding-left: 0;
-  padding-right: 0;
+/* 左右内边距收到 8px：给"图标 + 名字"腾出 52px 的内容宽 */
+.app-left-bar.is-collapsed .sidebar-nav,
+.app-left-bar.is-collapsed .sidebar-toggle-row,
+.app-left-bar.is-collapsed .sidebar-bottom {
+  padding-left: var(--transactions-space-sm);
+  padding-right: var(--transactions-space-sm);
 }
 
-.app-left-bar.is-collapsed .nav-btn-text {
+/* 功能项：竖排两行（图标 / 名字）。`:not(.sidebar-toggle-btn)` 是因为
+ * 「收起 / 展开」是**控件**不是功能页 —— 它收起后仍然只留那个折叠图标。 */
+.app-left-bar.is-collapsed .nav-btn:not(.sidebar-toggle-btn) {
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+  justify-content: center;
+  padding: var(--transactions-space-xs) 0;
+}
+
+.app-left-bar.is-collapsed .nav-btn-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* 名字：最小一档字号（11px）。四个字的「应用设置」是 44px，52px 里放得下；
+ * 真遇上更长的名字就省略号收尾，不挤出去。 */
+.app-left-bar.is-collapsed .nav-btn:not(.sidebar-toggle-btn) .nav-btn-text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--transactions-size-text-small);
+  line-height: var(--transactions-height-tight);
+}
+
+.app-left-bar.is-collapsed .sidebar-toggle-btn .nav-btn-text {
   display: none;
 }
 
