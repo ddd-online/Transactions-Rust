@@ -316,11 +316,6 @@ try {
         Click-Element $delegateButton | Out-Null
         $modalTitle = Wait-Like -Root $window -Pattern '授权做 · 紧急但不重要' -TimeoutSec 10
         Assert-True ([bool]$modalTitle) '弹窗标题 = 象限名 + 含义'
-        # "N 项进行中 · 按紧急度、重要度降序" 这行只在有事项时才画（空格子走空态）
-        if ($delegateRows.Count -gt 0) {
-            Assert-True ([bool](Wait-Like -Root $window -Pattern '· 按紧急度、重要度降序' -TimeoutSec 10)) `
-                '弹窗写明条数与排序口径'
-        }
         if ($modalTitle) {
             # 一行是 `li.todo-quadrant-modal__row`（UIA = ListItem，名字 = 整行的文字）：
             # 按类名取、按 Y 排，就是画面上的先后。

@@ -1135,7 +1135,7 @@ fn quadrant_name(
     .into_any()
 }
 
-/// 弹窗里的一行：事项名 + 紧急 / 重要两档 + 起止日期，下面一行是它所属的主题。
+/// 弹窗里的一行：**第一行**是事项描述，**第二行**是主题 + 紧急 / 重要两档 + 起止日期。
 fn quadrant_item_row(item: &QuadrantItem) -> AnyView {
     let dates = match (item.start_date.is_empty(), item.due_date.is_empty()) {
         (true, true) => String::new(),
@@ -1145,8 +1145,9 @@ fn quadrant_item_row(item: &QuadrantItem) -> AnyView {
     };
     view! {
         <li class="todo-quadrant-modal__row">
-            <div class="todo-quadrant-modal__line">
-                <span class="todo-item__title">{item.title.clone()}</span>
+            <span class="todo-quadrant-modal__title">{item.title.clone()}</span>
+            <div class="todo-quadrant-modal__meta">
+                <span class="todo-quadrant-modal__card">{item.card_title.clone()}</span>
                 <span class="todo-item__levels">
                     <span class="todo-level" title="紧急度">
                         {format!("紧急 {}", consts::todo_level_label(item.urgency))}
@@ -1154,11 +1155,12 @@ fn quadrant_item_row(item: &QuadrantItem) -> AnyView {
                     <span class="todo-level" title="重要度">
                         {format!("重要 {}", consts::todo_level_label(item.importance))}
                     </span>
-                    {(!dates.is_empty())
-                        .then(|| view! { <span class="todo-item__dates">{dates.clone()}</span> })}
                 </span>
+                {(!dates.is_empty())
+                    .then(|| {
+                        view! { <span class="todo-quadrant-modal__dates">{dates.clone()}</span> }
+                    })}
             </div>
-            <span class="todo-quadrant-modal__card">{item.card_title.clone()}</span>
         </li>
     }
     .into_any()
@@ -1395,9 +1397,6 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                         .into_any()
                 } else {
                     view! {
-                        <p class="todo-quadrant-modal__meta">
-                            {format!("{} 项进行中 · 按紧急度、重要度降序", rows.len())}
-                        </p>
                         <ul class="todo-quadrant-modal__list">
                             {rows.iter().map(quadrant_item_row).collect_view()}
                         </ul>

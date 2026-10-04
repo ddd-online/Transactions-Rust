@@ -478,13 +478,6 @@
 }
 
 /* ---------------- 四象限图的象限弹窗（点象限名打开） ---------------- */
-.todo-quadrant-modal__meta {
-  margin: 0 0 var(--transactions-space-md);
-  color: var(--transactions-color-text-tertiary);
-  font-size: var(--transactions-size-text-caption);
-  font-variant-numeric: tabular-nums;
-}
-
 .todo-quadrant-modal__list {
   list-style: none;
   margin: 0;
@@ -495,28 +488,49 @@
   overflow-y: auto;
 }
 
+/* 一行 = 事项描述（第一行）+ 主题 / 两档标签 / 时间区间（第二行）。
+   行底用 soft gray：多条事项靠**整块底色**分开（原来是一条分隔线，只切一刀、看着还是一整片）。 */
 .todo-quadrant-modal__row {
   display: flex;
   flex-direction: column;
-  gap: var(--transactions-space-2xs);
-  padding: var(--transactions-space-sm) 0;
+  gap: var(--transactions-space-xs);
+  padding: var(--transactions-space-sm) var(--transactions-space-md);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-minor-background);
 }
 
 .todo-quadrant-modal__row + .todo-quadrant-modal__row {
-  border-top: 1px solid var(--transactions-color-divider);
+  margin-top: var(--transactions-space-sm);
 }
 
-.todo-quadrant-modal__line {
+/* 第一行：事项描述 */
+.todo-quadrant-modal__title {
+  color: var(--transactions-color-text-major);
+  font-size: var(--transactions-size-text-body);
+  word-break: break-word;
+}
+
+/* 第二行：主题 + 紧急 / 重要 + 时间区间。底色是 soft gray —— 这里的文字用 secondary
+   （tertiary 在灰底上只有 3.4:1，12px 的正文门槛是 4.5:1）。 */
+.todo-quadrant-modal__meta {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--transactions-space-sm);
   flex-wrap: wrap;
+  color: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-caption);
+  font-variant-numeric: tabular-nums;
 }
 
-/* 主题名：图上没有它的位置（点是纯坐标），弹窗里补在事项名下面 */
+/* 主题名：同色但重一档，跟后面的时间区间分得开（不额外加"主题"两个字） */
 .todo-quadrant-modal__card {
-  color: var(--transactions-color-text-tertiary);
-  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-medium);
+}
+
+/* 两档标签在灰底上要"翻上来"：用 `elevated`（浅色 = Paper，深色 = #1d2026）——
+   比行底亮一档，两个主题里都看得出是标签；用 `major-background` 的话深色下和行底只差 2 级。 */
+.todo-quadrant-modal__row .todo-level {
+  background-color: var(--transactions-color-elevated);
 }
 
 /* ---------------- 历史 ---------------- */
