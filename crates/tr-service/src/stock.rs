@@ -2268,7 +2268,11 @@ struct ReplayOrder {
 ///
 /// 幂等性：轮次行按「股票 + 轮次序号」复用原 ID，重放结束后才删除不再成立的轮次，
 /// 因此连续两次重放（成交未变）结果完全一致。
-pub fn rebuild_trades(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult<()> {
+///
+/// **私有**：重放是写入路径的内部步骤（下单 / 改成交 / 删委托 / 回滚各调一次），
+/// 不是对外 interface —— 它收 `&rusqlite::Connection`，一旦公开就等于让调用方替这里
+/// 操心事务边界与调用顺序。要触发重放，请走那些写入路径。
+fn rebuild_trades(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult<()> {
     let mut trades = db(StockDao::list_all_trades_asc(conn, ledger_id))?;
 
     let existing_rounds = db(StockDao::list_trade_rounds(conn, ledger_id))?;
@@ -2630,7 +2634,9 @@ fn flush_replay_order(
 /// 首条记录的起点 = 本金 − Σ追加本金。
 ///
 /// 该规则在补录历史日期交易时并非单纯按日期排序，因此这里同样逐条取最大值而不是重排序。
-pub fn recalculate_cash_chain(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult<()> {
+///
+/// **私有**：与 [`rebuild_trades`] 同理，它是写入路径的一部分，不对外。
+fn recalculate_cash_chain(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult<()> {
     let account = get_or_create_account_in(conn, ledger_id)?;
     let records = db(StockDao::list_fund_records_in_insert_order(conn, ledger_id))?;
     let mut cash = account.principal;
