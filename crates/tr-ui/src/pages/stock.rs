@@ -42,12 +42,14 @@
 //! * 持仓市值按**持仓成本**计入
 //! * 全程不 `unwrap`、不 panic
 //!
-//! ## 取数为什么不用 `ListQuery`
+//! ## 取数
 //!
-//! 本页有六条彼此独立的查询（账户总览 / 资金记录 / 费用设置 / 交易标签 / 成交 / 持仓），
-//! 各带自己的 loading；统计那条还**跨视图缓存**（`STATS_*` 一组模块级槽位 + 去重键），
-//! 因为统计视图是普通函数、每次父级重渲染都会重建。这是"多条查询 + 跨视图复用"，
-//! 与 [`crate::query::ListQuery`] 的"一个 key → 一个列表"不是一回事。
+//! 本页的六条查询（账户总览 / 资金记录 / 费用设置 / 交易标签 / 成交 / 持仓）连同统计，
+//! 全部是 [`crate::query::Query`] 的**声明**：key 是（账本，选中股票 / 页码 / 筛选），
+//! 各带自己的 loading，失败语义写在声明里。统计与统计页的标签下拉用**跨视图缓存**
+//! （[`crate::query::Cache::Keep`] + `cache_scope` = 账本）：统计视图是普通函数、
+//! 每次父级重渲染都会重建，缓存与去重状态必须活过这一次重建 —— 那正是这个策略要解决的问题，
+//! 不再是本页的 `thread_local` 槽位。写路径（下单 / 改成交 / 回滚 / 重置 / 归档）不走 module。
 
 use std::collections::BTreeSet;
 
@@ -57,7 +59,7 @@ use tr_domain::dto::{
     StockFundRecordDto, StockFundRecordPage, StockOperationDto, StockOperationRollbackPreviewDto,
     StockOverviewDto, StockPositionDto, StockStatisticsDto, StockStatisticsPointDto, StockTradeDto,
     StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
-    StockTradeImpactDto, StockTradeImpactRoundDto, StockTradeRoundDto,
+    StockTradeImpactDto, StockTradeImpactRoundDto, StockTradeRoundDto, StockTradeTagSettingDto,
 };
 use tr_domain::fee::{compute_order_fee, is_shanghai_code, is_valid_stock_code};
 use tr_domain::models::StockFeeSetting;
@@ -73,6 +75,7 @@ use crate::error_handler::notify_error;
 use crate::format::{self, lots_of};
 use crate::icons::{self, Icon};
 use crate::notify::Notifier;
+use crate::query::{Cache, OnError, Query};
 use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd};
 
@@ -208,71 +211,17 @@ struct ImpactPrompt {
 
 // ==================================================================== 页面外壳
 
-// 统计视图是**普通函数**（不是组件）：父级每次重渲染都会重新调用它，函数体里的信号
-// 跟着重建 —— 所以"数据/加载中/去重状态"都**不能放在组件信号里**，必须放模块级，
-// 否则新挂载的那份看到的永远是空的（实测：去重挡住了请求风暴，页面却仍停在
-// 「正在加载」/「暂无统计」，因为回来的数据写进了**上一份**已经被丢掉的信号）。
-thread_local! {
-    static STATS_DEDUPE: std::cell::RefCell<(String, Option<String>)> =
-        const { std::cell::RefCell::new((String::new(), None)) };
-    /// 最近一次成功取到的统计（跨视图重建保留）。
-    ///
-    /// **它是缓存，不是真相**：只在切账本与筛选变化时更新，而数据可能在别处被改掉
-    /// （下单 / 改成交 / 减仓 / 清仓 / 重置股票数据）。所以 `统计` 视图每次挂载都会
-    /// **复核一次**（见 ledger Effect 的 `!switched` 分支）；复核回来若与手上的值一致，
-    /// 就不写信号 —— 否则整块图表会重建、入场动画重播。
-    static STATS_DATA: std::cell::RefCell<Option<StockStatisticsDto>> =
-        const { std::cell::RefCell::new(None) };
-    /// 是否有统计请求在飞行中（跨视图重建保留）
-    static STATS_LOADING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// 标签下拉的选项（跨视图重建保留，否则每次重建都要重新拉一次）。
-    /// 与 `STATS_DATA` 同一条口径：同样是缓存，挂载时随数据一起复核
-    /// （交易标签可以在「设置」子功能里被改掉）。
-    static STATS_TAGS: std::cell::RefCell<Vec<String>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-    /// **已经为哪个账本初始化过**。
-    ///
-    /// 必须有它：`统计` 视图每次重建都会把里面那个 Effect **重新创建**，而 Effect 自己的
-    /// `prev` 参数是新建的、每次都从 `None` 开始 —— 用 `prev` 判断"账本有没有换"
-    /// 等于每次重建都判定为"换了"，于是重跑：清缓存 → 重新拉标签 → 写 `tags` →
-    /// 上层视图重渲染 → 再重建 → **自激循环**。
-    /// 实测：统计页每秒重渲染 30+ 次，每轮都重建整块图表 SVG、**入场动画不断重播**，
-    /// 用户看到的就是"曲线一直在闪"（闪的是动画起点那一段）。
-    static STATS_LEDGER: std::cell::RefCell<String> =
-        const { std::cell::RefCell::new(String::new()) };
-}
-
-/// 切账本时清掉统计缓存与去重状态（否则新账本会看到上一个账本的数据/被旧键挡住）。
+/// 统计的查询 key：账本 + 筛选（区间 / 最近 N 笔 / 标签）。
 ///
-/// 注意**不清 `STATS_LEDGER`**：它由下面那个 Effect 负责推进，两边都动会互相抵消。
-fn reset_stats_cache() {
-    STATS_DEDUPE.with(|state| {
-        let mut state = state.borrow_mut();
-        state.0.clear();
-        state.1 = None;
-    });
-    STATS_DATA.with(|data| *data.borrow_mut() = None);
-    STATS_LOADING.with(|loading| loading.set(false));
-    STATS_TAGS.with(|tags| tags.borrow_mut().clear());
-}
-
-/// 这次统计请求要不要真的发出去（纯函数）。
-///
-/// 返回 `true` 表示"发"，并把 `in_flight` 置为当前键。
-/// * 同一份键**已经请求过**（`state.0`）→ `false`，结果就在手上，不必再算一遍；
-/// * `force` = **复核缓存**（见下面 ledger Effect 的 `!switched` 分支）：无视"已经请求过"，
-///   但仍然**不重复发一份正在飞行中的同键请求**（`state.1`）—— 来回切子功能时那份请求
-///   还在路上，再发一次只是让服务端把同一条结算序列重算一遍。
-fn stats_request_needed(state: &mut (String, Option<String>), key: &str, force: bool) -> bool {
-    if state.1.as_deref() == Some(key) {
-        return false;
-    }
-    if force || state.0 != key {
-        state.0 = key.to_string();
-        state.1 = Some(key.to_string());
-        return true;
-    }
-    false
+/// 它过去被拼成一个字符串喂给 `stats_request_needed`（"key 不限于是字符串"就是这条）；
+/// 现在整个结构体直接作 key，去重与复核判定都由取数 module 管。
+#[derive(Clone, PartialEq)]
+struct StatsKey {
+    ledger_id: String,
+    start_month: String,
+    end_month: String,
+    recent: Option<i64>,
+    tag: String,
 }
 
 /// 与记账页的 `AccountingPage` 同一套写法：五个子功能各自渲染一份 [`FeaturePage`]
@@ -388,21 +337,64 @@ impl FundAction {
 /// 总资产卡里只留指标，不再重复放这些入口。
 fn account_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
-    let overview = RwSignal::new(StockOverviewDto::default());
-    let overview_loading = RwSignal::new(false);
-    let fund_page = RwSignal::new(StockFundRecordPage {
-        page: 1,
-        page_size: FUND_PAGE_SIZE as i32,
-        ..StockFundRecordPage::default()
-    });
+
+    // ---- 取数：三条声明（总览 / 资金记录 / 费用设置）都过 `query` module ----
+    let overview_q = Query::<StockOverviewDto>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::stock::overview(&ledger_id).await },
+    )
+    .on_error(OnError::notify("查询股票账户总览失败"))
+    // 失败时保留手上的旧总览（比清成 0 有用）
+    .keep_stale(true)
+    .start();
+    let overview = overview_q.value;
+    let overview_loading = Signal::derive(move || overview_q.loading.get());
+
     // 分页控件的页码是独立信号（`Pagination` 需要 `RwSignal<i32>`）：
     // 每次成功加载后从服务端 DTO 回写，用户点击时再触发查询。
     let fund_page_signal = RwSignal::new(1_i32);
-    let records_loading = RwSignal::new(false);
+    let fund_q = Query::<StockFundRecordPage>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            let page = fund_page_signal.get();
+            (!ledger_id.is_empty()).then(|| (ledger_id, page as i64))
+        },
+        move |(ledger_id, page): (String, i64)| async move {
+            api::stock::fund_records(&ledger_id, page, FUND_PAGE_SIZE).await
+        },
+    )
+    .on_error(OnError::notify("查询资金变化记录失败"))
+    .start();
+    let fund_page = fund_q.value;
+    let records_loading = Signal::derive(move || fund_q.loading.get());
+    // 服务端回写的页码同步回分页控件（正常与请求页一致，不一致时以服务端为准）
+    Effect::new(move |_| {
+        let page = fund_q.value.get().page;
+        if page > 0 && fund_page_signal.get_untracked() != page {
+            fund_page_signal.set(page);
+        }
+    });
     // 资金记录为空时表格里只有一行空态：给它一个钩子类，好让表格撑满表格区、
     // 空态在表头与底栏之间垂直居中（见 stock.css 的 `.stock-table-wrap--empty`）。
     let funds_empty = Signal::derive(move || fund_page.get().items.is_empty());
-    let fee_settings = RwSignal::new(Option::<StockFeeSetting>::None);
+    // 费用设置只**读取**（读回来给下单弹窗估算费用用，不在本子功能渲染表单）
+    let fee_q =
+        Query::<Option<StockFeeSetting>>::new(
+            move || {
+                let ledger_id = stores.current_ledger_id.get();
+                (!ledger_id.is_empty()).then_some(ledger_id)
+            },
+            move |ledger_id: String| async move {
+                api::stock::fee_settings_get(&ledger_id).await.map(Some)
+            },
+        )
+        .on_error(OnError::notify("查询交易费用设置失败"))
+        .keep_stale(true)
+        .start();
+    let _fee_settings = fee_q.value;
     let mutating = RwSignal::new(false);
 
     // 三个资金操作的弹窗（共用 amount_text / amount_date）
@@ -412,107 +404,15 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
     let amount_text = RwSignal::new(String::new());
     let amount_date = RwSignal::new(today_ymd());
 
-    let load_overview = move || {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            return;
-        }
-        overview_loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::overview(&ledger_id).await {
-                Ok(data) => overview.set(data),
-                Err(error) => notify_error("查询股票账户总览失败", &error),
-            }
-            overview_loading.set(false);
-        });
-    };
-
-    let load_fund_records = move |page: i64, page_size: i64| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            return;
-        }
-        records_loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::fund_records(&ledger_id, page, page_size).await {
-                Ok(data) => {
-                    fund_page_signal.set(data.page);
-                    fund_page.set(data);
-                }
-                Err(error) => notify_error("查询资金变化记录失败", &error),
-            }
-            records_loading.set(false);
-        });
-    };
-
-    // 费用设置只**读取**：编辑入口在本页的「设置」子功能，
-    // 这里读回来是给下单弹窗估算费用用的（不在本子功能渲染表单）。
-    let load_fee_settings = move || {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            match api::stock::fee_settings_get(&ledger_id).await {
-                Ok(data) => fee_settings.set(Some(data)),
-                Err(error) => notify_error("查询交易费用设置失败", &error),
-            }
-        });
-    };
-
-    // 账本切换 → 重载总览 / 费用设置，并把资金记录重置回第 1 页
+    // 账本切换 → 资金记录回到第 1 页（总览 / 费用设置的查询 key 就是账本，module 自己重拉）
     Effect::new(move |prev: Option<String>| {
         let ledger_id = stores.current_ledger_id.get();
         if prev.as_deref() == Some(ledger_id.as_str()) {
             return ledger_id;
         }
-        if ledger_id.is_empty() {
-            overview.set(StockOverviewDto::default());
-            fund_page.set(StockFundRecordPage {
-                page: 1,
-                page_size: FUND_PAGE_SIZE as i32,
-                ..StockFundRecordPage::default()
-            });
-            // 页码一并收回第 1 页，避免切回账本时先闪一下上一个账本的页码
-            fund_page_signal.set(1);
-            fee_settings.set(None);
-            return ledger_id;
-        }
-        load_overview();
-        load_fee_settings();
-        // 资金记录由下面那个 Effect 统一查（账本 / 页码都是它的依赖）
+        // 页码收回事第 1 页（空账本也一样，避免切回账本时先闪一下上一个账本的页码）
         fund_page_signal.set(1);
         ledger_id
-    });
-
-    // 账本 / 页码 任一变化都要重查资金记录。
-    //
-    // 分页控件（`Pagination`）只写 `fund_page_signal`，**不会**自己去查数据；
-    // 早前资金记录只在"账本切换"和"提交资金操作"时查询，于是点「上一页 / 下一页 / 页码」
-    // 页码确实变了（按钮高亮跟着走），表格却还是原来那几行 —— 就是这里缺一个依赖页码的 Effect。
-    Effect::new(move |prev: Option<(String, i32)>| {
-        let ledger_id = stores.current_ledger_id.get();
-        let page = fund_page_signal.get();
-        // 账本换了就回第 1 页（不沿用上一个账本的页码）
-        let target = match prev.as_ref() {
-            Some((previous_ledger, _)) if previous_ledger == &ledger_id => page,
-            _ => 1,
-        };
-        let current = (ledger_id, target);
-        // 空账本不发查询；`prev == current` 时也不重查（服务端回写页码会再次触发本 Effect）
-        if current.0.is_empty() || prev.as_ref() == Some(&current) {
-            return current;
-        }
-        load_fund_records(target as i64, FUND_PAGE_SIZE);
-        current
-    });
-
-    Effect::new(move |prev: Option<bool>| {
-        let is_active = sub.get() == StockSub::Account;
-        if is_active && prev == Some(false) {
-            load_overview();
-        }
-        is_active
     });
 
     let submit_amount = move |action: FundAction| {
@@ -548,13 +448,9 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
                     interest_open.set(false);
                     withdraw_open.set(false);
                     amount_text.set(String::new());
-                    // 回到第 1 页看新记录：页码变了由上面的 Effect 查，
-                    // 本来就在第 1 页时页码信号不变，这里显式补一次查询
-                    let was_first_page = fund_page_signal.get_untracked() == 1;
+                    // 回到第 1 页看新记录：页码信号 + 一次强制重拉（本来就在第 1 页也不会漏）
                     fund_page_signal.set(1);
-                    if was_first_page {
-                        load_fund_records(1, FUND_PAGE_SIZE);
-                    }
+                    fund_q.reload();
                 }
                 Err(error) => notify_error(action.failure_text(), &error),
             }
@@ -719,7 +615,7 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
                         <button
                             type="button"
                             class="ui-btn ui-btn--link ui-btn--sm"
-                            on:click=move |_| load_overview()
+                            on:click=move |_| overview_q.reload()
                         >
                             "重试"
                         </button>
@@ -912,14 +808,75 @@ fn amount_modal(
 /// 「建仓」是本子功能的主操作，放在工具栏里（空态文案里的"先点下方「建仓」"已随之改为工具栏口径）。
 fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
-    let positions = RwSignal::new(Vec::<StockPositionDto>::new());
-    let positions_loading = RwSignal::new(false);
     let selected_code = RwSignal::new(String::new());
-    let trades = RwSignal::new(Vec::<StockTradeDto>::new());
-    let trades_loading = RwSignal::new(false);
-    let fee_settings = RwSignal::new(Option::<StockFeeSetting>::None);
-    let tags = RwSignal::new(Vec::<String>::new());
-    let default_tag = RwSignal::new("分析".to_string());
+
+    // ---- 取数：持仓 / 成交 / 费用设置 + 交易标签（都过 `query` module）----
+    // 持仓的 key 里带选中代码：点卡片（或切回本子功能）都是一次显式重取；
+    // 「选中代码」本身是页面状态，由结果同步（下面那个 Effect）。
+    let positions_q = Query::<Vec<StockPositionDto>>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            let code = selected_code.get();
+            (!ledger_id.is_empty()).then(|| (ledger_id, code))
+        },
+        move |(ledger_id, code): (String, String)| async move {
+            let _ = code;
+            api::stock::positions(&ledger_id).await
+        },
+    )
+    .on_error(OnError::notify("查询持仓失败"))
+    .start();
+    let positions = positions_q.value;
+    let positions_loading = Signal::derive(move || positions_q.loading.get());
+    let trades_q = Query::<Vec<StockTradeDto>>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            let code = selected_code.get();
+            (!ledger_id.is_empty() && !code.is_empty()).then(|| (ledger_id, code))
+        },
+        move |(ledger_id, code): (String, String)| async move {
+            api::stock::trades(&ledger_id, &code).await
+        },
+    )
+    .on_error(OnError::notify("查询成交记录失败"))
+    .start();
+    let trades = trades_q.value;
+    let trades_loading = Signal::derive(move || trades_q.loading.get());
+    let fee_q =
+        Query::<Option<StockFeeSetting>>::new(
+            move || {
+                let ledger_id = stores.current_ledger_id.get();
+                (!ledger_id.is_empty()).then_some(ledger_id)
+            },
+            move |ledger_id: String| async move {
+                api::stock::fee_settings_get(&ledger_id).await.map(Some)
+            },
+        )
+        .on_error(OnError::notify("查询交易费用设置失败"))
+        .keep_stale(true)
+        .start();
+    let fee_settings = fee_q.value;
+    // 标签设置：标签下拉与默认标签来自同一条请求
+    let tag_settings_q = Query::<StockTradeTagSettingDto>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::stock::tag_settings_get(&ledger_id).await },
+    )
+    .on_error(OnError::notify("查询交易标签失败"))
+    .keep_stale(true)
+    .start();
+    let tags = Signal::derive(move || tag_settings_q.value.get().tags);
+    // 默认标签：空串回落「分析」（与今天一致）
+    let default_tag = Signal::derive(move || {
+        let value = tag_settings_q.value.get().default_tag;
+        if value.is_empty() {
+            "分析".to_string()
+        } else {
+            value
+        }
+    });
 
     // 复盘编辑态
     let review_open = RwSignal::new(true);
@@ -951,9 +908,6 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
 
     // 折叠展开的委托
     let collapsed_orders = RwSignal::new(BTreeSet::<String>::new());
-    // 编辑成交（无失效轮次时直接写库）后的重取计数
-    let reload_trades = RwSignal::new(0_u32);
-
     let current_position = move || {
         let code = selected_code.get();
         positions
@@ -962,136 +916,29 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
             .find(|position| position.stock_code == code)
     };
 
-    let load_fee_settings = move || {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
+    // 持仓结果 → 同步选中代码：还在就留着，不在了（或刚清空）就选第一只。
+    // 点卡片 = 换 key，下一轮持仓请求由 module 自己发（"选中即刷新该股行情"）。
+    Effect::new(move |_| {
+        let items = positions_q.value.get();
+        let current = selected_code.get_untracked();
+        if items.iter().any(|item| item.stock_code == current) {
             return;
         }
-        let ledger_for_tags = ledger_id.clone();
-        leptos::task::spawn_local(async move {
-            if let Ok(data) = api::stock::fee_settings_get(&ledger_id).await {
-                fee_settings.set(Some(data));
-            }
-        });
-        leptos::task::spawn_local(async move {
-            match api::stock::tag_settings_get(&ledger_for_tags).await {
-                Ok(data) => {
-                    default_tag.set(if data.default_tag.is_empty() {
-                        "分析".to_string()
-                    } else {
-                        data.default_tag.clone()
-                    });
-                    tags.set(data.tags);
-                }
-                Err(error) => notify_error("查询交易标签失败", &error),
-            }
-        });
-    };
+        let next = items
+            .first()
+            .map(|item| item.stock_code.clone())
+            .unwrap_or_default();
+        selected_code.set(next);
+    });
 
-    let load_trades = move |code: String| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() || code.is_empty() {
-            trades.set(Vec::new());
-            return;
-        }
-        trades_loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::trades(&ledger_id, &code).await {
-                Ok(items) => trades.set(items),
-                Err(error) => {
-                    trades.set(Vec::new());
-                    notify_error("查询成交记录失败", &error);
-                }
-            }
-            trades_loading.set(false);
-        });
-    };
-
-    let load_positions = move |prefer: Option<String>| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            positions.set(Vec::new());
-            return;
-        }
-        positions_loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::positions(&ledger_id).await {
-                Ok(items) => {
-                    let current = selected_code.get_untracked();
-                    let still_exists = items.iter().any(|item| item.stock_code == current);
-                    positions.set(items.clone());
-                    if !still_exists {
-                        let next = prefer
-                            .filter(|code| items.iter().any(|item| &item.stock_code == code))
-                            .or_else(|| items.first().map(|item| item.stock_code.clone()))
-                            .unwrap_or_default();
-                        selected_code.set(next.clone());
-                        if next.is_empty() {
-                            trades.set(Vec::new());
-                        } else {
-                            load_trades(next);
-                        }
-                    }
-                }
-                Err(error) => {
-                    positions.set(Vec::new());
-                    notify_error("查询持仓失败", &error);
-                }
-            }
-            positions_loading.set(false);
-        });
-    };
-
-    // 账本切换 → 重置选中并全量重载
+    // 账本切换 → 重置选中（持仓 / 成交 / 费用设置 / 标签的 key 都带账本，module 自己重拉）
     Effect::new(move |prev: Option<String>| {
         let ledger_id = stores.current_ledger_id.get();
         if prev.as_deref() == Some(ledger_id.as_str()) {
             return ledger_id;
         }
         selected_code.set(String::new());
-        trades.set(Vec::new());
-        if ledger_id.is_empty() {
-            positions.set(Vec::new());
-            return ledger_id;
-        }
-        load_positions(None);
-        load_fee_settings();
         ledger_id
-    });
-
-    // 切回本子功能 → 刷新行情（重取持仓 + 账户总览）
-    Effect::new(move |prev: Option<bool>| {
-        let is_active = sub.get() == StockSub::Position;
-        if is_active && prev == Some(false) && !stores.current_ledger_id.get_untracked().is_empty()
-        {
-            load_positions(Some(selected_code.get_untracked()));
-        }
-        is_active
-    });
-
-    // 选中变化 → 刷新该股行情（原先靠工具栏的「刷新行情」按钮；现在点卡片即刷新）。
-    // 守卫写法与本文件其他 Effect 一致：值没变就直接返回，避免重复请求。
-    Effect::new(move |prev: Option<String>| {
-        let code = selected_code.get();
-        if prev.as_deref() == Some(code.as_str()) {
-            return code;
-        }
-        if !code.is_empty() {
-            load_positions(Some(code.clone()));
-        }
-        code
-    });
-    // 编辑成交后重取该股成交（写入计数即触发）
-    Effect::new(move |prev: Option<u32>| {
-        let revision = reload_trades.get();
-        if prev == Some(revision) {
-            return revision;
-        }
-        let code = selected_code.get_untracked();
-        if !code.is_empty() {
-            load_trades(code);
-        }
-        revision
     });
 
     // 选中股票变化 → 重置复盘与成交表
@@ -1103,9 +950,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         review_editing.set(false);
         review_open.set(true);
         review_draft.set(String::new());
-        if !code.is_empty() {
-            load_trades(code.clone());
-        }
+        // 成交由取数 module 按 key（账本 + 选中代码）重拉，这里不再手写
         code
     });
 
@@ -1260,7 +1105,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                 Ok(_) => {
                     Notifier::global().success("委托已记录".to_string(), None);
                     trade_open.set(false);
-                    load_positions(Some(code.clone()));
+                    positions_q.reload();
                 }
                 Err(error) => notify_error("记录委托失败", &error),
             }
@@ -1330,7 +1175,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                             Ok(_) => {
                                 Notifier::global().success("成交已更新".to_string(), None);
                                 edit_target.set(None);
-                                reload_trades.update(|value| *value += 1);
+                                trades_q.reload();
                             }
                             Err(error) => notify_error("保存成交失败", &error),
                         }
@@ -1386,7 +1231,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                             Notifier::global().success("成交已更新".to_string(), None);
                             impact.set(None);
                             edit_target.set(None);
-                            load_positions(Some(selected_code.get_untracked()));
+                            positions_q.reload();
                         }
                         Err(error) => notify_error("保存成交失败", &error),
                     }
@@ -1410,7 +1255,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                         Ok(_) => {
                             Notifier::global().success("委托已删除".to_string(), None);
                             impact.set(None);
-                            load_positions(Some(selected_code.get_untracked()));
+                            positions_q.reload();
                         }
                         Err(error) => notify_error("删除委托失败", &error),
                     }
@@ -2242,7 +2087,7 @@ fn trade_modal(
     rows: FillState,
     date: RwSignal<String>,
     tag: RwSignal<String>,
-    tags: RwSignal<Vec<String>>,
+    tags: Signal<Vec<String>>,
     fee_settings: RwSignal<Option<StockFeeSetting>>,
     mutating: RwSignal<bool>,
     on_code_blur: UnsyncCallback<String>,
@@ -2808,13 +2653,58 @@ fn trade_row_view(
 /// 免得多出一条空发丝线）。行内「编辑/删除」在持仓子功能的详情区，不在这里。
 fn history_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
-    let histories = RwSignal::new(Vec::<StockTradeHistoryDto>::new());
-    let summary = RwSignal::new(StockTradeHistorySummaryDto::default());
-    let detail = RwSignal::new(Option::<StockTradeHistoryDetailDto>::None);
     let selected_code = RwSignal::new(String::new());
-    let histories_loading = RwSignal::new(false);
-    let detail_loading = RwSignal::new(false);
-    let tags = RwSignal::new(Vec::<String>::new());
+
+    // ---- 取数：历史列表 / 总览 / 标签 / 单股详情（都过 `query` module）----
+    let histories_q = Query::<Vec<StockTradeHistoryDto>>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::stock::history(&ledger_id).await },
+    )
+    .on_error(OnError::notify("查询交易历史失败"))
+    .start();
+    let histories = histories_q.value;
+    let histories_loading = Signal::derive(move || histories_q.loading.get());
+    let summary_q = Query::<StockTradeHistorySummaryDto>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::stock::history_summary(&ledger_id).await },
+    )
+    .on_error(OnError::notify("查询交易历史总览失败"))
+    .keep_stale(true)
+    .start();
+    let summary = summary_q.value;
+    let tag_settings_q = Query::<StockTradeTagSettingDto>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::stock::tag_settings_get(&ledger_id).await },
+    )
+    .on_error(OnError::notify("查询交易标签失败"))
+    .keep_stale(true)
+    .start();
+    let tags = Signal::derive(move || tag_settings_q.value.get().tags);
+    let detail_q = Query::<Option<StockTradeHistoryDetailDto>>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            let code = selected_code.get();
+            (!ledger_id.is_empty() && !code.is_empty()).then(|| (ledger_id, code))
+        },
+        move |(ledger_id, code): (String, String)| async move {
+            api::stock::history_detail(&ledger_id, &code)
+                .await
+                .map(Some)
+        },
+    )
+    .on_error(OnError::notify("查询交易历史详情失败"))
+    .start();
+    let detail = detail_q.value;
+    let detail_loading = Signal::derive(move || detail_q.loading.get());
     let collapsed_rounds = RwSignal::new(BTreeSet::<String>::new());
     let collapsed_reviews = RwSignal::new(BTreeSet::<String>::new());
     let review_editing = RwSignal::new(String::new());
@@ -2822,77 +2712,27 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
     let review_saving = RwSignal::new(false);
     let tag_saving = RwSignal::new(false);
 
-    let load_history = move || {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
+    // 历史列表结果 → 同步选中股票（还在就留着，不在了就选第一只）
+    Effect::new(move |_| {
+        let items = histories_q.value.get();
+        let current = selected_code.get_untracked();
+        if items.iter().any(|item| item.stock_code == current) {
             return;
         }
-        histories_loading.set(true);
-        let ledger_for_summary = ledger_id.clone();
-        let ledger_for_tags = ledger_id.clone();
-        leptos::task::spawn_local(async move {
-            match api::stock::history(&ledger_id).await {
-                Ok(items) => {
-                    let current = selected_code.get_untracked();
-                    let still_exists = items.iter().any(|item| item.stock_code == current);
-                    histories.set(items.clone());
-                    if !still_exists {
-                        let next = items
-                            .first()
-                            .map(|item| item.stock_code.clone())
-                            .unwrap_or_default();
-                        selected_code.set(next);
-                    }
-                }
-                Err(error) => notify_error("查询交易历史失败", &error),
-            }
-            histories_loading.set(false);
-        });
-        leptos::task::spawn_local(async move {
-            match api::stock::history_summary(&ledger_for_summary).await {
-                Ok(data) => summary.set(data),
-                Err(error) => notify_error("查询交易历史总览失败", &error),
-            }
-        });
-        leptos::task::spawn_local(async move {
-            match api::stock::tag_settings_get(&ledger_for_tags).await {
-                Ok(data) => tags.set(data.tags),
-                Err(error) => notify_error("查询交易标签失败", &error),
-            }
-        });
-    };
+        let next = items
+            .first()
+            .map(|item| item.stock_code.clone())
+            .unwrap_or_default();
+        selected_code.set(next);
+    });
 
-    let load_detail = move |code: String| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() || code.is_empty() {
-            detail.set(None);
-            return;
-        }
-        detail_loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::history_detail(&ledger_id, &code).await {
-                Ok(data) => detail.set(Some(data)),
-                Err(error) => {
-                    detail.set(None);
-                    notify_error("查询交易历史详情失败", &error);
-                }
-            }
-            detail_loading.set(false);
-        });
-    };
-
+    // 账本切换 → 重置选中（各条查询的 key 都带账本，module 自己重拉）
     Effect::new(move |prev: Option<String>| {
         let ledger_id = stores.current_ledger_id.get();
         if prev.as_deref() == Some(ledger_id.as_str()) {
             return ledger_id;
         }
         selected_code.set(String::new());
-        detail.set(None);
-        if ledger_id.is_empty() {
-            histories.set(Vec::new());
-            return ledger_id;
-        }
-        load_history();
         ledger_id
     });
 
@@ -2906,9 +2746,7 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
         review_draft.set(String::new());
         collapsed_rounds.set(BTreeSet::new());
         collapsed_reviews.set(BTreeSet::new());
-        if !code.is_empty() {
-            load_detail(code.clone());
-        }
+        // 详情由取数 module 按 key（账本 + 选中代码）重拉
         code
     });
 
@@ -3194,7 +3032,7 @@ fn round_card(
     review_draft: RwSignal<String>,
     review_saving: RwSignal<bool>,
     tag_saving: RwSignal<bool>,
-    tags: RwSignal<Vec<String>>,
+    tags: Signal<Vec<String>>,
     on_save_review: UnsyncCallback<String>,
     on_save_tag: UnsyncCallback<(String, String)>,
 ) -> AnyView {
@@ -3509,12 +3347,14 @@ const STATS_DETAIL_PAGE_SIZE: i32 = 15;
 /// （`points`），界面只切展示：翻页是瞬时的，两个分栏也共用同一份数据（`STATS_DATA`），
 /// 不会为翻页反复重算整条序列。数据量级是"清仓轮次数"，界面侧承载没有压力。
 ///
-/// ## 缓存与复核（`STATS_DATA` / `STATS_TAGS`）
+/// ## 缓存与复核
 ///
-/// 这两份缓存跨视图重建保留，让人切走再切回来时**立刻**看到上一份结果。但统计的输入
-/// 分布在别的子功能里（下单 / 改成交 / 减仓 / 清仓 / 重置在账户·持仓·设置，交易标签在设置），
-/// 所以每次挂载都**复核一次**：缓存先渲染，请求回来若与缓存一致则**不写信号**
-/// （避免图表重建、入场动画重播），不一致才换掉。去重键见 `stats_request_needed`。
+/// 统计与标签都声明成 [`Cache::Keep`] + [`Query::cache_scope`]（作用域 = 账本）：
+/// 跨视图重建保留，切走再切回来**立刻**看到上一份结果；切账本则整份作废。
+/// 统计的输入分布在别的子功能里（下单 / 改成交 / 减仓 / 清仓 / 重置在账户·持仓·设置，
+/// 交易标签在设置），所以每次挂载都**复核一次**：缓存先渲染，请求回来若与缓存一致则
+/// **不写信号**（避免图表重建、入场动画重播），不一致才换掉 —— 这条判定在 module 里
+/// （`tr_draw::query::unchanged`），不再是统计页自己的补丁。
 ///
 /// ## 其余约定
 ///
@@ -3522,8 +3362,6 @@ const STATS_DETAIL_PAGE_SIZE: i32 = 15;
 /// 工具栏在三种内容态（加载中 / 空态 / 有数据）下都渲染 —— 否则空态会把筛选入口一起藏掉。
 fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
-    let stats = RwSignal::new(STATS_DATA.with(|data| data.borrow().clone()));
-    let loading = RwSignal::new(STATS_LOADING.with(|loading| loading.get()));
     let tab = RwSignal::new(STATS_TAB_SUMMARY.to_string());
     let metric = RwSignal::new(Metric::TotalPnl.label().to_string());
     let filter_mode = RwSignal::new("all".to_string());
@@ -3536,145 +3374,86 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     // 旁边那个下拉选不动的来源）。这里单独建一个、并在 `recent` 被重置时同步。
     let recent_signal = RwSignal::new(recent.get_untracked().to_string());
     let tag_filter = RwSignal::new(String::new());
-    // 选项从**模块级缓存**起手：视图重建（切子功能再切回来）时下拉不会空掉，
-    // 也就不必为了填它而重新拉一次标签（那次重新拉正是过去自激循环的一环）。
-    let tags = RwSignal::new(STATS_TAGS.with(|tags| tags.borrow().clone()));
+
+    // ---- 取数：统计（key = 账本 + 筛选）与交易标签，都走跨视图缓存策略 ----
+    let stats_q = Query::<Option<StockStatisticsDto>>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            if ledger_id.is_empty() {
+                return None;
+            }
+            let mode = filter_mode.get();
+            let (start_month, end_month) = if mode == "range" {
+                (range_start.get(), range_end.get())
+            } else {
+                (String::new(), String::new())
+            };
+            let recent_value = if mode == "recent" && recent.get() > 0 {
+                Some(recent.get())
+            } else {
+                None
+            };
+            Some(StatsKey {
+                ledger_id,
+                start_month,
+                end_month,
+                recent: recent_value,
+                tag: tag_filter.get(),
+            })
+        },
+        move |key: StatsKey| async move {
+            api::stock::statistics(
+                &key.ledger_id,
+                &key.start_month,
+                &key.end_month,
+                key.recent,
+                &key.tag,
+            )
+            .await
+            .map(Some)
+        },
+    )
+    .cache(Cache::Keep("stock.statistics"))
+    .cache_scope(move || stores.current_ledger_id.get_untracked())
+    .on_error(OnError::notify("查询交易统计失败"))
+    // 失败保留手上的旧曲线（没有刷新按钮，清空反而更糟）
+    .keep_stale(true)
+    .start();
+    let stats = stats_q.value;
+    let loading = Signal::derive(move || stats_q.loading.get());
+    let tag_settings_q = Query::<StockTradeTagSettingDto>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::stock::tag_settings_get(&ledger_id).await },
+    )
+    .cache(Cache::Keep("stock.statistics.tags"))
+    .cache_scope(move || stores.current_ledger_id.get_untracked())
+    // 标签失败静默：下拉留着手上的选项，不打扰用户
+    .on_error(OnError::Silent)
+    .start();
+    // 选项跨视图重建保留（module 的 Keep 槽位），重建时下拉不会空掉
+    let tags = Signal::derive(move || tag_settings_q.value.get().tags);
     // 明细分栏的分页状态（界面侧分页，见本函数文档注释）；每页条数走共享的
     // `Pagination` 下拉，默认值在 `STATS_DETAIL_PAGE_SIZE` 里（属于 `PAGE_SIZE_OPTIONS`）。
     let detail_page = RwSignal::new(1_i32);
     let detail_page_size = RwSignal::new(STATS_DETAIL_PAGE_SIZE);
 
-    let apply_filter = move |force: bool| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            stats.set(None);
-            return;
-        }
-        let mode = filter_mode.get_untracked();
-        let (start_month, end_month) = if mode == "range" {
-            (range_start.get_untracked(), range_end.get_untracked())
-        } else {
-            (String::new(), String::new())
-        };
-        let recent_value = if mode == "recent" && recent.get_untracked() > 0 {
-            Some(recent.get_untracked())
-        } else {
-            None
-        };
-        let tag = tag_filter.get_untracked();
-        let key = format!("{ledger_id}|{start_month}|{end_month}|{recent_value:?}|{tag}");
-        // 去重状态在模块级（`STATS_DEDUPE`），因此**跨视图重建**也有效
-        let needed =
-            STATS_DEDUPE.with(|state| stats_request_needed(&mut state.borrow_mut(), &key, force));
-        if !needed {
-            // 同一份筛选已经请求过 / 正在飞行中 → 既不发请求，也**不要动 loading**
-            // （这正是原来"卡在正在加载"的来源：视图被反复重建，每次都在飞行中又置 true）
-            return;
-        }
-        loading.set(true);
-        STATS_LOADING.with(|flag| flag.set(true));
-        leptos::task::spawn_local(async move {
-            match api::stock::statistics(&ledger_id, &start_month, &end_month, recent_value, &tag)
-                .await
-            {
-                Ok(data) => {
-                    // 数据落到**模块级缓存**：视图被重建后新挂载的那份也能拿到
-                    STATS_DATA.with(|slot| *slot.borrow_mut() = Some(data.clone()));
-                    // 信号**只在值真的变了时写**。`RwSignal::set` 同值也会通知，而统计页每次
-                    // "从别的子功能切回来"都会复核一次缓存（见 ledger Effect 的 `!switched`
-                    // 分支）—— 同值通知会重建整块图表、**入场动画重播**（正是过去
-                    // "曲线一直在闪"的那个症状）。复核回来一模一样就什么都不做。
-                    if stats.get_untracked().as_ref() != Some(&data) {
-                        stats.set(Some(data));
-                    }
-                }
-                Err(error) => {
-                    notify_error("查询交易统计失败", &error);
-                    // 失败时把去重键也清掉：没有「刷新」按钮了，失败后总得让下一次筛选
-                    // （或重新进入本页）能再试一次，不能因为"已经请求过"就永远不再发。
-                    STATS_DEDUPE.with(|state| state.borrow_mut().0.clear());
-                }
-            }
-            // 飞行结束：把 in_flight 清掉（键保留，重复触发仍然不会再发）
-            STATS_DEDUPE.with(|state| state.borrow_mut().1 = None);
-            STATS_LOADING.with(|flag| flag.set(false));
-            loading.set(false);
-        });
-    };
-
-    let load_tags = move || {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        if ledger_id.is_empty() {
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            if let Ok(data) = api::stock::tag_settings_get(&ledger_id).await {
-                // 落到模块级缓存（跨重建保留）+ **只在真的变了时写信号**：
-                // `RwSignal::set` 同值也会通知，而 `tags` 被上层视图同步读着
-                // （`Select.options` 要的是 `Vec`，调用方只能 `.get()`），
-                // 于是"同值也通知"会变成一次上层重建 —— 那正是自激循环的燃料。
-                let changed = STATS_TAGS.with(|slot| {
-                    let mut slot = slot.borrow_mut();
-                    if *slot == data.tags {
-                        false
-                    } else {
-                        *slot = data.tags.clone();
-                        true
-                    }
-                });
-                if changed {
-                    tags.set(data.tags);
-                }
-            }
-        });
-    };
-
-    // 账本变化才重新初始化。判据是**模块级**的"已初始化账本"（不能用 Effect 自己的
-    // `prev`：视图重建会重新创建这个 Effect，`prev` 每次都从 `None` 起步 —— 详见
-    // `STATS_LEDGER` 的注释，那正是"曲线一直在闪"的根因）。
-    Effect::new(move |_| {
+    // 账本切换 → 重置筛选。统计与标签这两条缓存由 module 的**作用域**策略作废
+    // （切账本不会把上一个账本的曲线带过来）。
+    Effect::new(move |previous: Option<String>| {
         let ledger_id = stores.current_ledger_id.get();
-        let switched = STATS_LEDGER.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            if *slot == ledger_id {
-                return false;
-            }
-            slot.clear();
-            slot.push_str(&ledger_id);
-            true
-        });
-        if !switched {
-            // 视图重建（不是账本切换）：把**模块级缓存**同步回本次的信号。
-            // 否则上一份 invocation 的飞行结果会落在已销毁的信号上，本次永远停在空态。
-            stats.set(STATS_DATA.with(|data| data.borrow().clone()));
-            loading.set(STATS_LOADING.with(|flag| flag.get()));
-            tags.set(STATS_TAGS.with(|tags| tags.borrow().clone()));
-            // 缓存**先显示、再复核**：`STATS_DATA` / `STATS_TAGS` 只在切账本与筛选变化时更新，
-            // 而用户可能刚在别的子功能里下过单 / 改过成交 / 减过仓 / 清过仓 / 重置过股票数据 /
-            // 改过交易标签 —— 手上这份就是那一轮之前的（真实缺陷：清仓后切到统计，刚清的那笔
-            // 不在里面，得改一次筛选才刷出来）。
-            // 复核一次的成本是一次只读聚合查询，比让人看到旧数字便宜得多。
-            // 不用"改动点打脏标记"：那要求每个改动处都记得上报，漏一个就静默回到同一个坑里，
-            // 而挂载时复核**在构造上不可能漏**（代价只是没改动时也查一次，见下面的去重）。
-            load_tags();
-            apply_filter(true);
-            return;
+        if previous.as_deref() == Some(ledger_id.as_str()) {
+            return ledger_id;
         }
-        // 账本切换（或首次进入）：清掉上一个账本的缓存
-        reset_stats_cache();
-        // 账本切换时重置筛选
         filter_mode.set("all".to_string());
         range_start.set(String::new());
         range_end.set(String::new());
         recent.set(0);
         recent_signal.set(String::new());
         tag_filter.set(String::new());
-        if ledger_id.is_empty() {
-            stats.set(None);
-            return;
-        }
-        load_tags();
-        apply_filter(false);
+        ledger_id
     });
 
     // 明细的页码：筛选条件或每页条数一变就回到第 1 页；数据变少时（切到笔数更少的筛选）
@@ -3763,7 +3542,6 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                             recent.set(10);
                             recent_signal.set("10".to_string());
                         }
-                        apply_filter(false);
                     })
                 />
                 <Show when=move || filter_mode.get() == "range">
@@ -3784,7 +3562,6 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                             ]
                             on_change=UnsyncCallback::new(move |value: String| {
                                 recent.set(value.parse().unwrap_or(10));
-                                apply_filter(false);
                             })
                         />
                     </div>
@@ -3804,7 +3581,6 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                 options=options
                                 on_change=UnsyncCallback::new(move |value: String| {
                                     tag_filter.set(value);
-                                    apply_filter(false);
                                 })
                             />
                         }
@@ -4285,18 +4061,15 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     let fee_transfer = RwSignal::new(String::new());
     let fee_saving = RwSignal::new(false);
 
-    // ---- 交易标签 ----
+    // ---- 交易标签（表单本身是本地状态，取数走 module，见下面的同步 Effect）----
     let tags = RwSignal::new(Vec::<String>::new());
     let default_tag = RwSignal::new(String::new());
-    let tags_loading = RwSignal::new(false);
     let tags_saving = RwSignal::new(false);
     let new_tag = RwSignal::new(String::new());
 
     // ---- 操作记录 / 回滚 ----
     // 最多保留的条数（与后端 `STOCK_OPERATION_LIMIT` 同口径；界面只用于说明文案）
     const OPERATION_LIMIT_TEXT: &str = "最多保留最近 10 次操作";
-    let operations = RwSignal::new(Vec::<StockOperationDto>::new());
-    let operations_loading = RwSignal::new(false);
     // 「查看记录」弹窗
     let records_open = RwSignal::new(false);
     // 「回滚」确认弹窗：预演结果（要撤销哪一次 + 会失效的轮次）
@@ -4312,6 +4085,42 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     let archive_name = RwSignal::new(String::new());
     let archiving = RwSignal::new(false);
 
+    // ---- 取数：费用设置 / 交易标签 / 操作记录（都过 `query` module，key = 账本）----
+    let fee_q =
+        Query::<Option<StockFeeSetting>>::new(
+            move || {
+                let ledger_id = stores.current_ledger_id.get();
+                (!ledger_id.is_empty()).then_some(ledger_id)
+            },
+            move |ledger_id: String| async move {
+                api::stock::fee_settings_get(&ledger_id).await.map(Some)
+            },
+        )
+        .on_error(OnError::notify("读取费用设置失败"))
+        .keep_stale(true)
+        .start();
+    let tags_q = Query::<StockTradeTagSettingDto>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::stock::tag_settings_get(&ledger_id).await },
+    )
+    .on_error(OnError::notify("读取交易标签失败"))
+    .keep_stale(true)
+    .start();
+    let tags_loading = Signal::derive(move || tags_q.loading.get());
+    let operations_q = Query::<Vec<StockOperationDto>>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::stock::operation_list(&ledger_id).await },
+    )
+    .on_error(OnError::notify("读取操作记录失败"))
+    .start();
+    let operations = operations_q.value;
+
     let no_ledger = move || stores.current_ledger_id.get().is_empty();
 
     // 回填：佣金 ×10000、最低佣金（分→元）、印花税/过户费 ×100
@@ -4322,37 +4131,16 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
         fee_transfer.set(format_scaled(setting.transfer_fee_rate, 100.0, 3));
     };
 
-    let load_fee = move |ledger_id: String| {
-        if ledger_id.is_empty() {
+    // 费用设置取回来 → 回填表单（空账本清空表单）
+    Effect::new(move |_| match fee_q.value.get() {
+        Some(setting) => fill_fee_form(&setting),
+        None => {
             fee_commission.set(String::new());
             fee_min.set(String::new());
             fee_stamp.set(String::new());
             fee_transfer.set(String::new());
-            return;
         }
-        leptos::task::spawn_local(async move {
-            match api::stock::fee_settings_get(&ledger_id).await {
-                Ok(setting) => fill_fee_form(&setting),
-                Err(error) => notify_error("读取费用设置失败", &error),
-            }
-        });
-    };
-
-    // ---- 操作记录 ----
-    let load_operations = move |ledger_id: String| {
-        if ledger_id.is_empty() {
-            operations.set(Vec::new());
-            return;
-        }
-        operations_loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::operation_list(&ledger_id).await {
-                Ok(list) => operations.set(list),
-                Err(error) => notify_error("读取操作记录失败", &error),
-            }
-            operations_loading.set(false);
-        });
-    };
+    });
 
     // 「查看记录」：先确保拿到最新的一份（本页挂载时已经拉过，这里只是刷新）
     let open_records = move || {
@@ -4362,7 +4150,8 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
             return;
         }
         records_open.set(true);
-        load_operations(ledger_id);
+        let _ = ledger_id;
+        operations_q.reload();
     };
 
     // 「回滚」：**先预演再确认**（回滚清仓会连带移除该轮次与它的复盘，不可恢复）
@@ -4407,7 +4196,8 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                     } else {
                         Notifier::global().success(format!("已回滚「{}」", result.action), None);
                     }
-                    load_operations(reload);
+                    let _ = reload;
+                    operations_q.reload();
                 }
                 Err(error) => notify_error("回滚失败", &error),
             }
@@ -4488,25 +4278,17 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     };
 
     // ---- 交易标签 ----
-    let load_tags = move |ledger_id: String| {
-        if ledger_id.is_empty() {
+    // 标签设置取回来 → 同步到本地列表 / 默认标签（空账本清空）
+    Effect::new(move |_| match tags_q.value.get() {
+        setting if !stores.current_ledger_id.get_untracked().is_empty() => {
+            tags.set(setting.tags);
+            default_tag.set(setting.default_tag);
+        }
+        _ => {
             tags.set(Vec::new());
             default_tag.set(String::new());
-            tags_loading.set(false);
-            return;
         }
-        tags_loading.set(true);
-        leptos::task::spawn_local(async move {
-            match api::stock::tag_settings_get(&ledger_id).await {
-                Ok(setting) => {
-                    tags.set(setting.tags);
-                    default_tag.set(setting.default_tag);
-                }
-                Err(error) => notify_error("读取交易标签失败", &error),
-            }
-            tags_loading.set(false);
-        });
-    };
+    });
 
     let save_tags = move |next: Vec<String>, success: Option<String>| {
         if tags_saving.get_untracked() {
@@ -4592,8 +4374,9 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                 Ok(_) => {
                     confirm_open.set(false);
                     // 重置会清掉费用设置与交易标签，重新拉一遍
-                    load_fee(ledger_id.clone());
-                    load_tags(ledger_id);
+                    let _ = ledger_id;
+                    fee_q.reload();
+                    tags_q.reload();
                     Notifier::global().success("股票数据已重置", None);
                 }
                 Err(error) => notify_error("重置股票数据失败", &error),
@@ -4644,7 +4427,8 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                         Err(error) => notify_error("查询账本", &error),
                     }
                     // 归档会把操作记录一起清掉，重新拉一遍
-                    load_operations(ledger_id);
+                    let _ = ledger_id;
+                    operations_q.reload();
                     Notifier::global().success(format!("已归档到「{name}」"), None);
                 }
                 // 失败保留弹窗（名称还在，改完即可重试）
@@ -4668,14 +4452,6 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
             removed_rounds_text(&preview.removed_rounds),
         )
     };
-
-    // 账本变化 → 重新加载费用设置、交易标签与操作记录
-    Effect::new(move |_: Option<()>| {
-        let ledger_id = stores.current_ledger_id.get();
-        load_fee(ledger_id.clone());
-        load_tags(ledger_id.clone());
-        load_operations(ledger_id);
-    });
 
     let tag_empty_text = move || {
         if tags_loading.get() {

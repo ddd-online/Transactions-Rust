@@ -26,7 +26,10 @@
 //!   是"做一件事"，走 [`crate::ipc`] + 页面的本地状态，**不要**为了统一塞进来；
 //! * **写入路径**（下单 / 改成交 / 同步到其他账本）：本模块只读不写；
 //! * **一次性旁路读取**（例如弹窗里查一个股票名）：没有 key、没有缓存语义，
-//!   直接用 `api::*`，别造一条只有一个使用面的形状。
+//!   直接用 `api::*`，别造一条只有一个使用面的形状；
+//! * **按 key 的惰性缓存**（事件页"按日期拉图片与关联交易，命中就同步换上"）：
+//!   [`Cache::Keep`] 是"单槽位 + 挂载复核"，命中时不能同步换值，形状对不上 ——
+//!   那一段留在页面里，等第二个同形状的使用面出现再抽。
 //!
 //! 纪律：取数一律过这里，别再在页面里手写 `spawn_local` + `notify_error` 的组合 ——
 //! 那种写法每多一处，就多一处"忘了置回 loading"或"忘了在变更后重拉"的机会。
@@ -112,7 +115,9 @@ impl<T: Default + 'static> Query<T> {
     pub fn new<K, KF, F>(key: KF, fetch: F) -> QueryBuilder<T, K, KF, F> {
         QueryBuilder {
             cache: Cache::Mount,
+            cache_scope: None,
             on_error: OnError::Silent,
+            keep_stale: false,
             fallback: Rc::new(|_: Option<&K>| T::default()),
             key,
             fetch,
@@ -140,7 +145,9 @@ impl<T: 'static> Query<T> {
 /// 声明中途的配置（`Query::new(..).on_error(..).start()`）。
 pub struct QueryBuilder<T: 'static, K, KF, F> {
     cache: Cache,
+    cache_scope: Option<Rc<dyn Fn() -> String>>,
     on_error: OnError,
+    keep_stale: bool,
     fallback: Rc<dyn Fn(Option<&K>) -> T>,
     key: KF,
     fetch: F,
@@ -165,12 +172,31 @@ where
         self
     }
 
+    /// 缓存**作用域**：作用域变了（例如切了账本），这一条缓存立刻作废 ——
+    /// 不把上一个作用域的数据与去重键带过去。只对 [`Cache::Keep`] 有意义。
+    ///
+    /// 闭包在渲染期与每次观察时各读一次（都用 `untrack` 读，不会把作用域里的信号
+    /// 变成上层视图的依赖）。
+    pub fn cache_scope(mut self, scope: impl Fn() -> String + 'static) -> Self {
+        self.cache_scope = Some(Rc::new(scope));
+        self
+    }
+
     /// 失败 / 清空时对外显示什么（默认 `T::default()`）。
     ///
     /// 闭包拿到的是"当前 key"：`None` 表示这次是被清空（例如还没选账本），
     /// `Some(&key)` 表示失败时手上那一份 key（「不存在 = 某日期的空条目」要它）。
     pub fn fallback(mut self, fallback: impl Fn(Option<&K>) -> T + 'static) -> Self {
         self.fallback = Rc::new(fallback);
+        self
+    }
+
+    /// 失败时**保留手上那一份**（默认按 `fallback` 回落）。
+    ///
+    /// 只对 [`OnError::Notify`] 有意义：统计曲线 / 账户总览这类"手上本来就有旧数据"的地方，
+    /// 一次失败不该把图清空 —— 提示一句、把旧数字留在那儿比一片空白有用。
+    pub fn keep_stale(mut self, keep_stale: bool) -> Self {
+        self.keep_stale = keep_stale;
         self
     }
 
@@ -182,7 +208,9 @@ where
     {
         let QueryBuilder {
             cache,
+            cache_scope,
             on_error,
+            keep_stale,
             fallback,
             key,
             fetch,
@@ -194,7 +222,10 @@ where
         // 既能先看到缓存，也不会把同一条请求再发一遍。
         let keep = match cache {
             Cache::Mount => None,
-            Cache::Keep(id) => Some(keep_slot::<K, T>(id, &fallback)),
+            Cache::Keep(id) => {
+                let scope = cache_scope.as_ref().map(|scope| untrack(scope.as_ref()));
+                Some(keep_slot::<K, T>(id, scope, &fallback))
+            }
         };
 
         let (value, loading, loaded, failed) = match &keep {
@@ -224,6 +255,11 @@ where
         Effect::new(move |prev: Option<(Option<K>, u64)>| {
             let current_key = key();
             let generation_now = generation.get();
+            // 缓存作用域变了（切账本）→ 这一条缓存作废：数据与去重状态一起丢
+            if let Some(slot) = keep.as_ref() {
+                let scope = cache_scope.as_ref().map(|scope| untrack(scope.as_ref()));
+                slot.ensure_scope(scope, &fallback);
+            }
             let step = match prev {
                 // 首次运行 = 视图挂载：确保当前 key 有一份数据（缓存先显示、静默复核）
                 None => core.borrow_mut().mount(current_key.clone()),
@@ -286,7 +322,9 @@ where
                                 match on_error {
                                     OnError::Notify(ref prefix) => {
                                         let prefix = prefix();
-                                        value.set(fallback_value);
+                                        if !keep_stale {
+                                            value.set(fallback_value);
+                                        }
                                         failed.set(Some(error.prefixed(&prefix)));
                                         notify_error(&prefix, &error);
                                     }
@@ -331,6 +369,22 @@ struct KeepSlot<K, T> {
     value: RefCell<T>,
     loading: Cell<bool>,
     loaded: Cell<bool>,
+    /// 这份缓存属于哪个作用域（空 `None` = 不区分作用域）
+    scope: RefCell<Option<String>>,
+}
+
+impl<K: Clone + PartialEq, T: Clone> KeepSlot<K, T> {
+    /// 作用域对不上就把这份缓存整个作废（数据 + 去重状态）。
+    fn ensure_scope(&self, scope: Option<String>, fallback: &Rc<dyn Fn(Option<&K>) -> T>) {
+        if *self.scope.borrow() == scope {
+            return;
+        }
+        *self.scope.borrow_mut() = scope;
+        *self.value.borrow_mut() = fallback(None);
+        *self.core.borrow_mut() = QueryCore::new();
+        self.loading.set(false);
+        self.loaded.set(false);
+    }
 }
 
 thread_local! {
@@ -339,7 +393,11 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-fn keep_slot<K, T>(id: &'static str, fallback: &Rc<dyn Fn(Option<&K>) -> T>) -> Rc<KeepSlot<K, T>>
+fn keep_slot<K, T>(
+    id: &'static str,
+    scope: Option<String>,
+    fallback: &Rc<dyn Fn(Option<&K>) -> T>,
+) -> Rc<KeepSlot<K, T>>
 where
     K: Clone + PartialEq + 'static,
     T: Clone + 'static,
@@ -348,7 +406,12 @@ where
         let mut slots = slots.borrow_mut();
         if let Some(existing) = slots.get(id) {
             match Rc::clone(existing).downcast::<KeepSlot<K, T>>() {
-                Ok(slot) => return slot,
+                Ok(slot) => {
+                    // 作用域对不上 = 上一个作用域的缓存，整份丢掉重建
+                    if *slot.scope.borrow() == scope {
+                        return slot;
+                    }
+                }
                 Err(_) => {
                     leptos::logging::warn!("取数缓存槽位 {id} 的结果类型与上次不一致，已重建");
                 }
@@ -359,6 +422,7 @@ where
             value: RefCell::new(fallback(None)),
             loading: Cell::new(false),
             loaded: Cell::new(false),
+            scope: RefCell::new(scope),
         });
         slots.insert(id, Rc::clone(&slot) as Rc<dyn Any>);
         slot

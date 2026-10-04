@@ -208,7 +208,7 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
             })
         },
     )
-    .on_error(OnError::Notify(QUERY_ERROR_PREFIX))
+    .on_error(OnError::notify(QUERY_ERROR_PREFIX))
     .start();
 
     // 页面其余部分照旧读这几个名字，只是改成从整份结果派生（内容变了才通知）。
