@@ -229,16 +229,21 @@ try {
     } while (-not $tradeDelete -and (Get-Date) -lt $deadline)
     Assert-True ([bool]$tradeDelete) '找到关联交易卡上的「删除交易」按钮'
     if ($tradeDelete) {
-        $triggerRect = $tradeDelete.Current.BoundingRectangle
         Click-Element $tradeDelete | Out-Null
         Start-Sleep -Milliseconds 1200
         $bubble = Find-First $window '删除这条关联交易？'
         Assert-True ([bool]$bubble) '气泡已弹出（标题「删除这条关联交易？」）'
         if ($bubble) {
             $bubbleRect = $bubble.Current.BoundingRectangle
-            $triggerY = $triggerRect.Y + $triggerRect.Height / 2
-            $bubbleY = $bubbleRect.Y + $bubbleRect.Height / 2
-            Assert-True ($bubbleY -lt $triggerY) "气泡在触发器**上方**（气泡中心 $([int]$bubbleY) < 按钮中心 $([int]$triggerY)）"
+            # 判据是"**完整落在窗口里**"，不再是"一定在触发器上方"：面板改成
+            # `position: fixed` + 实测落点之后，方向由"下面装不下就翻上去"自己决定
+            # （这张卡在列表中间时它就该向下；原来那条"强制向上"是给绝对定位打的补丁，
+            # 而且它并不能阻止气泡被滚动容器裁掉）。
+            $win = $window.Current.BoundingRectangle
+            $inside = $bubbleRect.X -ge $win.X -and $bubbleRect.Y -ge $win.Y -and
+                ($bubbleRect.X + $bubbleRect.Width) -le ($win.X + $win.Width) -and
+                ($bubbleRect.Y + $bubbleRect.Height) -le ($win.Y + $win.Height)
+            Assert-True $inside "气泡完整落在窗口内（气泡 $([int]$bubbleRect.X),$([int]$bubbleRect.Y) $([int]$bubbleRect.Width)x$([int]$bubbleRect.Height)）"
             # 只关掉气泡，**不确认删除**（本脚本不验删关联，只验气泡位置）
             $cancel = Find-All $window '取消'
             if ($cancel.Count -gt 0) { Invoke-Element $cancel[$cancel.Count - 1] | Out-Null }

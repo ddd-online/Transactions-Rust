@@ -144,11 +144,6 @@
 }
 
 /* 行内删除确认气泡右对齐，避免在表格右侧溢出 */
-.tr-cell-actions .ui-popconfirm--end .ui-popconfirm__panel {
-  left: auto;
-  right: 0;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .tr-sync-icon.is-spinning {
     animation: none;

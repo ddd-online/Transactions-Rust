@@ -1190,10 +1190,11 @@
 }
 
 .ui-popconfirm__panel {
-  position: absolute;
+  /* **fixed**：落点由组件实测（触发器矩形 + 面板自身尺寸）后写在行内 style 上。
+   * 绝对定位会被沿途的滚动容器裁掉 —— 图表列表里点删除，气泡只画出小半截、
+   * 确认键根本看不见（用户报的就是这个）。fixed 不再受任何祖先裁剪。 */
+  position: fixed;
   z-index: 1050;
-  top: calc(100% + var(--transactions-space-xs));
-  left: 0;
   min-width: 220px;
   max-width: 300px;
   padding: var(--transactions-space-md);
@@ -1205,10 +1206,9 @@
   animation: tr-rise-in var(--transactions-transition-enter);
 }
 
-.ui-popconfirm--end .ui-popconfirm__panel {
-  left: auto;
-  right: 0;
-}
+/* `--end`（贴右）的含义由组件实现（`popconfirm.rs` 的 `align_end`）：面板的
+ * 左右坐标是算出来的，CSS 再写 `left/right` 会与行内 style 打架。
+ * 类名仍然要留给调用方 —— 它表达的是"用哪条边对齐触发器"这个意图。 */
 
 .ui-popconfirm__header {
   display: flex;

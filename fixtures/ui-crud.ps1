@@ -408,7 +408,45 @@ try {
             $popButtons = @(Find-All $window '删除' | Where-Object { (Test-Rect $_.Current.BoundingRectangle) })
             if ($popButtons.Count -eq 0) { Start-Sleep -Milliseconds 300 }
         } while ($popButtons.Count -eq 0 -and (Get-Date) -lt $deadline)
-        if ($popButtons.Count -gt 0) { Invoke-Element $popButtons[$popButtons.Count - 1] | Out-Null }
+        # 气泡**真的画出来了吗**：UIA 的矩形在被裁掉时照样报得出来（它报的是元素几何，
+        # 不是"看得见的那部分"），所以这里只能看图 —— 确认键是主色实心按钮，
+        # 取它矩形左侧内边距上的一点，颜色必须落在这套主色的三档里
+        # （静止 / 悬停 / 按下：鼠标常常正好停在按钮上，实测取到的是悬停档 #5b7fff）。
+        # 这是"图表列表的滚动容器把气泡裁掉"那个回归**唯一**的护栏：气泡被裁掉时，
+        # UIA 里它和正常的一模一样（当初用户报的那张图里，气泡只画出小半截）。
+        if ($popButtons.Count -gt 0) {
+            $confirmRect = $popButtons[$popButtons.Count - 1].Current.BoundingRectangle
+            $shot = Join-Path $OutDir 'chart-popconfirm.png'
+            Save-Screenshot $shot
+            $bitmap = [System.Drawing.Bitmap]::FromFile($shot)
+            $painted = $false
+            $probe = @()
+            # 主色三档：primary #3964fe / primary-light #5b7fff / primary-active #2b52e6
+            $primaryAnchors = @(@(57, 100, 254), @(91, 127, 255), @(43, 82, 230))
+            foreach ($dx in 6, 12, 18) {
+                $px = [int]($confirmRect.X + $dx)
+                $py = [int]($confirmRect.Y + $confirmRect.Height / 2)
+                if ($px -ge $bitmap.Width -or $py -ge $bitmap.Height) {
+                    $probe += "$px,$py 超出截图"
+                    continue
+                }
+                $pixel = $bitmap.GetPixel($px, $py)
+                $probe += "$px,$py=($($pixel.R),$($pixel.G),$($pixel.B))"
+                foreach ($anchor in $primaryAnchors) {
+                    if ([Math]::Abs($pixel.R - $anchor[0]) -le 24 -and
+                        [Math]::Abs($pixel.G - $anchor[1]) -le 24 -and
+                        [Math]::Abs($pixel.B - $anchor[2]) -le 24) {
+                        $painted = $true
+                        break
+                    }
+                }
+                if ($painted) { break }
+            }
+            $bitmap.Dispose()
+            $rect = "$([int]$confirmRect.X),$([int]$confirmRect.Y) $([int]$confirmRect.Width)x$([int]$confirmRect.Height)"
+            Assert-True $painted "气泡的确认键真的画在屏幕上（按钮矩形 $rect；取样 $($probe -join ' / ')；截图 $shot）"
+            Invoke-Element $popButtons[$popButtons.Count - 1] | Out-Null
+        }
         Start-Sleep -Seconds 3
     }
     $chartGone = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_chart' -OutDir $OutDir | Where-Object { $_.title -eq $chartTitle })
