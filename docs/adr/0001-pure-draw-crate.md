@@ -47,3 +47,14 @@
 - `tr-draw` 不许出现 `leptos` / `web-sys` / `charts-rs` —— 一旦引入，它就编不到 native，ADR 的前提失效。
 - 本次搬家后 `fixtures/test.ps1` 的 `chart` / `analysis` / `ui-kit` 三个分组改跑 `test-draw` 这一步，
   组名与覆盖面不变。
+
+## 补充：绘制的名字窄了（页面取数深化之后）
+
+`tr-draw/src/query.rs`（页面取数的决策核心）落地之后，本 crate 的自我描述
+"纯绘制算法层"就窄了 —— 它现在是**界面纯算法层**，"绘制"只是第一批住户。
+判据没有变，还是开头那句"能在 native 上断言、且不是渲染配置本身"：
+取数的去重 / 复核 / 失效规则完全符合，而且是那次搬家的同一动机
+（界面里的纯决策住在只编 wasm32 的文件里，native 一句也测不到）。
+
+因此 `lib.rs` / `Cargo.toml` 的抬头改成"界面侧纯算法层"，两条纪律照旧
+（不许 `leptos` / `web_sys` / `charts_rs`；`cargo test -p tr-draw` 是唯一测试面）。

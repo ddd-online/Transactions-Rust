@@ -166,8 +166,12 @@ $PathMap = @(
     @{ Re='^crates/tr-ipc/';                              Groups=@('ipc') }
     @{ Re='^crates/tr-draw/src/chart\.rs$';               Groups=@('chart', 'analysis') }
     @{ Re='^crates/tr-draw/src/crop\.rs$';                Groups=@('ui-kit') }
+    # 取数决策核心：所有走页面取数 module 的页面都在影响面里（含还在用 ListQuery 薄壳的三页）
+    @{ Re='^crates/tr-draw/src/query\.rs$';               Groups=@('chart', 'analysis', 'templates', 'todo', 'accounting', 'stock', 'category-tag', 'key-event', 'diary') }
     @{ Re='^crates/tr-draw/';                             Groups=@('chart', 'analysis', 'ui-kit') }
     @{ Re='^crates/tr-ui/src/api/';                       Groups=@('ipc') }
+    # 取数 module 与决策核心同一条影响面（谁改了"什么时候发"，就得跑所有用它的页面）
+    @{ Re='^crates/tr-ui/src/query\.rs$';                 Groups=@('chart', 'analysis', 'templates', 'todo', 'accounting', 'stock', 'category-tag', 'key-event', 'diary') }
     @{ Re='^crates/tr-ui/src/pages/stock\.rs$';           Groups=@('stock') }
     @{ Re='^crates/tr-ui/src/pages/todo\.rs$';            Groups=@('todo', 'ui-kit') }
     @{ Re='^crates/tr-ui/src/pages/diary\.rs$';           Groups=@('diary') }

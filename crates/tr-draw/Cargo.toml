@@ -4,7 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# 纯绘制算法层：坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何。
+# 界面侧的纯算法层：绘制（坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何）
+# 与取数决策核心。
 #
 # 为什么单开一个 crate（而不是塞进 tr-domain、也不把 tr-ui 改成双目标）：
 # 见 docs/adr/0001-pure-draw-crate.md。

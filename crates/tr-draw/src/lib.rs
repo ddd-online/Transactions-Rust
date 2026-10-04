@@ -1,11 +1,14 @@
-//! tr-draw —— 纯绘制算法层。
+//! tr-draw —— 界面侧的纯算法层（native 与 wasm32 双可编、零 I/O）。
 //!
-//! 装的是"画之前的数学"：没有一行 I/O，也不认识 DOM 与图表引擎。
+//! 装的是"界面里想被 native 断言的东西"：没有一行 I/O，也不认识 DOM。
 //!
 //! * [`chart`]：折线图的坐标与刻度（Y 轴范围、刻度的"大整数"、值 → 像素）、
 //!   charts-rs 输出 SVG 的定点改写（按 0 轴分色、面积填充基线）、类目抽稀、
 //!   提示框定位，以及从测量点拼出的 [`chart::ChartGeometry`]。
 //! * [`crop`]：方形裁剪的几何（cover 比例、位移夹紧、裁剪框反解）。
+//! * [`query`]：页面取数的决策核心（去重键与 generation 的推进、要不要发这次请求、
+//!   缓存复核的判定、失效规则）—— 绘制只是本 crate 的第一批住户，见
+//!   `docs/adr/0001-pure-draw-crate.md` 的补充说明。
 //!
 //! 为什么单开一个 crate，见 `docs/adr/0001-pure-draw-crate.md`。
 //!
@@ -17,3 +20,4 @@
 
 pub mod chart;
 pub mod crop;
+pub mod query;
