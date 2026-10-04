@@ -353,10 +353,12 @@
 
 .todo-quadrant__canvas {
   /* 撑满工具栏以下的整块高度（`.todo-quadrant` 是弹性列）：卡片不再只跟着内容高，
-     底部也不再留一段空白；象限到卡片边的边距由 SVG 里的 PAD 负责。 */
+     底部也不再留一段空白；象限底**铺满**整张卡片（没有内边距）—— 圆角靠这里的
+     `overflow: hidden` 裁掉（方块底自己不知道卡片是圆的）。 */
   flex: 1;
   /* 窗口再矮也不把图压没：不够高时由外层的 `overflow: auto` 出滚动条 */
   min-height: 220px;
+  overflow: hidden;
   background-color: var(--transactions-color-major-background);
   border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-lg);
@@ -527,8 +529,9 @@
   font-weight: var(--transactions-weight-medium);
 }
 
-/* 两档标签在灰底上要"翻上来"：用 `elevated`（浅色 = Paper，深色 = #1d2026）——
-   比行底亮一档，两个主题里都看得出是标签；用 `major-background` 的话深色下和行底只差 2 级。 */
+/* 两档标签在灰底上要"翻上来"：用 `elevated`（浅色是 Paper、深色比行底再亮一档）——
+   两个主题里都看得出是标签；用 `major-background` 的话深色下和行底只差 2 级、几乎看不见。
+   （注释里也别写十六进制色值：design-audit 的硬编码扫描不认注释。） */
 .todo-quadrant-modal__row .todo-level {
   background-color: var(--transactions-color-elevated);
 }

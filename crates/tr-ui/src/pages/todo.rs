@@ -1210,8 +1210,8 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
 
     // 画布按**实测像素**出图（1 个用户单位 = 1px）：固定 viewBox 缩放到卡片宽度时，
     // 四象限会在卡片里留出大片空白（宽高比不匹配就必然有一边空着），量到的宽高才对得上。
-    // `PAD` 是轴端文字（紧急 / 不紧急 / 重要 / 不重要）的留白，也是象限底到卡片边的边距。
-    const PAD: f64 = 32.0;
+    // 象限底**铺满**卡片（不留边距）：轴端那四个字改在四角各留 8px（见下面的标注），
+    // 圆角由 CSS 的 `overflow: hidden` 裁 —— 方块底自己不知道卡片是圆的。
     let canvas = NodeRef::<leptos::html::Div>::new();
     // 还没量到（首帧 / 面板刚挂载）时的兜底尺寸：沿用旧的 720×460
     let size = RwSignal::new((720.0_f64, 460.0_f64));
@@ -1246,22 +1246,20 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
             <div class="todo-quadrant__canvas" node_ref=canvas>
                 {move || {
                     let (w, h) = size.get();
-                    let sx = |urgency: i32| {
-                        PAD + (f64::from(urgency) + 5.0) / 10.0 * (w - 2.0 * PAD)
-                    };
+                    let sx = |urgency: i32| (f64::from(urgency) + 5.0) / 10.0 * w;
                     let sy = |importance: i32| {
-                        h - PAD - (f64::from(importance) + 5.0) / 10.0 * (h - 2.0 * PAD)
+                        h - (f64::from(importance) + 5.0) / 10.0 * h
                     };
                     let axis_x = sx(0);
                     let axis_y = sy(0);
                     // 四个象限的中心：水印名各自摆在自己的中心上
                     let mid = |a: f64, b: f64| (a + b) / 2.0;
-                    let (plan_x, plan_y) = (mid(PAD, axis_x), mid(PAD, axis_y));
-                    let (now_x, now_y) = (mid(axis_x, w - PAD), mid(PAD, axis_y));
-                    let (less_x, less_y) = (mid(PAD, axis_x), mid(axis_y, h - PAD));
-                    let (delegate_x, delegate_y) = (mid(axis_x, w - PAD), mid(axis_y, h - PAD));
+                    let (plan_x, plan_y) = (mid(0.0, axis_x), mid(0.0, axis_y));
+                    let (now_x, now_y) = (mid(axis_x, w), mid(0.0, axis_y));
+                    let (less_x, less_y) = (mid(0.0, axis_x), mid(axis_y, h));
+                    let (delegate_x, delegate_y) = (mid(axis_x, w), mid(axis_y, h));
                     // 水印字号：名称占象限宽度的三成（四个名字都是 3 个字）
-                    let name_px = ((axis_x - PAD) * 0.30 / 3.0).clamp(22.0, 72.0);
+                    let name_px = (axis_x * 0.30 / 3.0).clamp(22.0, 72.0);
                     // 中文字形的墨高约 0.96em（基线以上 0.84、以下 0.12）：要让这块墨**整体**
                     // 落在象限中心，基线得压在中心下方 (0.84 − 0.12) / 2 = 0.36em。
                     let name_dy = name_px * 0.36;
@@ -1278,44 +1276,44 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                             <rect
                                 class="todo-quadrant__ground todo-quadrant__ground--now"
                                 x=axis_x
-                                y=PAD
-                                width=w - PAD - axis_x
-                                height=axis_y - PAD
+                                y=0.0
+                                width=w - axis_x
+                                height=axis_y
                             ></rect>
                             <rect
                                 class="todo-quadrant__ground todo-quadrant__ground--plan"
-                                x=PAD
-                                y=PAD
-                                width=axis_x - PAD
-                                height=axis_y - PAD
+                                x=0.0
+                                y=0.0
+                                width=axis_x
+                                height=axis_y
                             ></rect>
                             <rect
                                 class="todo-quadrant__ground todo-quadrant__ground--less"
-                                x=PAD
+                                x=0.0
                                 y=axis_y
-                                width=axis_x - PAD
-                                height=h - PAD - axis_y
+                                width=axis_x
+                                height=h - axis_y
                             ></rect>
                             <rect
                                 class="todo-quadrant__ground todo-quadrant__ground--delegate"
                                 x=axis_x
                                 y=axis_y
-                                width=w - PAD - axis_x
-                                height=h - PAD - axis_y
+                                width=w - axis_x
+                                height=h - axis_y
                             ></rect>
                             // 十字轴
                             <line
                                 class="todo-quadrant__axis"
                                 x1=axis_x
-                                y1=PAD
+                                y1=0.0
                                 x2=axis_x
-                                y2=h - PAD
+                                y2=h
                             ></line>
                             <line
                                 class="todo-quadrant__axis"
-                                x1=PAD
+                                x1=0.0
                                 y1=axis_y
-                                x2=w - PAD
+                                x2=w
                                 y2=axis_y
                             ></line>
                             // 象限名（各自象限的**中心**：水平垂直都居中；可点，点开看这一格的事项）
@@ -1324,28 +1322,26 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                             {quadrant_name(Quadrant::Less, less_count, less_x, less_y, name_px, name_dy, open_quad)}
                             {quadrant_name(Quadrant::Delegate, delegate_count, delegate_x, delegate_y, name_px, name_dy, open_quad)}
                             // 轴端标注（紧急 / 不紧急 / 重要 / 不重要）：贴着各自的轴，但**四个
-                            // 都要离象限底的边线 8px 以上** —— 横轴这两个原来顶在版心的左右边线上
-                            // （和纵轴那两个原来骑在上下边线上是同一个毛病），现在四个一致。
+                            // 都要离卡片的边线 8px 以上**（象限底已经铺满卡片，边线就是卡片的边）。
                             <text
                                 class="todo-quadrant__axis-label"
-                                x=w - PAD - 8.0
+                                x=w - 8.0
                                 y=axis_y - 10.0
                                 text-anchor="end"
                             >
                                 "紧急"
                             </text>
-                            <text class="todo-quadrant__axis-label" x=PAD + 8.0 y=axis_y - 10.0>
+                            <text class="todo-quadrant__axis-label" x=8.0 y=axis_y - 10.0>
                                 "不紧急"
                             </text>
                             // 纵轴这两个：标注 16px（见 CSS 的 `.todo-quadrant__axis-label`），
                             // 中文字形高约 0.88em、下缘只越出基线一点点 —— 所以顶部基线落在
-                            // PAD+21、底部落在 h−PAD−10，两侧各留 8px。原来直接写 PAD / h−PAD，
-                            // 字正好骑在边线上（顶部的字顶冒到线外侧、底部的字底沉到线外侧），
-                            // 看着像被截断。
-                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=PAD + 21.0>
+                            // 21、底部落在 h−10，两侧各留 8px（直接写 0 / h 的话字正好骑在边线上，
+                            // 顶部的字顶冒到线外侧、底部的字底沉到线外侧，看着像被截断）。
+                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=21.0>
                                 "重要"
                             </text>
-                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=h - PAD - 10.0>
+                            <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=h - 10.0>
                                 "不重要"
                             </text>
                             // 事项点：位置就是数据本身（同时落在同一点上的会重叠，靠悬停看名字）
