@@ -10,7 +10,8 @@ Transactions 是一款桌面个人记账应用，每个工作空间是一个独�
 
 ```
 crates/tr-domain/    # 纯领域层：models / dto / 金额换算 / 费用分摊（native + wasm 双可编，无 I/O）
-crates/tr-draw/      # 纯绘制算法层：坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何（同上，无 I/O）
+crates/tr-draw/      # 界面侧纯算法层：绘制（坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何）
+                     #   + 页面取数的决策核心（query：去重 / generation / 复核判定；同上，无 I/O）
 crates/tr-store/     # 存储层：建库 + 迁移引擎（migrations）+ 格式校验 + 各 Dao（rusqlite）
 crates/tr-service/   # 服务层：业务规则（账本/交易/…/股票），不依赖 tauri
 crates/tr-ipc/       # IPC 命令面：全部 #[tauri::command] + 统一错误信封
@@ -32,7 +33,7 @@ fixtures/            # schema 基线（fresh.sql）+ 种子与端到端脚本（
 # 类型检查 / 测试（不含桌面外壳）
 cargo check -p tr-domain -p tr-store -p tr-service -p xtask --all-targets
 cargo test  -p tr-domain -p tr-draw -p tr-store -p tr-service
-cargo check -p tr-draw --all-targets                       # 纯绘制算法（native 上就能测）
+cargo check -p tr-draw --all-targets                       # 纯算法（绘制 + 取数决策；native 上就能测）
 cargo check -p tr-ui --target wasm32-unknown-unknown       # 界面只编 wasm32
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -78,7 +79,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 | `ui-upload` | 图片按原字节落盘 + 缩略图 + `trasset://` 资产协议 |
 | `ui-proxy` / `ui-about` / `ui-features` / `ui-update-restore` | 假代理日志当判据（行情 `qt.gtimg.cn`、更新 `api.github.com`）；版本自报；功能开关落盘并重启生效；下载状态跨页面恢复（依赖真实 GitHub API，离线用 `-SkipNetwork`） |
 | `migrate-workspace` | 降级 → 升级 → 备份 → 幂等（**迁移引擎这条最高风险路径就靠它**） |
-| `test-draw` | 图表与裁剪的**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 |
+| `test-draw` | 界面侧**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 + 页面取数的决策（去重 / generation / 复核判定 / 失效） |
 
 护栏总原则：一律真的启动应用、用 UI Automation 或真实鼠标键盘驱动；**断言落在库/磁盘上**，不落在"点到了没有"。
 
