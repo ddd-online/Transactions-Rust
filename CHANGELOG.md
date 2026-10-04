@@ -2,6 +2,28 @@
 
 本文件记录本仓库的版本变更。版本号以 `src-tauri/tauri.conf.json` 为唯一来源。
 
+## [未发布]
+
+### 修复
+
+**筛选之后，底部统计条跟着筛选走**
+
+- 底栏那三个数（收入 / 支出 / 转账）原来只按「账本 + 时间范围」汇总，`items`（筛选条件）
+  一律不参与 —— 于是筛出 3 条支出、底部却写着整月合计（用户报的正是这个：列表 3 条
+  合计 1428.90，底栏 3488.21）。
+- 现在统计与列表**共用同一份 WHERE**：账本 + 时间范围 + 条件项；分页与排序不进 WHERE，
+  所以翻页不影响这三个数。实现上只留一处拼 SQL 的地方
+  （`TransactionRecordDao::query_statistics_where`）：`query_filtered` 传"带条件"、
+  `query_statistics`（分析页图表面板用）传"不带条件"，两个口径各自写在注释里。
+- **口径变了**，两条旧规格同时改写：`tr-store` 的 `statistics_ignore_items_and_respect_time_range`
+  → `statistics_follow_items_and_respect_time_range`（并补一条"分页不影响统计"），
+  `tr-service` 的 `condition_filter_and_statistics_are_independent`
+  → `statistics_follow_the_condition_while_paging_stays_out`。
+
+回归：`cargo test -p tr-store -p tr-service` 全绿（157 + 76）；
+`fixtures/ui-transactions.ps1` 的筛选那一段新增一条断言 —— 筛到唯一那条 88.88 的支出后，
+页面上 "88.88" 必须出现**至少两次**（行内 + 统计条），旧实现下它只出现一次。
+
 ## [0.13.0] - 2026-10-05
 
 ### 调整

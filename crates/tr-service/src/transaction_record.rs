@@ -1,7 +1,8 @@
 //! 消费记录服务：新建 / 批量新建 / 条件查询 / 图表聚合 / 关联关键事件。
 //!
 //! 几个容易踩空、但必须遵守的细节：
-//! * **统计口径**：`items`（筛选条件）不影响 `trStatistics`——它只按「账本 + 时间范围」汇总
+//! * **统计口径**：`trStatistics` 与列表**同源**（账本 + 时间范围 + `items` 条件项，
+//!   不含分页与排序）—— 底栏那三个数就是"筛出来的那些记录"的合计
 //! * **分页**：`limit <= 0` 时 `page_size` 取实际返回条数；`page` 仅在 `limit > 0 && offset >= 0` 时推导
 //! * **图表**：先按曲线查桶，再在**全部曲线的最小/最大桶**之间补零生成连续时间轴
 //! * **关联关键事件**：目标日期没有关键事件时自动创建一条空事件，并写一条 info 日志
@@ -720,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn condition_filter_and_statistics_are_independent() {
+    fn statistics_follow_the_condition_while_paging_stays_out() {
         let (workspace, dir) = workspace("filter");
         create_tr(&workspace, &dto(100, "expense", "餐饮美食", 10, &["三餐"])).unwrap();
         create_tr(&workspace, &dto(200, "expense", "购物消费", 20, &[])).unwrap();
@@ -742,9 +743,29 @@ mod tests {
 
         assert_eq!(result.total, 1);
         assert_eq!(result.items.len(), 1);
-        // 统计不受 items 影响
-        assert_eq!(result.tr_statistics["expense"], 300);
-        assert_eq!(result.tr_statistics["income"], 300);
+        // 底部统计跟着条件走：只剩筛出来的那一笔（100），别的两档归零
+        assert_eq!(result.tr_statistics["expense"], 100);
+        assert_eq!(result.tr_statistics["income"], 0);
+        assert_eq!(result.tr_statistics["transfer"], 0);
+
+        // 分页不进条件：`limit = 1` 只影响列表取几条，统计仍是"这两笔支出"的合计
+        let paged = query_trs_on_condition(
+            &workspace,
+            &TrQueryCondition {
+                ledger_id: "l1".into(),
+                limit: 1,
+                items: vec![QueryConditionItem {
+                    transaction_type: consts::TRANSACTION_TYPE_EXPENSE.into(),
+                    ..QueryConditionItem::default()
+                }],
+                ..TrQueryCondition::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(paged.total, 2);
+        assert_eq!(paged.items.len(), 1);
+        assert_eq!(paged.tr_statistics["expense"], 300);
+        assert_eq!(paged.tr_statistics["income"], 0);
 
         std::fs::remove_dir_all(&dir).ok();
     }

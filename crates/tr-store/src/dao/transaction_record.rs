@@ -6,7 +6,8 @@
 //! * 描述匹配用 `instr(description, ?) > 0`（区分大小写、不把 `%_` 当通配符）
 //! * 标签用子查询：`all` 走 `COUNT(DISTINCT ...) = n`，否则 `EXISTS`，`tag_not` 加 `NOT`
 //! * 排序字段走白名单映射，非法/空则回退 `transaction_at desc`
-//! * 统计口径固定为「账本 + 时间范围」，**不随筛选条件变化**
+//! * 统计口径与列表**同源**：账本 + 时间范围 + 条件项（不含分页与排序）——
+//!   筛出来的就是底部统计条算出来的
 //! * 图表分桶用 `strftime(<格式>, transaction_at, 'unixepoch')`，缺省排除 outlier
 
 use rusqlite::types::Value;
@@ -144,6 +145,10 @@ impl TransactionRecordDao {
     ) -> rusqlite::Result<TrFilterResult> {
         let (where_sql, args) = build_where(condition);
 
+        // 统计与列表**同一份 where**：账本 + 时间范围 + 条件项（分页与排序不进 where，
+        // 所以翻页不影响这三个数）。少一个口径，就不会出现"筛出 3 条、底部写着全月合计"。
+        let statistics = Self::query_statistics_where(conn, &where_sql, &args)?;
+
         let total: i64 = conn.query_row(
             &format!("SELECT COUNT(*) FROM tbl_billadm_transaction_record {where_sql}"),
             params_from_iter(args.clone()),
@@ -170,8 +175,6 @@ impl TransactionRecordDao {
             .query_map(params_from_iter(args), from_row)?
             .collect::<Result<Vec<_>, _>>()?;
 
-        let statistics = Self::query_statistics(conn, &condition.ledger_id, &condition.ts_range)?;
-
         Ok(TrFilterResult {
             items,
             total,
@@ -179,26 +182,22 @@ impl TransactionRecordDao {
         })
     }
 
-    /// 按交易类型汇总指定账本与时间范围内的金额（不受筛选条件影响）。
-    pub fn query_statistics(
+    /// 按交易类型汇总**指定 WHERE 命中的行**（三档金额：收支转）。
+    ///
+    /// 只有一处拼 SQL 的地方：`query_filtered` 传"账本 + 时间范围 + 条件项"，
+    /// [`Self::query_statistics`] 传"账本 + 时间范围"—— 两个口径各自说清楚，
+    /// 实现不再各写一份。
+    fn query_statistics_where(
         conn: &Connection,
-        ledger_id: &str,
-        ts_range: &[i64],
+        where_sql: &str,
+        args: &[Value],
     ) -> rusqlite::Result<TrStatistics> {
-        let mut sql = String::from(
+        let sql = format!(
             "SELECT transaction_type, SUM(price) FROM tbl_billadm_transaction_record \
-             WHERE ledger_id = ?",
+             {where_sql} GROUP BY transaction_type"
         );
-        let mut args: Vec<Value> = vec![Value::Text(ledger_id.to_string())];
-        if ts_range.len() == 2 {
-            sql.push_str(" AND transaction_at >= ? AND transaction_at <= ?");
-            args.push(Value::Integer(ts_range[0]));
-            args.push(Value::Integer(ts_range[1]));
-        }
-        sql.push_str(" GROUP BY transaction_type");
-
         let mut statement = conn.prepare(&sql)?;
-        let rows = statement.query_map(params_from_iter(args), |row| {
+        let rows = statement.query_map(params_from_iter(args.iter()), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, Option<i64>>(1)?.unwrap_or(0),
@@ -216,6 +215,24 @@ impl TransactionRecordDao {
             }
         }
         Ok(statistics)
+    }
+
+    /// 按交易类型汇总指定账本与时间范围内的金额（**不带条件项**）。
+    ///
+    /// 分析页的图表面板用它 —— 那里的口径就是"这个时间范围"，与列表筛选无关。
+    /// 列表底部的统计条不走这里（它要跟着筛选走，见 [`Self::query_filtered`]）。
+    pub fn query_statistics(
+        conn: &Connection,
+        ledger_id: &str,
+        ts_range: &[i64],
+    ) -> rusqlite::Result<TrStatistics> {
+        let condition = TrQueryCondition {
+            ledger_id: ledger_id.to_string(),
+            ts_range: ts_range.to_vec(),
+            ..TrQueryCondition::default()
+        };
+        let (where_sql, args) = build_where(&condition);
+        Self::query_statistics_where(conn, &where_sql, &args)
     }
 
     /// 单条曲线的分桶聚合序列。
@@ -589,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn statistics_ignore_items_and_respect_time_range() {
+    fn statistics_follow_items_and_respect_time_range() {
         let (workspace, dir) = crate::dao::test_workspace("dao-tr-stats");
         let conn = workspace.connection();
         TransactionRecordDao::create(&conn, &record("t1", 100, "expense", "餐饮美食", 10, false))
@@ -610,7 +627,7 @@ mod tests {
         assert_eq!(statistics.income, 200);
         assert_eq!(statistics.expense, 0);
 
-        // 带筛选条件时统计口径不变（仍是账本 + 时间范围全量）
+        // 带筛选条件时统计跟着筛（与列表同一份 WHERE）：只剩"餐饮美食"那一笔 100
         let mut condition = base_condition();
         condition.limit = 1;
         condition.items = vec![QueryConditionItem {
@@ -620,7 +637,21 @@ mod tests {
         let result = TransactionRecordDao::query_filtered(&conn, &condition).unwrap();
         assert_eq!(result.total, 1);
         assert_eq!(result.items.len(), 1);
-        assert_eq!(result.statistics.expense, 500);
+        assert_eq!(result.statistics.expense, 100, "底部统计跟着筛选走");
+        assert_eq!(result.statistics.income, 0);
+        assert_eq!(result.statistics.transfer, 0);
+
+        // 分页不进 WHERE：只取 1 条时，统计仍是"这两笔支出"的合计
+        let mut paged = base_condition();
+        paged.limit = 1;
+        paged.items = vec![QueryConditionItem {
+            transaction_type: consts::TRANSACTION_TYPE_EXPENSE.to_string(),
+            ..QueryConditionItem::default()
+        }];
+        let result = TransactionRecordDao::query_filtered(&conn, &paged).unwrap();
+        assert_eq!(result.total, 2);
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.statistics.expense, 500, "翻页不影响统计");
 
         std::fs::remove_dir_all(&dir).ok();
     }

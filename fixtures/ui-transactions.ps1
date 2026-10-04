@@ -363,6 +363,14 @@ try {
     $amountAfterFilter = @(Get-Elements $window | ForEach-Object { $_.Current.Name } |
         Where-Object { $_ -and $_ -match '88\.88' })
     Assert-True ($amountAfterFilter.Count -gt 0) '筛出来的行仍显示金额 88.88'
+    # 底部统计条要**跟着筛选走**：筛完只剩这一条 88.88 的支出，
+    # 三个数就该是 收入 0.00 / 支出 88.88 / 转账 0.00。
+    # 判据不是"页面上出现过 88.88"（列表行里本来就有），而是**它至少出现两次**：
+    # 行里一次、底部统计里一次 —— 旧实现下底部算的是整个时间范围的合计，这条会红。
+    $expenseInFooter = @(Get-Elements $window | ForEach-Object { $_.Current.Name } |
+        Where-Object { $_ -and $_ -match '88\.88' })
+    Assert-True ($expenseInFooter.Count -ge 2) `
+        "底部「支出」也是 88.88（88.88 出现 $($expenseInFooter.Count) 次：行内 1 次 + 统计条 1 次）"
 }
 
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
