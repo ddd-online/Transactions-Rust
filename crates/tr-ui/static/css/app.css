@@ -616,6 +616,18 @@
   justify-content: center;
 }
 
+/* 只有图标的两个入口（「收起 / 展开侧边栏」与「应用设置」）用**贴住图标的小方块**：
+ * 它们没有第二行文字，44px 的方块只是给图标留了一圈空 —— 收到图标按钮的既有尺寸
+ * （`--transactions-icon-btn-size` = 28px）就够了，也与全仓其它图标按钮同一档。
+ * 居中是必须的：这一列的列向对齐是 `stretch`，给死宽度后它会贴到左边。 */
+.app-left-bar.is-collapsed .sidebar-toggle-btn,
+.app-left-bar.is-collapsed .sidebar-bottom .nav-btn {
+  width: var(--transactions-icon-btn-size);
+  height: var(--transactions-icon-btn-size);
+  margin-left: auto;
+  margin-right: auto;
+}
+
 /* 收起态的图标比展开态大一档（18 → 20px）：它和名字挤在同一格里，
  * 名字已经是最小一号字，图标得撑住那一格的重量。
  * **只改收起态** —— 展开态是"图标在左、文字在右"的横向排法，图标跟文字同一档更稳。 */
