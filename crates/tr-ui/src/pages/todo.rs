@@ -1000,10 +1000,11 @@ fn progress_panel(
 ///
 /// 版面：卡片（`.todo-quadrant__canvas`）撑满工具栏以下的高度，SVG 再撑满卡片 ——
 /// viewBox 用 `watch_canvas_size` 量到的**真实像素**（1 单位 = 1px），所以四象限是等比贴合、
-/// 不会变形；象限名与说明摆在各自象限的中心（水平垂直居中）。
+/// 不会变形；象限名摆在各自象限的中心（水平垂直居中）。
 ///
 /// 象限名是一块**水印**：字号按象限宽度的三成算（四个名字都恰好 3 个字），
-/// 颜色由 CSS 压到 tertiary —— 图上的"重量"留给数据点，文字只做方位提示。
+/// 颜色由 CSS 压成低浓度的墨 —— 图上的"重量"留给数据点，文字只做方位提示。象限的语义不必
+/// 在象限里复述一遍：「重要」那一行 + 「不紧急」那一列 已经就是"计划做"。
 /// 落在同一坐标的事项按 id 各带一个固定的微小偏移（[`jitter_of`]），否则会叠成一坨。
 fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
     // (事项 id, 主题, 事项, 紧急度, 重要度)；id 只用来给点取一个稳定的抖动偏移
@@ -1061,19 +1062,17 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                     };
                     let axis_x = sx(0);
                     let axis_y = sy(0);
-                    // 四个象限的中心：名称在上、说明在下，两行整体在象限里居中
+                    // 四个象限的中心：水印名各自摆在自己的中心上
                     let mid = |a: f64, b: f64| (a + b) / 2.0;
                     let (plan_x, plan_y) = (mid(PAD, axis_x), mid(PAD, axis_y));
                     let (now_x, now_y) = (mid(axis_x, w - PAD), mid(PAD, axis_y));
                     let (less_x, less_y) = (mid(PAD, axis_x), mid(axis_y, h - PAD));
                     let (delegate_x, delegate_y) = (mid(axis_x, w - PAD), mid(axis_y, h - PAD));
-                    // 水印字号：名称占象限宽度的三成（四个名字都是 3 个字），说明是它的 1/4
+                    // 水印字号：名称占象限宽度的三成（四个名字都是 3 个字）
                     let name_px = ((axis_x - PAD) * 0.30 / 3.0).clamp(22.0, 72.0);
-                    let sub_px = (name_px * 0.24).clamp(11.0, 24.0);
-                    let line_gap = name_px * 0.8;
-                    // 两行的**整体**在象限里居中：由名称的大写高、行距、说明的下沿反推基线
-                    let name_dy = (name_px * 0.72 - line_gap - sub_px * 0.13) / 2.0;
-                    let sub_dy = name_dy + line_gap;
+                    // 中文字形的墨高约 0.96em（基线以上 0.84、以下 0.12）：要让这块墨**整体**
+                    // 落在象限中心，基线得压在中心下方 (0.84 − 0.12) / 2 = 0.36em。
+                    let name_dy = name_px * 0.36;
                     view! {
                         <svg
                             class="todo-quadrant__svg"
@@ -1125,7 +1124,7 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                                 x2=w - PAD
                                 y2=axis_y
                             ></line>
-                            // 象限名与说明（各自象限的**中心**：水平垂直都居中）
+                            // 象限名（各自象限的**中心**：水平垂直都居中）
                             <text
                                 class="todo-quadrant__name todo-quadrant__name--now"
                                 x=now_x
@@ -1134,15 +1133,6 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                                 text-anchor="middle"
                             >
                                 "马上做"
-                            </text>
-                            <text
-                                class="todo-quadrant__sub"
-                                x=now_x
-                                y=now_y + sub_dy
-                                font-size=sub_px
-                                text-anchor="middle"
-                            >
-                                "重要且紧急"
                             </text>
                             <text
                                 class="todo-quadrant__name"
@@ -1154,15 +1144,6 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                                 "计划做"
                             </text>
                             <text
-                                class="todo-quadrant__sub"
-                                x=plan_x
-                                y=plan_y + sub_dy
-                                font-size=sub_px
-                                text-anchor="middle"
-                            >
-                                "重要但不紧急"
-                            </text>
-                            <text
                                 class="todo-quadrant__name"
                                 x=less_x
                                 y=less_y + name_dy
@@ -1170,15 +1151,6 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                                 text-anchor="middle"
                             >
                                 "减少做"
-                            </text>
-                            <text
-                                class="todo-quadrant__sub"
-                                x=less_x
-                                y=less_y + sub_dy
-                                font-size=sub_px
-                                text-anchor="middle"
-                            >
-                                "不重要且不紧急"
                             </text>
                             <text
                                 class="todo-quadrant__name"
@@ -1189,27 +1161,25 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                             >
                                 "授权做"
                             </text>
+                            // 轴端标注（紧急 / 不紧急 / 重要 / 不重要）：贴着各自的轴，但**四个
+                            // 都要离象限底的边线 8px 以上** —— 横轴这两个原来顶在版心的左右边线上
+                            // （和纵轴那两个原来骑在上下边线上是同一个毛病），现在四个一致。
                             <text
-                                class="todo-quadrant__sub"
-                                x=delegate_x
-                                y=delegate_y + sub_dy
-                                font-size=sub_px
-                                text-anchor="middle"
+                                class="todo-quadrant__axis-label"
+                                x=w - PAD - 8.0
+                                y=axis_y - 10.0
+                                text-anchor="end"
                             >
-                                "紧急但不重要"
-                            </text>
-                            // 轴端标注（紧急 / 不紧急 / 重要 / 不重要）
-                            <text class="todo-quadrant__axis-label" x=w - PAD y=axis_y - 10.0 text-anchor="end">
                                 "紧急"
                             </text>
-                            <text class="todo-quadrant__axis-label" x=PAD y=axis_y - 10.0>
+                            <text class="todo-quadrant__axis-label" x=PAD + 8.0 y=axis_y - 10.0>
                                 "不紧急"
                             </text>
-                            // 纵轴这两个要离象限底的**边线** 8px 以上：标注 16px（见 CSS 的
-                            // `.todo-quadrant__axis-label`），中文字形高约 0.88em、下缘只越出基线
-                            // 一点点 —— 所以顶部基线落在 PAD+21、底部落在 h−PAD−10。原来直接写
-                            // PAD / h−PAD，字正好骑在边线上（顶部的字顶冒到线外侧、底部的字底
-                            // 沉到线外侧），看着像被截断。
+                            // 纵轴这两个：标注 16px（见 CSS 的 `.todo-quadrant__axis-label`），
+                            // 中文字形高约 0.88em、下缘只越出基线一点点 —— 所以顶部基线落在
+                            // PAD+21、底部落在 h−PAD−10，两侧各留 8px。原来直接写 PAD / h−PAD，
+                            // 字正好骑在边线上（顶部的字顶冒到线外侧、底部的字底沉到线外侧），
+                            // 看着像被截断。
                             <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=PAD + 21.0>
                                 "重要"
                             </text>

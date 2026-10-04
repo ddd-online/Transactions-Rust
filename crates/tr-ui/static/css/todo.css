@@ -419,12 +419,6 @@
   );
 }
 
-.todo-quadrant__sub {
-  /* 象限里的那行说明是**信息**不是装饰：用 secondary（tertiary 在浅底上只有 ~3.4:1）；
-     字号同样由 SVG 给。 */
-  fill: var(--transactions-color-text-secondary);
-}
-
 .todo-quadrant__axis-label {
   /* 轴端标注（重要 / 紧急 / 不重要 / 不紧急）：放大到 section 号，颜色用 secondary
      —— 它们要比水印实，才能在象限名上照样被读到。 */
