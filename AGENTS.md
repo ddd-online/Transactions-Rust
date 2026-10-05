@@ -495,17 +495,28 @@ PR）只会生成一行 `Full Changelog` 链接 —— 想给正文就自己填�
 号，发布后再 `gh release view <tag> --json assets` 核对 `digest` 与本地 `Get-FileHash` 一致（同一个 digest 出现
 在两个 tag 下就是发错了）。
 
-## AI 工具（Codex）
+## AI 工具（DSH）
 
-本项目用 Codex 开发，约定：
+本项目用 DeepSeek Harness（DSH）开发。
 
-- 项目级 skill 在 `.agents/skills/`（Codex 从仓库根向下扫这个名字的目录）：`impeccable`（界面设计，含设计检测
-  hook）与 `humanizer-zh`（中文去 AI 味）。它们属本机安装、**不入库**（见 `.gitignore`），换机重装即可。
-- 设计检测 hook 在 `.codex/hooks.json`（`PostToolUse` 扫当次改动、`Stop` 做深扫），命令走
-  `.agents/skills/impeccable/scripts/impeccable[.cmd]`，skill 不存在时静默跳过。首次使用要在 Codex 里用 `/hooks`
-  信任一次；命令用仓库根相对路径，故请在仓库根启动会话。
-- 界面设计与审查的裁决标准仍是 `DESIGN.md` 加 `.impeccable/surfaces/` 的表面简报；动界面之前按 `impeccable` 的
-  Setup 第 1 步跑一次 `impeccable context`。
+**skill**：都在 `.agents/skills/`。DSH 的 `dsh-skill-filesystem` 按 rank 扫本地根：`<项目根>/.dsh/skills` 是
+rank 100、`<项目根>/.agents/skills` 是 rank 200（本项目用后者）。每个 skill 是 `<name>/SKILL.md`（或平铺的
+`<name>.md`），frontmatter 必须有 kebab-case 的 `name` 与 `description`——**不合法的 skill 会被静默丢弃**，只在
+启动日志里留一句警告，目录里看不出"少了谁"。带 `disable-model-invocation: true` 的 skill 不进模型目录、只作为
+用户主动调用的命令（`ask-matt` / `handoff` / `triage` / `to-spec` / `wayfinder` 等都是这一类），所以"目录里比
+磁盘上少几个"是设计如此，不是没加载。整个 `.agents/` 属本机安装、**不入库**（见 `.gitignore`），换机重装即可。
+
+**没有设计检测工具链**：原来的 Codex hook（`.codex/hooks.json`，`PostToolUse` 扫当次改动、`Stop` 做深扫）与它
+调的 `impeccable` skill 都已删除，`.impeccable/`（配置 / 缓存 / 表面简报 / 验证截图）也一并删掉——现在既没有
+自动扫描，也没有可跑的扫描命令，别照旧文档去调 `impeccable`。**要加回来别只抄旧配置**：DSH 没有项目级插件配置，
+唯一的 hook 入口是消费 Codex / Claude Code 清单的桥接（`dsh-hooks-codex` / `dsh-hooks-claude-code`），而它在
+Windows 上有三处对不上——`commandWindows` 字段被忽略（`ctx.shell` 是 pwsh，POSIX 那行 `[ ! -f … ] || …` 跑不
+通）、matcher 是大小写敏感的 `new RegExp`（DSH 工具名是小写 `edit` / `write`，`Edit|Write|apply_patch` 永不
+匹配）、非 shell 工具的入参被压成 `tool_input: { command }`（被编辑的文件路径传不进检测器）。残留物（都已无
+消费者）：`app.css` / `diary.css` / `fonts.css` 各一处 `impeccable-disable-line` 注释、`PRODUCT.md` 首行一个
+`<!-- impeccable:product-schema 1 -->` 标记。
+
+**裁决标准只有 `DESIGN.md`**（调色板 / 排版 / 间距 / 分层规则都在里面），动界面之前先读它。
 
 ## Agent skills
 
