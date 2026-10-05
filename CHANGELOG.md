@@ -80,6 +80,16 @@
 `cargo test -p transactions`（39 项，以前一次都不跑）、`fixtures/test.ps1 -Unit update` 全绿
 （`test-domain` + `test-src-tauri` + `ui-update-restore`，端到端那条仍依赖真实 GitHub API）。
 
+**发布后补验：这次真的走了更新链路（v0.14.0 已发出之后）**
+
+本地版本一直等于最新 release，所以 `ui-update-restore` 从前只能走「已是最新版本」那一支 ——
+下载、进度、跨页面恢复这几段**从来没在真机上跑过**。这次发布补上了：用一个只改 Tauri 版本
+（`TAURI_CONFIG='{"version":"0.13.1"}'`，**源码一行没动**）的探针构建走真实链路 ——
+检查到「有新版 v0.14.0」→ 点「立即更新」→ **下载完成**（这条同时证明发布资产的 `asset.digest`
+sha256 在应用自己的校验里通过）→ 切到「记账」再切回「关于软件」仍是下载态 →
+`fixtures/ui-update-restore.ps1` 全绿。仍未覆盖的两支：「取消下载」（5.7 MB 下得太快，
+点不到）与「安装并退出」（会真的把 0.14.0 装上）。
+
 ## [0.13.1] - 2026-10-05
 
 ### 修复
