@@ -793,7 +793,7 @@ pub struct DevToolsToggleRequest {
 ///
 /// **不会 reject**：网络失败时它 resolve 出 `error` 字段，界面必须把
 /// 「`hasUpdate == false` + 有 `error`」当成"检查失败"而不是"已是最新"。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UpdateCheckResponse {
     #[serde(rename = "hasUpdate")]
@@ -848,21 +848,6 @@ pub struct UpdateDownloadRequest {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
-}
-
-/// `update_download_status` 的返回：界面（重新）进入「关于软件」时恢复下载状态。
-///
-/// 下载是**单例**（一次只有一笔，跑在外壳的线程里），界面进来时先问一次当前状态，
-/// 这样切换页面回来、甚至重开界面，都能接着显示进度而不是回到"未下载"。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct UpdateDownloadStatus {
-    /// 是否有下载正在跑
-    pub active: bool,
-    /// 已经下载好、正在等待安装（`%TEMP%` 里那份文件还在）
-    pub downloaded: bool,
-    pub percent: u32,
-    pub speed: String,
 }
 
 #[cfg(test)]

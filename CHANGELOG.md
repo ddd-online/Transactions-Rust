@@ -2,6 +2,40 @@
 
 本文件记录本仓库的版本变更。版本号以 `src-tauri/tauri.conf.json` 为唯一来源。
 
+## [未发布]
+
+### 调整
+
+**更新流程：状态机收成一处拥有，界面只渲染快照**
+
+- **问题**：一次"检查 → 下载 → 安装"的状态同时活在两个 module 里 —— 外壳只记"正在下载的键、
+  已下载路径、取消标记、百分比、速度"，界面那侧拿着七个状态字符串（`idle` / `checking` /
+  `available` / `no-update` / `downloading` / `downloaded` / `error`）与版本、地址、digest、
+  发行说明、错误、进度、速度，两边靠**三个只带局部字段的事件 + 进页面时一次轮询**对齐。
+  后果有三：**状态机的规则写在渲染函数里**（"检查失败 ≠ 已是最新"得靠界面自己判断
+  `hasUpdate == false` 且有 `error`）、**跨页面恢复是特例**（只能靠一条依赖真实 GitHub API
+  的端到端护栏兜底）、**这条链路的单元测试根本不执行**（应用外壳不在测试矩阵里）。
+- **词表与合法迁移进领域层**：新增 `tr-domain::update`（纯逻辑、零 I/O，native 与 wasm 共用）。
+  `UpdateStatus` 是那七个取值的**类型**（序列化取值与从前的字符串逐字一致，`no-update` 仍是连字符），
+  `UpdateEvent::apply` 是唯一的迁移入口：**"检查失败 ≠ 已是最新"**（带 `error` 一律进 `failed`）、
+  进度只在 `downloading` 时生效（迟到的进度不会把状态拉回来）、重复事件幂等、没有下载地址不进
+  下载态。界面侧不再出现 `"downloading"` 这类裸字符串比较（`match` 穷尽，加一档编译器会逼着补文案）。
+- **外壳是唯一持有者**：`UpdaterState` 直接持有快照，推进状态机、发快照；`update_download_status`
+  返回**同一份快照** —— "进页面补状态"从特例变成常规读法，与事件谁先到都不影响结果。
+- **事件载荷从"局部字段"改成"完整快照"**（`update:download-progress|complete|error` 三个**名字不变**，
+  改的是载荷）：界面侧只剩"最后一次快照"一个信号 + 应用名 / 版本，不再自己拼状态。
+- **对使用者零行为变化**：检查中 → 有新版 / 已是最新 / 失败、下载中（进度 + 速度 + 取消）、
+  下载完成（安装并退出）、失败（原因 + 重试）的可见状态与文案逐字未改；不上后台自动更新、
+  不改下载实现与 sha256 校验、不动代理探测、不动发布链路、不新增依赖。
+- **顺带把应用外壳的测试纳入验收**：`fixtures/test.ps1` 新增一步 `cargo test -p transactions`
+  （登记进 `shell` 与 `update` 两个分组）。测试目标跳过入口（`main` 被 `cfg(test)` 排除）——
+  `generate_context!()` 要嵌 `crates/tr-ui/dist`，而那份产物由 trunk 生成、不入库，
+  少了它连 `cargo test` 都编译不过。之前那边 39 条 `#[cfg(test)]` 从没被执行过。
+
+回归：`cargo test -p tr-domain`（77 项，其中 `update` 19 项覆盖状态迁移、乱序 / 幂等 / 取消 / 文案）、
+`cargo test -p transactions`（39 项，以前一次都不跑）、`fixtures/test.ps1 -Unit update` 全绿
+（`test-domain` + `test-src-tauri` + `ui-update-restore`，端到端那条仍依赖真实 GitHub API）。
+
 ## [0.13.1] - 2026-10-05
 
 ### 修复

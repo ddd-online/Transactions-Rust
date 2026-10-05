@@ -57,6 +57,7 @@ use tr_domain::proxy::{
     join_http_proxy, split_http_proxy, ProxySetting, PROXY_MODE_AUTO, PROXY_MODE_MANUAL,
     PROXY_MODE_OFF, PROXY_SCHEME_HTTP,
 };
+use tr_domain::update::{UpdateEvent, UpdateSnapshot, UpdateStatus, NOTIFY_DOWNLOAD_FAILED};
 
 use crate::api;
 use crate::components::ui::{
@@ -1255,19 +1256,15 @@ fn diary_failed_row(item: DiaryExportFileError) -> impl IntoView {
 /// 本实现的 `TabPane` 切走会卸载组件，组件内信号会随之丢失
 /// （"下载中切到别的分栏再切回来"会看到状态归零），且每次重新挂载都会重复注册事件监听。
 /// 这里把状态与监听都收敛到模块级槽位。
+///
+/// **界面只持有"最后一次快照"**：状态词表与合法迁移都在 `tr_domain::update`
+/// （外壳是唯一持有者、它推进状态机、它发完整快照），界面不拼状态、不判断"失败还是最新"。
 #[derive(Clone, Copy)]
 struct UpdateState {
     app_name: RwSignal<String>,
     version: RwSignal<String>,
-    /// idle / checking / available / no-update / downloading / downloaded / error
-    status: RwSignal<String>,
-    latest_version: RwSignal<String>,
-    download_url: RwSignal<String>,
-    digest: RwSignal<String>,
-    release_body: RwSignal<String>,
-    error_message: RwSignal<String>,
-    download_percent: RwSignal<f64>,
-    download_speed: RwSignal<String>,
+    /// 外壳发来的最后一份完整更新快照（事件与 `update_download_status` 同一份口径）。
+    snapshot: RwSignal<UpdateSnapshot>,
 }
 
 thread_local! {
@@ -1291,14 +1288,7 @@ impl UpdateState {
         Self {
             app_name: RwSignal::new(String::new()),
             version: RwSignal::new(String::new()),
-            status: RwSignal::new("idle".to_string()),
-            latest_version: RwSignal::new(String::new()),
-            download_url: RwSignal::new(String::new()),
-            digest: RwSignal::new(String::new()),
-            release_body: RwSignal::new(String::new()),
-            error_message: RwSignal::new(String::new()),
-            download_percent: RwSignal::new(0.0_f64),
-            download_speed: RwSignal::new(String::new()),
+            snapshot: RwSignal::new(UpdateSnapshot::default()),
         }
     }
 
@@ -1323,30 +1313,45 @@ impl UpdateState {
         state
     }
 
-    /// 订阅下载事件（`ipc::listen` 内部保活闭包，界面进程即应用进程，无需退订）。
+    /// 把外壳发来的快照换进来（界面唯一改状态的方式）。
+    fn accept(self, snapshot: UpdateSnapshot) {
+        self.snapshot.set(snapshot);
+    }
+
+    /// 取当前快照（`untracked`：命令处理里读它不该订阅重渲染）。
+    fn current(self) -> UpdateSnapshot {
+        self.snapshot.get_untracked()
+    }
+
+    /// 本地乐观推进（点下按钮到外壳回话之间那一段），走**同一个状态机**。
+    ///
+    /// 例如「检查更新」：`Checking` 只有界面会显示（外壳在命令返回前不改状态），
+    /// 但状态本身仍然由 `UpdateEvent::CheckStarted` 推导，界面不自己拼字段。
+    fn advance_with(self, event: UpdateEvent) {
+        self.snapshot.set(event.apply(&self.current()));
+    }
+
+    /// 订阅事件（`ipc::listen` 内部保活闭包，界面进程即应用进程，无需退订）。
+    ///
+    /// 三个事件的载荷都是**完整快照**，所以这里只有"换掉快照"一件事：
+    /// 从前要在渲染侧拼 `status`，那个规则已经搬进状态机。
     fn register_listeners(self) {
-        ipc::listen::<api::update::UpdateProgress, _>(
-            api::update::EVENT_DOWNLOAD_PROGRESS,
-            move |progress| {
-                self.download_percent.set(progress.percent as f64);
-                self.download_speed.set(progress.speed.clone());
-                if self.status.get_untracked() != "downloading" {
-                    self.status.set("downloading".to_string());
-                }
-            },
-        );
-        ipc::listen::<api::update::UpdateComplete, _>(
-            api::update::EVENT_DOWNLOAD_COMPLETE,
-            move |_complete| self.status.set("downloaded".to_string()),
-        );
-        ipc::listen::<api::update::UpdateError, _>(
-            api::update::EVENT_DOWNLOAD_ERROR,
-            move |error| {
-                self.error_message.set(error.message.clone());
-                self.status.set("error".to_string());
-                Notifier::global().error("下载更新失败", Some(error.message));
-            },
-        );
+        ipc::listen::<UpdateSnapshot, _>(api::update::EVENT_DOWNLOAD_PROGRESS, move |snapshot| {
+            self.accept(snapshot);
+        });
+        ipc::listen::<UpdateSnapshot, _>(api::update::EVENT_DOWNLOAD_COMPLETE, move |snapshot| {
+            self.accept(snapshot);
+        });
+        ipc::listen::<UpdateSnapshot, _>(api::update::EVENT_DOWNLOAD_ERROR, move |snapshot| {
+            // 文案优先用外壳给的原因（它直接展示给用户）；没有就退回状态词表里那句兜底
+            let message = snapshot
+                .error
+                .clone()
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| UpdateStatus::Failed.label().to_string());
+            self.accept(snapshot);
+            Notifier::global().error(NOTIFY_DOWNLOAD_FAILED, Some(message));
+        });
     }
 }
 
@@ -1367,14 +1372,8 @@ fn AboutSetting() -> impl IntoView {
     let state = UpdateState::global();
     let app_name = state.app_name;
     let version = state.version;
-    let status = state.status;
-    let latest_version = state.latest_version;
-    let download_url = state.download_url;
-    let digest = state.digest;
-    let release_body = state.release_body;
-    let error_message = state.error_message;
-    let download_percent = state.download_percent;
-    let download_speed = state.download_speed;
+    // 界面只读这一份快照：状态词表、合法迁移、发行说明的展示条件都在 tr_domain::update
+    let snapshot = state.snapshot;
 
     // 首屏：应用信息 + 自动检查一次更新
     leptos::task::spawn_local(async move {
@@ -1388,74 +1387,52 @@ fn AboutSetting() -> impl IntoView {
         }
     });
 
+    // 检查更新：本地先把状态机推进到「检查中」（外壳在命令返回前不改状态，
+    // 但这一档由状态机定义，界面不自己拼字段），拿到返回后交给同一个状态机。
+    //
+    // `update_check` **不会 reject**：请求失败时它 resolve 出 `error` 字段 ——
+    // "检查失败 ≠ 已是最新"这条规则在状态机里（`UpdateEvent::CheckFinished`），界面不再判断。
     let check_for_update = move || {
-        let current = status.get_untracked();
-        if current == "downloading" || current == "downloaded" {
+        if !state.current().status.allows_new_check() {
             return;
         }
-        status.set("checking".to_string());
-        error_message.set(String::new());
+        // 记下这一刻的快照：命令层**自身**失败时（信封错误）要退回这里 ——
+        // 那种失败外壳根本没收到调用，不会有事件来收拾"检查中"这个临时态。
+        let before = state.current();
+        state.advance_with(UpdateEvent::CheckStarted);
 
         leptos::task::spawn_local(async move {
             match api::update::check().await {
                 Ok(result) => {
-                    // 注意：`update_check` 不会 reject；hasUpdate == false 且有 error
-                    // 表示"检查失败"，不能当成"已是最新"。
-                    if let Some(message) = result.error.clone() {
-                        status.set("error".to_string());
-                        error_message.set(message.clone());
-                        Notifier::global().error("检查更新失败", Some(message));
-                        return;
-                    }
-                    if result.has_update {
-                        status.set("available".to_string());
-                        latest_version.set(result.latest_version.clone());
-                        download_url.set(result.download_url.clone());
-                        digest.set(result.digest.clone());
-                        release_body.set(result.body.clone());
-                    } else {
-                        status.set("no-update".to_string());
+                    let failed = result.error.clone();
+                    state.advance_with(UpdateEvent::CheckFinished(result));
+                    if let Some(message) = failed {
+                        // 界面只负责"把失败告诉用户"；是哪一档失败由状态机决定
+                        Notifier::global()
+                            .error(tr_domain::update::NOTIFY_CHECK_FAILED, Some(message));
                     }
                 }
                 Err(error) => {
-                    status.set("error".to_string());
-                    error_message.set(error.message().to_string());
-                    notify_error("检查更新失败", &error);
+                    // 命令层本身就失败了（信封错误）：外壳没收到调用，状态机也就没话说，
+                    // 退回点击前的状态并提示。
+                    state.accept(before);
+                    notify_error(tr_domain::update::NOTIFY_CHECK_FAILED, &error);
                 }
             }
         });
     };
 
-    // 挂载时自动检查一次。
+    // 挂载时自动检查一次；**第二次以后进入本页只补状态**（不再重新检查）。
     //
-    // 但**第二次以后进入本页不再重新检查**，而是去问外壳"现在有没有下载在跑"：
-    // 下载是外壳侧的单例任务（切换页面/重建界面都不会中断它），
-    // 若这里照旧走一遍 check，正在下载的状态会被 `check_for_update` 的守卫挡住，
-    // 而**进度条**却会因为状态被重置而消失 —— 用户看到的就是"回来以后下载不见了"。
+    // 从前这是"特例"：进入页面轮询一次 `update_download_status`，再自己把字段拼成状态。
+    // 现在它就是状态机的常规读法 —— 外壳持有唯一状态，界面取一份完整快照换上即可，
+    // 所以"下载中切走再切回来"不会丢进度，也不会与事件打架（同一份口径）。
     Effect::new(move |_: Option<()>| {
         if ABOUT_ENTERED.with(|entered| entered.replace(true)) {
-            // 不是第一次进来：以**外壳的真实状态**为准恢复
             leptos::task::spawn_local(async move {
-                match api::update::download_status().await {
-                    Ok(current) => {
-                        if current.active {
-                            status.set("downloading".to_string());
-                            download_percent.set(current.percent as f64);
-                            download_speed.set(current.speed);
-                        } else if current.downloaded {
-                            status.set("downloaded".to_string());
-                            download_percent.set(100.0);
-                        } else {
-                            // 没有下载在跑也没有下载好的文件 → 回到可更新的状态
-                            let known = status.get_untracked();
-                            if known == "downloading" || known == "downloaded" {
-                                status.set("available".to_string());
-                                download_percent.set(0.0);
-                                download_speed.set(String::new());
-                            }
-                        }
-                    }
-                    Err(error) => notify_error("读取下载状态", &error),
+                match api::update::status().await {
+                    Ok(current) => state.accept(current),
+                    Err(error) => notify_error("读取更新状态", &error),
                 }
             });
             return;
@@ -1463,62 +1440,45 @@ fn AboutSetting() -> impl IntoView {
         check_for_update();
     });
 
+    // 下载：本地先把状态机推进到「下载中」（按钮立刻有反应），响应回来后按
+    // `api::update::download_followup` 落位（完成 / 取消 / 失败 / "已经有了一笔"）。
     let download_update = move || {
-        let url = download_url.get_untracked();
-        if url.is_empty() {
+        let current = state.current();
+        if current.download_url.is_empty() || current.is_downloading() {
             return;
         }
-        // 单例：已经在下载就别再发一次（外壳侧也会拒绝，这里只是省一次往返）
-        if status.get_untracked() == "downloading" {
-            return;
-        }
-        status.set("downloading".to_string());
-        download_percent.set(0.0);
-        download_speed.set(String::new());
+        let (url, digest) = (current.download_url.clone(), current.digest.clone());
+        state.advance_with(UpdateEvent::DownloadStarted {
+            url: url.clone(),
+            digest: digest.clone(),
+        });
 
         leptos::task::spawn_local(async move {
-            let digest = digest.get_untracked();
             match api::update::download(&url, &digest).await {
                 Ok(response) => {
-                    if response.success {
-                        // 正常路径由 `update:download-complete` 事件置为 downloaded
-                        if status.get_untracked() == "downloading" {
-                            status.set("downloaded".to_string());
-                        }
-                    } else if response.is_cancelled() {
-                        status.set("available".to_string());
-                        download_percent.set(0.0);
-                        download_speed.set(String::new());
-                    } else if response.error.as_deref() == Some("already_downloading") {
-                        // 外壳报告已有一笔在跑（例如刚切回本页又点了下载）：
-                        // 回到"下载中"，让进度事件继续驱动界面
-                        status.set("downloading".to_string());
-                    } else {
-                        let message = response.error.unwrap_or_else(|| "下载失败".to_string());
-                        if status.get_untracked() != "error" {
-                            status.set("error".to_string());
-                            error_message.set(message.clone());
-                        }
-                        Notifier::global().error("下载更新失败", Some(message));
+                    // 失败的通知由 `update:download-error` 事件那条监听负责（只发一次）
+                    if let Some(next) = api::update::download_followup(&response, &state.current())
+                    {
+                        state.accept(next);
                     }
                 }
                 Err(error) => {
-                    status.set("error".to_string());
-                    error_message.set(error.message().to_string());
-                    notify_error("下载更新失败", &error);
+                    // 命令层失败（信封错误）是"外壳压根没收到调用"这一档 ——
+                    // 只把状态从"下载中"救回来，**不重复提示**：真的下载失败由事件那条通知负责。
+                    let next = state
+                        .current()
+                        .failed_after_download_attempt(error.message());
+                    state.accept(next);
                 }
             }
         });
     };
 
+    // 取消：外壳把状态退回「可下载」并不广播（发起方就是界面），这里本地落同一档。
     let cancel_download = move || {
         leptos::task::spawn_local(async move {
             match api::update::cancel().await {
-                Ok(()) => {
-                    status.set("available".to_string());
-                    download_percent.set(0.0);
-                    download_speed.set(String::new());
-                }
+                Ok(()) => state.advance_with(UpdateEvent::DownloadCancelled),
                 Err(error) => notify_error("取消下载", &error),
             }
         });
@@ -1530,18 +1490,15 @@ fn AboutSetting() -> impl IntoView {
                 Ok(response) => {
                     if response.success {
                         // 成功后应用会自行退出，界面只需提示
-                        Notifier::global().success("正在启动安装程序", None);
+                        Notifier::global().success(tr_domain::update::NOTIFY_INSTALLING, None);
                     } else {
                         let message = response.error.unwrap_or_else(|| "安装启动失败".to_string());
-                        status.set("error".to_string());
-                        error_message.set(message.clone());
-                        Notifier::global().error("安装更新失败", Some(message));
+                        Notifier::global()
+                            .error(tr_domain::update::NOTIFY_INSTALL_FAILED, Some(message));
                     }
                 }
                 Err(error) => {
-                    status.set("error".to_string());
-                    error_message.set(error.message().to_string());
-                    notify_error("安装更新失败", &error);
+                    notify_error(tr_domain::update::NOTIFY_INSTALL_FAILED, &error);
                 }
             }
         });
@@ -1556,14 +1513,11 @@ fn AboutSetting() -> impl IntoView {
         }
     };
 
-    // 更新说明在 available / downloading / downloaded / error 阶段保留展示
+    // 更新说明的展示条件由状态机给（`UpdateStatus::shows_release_body`）：
+    // available / downloading / downloaded / failed 阶段都保留展示。
     let show_release_body = move || {
-        let status_now = status.get();
-        !release_body.get().is_empty()
-            && matches!(
-                status_now.as_str(),
-                "available" | "downloading" | "downloaded" | "error"
-            )
+        let current = snapshot.get();
+        !current.release_body.is_empty() && current.status.shows_release_body()
     };
 
     view! {
@@ -1584,142 +1538,156 @@ fn AboutSetting() -> impl IntoView {
                     <p class="st-app-version">{version_text}</p>
                 </div>
 
+                // 纯渲染：`match` 的分支就是状态词表（穷尽匹配，加一档会被编译器逼着补文案），
+                // 每个分支只读快照里的字段，不做任何状态推导。
                 <div class="st-about-update">
-                    {move || match status.get().as_str() {
-                        "checking" => {
-                            view! {
-                                <div class="st-update-row">
-                                    <Spin spinning=true size=SpinSize::Small />
-                                    <span class="st-update-text">"正在检查更新…"</span>
-                                </div>
+                    {move || {
+                        let current = snapshot.get();
+                        match current.status {
+                            UpdateStatus::Checking => {
+                                view! {
+                                    <div class="st-update-row">
+                                        <Spin spinning=true size=SpinSize::Small />
+                                        <span class="st-update-text">
+                                            {UpdateStatus::Checking.label()}
+                                        </span>
+                                    </div>
+                                }
+                                    .into_any()
                             }
-                                .into_any()
-                        }
-                        "no-update" => {
-                            view! {
-                                <div class="st-update-row st-update-success">
-                                    <span class="st-update-icon">
-                                        {icons::icon(Icon::CheckCircle)}
-                                    </span>
-                                    <span class="st-update-text">"已是最新版本"</span>
-                                    <Button
-                                        variant=ButtonVariant::Secondary
-                                        size=ButtonSize::Small
-                                        on_click=move || check_for_update()
-                                    >
-                                        "重新检查"
-                                    </Button>
-                                </div>
+                            UpdateStatus::NoUpdate => {
+                                view! {
+                                    <div class="st-update-row st-update-success">
+                                        <span class="st-update-icon">
+                                            {icons::icon(Icon::CheckCircle)}
+                                        </span>
+                                        <span class="st-update-text">
+                                            {UpdateStatus::NoUpdate.label()}
+                                        </span>
+                                        <Button
+                                            variant=ButtonVariant::Secondary
+                                            size=ButtonSize::Small
+                                            on_click=move || check_for_update()
+                                        >
+                                            "重新检查"
+                                        </Button>
+                                    </div>
+                                }
+                                    .into_any()
                             }
-                                .into_any()
-                        }
-                        "available" => {
-                            view! {
-                                <div class="st-update-row st-update-available">
-                                    <span class="st-update-text">
-                                        "发现新版本 "
-                                        <strong>{move || latest_version.get()}</strong>
-                                    </span>
-                                    <Button
-                                        variant=ButtonVariant::Primary
-                                        size=ButtonSize::Small
-                                        on_click=move || download_update()
-                                    >
-                                        "立即更新"
-                                    </Button>
-                                </div>
+                            UpdateStatus::Available => {
+                                view! {
+                                    <div class="st-update-row st-update-available">
+                                        <span class="st-update-text">
+                                            "发现新版本 "
+                                            <strong>{move || snapshot.get().latest_version}</strong>
+                                        </span>
+                                        <Button
+                                            variant=ButtonVariant::Primary
+                                            size=ButtonSize::Small
+                                            on_click=move || download_update()
+                                        >
+                                            "立即更新"
+                                        </Button>
+                                    </div>
+                                }
+                                    .into_any()
                             }
-                                .into_any()
-                        }
-                        "downloading" => {
-                            view! {
-                                <div class="st-update-row">
-                                    <Progress
-                                        percent=Signal::derive(move || download_percent.get())
-                                        class="st-update-progress"
-                                    />
-                                    <span class="st-update-text">
-                                        {move || format!("{:.0}%", download_percent.get())}
-                                    </span>
-                                    // 百分比之外额外显示速度（本轮任务要求的增补）
-                                    <span class="st-update-speed">
-                                        {move || download_speed.get()}
-                                    </span>
-                                    <Button
-                                        variant=ButtonVariant::Secondary
-                                        size=ButtonSize::Small
-                                        on_click=move || cancel_download()
-                                    >
-                                        "取消下载"
-                                    </Button>
-                                </div>
+                            UpdateStatus::Downloading => {
+                                view! {
+                                    <div class="st-update-row">
+                                        <Progress
+                                            percent=Signal::derive(move || {
+                                                snapshot.get().percent as f64
+                                            })
+                                            class="st-update-progress"
+                                        />
+                                        <span class="st-update-text">
+                                            {move || format!("{:.0}%", snapshot.get().percent)}
+                                        </span>
+                                        // 百分比之外额外显示速度（本轮任务要求的增补）
+                                        <span class="st-update-speed">
+                                            {move || snapshot.get().speed}
+                                        </span>
+                                        <Button
+                                            variant=ButtonVariant::Secondary
+                                            size=ButtonSize::Small
+                                            on_click=move || cancel_download()
+                                        >
+                                            "取消下载"
+                                        </Button>
+                                    </div>
+                                }
+                                    .into_any()
                             }
-                                .into_any()
-                        }
-                        "downloaded" => {
-                            view! {
-                                <div class="st-update-row st-update-success">
-                                    <span class="st-update-icon">
-                                        {icons::icon(Icon::CheckCircle)}
-                                    </span>
-                                    <span class="st-update-text">"下载完成"</span>
-                                    <Button
-                                        variant=ButtonVariant::Primary
-                                        size=ButtonSize::Small
-                                        on_click=move || install_update()
-                                    >
-                                        "安装并退出"
-                                    </Button>
-                                </div>
+                            UpdateStatus::Downloaded => {
+                                view! {
+                                    <div class="st-update-row st-update-success">
+                                        <span class="st-update-icon">
+                                            {icons::icon(Icon::CheckCircle)}
+                                        </span>
+                                        <span class="st-update-text">
+                                            {UpdateStatus::Downloaded.label()}
+                                        </span>
+                                        <Button
+                                            variant=ButtonVariant::Primary
+                                            size=ButtonSize::Small
+                                            on_click=move || install_update()
+                                        >
+                                            "安装并退出"
+                                        </Button>
+                                    </div>
+                                }
+                                    .into_any()
                             }
-                                .into_any()
-                        }
-                        "error" => {
-                            view! {
-                                <div class="st-update-row st-update-error">
-                                    <span class="st-update-icon">
-                                        {icons::icon(Icon::CloseCircle)}
-                                    </span>
-                                    <span class="st-update-text">
-                                        {move || {
-                                            let message = error_message.get();
-                                            if message.is_empty() {
-                                                "检查失败，请稍后重试".to_string()
-                                            } else {
-                                                message
-                                            }
-                                        }}
-                                    </span>
-                                    <Button
-                                        variant=ButtonVariant::Secondary
-                                        size=ButtonSize::Small
-                                        on_click=move || check_for_update()
-                                    >
-                                        "重试"
-                                    </Button>
-                                </div>
+                            UpdateStatus::Failed => {
+                                view! {
+                                    <div class="st-update-row st-update-error">
+                                        <span class="st-update-icon">
+                                            {icons::icon(Icon::CloseCircle)}
+                                        </span>
+                                        <span class="st-update-text">
+                                            {move || {
+                                                let message = snapshot.get().error.unwrap_or_default();
+                                                if message.is_empty() {
+                                                    UpdateStatus::Failed.label().to_string()
+                                                } else {
+                                                    message
+                                                }
+                                            }}
+                                        </span>
+                                        <Button
+                                            variant=ButtonVariant::Secondary
+                                            size=ButtonSize::Small
+                                            on_click=move || check_for_update()
+                                        >
+                                            "重试"
+                                        </Button>
+                                    </div>
+                                }
+                                    .into_any()
                             }
-                                .into_any()
-                        }
-                        _ => {
-                            view! {
-                                <div class="st-update-row">
-                                    <Button
-                                        variant=ButtonVariant::Secondary
-                                        size=ButtonSize::Small
-                                        on_click=move || check_for_update()
-                                    >
-                                        "检查更新"
-                                    </Button>
-                                </div>
+                            // idle：还没查过（或查不到可更新内容）→ 只给一颗「检查更新」
+                            UpdateStatus::Idle => {
+                                view! {
+                                    <div class="st-update-row">
+                                        <Button
+                                            variant=ButtonVariant::Secondary
+                                            size=ButtonSize::Small
+                                            on_click=move || check_for_update()
+                                        >
+                                            {UpdateStatus::Idle.label()}
+                                        </Button>
+                                    </div>
+                                }
+                                    .into_any()
                             }
-                                .into_any()
                         }
                     }}
                 </div>
 
                 <Show when=show_release_body>
-                    <div class="st-release-body">{move || release_body.get()}</div>
+                    <div class="st-release-body">{move || snapshot.get().release_body}</div>
                 </Show>
 
                 <div class="st-about-footer">

@@ -33,6 +33,7 @@ fixtures/            # schema 基线（fresh.sql）+ 种子与端到端脚本（
 # 类型检查 / 测试（不含桌面外壳）
 cargo check -p tr-domain -p tr-store -p tr-service -p xtask --all-targets
 cargo test  -p tr-domain -p tr-draw -p tr-store -p tr-service
+cargo test  -p transactions                                # 应用外壳的纯逻辑（配置/命令面/日志/资产/更新器）
 cargo check -p tr-draw --all-targets                       # 纯算法（绘制 + 取数决策；native 上就能测）
 cargo check -p tr-ui --target wasm32-unknown-unknown       # 界面只编 wasm32
 cargo fmt --check
@@ -80,6 +81,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 | `ui-proxy` / `ui-about` / `ui-features` / `ui-update-restore` | 假代理日志当判据（行情 `qt.gtimg.cn`、更新 `api.github.com`）；版本自报；功能开关落盘并重启生效；下载状态跨页面恢复（依赖真实 GitHub API，离线用 `-SkipNetwork`） |
 | `migrate-workspace` | 降级 → 升级 → 备份 → 幂等（**迁移引擎这条最高风险路径就靠它**） |
 | `test-draw` | 界面侧**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 + 页面取数的决策（去重 / generation / 复核判定 / 失效） |
+| `test-src-tauri` | **应用外壳**的纯逻辑真跑（`cargo test -p transactions`）：配置键名与往返、命令面请求形状、日志轮转、资产路径穿越校验、更新器解析；更新流程的状态机本身在 `tr-domain::update`（由 `test-domain` 跑） |
 
 护栏总原则：一律真的启动应用、用 UI Automation 或真实鼠标键盘驱动；**断言落在库/磁盘上**，不落在"点到了没有"。
 
@@ -124,7 +126,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   要删事件，所以改「删除事件」就得带上它）—— 新增/改动护栏时把这类依赖写进 `$Groups` 的注释里。
 - **什么时候才跑全量**：① 动 `fixtures/lib/TrUia.ps1` / 公共组件 / 外壳；② 一次改动跨 3 个以上页面；
   ③ 合并或发布前；④ 长时间没跑过（不确定基线还绿不绿）。
-- 单独排查时可直接跑某个脚本，但**别漏了 `core` 那四条**。
+- 单独排查时可直接跑某个脚本，但**别漏了 `core` 那三条**。
 
 ## 本机环境注意事项（踩过的坑）
 
@@ -360,11 +362,26 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 ### 更新与代理
 
 - **自动更新是自研实现**（`src-tauri/src/updater.rs`），没有用 `tauri-plugin-updater`：沿用 GitHub Releases +
-  `asset.digest`(sha256) 校验，不需要签名密钥与 `latest.json`。命令 `update_check` / `update_download`（发
-  `update:download-progress|complete|error` 事件）/ `update_cancel` / `update_install`；行为：仅 GitHub 域名白名单、
-  已下载复用、`.part` 中转、取消清理、打开安装包后退出。因此 `tauri.conf.json` 里**不要**加 `plugins.updater`，
-  capabilities 也不需要 `updater:default`。两个纯函数 `parse_release`（跳过预发布、`v` 前缀、取第一个 `.exe`
-  资产、body 缺失给空串、没有 `.exe` 仍算"有更新"）与 `digest_matches` / `normalize_digest` 已有单测。
+  `asset.digest`(sha256) 校验，不需要签名密钥与 `latest.json`。命令 `update_check` / `update_download` /
+  `update_download_status` / `update_cancel` / `update_install`；行为：仅 GitHub 域名白名单、已下载复用、
+  `.part` 中转、取消清理、打开安装包后退出。因此 `tauri.conf.json` 里**不要**加 `plugins.updater`，
+  capabilities 也不需要 `updater:default`。
+  * **状态的唯一持有者是外壳，词表与迁移规则在 `tr-domain::update`**（纯逻辑、两侧共用、`cargo test -p tr-domain`
+    真跑）。`UpdateStatus` 七个取值（`idle` / `checking` / `available` / `no-update` / `downloading` /
+    `downloaded` / `failed`）**序列化取值就是契约**（`no-update` 是连字符）；`UpdateEvent::apply` 是唯一的迁移
+    入口，四条规则写在里面：**"检查失败 ≠ 已是最新"**（带 `error` 一律进 `failed`）、进度只在 `downloading` 时
+    生效（迟到的进度不会把状态拉回来）、重复事件幂等、没有下载地址不进下载态。
+  * **事件载荷是完整快照**（`UpdateSnapshot`，camelCase）：`update:download-progress|complete|error` 三个名字
+    不变（改名字另有其票），改的是"从前各自带一小块字段、界面再拼"这件事。`update_download_status` 返回同一份
+    快照 —— 所以"进页面补状态"与"事件推过来"永远一致，谁先到都不影响结果。
+  * **界面（`crates/tr-ui/src/pages/settings.rs` 的「关于软件」）只渲染快照**：`match` 的分支就是词表（穷尽匹配），
+    不再出现 `"downloading"` 这类字符串比较，也不再自己判断"失败还是最新"。文案常量（按钮 / 通知标题）也在
+    `tr-domain::update` 里，两侧共用，单元测试遍历所有取值断言"每个状态都有文案"。
+  * 剩下的纯函数（`parse_release`、`is_newer_version`、`digest_matches` / `normalize_digest`、`format_speed`）
+    有一半已搬进 `tr-domain::update`，留在外壳的（`parse_release` / `url_host` / 缓存文件 digest 复核 / 去重键）
+    由 `cargo test -p transactions` 覆盖 —— 这条链路以前**一个单元测试都不执行**。回归：
+    `fixtures/test.ps1 -Unit update`（`test-domain` + `test-src-tauri` + `ui-update-restore`，端到端那条仍依赖
+    真实 GitHub API）。
 - **代理：三态 + 自动探测系统代理**：「应用设置 → 通用设置 → 代理」= `off`（不使用）/ `auto`（自动探测，默认）/
   `manual`（手动 `http://host:port`），落在 `~/.transactions.json` 的 `proxy: { mode, url }`（缺该键的老配置按
   `auto`）。配置由外壳持有，`main.rs` 启动时调 `tr_service::proxy::set(...)`，`config_set_proxy` 落盘后立即再推

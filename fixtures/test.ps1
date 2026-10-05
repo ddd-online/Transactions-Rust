@@ -77,6 +77,12 @@ $Steps = [ordered]@{
     'test-store'        = @{ Title='cargo test -p tr-store';                         Kind='cargo'; Args=@('test','-p','tr-store'); Needs='none' }
     'test-service'      = @{ Title='cargo test -p tr-service';                       Kind='cargo'; Args=@('test','-p','tr-service'); Needs='none' }
     'test-ipc'          = @{ Title='cargo test -p tr-ipc';                           Kind='cargo'; Args=@('test','-p','tr-ipc'); Needs='none' }
+    # 应用外壳（窗口 / 托盘 / 配置 / 命令面 / 日志 / 资产 / 更新器）此前**一个测试都不跑** ——
+    # 仓库的 `cargo test` 与全量档都不覆盖它，那边十来条 `#[cfg(test)]` 落进了 ADR-0001 说过的
+    # 处境（只是规格说明）。测试目标会跳过入口（`main` 被 `cfg(test)` 排除，理由见 main.rs）：
+    # `generate_context!()` 要嵌 `crates/tr-ui/dist`，而那份产物由 trunk 生成、不入库，
+    # 少了它连 `cargo test` 都编译不过 —— 那是与测试无关的条件。
+    'test-src-tauri'    = @{ Title='cargo test -p transactions（应用外壳）';          Kind='cargo'; Args=@('test','-p','transactions'); Needs='none' }
     'test-draw'         = @{ Title='cargo test -p tr-draw（图表 / 裁剪的纯算法）';    Kind='cargo'; Args=@('test','-p','tr-draw'); Needs='none' }
     # --all-targets 不能省：界面的 `#[cfg(test)]` 在 native 上跑不到（跑到了也是 0 个），
     # 少了它连**类型检查**都没有 —— 实测曾积累 7 处 `vec![100, 300]` 这类错误（整数当 f64）
@@ -133,11 +139,16 @@ $Groups = [ordered]@{
     'todo'         = @('ui-todo')
     'settings'     = @('ui-proxy', 'ui-about', 'ui-features')
     'assets'       = @('ui-upload')
-    'shell'        = @('smoke', 'window-bounds', 'close-behavior')
+    # 外壳：窗口 / 托盘 / 关闭行为。`test-src-tauri` 是这一整个 crate 的单元测试
+    # （配置键名与往返、命令面请求形状、日志轮转、资产路径穿越、更新器解析）——
+    # 改了外壳任何一处都该跑它，否则那 39 条断言又变回"只是规格说明"。
+    'shell'        = @('test-src-tauri', 'smoke', 'window-bounds', 'close-behavior')
     # 共享组件 / 全局样式 / 侧栏骨架：影响面按 AGENTS.md 的约定放大到"覆盖到的代表页"
     # 图表与裁剪的纯算法已搬进 tr-draw（native 可编），由 test-draw 真跑 —— 见 docs/adr/0001
     'ui-kit'       = @('design-audit', 'check-ui-wasm', 'test-draw', 'ui-smoke', 'ui-shots', 'ui-transactions', 'ui-stock')
-    'update'       = @('ui-update-restore')
+    # 更新流程：状态机在 tr-domain::update（native 真跑），外壳持有状态、界面只渲染快照，
+    # 端到端那条仍然依赖真实 GitHub API（离线用 -SkipNetwork 跳过）。
+    'update'       = @('test-domain', 'test-src-tauri', 'ui-update-restore')
 }
 
 # ---------------------------------------------------------------- 改动 → 分组（-Unit changed）
@@ -147,6 +158,9 @@ $PathMap = @(
     @{ Re='^fixtures/(?<name>[a-z0-9-]+)\.ps1$';          Script=$true }     # 改了某个护栏 → 跑它自己
     @{ Re='^fixtures/';                                   Groups=@('core') }
     @{ Re='^crates/tr-domain/src/(money|fee|consts|proxy|error)\.rs$'; Groups=@('domain') }
+    # 更新流程的状态机（词表 / 合法迁移 / 文案）：词表改了要连外壳与端到端一起看，
+    # 所以单独一条规则，必须排在通用的 `tr-domain/` 之前（顺序敏感，第一条命中为准）。
+    @{ Re='^crates/tr-domain/src/update\.rs$';            Groups=@('update', 'domain') }
     @{ Re='^crates/tr-domain/src/models/';                Groups=@('domain', 'store') }
     @{ Re='^crates/tr-domain/src/dto/';                   Groups=@('domain', 'ipc') }
     @{ Re='^crates/tr-domain/';                           Groups=@('domain') }
@@ -180,13 +194,16 @@ $PathMap = @(
     @{ Re='^crates/tr-ui/src/pages/data_analysis\.rs$';   Groups=@('analysis') }
     @{ Re='^crates/tr-ui/src/pages/templates\.rs$';       Groups=@('templates') }
     @{ Re='^crates/tr-ui/src/pages/(transactions|accounting)\.rs$'; Groups=@('accounting') }
+    # 「关于软件」的快照渲染与更新的命令桥：同一条链路（词表在 tr-domain::update）
+    @{ Re='^crates/tr-ui/src/(api/update|pages/settings)\.rs$'; Groups=@('update', 'settings') }
     @{ Re='^crates/tr-ui/src/pages/settings\.rs$';        Groups=@('settings') }
     @{ Re='^crates/tr-ui/src/components/ui/';             Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/src/(shell|store|icons|notify|error_handler|format|time)\.rs$'; Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/static/css/';                    Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/(index\.html|Trunk\.toml)$';     Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/';                               Groups=@('ui-kit') }
-    @{ Re='^src-tauri/';                                  Groups=@('shell') }
+    # 外壳：`test-src-tauri` 在 shell 分组里（含更新器的解析与去重键）
+    @{ Re='^src-tauri/';                                  Groups=@('shell', 'update') }
     @{ Re='^(Cargo\.toml|Cargo\.lock|\.cargo/config\.toml)$'; Groups=@('core') }
 )
 
