@@ -1,5 +1,5 @@
-//! 股票域命令封装。字段名以 `crates/tr-ipc/src/commands/stock.rs` 为准
-//! （**唯一权威**，逐字照抄）。
+//! 股票域命令封装。命令名与请求 / 响应类型取自 `tr_domain::commands` 的清单，
+//! 字段名取自共享的 `tr_domain` 类型 —— 两处都不会与命令面漂移。
 //!
 //! | 命令 | 入参 |
 //! |---|---|
@@ -26,6 +26,7 @@
 //! `stock_overview` / `stock_positions` / `stock_trades` / `stock_history` 等
 //! 在 P6-b 已全部接入（见下方「股票页」一节）。
 
+use tr_domain::commands;
 use tr_domain::dto::{
     StockFundRecordPage, StockNameDto, StockOperationDto, StockOperationRollbackDto,
     StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockStatisticsDto,
@@ -49,7 +50,7 @@ use crate::ipc::{self, IpcError};
 /// 读取费用设置（不存在时后端按默认值创建并返回）。
 pub async fn fee_settings_get(ledger_id: &str) -> Result<StockFeeSetting, IpcError> {
     ipc::call(
-        "stock_fee_settings_get",
+        commands::STOCK_FEE_SETTINGS_GET,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -66,7 +67,7 @@ pub async fn fee_settings_put(
     transfer_fee_rate: f64,
 ) -> Result<StockFeeSetting, IpcError> {
     ipc::call(
-        "stock_fee_settings_put",
+        commands::STOCK_FEE_SETTINGS_PUT,
         StockFeeSettingsRequest {
             ledger_id: ledger_id.to_string(),
             commission_rate: Some(commission_rate),
@@ -82,7 +83,7 @@ pub async fn fee_settings_put(
 /// 读取可用交易标签（`defaultTag` 恒为「分析」）。
 pub async fn tag_settings_get(ledger_id: &str) -> Result<StockTradeTagSettingDto, IpcError> {
     ipc::call(
-        "stock_tag_settings_get",
+        commands::STOCK_TAG_SETTINGS_GET,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -96,7 +97,7 @@ pub async fn tag_settings_put(
     tags: Vec<String>,
 ) -> Result<StockTradeTagSettingDto, IpcError> {
     ipc::call(
-        "stock_tag_settings_put",
+        commands::STOCK_TAG_SETTINGS_PUT,
         StockTagSettingsRequest {
             ledger_id: ledger_id.to_string(),
             tags,
@@ -108,7 +109,7 @@ pub async fn tag_settings_put(
 /// 清空指定账本的全部股票数据（后端返回 `true`）。
 pub async fn reset(ledger_id: &str) -> Result<bool, IpcError> {
     ipc::call(
-        "stock_reset",
+        commands::STOCK_RESET,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -120,7 +121,7 @@ pub async fn reset(ledger_id: &str) -> Result<bool, IpcError> {
 /// 仍持有股票时后端返回 409（文案里带持仓名）。
 pub async fn archive(ledger_id: &str, name: &str) -> Result<String, IpcError> {
     ipc::call(
-        "stock_archive",
+        commands::STOCK_ARCHIVE,
         StockArchiveRequest {
             ledger_id: ledger_id.to_string(),
             name: name.to_string(),
@@ -136,7 +137,7 @@ pub async fn archive(ledger_id: &str, name: &str) -> Result<String, IpcError> {
 /// 账户总览（本金 / 可用现金 / 持仓市值 / 总资产 / 已实现 / 浮动盈亏 / 行情失败数）。
 pub async fn overview(ledger_id: &str) -> Result<StockOverviewDto, IpcError> {
     ipc::call(
-        "stock_overview",
+        commands::STOCK_OVERVIEW,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -151,7 +152,7 @@ pub async fn principal_add(
     date: &str,
 ) -> Result<StockOverviewDto, IpcError> {
     ipc::call(
-        "stock_principal_add",
+        commands::STOCK_PRINCIPAL_ADD,
         StockAmountDateRequest {
             ledger_id: ledger_id.to_string(),
             amount: Some(amount),
@@ -168,7 +169,7 @@ pub async fn interest_add(
     date: &str,
 ) -> Result<StockOverviewDto, IpcError> {
     ipc::call(
-        "stock_interest_add",
+        commands::STOCK_INTEREST_ADD,
         StockAmountDateRequest {
             ledger_id: ledger_id.to_string(),
             amount: Some(amount),
@@ -185,7 +186,7 @@ pub async fn withdraw(
     date: &str,
 ) -> Result<StockOverviewDto, IpcError> {
     ipc::call(
-        "stock_withdraw",
+        commands::STOCK_WITHDRAW,
         StockAmountDateRequest {
             ledger_id: ledger_id.to_string(),
             amount: Some(amount),
@@ -202,7 +203,7 @@ pub async fn fund_records(
     page_size: i64,
 ) -> Result<StockFundRecordPage, IpcError> {
     ipc::call(
-        "stock_fund_records",
+        commands::STOCK_FUND_RECORDS,
         StockFundRecordsRequest {
             ledger_id: ledger_id.to_string(),
             page: Some(page.into()),
@@ -215,7 +216,7 @@ pub async fn fund_records(
 /// 持仓列表（只含未清仓股票，后端会挂行情；行情失败时 `latestPrice` 为 `None`）。
 pub async fn positions(ledger_id: &str) -> Result<Vec<StockPositionDto>, IpcError> {
     ipc::call(
-        "stock_positions",
+        commands::STOCK_POSITIONS,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -230,7 +231,7 @@ pub async fn position_review(
     review: &str,
 ) -> Result<StockPositionDto, IpcError> {
     ipc::call(
-        "stock_position_review",
+        commands::STOCK_POSITION_REVIEW,
         StockPositionReviewRequest {
             ledger_id: ledger_id.to_string(),
             code: code.to_string(),
@@ -243,7 +244,7 @@ pub async fn position_review(
 /// 某股交易列表（持仓中只返回本轮）。
 pub async fn trades(ledger_id: &str, stock_code: &str) -> Result<Vec<StockTradeDto>, IpcError> {
     ipc::call(
-        "stock_trades",
+        commands::STOCK_TRADES,
         StockTradesRequest {
             ledger_id: ledger_id.to_string(),
             stock_code: stock_code.to_string(),
@@ -263,7 +264,7 @@ pub async fn trade_create(
     fills: Vec<TradeFillRequest>,
 ) -> Result<Vec<StockTradeDto>, IpcError> {
     ipc::call(
-        "stock_trade_create",
+        commands::STOCK_TRADE_CREATE,
         StockTradeCreateRequest {
             ledger_id: ledger_id.to_string(),
             stock_code: stock_code.to_string(),
@@ -291,7 +292,7 @@ pub async fn trade_update(
     trade_time: i64,
 ) -> Result<StockTradeDto, IpcError> {
     ipc::call(
-        "stock_trade_update",
+        commands::STOCK_TRADE_UPDATE,
         StockTradeUpdateRequest {
             ledger_id: ledger_id.to_string(),
             id: id.to_string(),
@@ -306,7 +307,7 @@ pub async fn trade_update(
 /// 删除整笔委托。
 pub async fn trade_order_delete(ledger_id: &str, order_id: &str) -> Result<bool, IpcError> {
     ipc::call(
-        "stock_trade_order_delete",
+        commands::STOCK_TRADE_ORDER_DELETE,
         StockTradeOrderDeleteRequest {
             ledger_id: ledger_id.to_string(),
             order_id: order_id.to_string(),
@@ -327,7 +328,7 @@ pub async fn trade_impact(
     trade_time: i64,
 ) -> Result<StockTradeImpactDto, IpcError> {
     ipc::call(
-        "stock_trade_impact",
+        commands::STOCK_TRADE_IMPACT,
         StockTradeImpactRequest {
             ledger_id: ledger_id.to_string(),
             action: action.to_string(),
@@ -344,7 +345,7 @@ pub async fn trade_impact(
 /// 交易历史集合列表（左栏）。
 pub async fn history(ledger_id: &str) -> Result<Vec<StockTradeHistoryDto>, IpcError> {
     ipc::call(
-        "stock_history",
+        commands::STOCK_HISTORY,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -358,7 +359,7 @@ pub async fn history_detail(
     stock_code: &str,
 ) -> Result<StockTradeHistoryDetailDto, IpcError> {
     ipc::call(
-        "stock_history_detail",
+        commands::STOCK_HISTORY_DETAIL,
         StockTradesRequest {
             ledger_id: ledger_id.to_string(),
             stock_code: stock_code.to_string(),
@@ -370,7 +371,7 @@ pub async fn history_detail(
 /// 全部股票的交易历史总览。
 pub async fn history_summary(ledger_id: &str) -> Result<StockTradeHistorySummaryDto, IpcError> {
     ipc::call(
-        "stock_history_summary",
+        commands::STOCK_HISTORY_SUMMARY,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -385,7 +386,7 @@ pub async fn round_review(
     review: &str,
 ) -> Result<StockTradeHistoryDetailDto, IpcError> {
     ipc::call(
-        "stock_round_review",
+        commands::STOCK_ROUND_REVIEW,
         StockRoundReviewRequest {
             ledger_id: ledger_id.to_string(),
             id: id.to_string(),
@@ -402,7 +403,7 @@ pub async fn round_tag(
     tag: &str,
 ) -> Result<StockTradeHistoryDetailDto, IpcError> {
     ipc::call(
-        "stock_round_tag",
+        commands::STOCK_ROUND_TAG,
         StockRoundTagRequest {
             ledger_id: ledger_id.to_string(),
             id: id.to_string(),
@@ -424,7 +425,7 @@ pub async fn statistics(
     tag: &str,
 ) -> Result<StockStatisticsDto, IpcError> {
     ipc::call(
-        "stock_statistics",
+        commands::STOCK_STATISTICS,
         StockStatisticsRequest {
             ledger_id: ledger_id.to_string(),
             start_month: start_month.to_string(),
@@ -439,7 +440,7 @@ pub async fn statistics(
 /// 查询股票名称（优先本地交易记录，未命中走外部行情；**不需要 ledger_id**）。
 pub async fn stock_name(stock_code: &str) -> Result<StockNameDto, IpcError> {
     ipc::call(
-        "stock_name",
+        commands::STOCK_NAME,
         StockNameRequest {
             stock_code: stock_code.to_string(),
         },
@@ -450,7 +451,7 @@ pub async fn stock_name(stock_code: &str) -> Result<StockNameDto, IpcError> {
 /// 操作记录列表（最新的在前，最多 10 条）。
 pub async fn operation_list(ledger_id: &str) -> Result<Vec<StockOperationDto>, IpcError> {
     ipc::call(
-        "stock_operation_list",
+        commands::STOCK_OPERATION_LIST,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -463,7 +464,7 @@ pub async fn operation_preview(
     ledger_id: &str,
 ) -> Result<StockOperationRollbackPreviewDto, IpcError> {
     ipc::call(
-        "stock_operation_preview",
+        commands::STOCK_OPERATION_PREVIEW,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -474,7 +475,7 @@ pub async fn operation_preview(
 /// 回滚最新一次操作。
 pub async fn operation_rollback(ledger_id: &str) -> Result<StockOperationRollbackDto, IpcError> {
     ipc::call(
-        "stock_operation_rollback",
+        commands::STOCK_OPERATION_ROLLBACK,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },

@@ -3,6 +3,7 @@
 //! 与分类域同构，但查询参数名是 `categoryTransactionType`（分类域是 `type`）——照抄
 //! `crates/tr-ipc/src/commands/tag.rs`，不要"顺手统一"。
 
+use tr_domain::commands;
 use tr_domain::dto::{CreateTagRequest, TagDto, UpdateTagSortRequest};
 use tr_domain::wire::{TagDeleteRequest, TagListRequest};
 
@@ -14,7 +15,7 @@ pub async fn list(
     ledger_id: &str,
 ) -> Result<Vec<TagDto>, IpcError> {
     ipc::call(
-        "tag_list",
+        commands::TAG_LIST,
         TagListRequest {
             category_transaction_type: category_transaction_type.to_string(),
             ledger_id: ledger_id.to_string(),
@@ -30,7 +31,7 @@ pub async fn create(
     category_transaction_type: &str,
 ) -> Result<(), IpcError> {
     ipc::call_void(
-        "tag_create",
+        commands::TAG_CREATE,
         CreateTagRequest {
             ledger_id: ledger_id.to_string(),
             name: name.to_string(),
@@ -48,7 +49,7 @@ pub async fn delete(
     ledger_id: &str,
 ) -> Result<(), IpcError> {
     ipc::call_void(
-        "tag_delete",
+        commands::TAG_DELETE,
         TagDeleteRequest {
             name: name.to_string(),
             category_transaction_type: category_transaction_type.to_string(),
@@ -66,7 +67,7 @@ pub async fn update_sort(
     sort_order: i32,
 ) -> Result<(), IpcError> {
     ipc::call_void(
-        "tag_update_sort",
+        commands::TAG_UPDATE_SORT,
         UpdateTagSortRequest {
             ledger_id: ledger_id.to_string(),
             name: name.to_string(),

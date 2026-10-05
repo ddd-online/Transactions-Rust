@@ -5,10 +5,14 @@
 //! * 因此它可以同时被 `tr-store`/`tr-service`（native）与 `tr-ui`（wasm32）依赖，
 //!   界面与后端共享**同一份**金额换算、费用分摊与时间段算法，杜绝两侧漂移。
 //! * 序列化字段名是 IPC 契约的一部分，必须逐字段保持稳定（见各模块注释）。
+//! * IPC 的**名字**（命令名 / 事件名）也只有一份来源：[`commands`] 与 [`events`]。
+//!   字段名靠共享类型，名字靠共享清单 —— 界面侧不再出现命令名字符串字面量。
 
+pub mod commands;
 pub mod consts;
 pub mod dto;
 pub mod error;
+pub mod events;
 pub mod fee;
 pub mod models;
 pub mod money;

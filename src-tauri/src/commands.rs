@@ -56,9 +56,13 @@ impl DesktopState {
 }
 
 /// 事件名：工作空间切换成功后广播，界面据此重新挂载当前页面。
-pub const EVENT_WORKSPACE_CHANGED: &str = "workspace-changed";
-/// 事件名：DevTools 开合状态变化。
-pub const EVENT_DEVTOOLS_STATE_CHANGED: &str = "devtools:state-changed";
+///
+/// 名字只有一份定义（`tr_domain::events`）：界面订阅的是同一个常量，
+/// 因此不存在"外壳改了名字、界面还在等旧名字"。
+pub use tr_domain::events::{
+    DEVTOOLS_STATE_CHANGED as EVENT_DEVTOOLS_STATE_CHANGED,
+    WORKSPACE_CHANGED as EVENT_WORKSPACE_CHANGED,
+};
 
 /// 把底层错误收敛为 500 信封（命令面与更新器共用同一套转换）。
 pub(crate) fn internal(error: impl std::fmt::Display) -> ApiError {

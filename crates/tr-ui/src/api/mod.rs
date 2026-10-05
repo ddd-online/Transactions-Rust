@@ -15,12 +15,16 @@
 //! | [`desktop`] | `window_control` / `workspace_*` / `config_*` / `dialog_open` / `devtools_*` |
 //! | [`update`] | `update_check` / `update_download` / `update_install` / `update_cancel` |
 //!
-//! ## 入参 / 返回类型
+//! ## 名字与字段名各有一份来源
 //!
-//! 请求与响应类型**全部来自 `tr_domain`**（`tr_domain::wire` 是请求/响应，
-//! `tr_domain::dto` 是业务 DTO）：界面与内核共用同一份定义，字段名不可能漂移，
-//! 也不需要"逐字照抄"或跨 crate 比对。命名本来就不统一（camelCase 与 snake_case 混用），
-//! 那是既成契约，各类型的 `#[serde(rename)]` 逐字保留。
+//! * **名字靠共享清单**：业务命令的名字都在 `tr_domain::commands`，调用点写成
+//!   `ipc::call(commands::LEDGER_LIST, req)` —— 名字、请求类型、响应类型从同一条目取，
+//!   拼错名字**编译期**就报错。表里的 [`desktop`] 与 [`update`] 还没进清单
+//!   （那是另一票的事），它们暂时走按名字的内部入口。
+//! * **字段名靠共享类型**：请求与响应类型**全部来自 `tr_domain`**（`tr_domain::wire`
+//!   是请求/响应，`tr_domain::dto` 是业务 DTO）：界面与内核共用同一份定义，字段名不可能漂移，
+//!   也不需要"逐字照抄"或跨 crate 比对。命名本来就不统一（camelCase 与 snake_case 混用），
+//!   那是既成契约，各类型的 `#[serde(rename)]` 逐字保留。
 //!
 //! ## 错误
 //!

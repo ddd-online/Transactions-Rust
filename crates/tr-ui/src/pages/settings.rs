@@ -1336,13 +1336,13 @@ impl UpdateState {
     /// 三个事件的载荷都是**完整快照**，所以这里只有"换掉快照"一件事：
     /// 从前要在渲染侧拼 `status`，那个规则已经搬进状态机。
     fn register_listeners(self) {
-        ipc::listen::<UpdateSnapshot, _>(api::update::EVENT_DOWNLOAD_PROGRESS, move |snapshot| {
+        ipc::listen::<UpdateSnapshot, _>(api::update::UPDATE_DOWNLOAD_PROGRESS, move |snapshot| {
             self.accept(snapshot);
         });
-        ipc::listen::<UpdateSnapshot, _>(api::update::EVENT_DOWNLOAD_COMPLETE, move |snapshot| {
+        ipc::listen::<UpdateSnapshot, _>(api::update::UPDATE_DOWNLOAD_COMPLETE, move |snapshot| {
             self.accept(snapshot);
         });
-        ipc::listen::<UpdateSnapshot, _>(api::update::EVENT_DOWNLOAD_ERROR, move |snapshot| {
+        ipc::listen::<UpdateSnapshot, _>(api::update::UPDATE_DOWNLOAD_ERROR, move |snapshot| {
             // 文案优先用外壳给的原因（它直接展示给用户）；没有就退回状态词表里那句兜底
             let message = snapshot
                 .error

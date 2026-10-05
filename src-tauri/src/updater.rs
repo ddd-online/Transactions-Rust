@@ -19,8 +19,8 @@
 //! * 取消时清理临时文件与已下载文件
 //! * 打开安装包后退出应用
 //!
-//! 事件名见 [`EVENT_*`](EVENT_PROGRESS)：载荷**一律是完整快照**（从前是
-//! "各自带一小块字段，界面再拼"）。事件名不变（改名字是另一张票），改的是载荷。
+//! 事件名只有一份定义（`tr_domain::events`，界面订阅的是同一份常量）。载荷**一律是
+//! 完整快照**（从前是"各自带一小块字段，界面再拼"）。改的是载荷，不是名字。
 //!
 //! **为什么不用 `tauri-plugin-updater`**：本项目的发布管线只上传普通 `.exe` 资产（没有签名与 `latest.json`），
 //! 自研路径沿用同一管线、用 `asset.digest` 做完整性校验，无需引入签名密钥管理；
@@ -35,6 +35,9 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
 
+use tr_domain::events::{
+    UPDATE_DOWNLOAD_COMPLETE, UPDATE_DOWNLOAD_ERROR, UPDATE_DOWNLOAD_PROGRESS,
+};
 use tr_domain::update as update_state;
 use tr_domain::update::{UpdateEvent, UpdateSnapshot};
 use tr_domain::wire::{UpdateCheckResponse, UpdateDownloadRequest, UpdateResponse};
@@ -52,13 +55,6 @@ const RELEASE_API: &str =
 const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 /// 下载安装包的超时（安装包可达数百 MB，给足时间）。
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(1800);
-
-/// 事件：下载进度（载荷是完整快照，不是"只有百分比"）。
-const EVENT_PROGRESS: &str = "update:download-progress";
-/// 事件：下载完成（载荷是完整快照）。
-const EVENT_COMPLETE: &str = "update:download-complete";
-/// 事件：下载失败（载荷是完整快照）。
-const EVENT_ERROR: &str = "update:download-error";
 
 /// 取消标记对应的错误文本（与 `tr_domain::update::CANCELLED` 同值；状态机认它）。
 const CANCELLED: &str = update_state::CANCELLED;
@@ -144,7 +140,7 @@ impl UpdaterState {
         *self.speed.lock().expect("更新状态锁中毒") = speed;
         // 不是下载中就不要广播（取消之后迟到的进度会惊动界面）
         if self.state.lock().expect("更新状态锁中毒").is_downloading() {
-            self.emit_snapshot(app, EVENT_PROGRESS);
+            self.emit_snapshot(app, UPDATE_DOWNLOAD_PROGRESS);
         }
     }
 
@@ -353,7 +349,7 @@ async fn run_download(
         Ok(path) => {
             state.remember_downloaded(Some(path));
             state.apply(UpdateEvent::DownloadFinished);
-            state.emit_snapshot(app, EVENT_COMPLETE);
+            state.emit_snapshot(app, UPDATE_DOWNLOAD_COMPLETE);
             Ok(UpdateResponse::ok())
         }
         Err(message) if message == CANCELLED => {
@@ -365,7 +361,7 @@ async fn run_download(
             state.apply(UpdateEvent::DownloadFailed {
                 message: message.clone(),
             });
-            state.emit_snapshot(app, EVENT_ERROR);
+            state.emit_snapshot(app, UPDATE_DOWNLOAD_ERROR);
             Ok(UpdateResponse::failed(message))
         }
     }

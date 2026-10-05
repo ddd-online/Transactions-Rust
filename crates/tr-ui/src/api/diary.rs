@@ -14,6 +14,7 @@
 //! 这里刻意**不用** `api/mod.rs` 里那个 camelCase 的 `LedgerIdRequest`，否则字段名对不上）。
 //! 导出只导指定账本，导入落到指定账本。
 
+use tr_domain::commands;
 use tr_domain::dto::{
     DiaryExportRequest, DiaryExportResult, DiaryScanResponse, DiaryUpsertRequest,
 };
@@ -27,7 +28,7 @@ use crate::ipc::{self, IpcError};
 /// 某账本有日记的日期列表（倒序，含字数与心情）。
 pub async fn list_dates(ledger_id: &str) -> Result<Vec<DiaryDateItem>, IpcError> {
     ipc::call(
-        "diary_list_dates",
+        commands::DIARY_LIST_DATES,
         DiaryLedgerRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -38,7 +39,7 @@ pub async fn list_dates(ledger_id: &str) -> Result<Vec<DiaryDateItem>, IpcError>
 /// 取某账本某天日记（不存在时报错）。
 pub async fn get(date: &str, ledger_id: &str) -> Result<DiaryEntry, IpcError> {
     ipc::call(
-        "diary_get",
+        commands::DIARY_GET,
         DiaryDateRequest {
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),
@@ -55,7 +56,7 @@ pub async fn upsert(
     ledger_id: &str,
 ) -> Result<DiaryEntry, IpcError> {
     ipc::call(
-        "diary_upsert",
+        commands::DIARY_UPSERT,
         DiaryUpsertRequest {
             ledger_id: ledger_id.to_string(),
             date: date.to_string(),
@@ -69,7 +70,7 @@ pub async fn upsert(
 /// 删除某账本某天的日记。
 pub async fn delete(date: &str, ledger_id: &str) -> Result<(), IpcError> {
     ipc::call_void(
-        "diary_delete",
+        commands::DIARY_DELETE,
         DiaryDateRequest {
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),
@@ -81,7 +82,7 @@ pub async fn delete(date: &str, ledger_id: &str) -> Result<(), IpcError> {
 /// 扫描目录里的日记文件。
 pub async fn import_scan(directory: &str) -> Result<DiaryScanResponse, IpcError> {
     ipc::call(
-        "diary_import_scan",
+        commands::DIARY_IMPORT_SCAN,
         DiaryScanRequest {
             directory: directory.to_string(),
         },
@@ -92,7 +93,7 @@ pub async fn import_scan(directory: &str) -> Result<DiaryScanResponse, IpcError>
 /// 导入单个文件到指定账本（后端自动识别 UTF-8/UTF-16/GBK）。
 pub async fn import_file(path: &str, date: &str, ledger_id: &str) -> Result<DiaryEntry, IpcError> {
     ipc::call(
-        "diary_import_file",
+        commands::DIARY_IMPORT_FILE,
         DiaryImportFileRequest {
             path: path.to_string(),
             date: date.to_string(),
@@ -110,7 +111,7 @@ pub async fn export(
     ledger_id: &str,
 ) -> Result<DiaryExportResult, IpcError> {
     ipc::call(
-        "diary_export",
+        commands::DIARY_EXPORT,
         DiaryExportRequest {
             ledger_id: ledger_id.to_string(),
             directory: directory.to_string(),

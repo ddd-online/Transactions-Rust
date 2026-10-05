@@ -21,6 +21,7 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tr_domain::events::WINDOW_STATE_CHANGED;
 use tr_ipc::AppState;
 
 use crate::commands::DesktopState;
@@ -318,7 +319,7 @@ pub fn attach_main_window_events(app: &AppHandle, window: &WebviewWindow) {
         }
         tauri::WindowEvent::Resized(_) => {
             let maximized = main_window.is_maximized().unwrap_or(false);
-            let _ = main_window.emit("window-state-changed", maximized);
+            let _ = main_window.emit(WINDOW_STATE_CHANGED, maximized);
         }
         _ => {}
     });

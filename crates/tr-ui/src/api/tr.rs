@@ -13,6 +13,7 @@
 //! | `tr_unlink` | `{ transaction_id }`（**snake_case**） |
 //! | `tr_linked_by_date` | `{ date, ledger_id }`（**snake_case**） |
 
+use tr_domain::commands;
 use tr_domain::dto::{
     ChartQueryRequest, ChartQueryResponse, TrQueryCondition, TrQueryResult, TransactionRecordDto,
 };
@@ -39,28 +40,28 @@ pub fn default_condition(ledger_id: &str, page: i32, page_size: i32) -> TrQueryC
 
 /// 条件查询。条件项之间 OR，项内 AND；`trStatistics` 覆盖**全部**命中记录而非当前页。
 pub async fn query(condition: TrQueryCondition) -> Result<TrQueryResult, IpcError> {
-    ipc::call("tr_query", condition).await
+    ipc::call(commands::TR_QUERY, condition).await
 }
 
 /// 图表逐曲线分桶数据。
 pub async fn chart_data(request: ChartQueryRequest) -> Result<ChartQueryResponse, IpcError> {
-    ipc::call("tr_chart_data", request).await
+    ipc::call(commands::TR_CHART_DATA, request).await
 }
 
 /// 新建一条记录，返回记录 id。
 pub async fn create(record: TransactionRecordDto) -> Result<String, IpcError> {
-    ipc::call("tr_create", record).await
+    ipc::call(commands::TR_CREATE, record).await
 }
 
 /// 删除记录及其标签关联。
 pub async fn delete(id: &str) -> Result<(), IpcError> {
-    ipc::call_void("tr_delete", IdRequest { id: id.to_string() }).await
+    ipc::call_void(commands::TR_DELETE, IdRequest { id: id.to_string() }).await
 }
 
 /// 关联到事件，返回日期。
 pub async fn link(transaction_id: &str, date: &str) -> Result<String, IpcError> {
     ipc::call(
-        "tr_link",
+        commands::TR_LINK,
         LinkRequest {
             transaction_id: transaction_id.to_string(),
             date: date.to_string(),
@@ -72,7 +73,7 @@ pub async fn link(transaction_id: &str, date: &str) -> Result<String, IpcError> 
 /// 解除关联，返回记录 id。
 pub async fn unlink(transaction_id: &str) -> Result<String, IpcError> {
     ipc::call(
-        "tr_unlink",
+        commands::TR_UNLINK,
         UnlinkRequest {
             transaction_id: transaction_id.to_string(),
         },
@@ -86,7 +87,7 @@ pub async fn linked_by_date(
     ledger_id: &str,
 ) -> Result<Vec<TransactionRecordDto>, IpcError> {
     ipc::call(
-        "tr_linked_by_date",
+        commands::TR_LINKED_BY_DATE,
         LinkedByDateRequest {
             date: date.to_string(),
             ledger_id: ledger_id.to_string(),

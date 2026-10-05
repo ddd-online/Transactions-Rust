@@ -82,6 +82,8 @@ $Steps = [ordered]@{
     # 处境（只是规格说明）。测试目标会跳过入口（`main` 被 `cfg(test)` 排除，理由见 main.rs）：
     # `generate_context!()` 要嵌 `crates/tr-ui/dist`，而那份产物由 trunk 生成、不入库，
     # 少了它连 `cargo test` 都编译不过 —— 那是与测试无关的条件。
+    # 命令注册表的那条守卫也在这里（`src-tauri/src/registry.rs`：注册表 == tr_domain::commands
+    # 清单），所以 `ipc` 分组也带上本步骤 —— 名字这件事的实现侧断言在 tr-ipc，注册侧断言在这儿。
     'test-src-tauri'    = @{ Title='cargo test -p transactions（应用外壳）';          Kind='cargo'; Args=@('test','-p','transactions'); Needs='none' }
     'test-draw'         = @{ Title='cargo test -p tr-draw（图表 / 裁剪的纯算法）';    Kind='cargo'; Args=@('test','-p','tr-draw'); Needs='none' }
     # --all-targets 不能省：界面的 `#[cfg(test)]` 在 native 上跑不到（跑到了也是 0 个），
@@ -124,7 +126,10 @@ $Groups = [ordered]@{
     'domain'       = @('test-domain')
     'store'        = @('test-store', 'schema-diff')
     'service'      = @('test-service')
-    'ipc'          = @('test-ipc')
+    # 命令面：`test-ipc` 断言"本 crate 的命令实现 == tr_domain::commands 清单"，
+    # `test-src-tauri` 断言"外壳注册表 == 同一份清单"（守卫在 src-tauri/src/registry.rs）——
+    # 两条合起来才等于"注册的每一条都真的存在、存在的每一条都真的注册了"。
+    'ipc'          = @('test-ipc', 'test-src-tauri')
     'ui'           = @('check-ui-wasm', 'design-audit')
     'chart'        = @('test-draw')
     'schema'       = @('schema-diff', 'migrate-workspace')
@@ -158,9 +163,17 @@ $PathMap = @(
     @{ Re='^fixtures/(?<name>[a-z0-9-]+)\.ps1$';          Script=$true }     # 改了某个护栏 → 跑它自己
     @{ Re='^fixtures/';                                   Groups=@('core') }
     @{ Re='^crates/tr-domain/src/(money|fee|consts|proxy|error)\.rs$'; Groups=@('domain') }
+    # 命令的**名字清单**：它同时被命令面的守卫（ipc）与界面侧的编译期兜底（ui）读到，
+    # 它自己的单测在 tr-domain（domain）—— 三条一起拉（同下面 `store`/`service` 那几条
+    # 带上父分组的写法：漏了 domain，清单里的断言就不会跑）。必须排在通用的 `tr-domain/`
+    # 之前（顺序敏感，第一条命中为准）。
+    @{ Re='^crates/tr-domain/src/commands\.rs$';          Groups=@('ipc', 'ui', 'domain') }
     # 更新流程的状态机（词表 / 合法迁移 / 文案）：词表改了要连外壳与端到端一起看，
     # 所以单独一条规则，必须排在通用的 `tr-domain/` 之前（顺序敏感，第一条命中为准）。
     @{ Re='^crates/tr-domain/src/update\.rs$';            Groups=@('update', 'domain') }
+    # 命令面的事件名：两侧引用的就是这里，所以它牵动命令面（引用面）、界面（引用面）、
+    # 更新那条链路（外壳发送方）与它自己的单测（domain）。
+    @{ Re='^crates/tr-domain/src/events\.rs$';            Groups=@('ipc', 'ui', 'update', 'domain') }
     @{ Re='^crates/tr-domain/src/models/';                Groups=@('domain', 'store') }
     @{ Re='^crates/tr-domain/src/dto/';                   Groups=@('domain', 'ipc') }
     @{ Re='^crates/tr-domain/';                           Groups=@('domain') }
@@ -183,7 +196,15 @@ $PathMap = @(
     # 取数决策核心：所有走页面取数 module 的页面都在影响面里（含还在用 ListQuery 薄壳的三页）
     @{ Re='^crates/tr-draw/src/query\.rs$';               Groups=@('chart', 'analysis', 'templates', 'todo', 'accounting', 'stock', 'category-tag', 'key-event', 'diary') }
     @{ Re='^crates/tr-draw/';                             Groups=@('chart', 'analysis', 'ui-kit') }
-    @{ Re='^crates/tr-ui/src/api/';                       Groups=@('ipc') }
+    # 「关于软件」的快照渲染与更新的命令桥：同一条链路（词表在 tr-domain::update）。
+    # 它同时覆盖 pages/settings.rs（`settings` 分组），所以下面不再给那个文件单独一条规则
+    # —— 写了也是死规则（顺序敏感，第一条命中为准）。
+    # ⚠ 必须排在下面通用的 `tr-ui/src/api/` 之前：那条规则会先命中 api/update.rs（顺序敏感）。
+    @{ Re='^crates/tr-ui/src/(api/update|pages/settings)\.rs$'; Groups=@('update', 'settings') }
+    # 命令封装：业务域的名字来自 tr-domain::commands，所以耦合那条清单
+    @{ Re='^crates/tr-ui/src/api/';                       Groups=@('ipc', 'ui') }
+    # 命令调用桥：所有页面共用（名字/类型都从这里过），改它等于动整个界面
+    @{ Re='^crates/tr-ui/src/ipc\.rs$';                   Groups=@('ipc', 'ui', 'ui-kit') }
     # 取数 module 与决策核心同一条影响面（谁改了"什么时候发"，就得跑所有用它的页面）
     @{ Re='^crates/tr-ui/src/query\.rs$';                 Groups=@('chart', 'analysis', 'templates', 'todo', 'accounting', 'stock', 'category-tag', 'key-event', 'diary') }
     @{ Re='^crates/tr-ui/src/pages/stock\.rs$';           Groups=@('stock') }
@@ -194,14 +215,14 @@ $PathMap = @(
     @{ Re='^crates/tr-ui/src/pages/data_analysis\.rs$';   Groups=@('analysis') }
     @{ Re='^crates/tr-ui/src/pages/templates\.rs$';       Groups=@('templates') }
     @{ Re='^crates/tr-ui/src/pages/(transactions|accounting)\.rs$'; Groups=@('accounting') }
-    # 「关于软件」的快照渲染与更新的命令桥：同一条链路（词表在 tr-domain::update）
-    @{ Re='^crates/tr-ui/src/(api/update|pages/settings)\.rs$'; Groups=@('update', 'settings') }
-    @{ Re='^crates/tr-ui/src/pages/settings\.rs$';        Groups=@('settings') }
     @{ Re='^crates/tr-ui/src/components/ui/';             Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/src/(shell|store|icons|notify|error_handler|format|time)\.rs$'; Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/static/css/';                    Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/(index\.html|Trunk\.toml)$';     Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/';                               Groups=@('ui-kit') }
+    # 命令注册表（`generate_handler![]` 的唯一入口 + "注册表 == 清单"守卫）：
+    # 改了它要跑命令面的守卫，也要跑 shell / update 那两组（那里也跑 test-src-tauri）。
+    @{ Re='^src-tauri/src/registry\.rs$';                 Groups=@('ipc', 'shell', 'update') }
     # 外壳：`test-src-tauri` 在 shell 分组里（含更新器的解析与去重键）
     @{ Re='^src-tauri/';                                  Groups=@('shell', 'update') }
     @{ Re='^(Cargo\.toml|Cargo\.lock|\.cargo/config\.toml)$'; Groups=@('core') }

@@ -96,13 +96,30 @@ function Write-Config {
         ConvertTo-Json | Set-Content -Path (Join-Path $smokeHome '.transactions.json') -Encoding UTF8
 }
 
+function Test-WindowHasUi {
+    param($Window)
+    # "界面已经挂上"的判据：窗口里能找到 Button（标题栏三键、侧栏条目都是 Button）。
+    # 为什么要这一条：Tauri 还会建拖拽/缩放用的浮层窗口，它同样是**本进程的顶层窗口**
+    # 但没有界面 —— 抓到它，后面按名字找「关闭」按钮会一直找不到（AGENTS.md 的
+    # 「启动时抓主窗口，而不是该进程的第一个窗口」说的就是这件事）。
+    $all = @($Window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition))
+    foreach ($el in $all) {
+        if ($el.Current.ControlType.ProgrammaticName -eq 'ControlType.Button') { return $true }
+    }
+    return $false
+}
+
 function Get-MainWindow {
     param([int]$ProcessId, [int]$TimeoutSec = 60)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $cond = New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $ProcessId)
-        $win = $UIA::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
-        if ($win) { return $win }
+        $wins = @($UIA::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $cond))
+        # 只认"界面已经挂上"的那个（可能不是第一个：浮层窗口也在这一串里）。
+        # 轮询同时起两个作用：等界面渲染出来 + 把 Chromium 的惰性 UIA 树"唤醒"。
+        $ready = $wins | Where-Object { Test-WindowHasUi $_ } | Select-Object -First 1
+        if ($ready) { return $ready }
         Start-Sleep -Milliseconds 600
     }
     return $null

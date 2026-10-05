@@ -9,7 +9,8 @@ Transactions 是一款桌面个人记账应用，每个工作空间是一个独�
 ## 架构
 
 ```
-crates/tr-domain/    # 纯领域层：models / dto / 金额换算 / 费用分摊（native + wasm 双可编，无 I/O）
+crates/tr-domain/    # 纯领域层：models / dto / 金额换算 / 费用分摊 / IPC 命令与事件的**名字清单**
+                     #   （native + wasm 双可编，无 I/O）
 crates/tr-draw/      # 界面侧纯算法层：绘制（坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何）
                      #   + 页面取数的决策核心（query：去重 / generation / 复核判定；同上，无 I/O）
 crates/tr-store/     # 存储层：建库 + 迁移引擎（migrations）+ 格式校验 + 各 Dao（rusqlite）
@@ -81,7 +82,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 | `ui-proxy` / `ui-about` / `ui-features` / `ui-update-restore` | 假代理日志当判据（行情 `qt.gtimg.cn`、更新 `api.github.com`）；版本自报；功能开关落盘并重启生效；下载状态跨页面恢复（依赖真实 GitHub API，离线用 `-SkipNetwork`） |
 | `migrate-workspace` | 降级 → 升级 → 备份 → 幂等（**迁移引擎这条最高风险路径就靠它**） |
 | `test-draw` | 界面侧**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 + 页面取数的决策（去重 / generation / 复核判定 / 失效） |
-| `test-src-tauri` | **应用外壳**的纯逻辑真跑（`cargo test -p transactions`）：配置键名与往返、命令面请求形状、日志轮转、资产路径穿越校验、更新器解析；更新流程的状态机本身在 `tr-domain::update`（由 `test-domain` 跑） |
+| `test-src-tauri` | **应用外壳**的纯逻辑真跑（`cargo test -p transactions`）：配置键名与往返、命令面请求形状、**命令注册表 == `tr_domain::commands` 清单**（`src-tauri/src/registry.rs` 的 `catalog_matches_registration`）、日志轮转、资产路径穿越校验、更新器解析；更新流程的状态机本身在 `tr-domain::update`（由 `test-domain` 跑） |
 
 护栏总原则：一律真的启动应用、用 UI Automation 或真实鼠标键盘驱动；**断言落在库/磁盘上**，不落在"点到了没有"。
 
@@ -441,8 +442,26 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   重复应用无副作用）。升级前必须先备份（`VACUUM INTO` 出 `transactions.db.pre-migration-<时间戳>.bak`，备份失败
   就不升级），同一工作空间只保留最近一份（旧的 `.bak` 在新备份成功之后才清掉），只认自己的命名规则、不动工作空
   间里别的文件。`cargo xtask migrate` 手工升级，`validate` / `dump` 仍只读。
-- **IPC 契约**：命令统一只收一个 `req` 结构体参数，字段名是硬契约，改动即破坏兼容。成功时 promise 直接 resolve
+- **IPC 契约**：命令统一只收一个 `req` 形参（个别命令的 `req` 本身就是数组 / DTO ——
+  `tr_batch_create`、`tr_create`、`template_create` 是这样，见 `tr_domain::commands` 的清单），
+  字段名是硬契约，改动即破坏兼容。成功时 promise 直接 resolve
   为数据本身；失败时 reject 载荷为 `{"code":-1,"msg":"...","status":500}`。`msg` 是用户可见文案。
+  * **字段名靠共享类型，名字靠共享清单**：请求 / 响应类型在 `tr-domain`（`wire` / `dto` / `models`），
+    命令名与事件名在 `tr-domain::commands` / `tr-domain::events`（事件名一共 6 条，应用里每一个都在那儿）。
+    界面侧**不再出现命令名字符串字面量**（`ipc::call(commands::LEDGER_LIST, req)`）—— 拼错名字是编译错误，
+    不是运行时的"命令不存在"。
+  * **"一致"由能跑的断言闭合**，不靠人读注释。名字这条链有三段，各有一段断言：
+    `tr-ipc` 的 `implementations_match_the_catalog` 断言"**实现 == 清单**"（扫本 crate 的
+    `#[tauri::command]` 函数名）；`src-tauri/src/registry.rs` 的 `catalog_matches_registration`
+    断言"**注册表 == 清单**"（注册清单与 `generate_handler![]` 从同一个 `app_commands![]` 调用处展开，
+    所以守卫读的就是真正注册的那份）。两处都带**负向断言**：tr-ipc 那条拿真实扫描结果去比一份
+    少一条的清单、外壳那条直接改坏**真实注册清单**（少一条 / 改名 / 重复 / 整段删掉），
+    比较函数 `tr_domain::commands::catalog_mismatch` 自己另有一组单测。
+    前提"注册名 = 函数名"由 tr-ipc 的 `registration_name_is_the_function_name` 钉住
+    （命令**不许**用 `rename` / `rename_all`）。
+  * **还没进清单的 27 条**：外壳 22 条 + 更新 5 条。它们的名字仍以字符串出现在
+    `crates/tr-ui/src/api/{desktop,update}.rs`，走 `ipc::call_by_name` 等内部入口；注册侧由
+    `REGISTERED_PATHS` 覆盖（`desktop_commands_are_still_registered` 防漏）。收进清单是 #28。
 - **JSON 字段命名不统一，但必须保持不变**：核心记账模型是 snake_case（`ledger.created_at`），事件/日记/股票模型
   是 camelCase（`ledgerId`、`createdAt`），DTO 里两种混用（`tr_query_result` 的 `page_size` 与 `trStatistics`
   并存）。数据库列名恒为 snake_case，列映射在 DAO 层显式书写，不依赖 serde。

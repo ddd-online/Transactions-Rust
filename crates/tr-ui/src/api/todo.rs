@@ -1,4 +1,5 @@
-//! 待办域命令封装。字段名以 `crates/tr-ipc/src/commands/todo.rs` 为准（**唯一权威**）。
+//! 待办域命令封装。命令名与请求 / 响应类型取自 `tr_domain::commands` 的清单，
+//! 字段名取自共享的 `tr_domain` 类型 —— 两处都不会与命令面漂移。
 //!
 //! | 命令 | 入参 |
 //! |---|---|
@@ -15,6 +16,7 @@
 //! | `todo_progress_delete` | `{ id }` |
 //! | `todo_progress_done` | `{ id, done }`（打勾 / 取消打勾） |
 
+use tr_domain::commands;
 use tr_domain::dto::{TodoCardDto, TodoHistoryDto, TodoItemDto, TodoProgressDto};
 use tr_domain::wire::{
     IdRequest, LedgerIdRequest, TodoCardCreateRequest, TodoCardSortRequest, TodoItemCreateRequest,
@@ -27,7 +29,7 @@ use crate::ipc::{self, IpcError};
 /// 卡片视图（卡片 + 卡下进行中的事项）。
 pub async fn cards(ledger_id: &str) -> Result<Vec<TodoCardDto>, IpcError> {
     ipc::call(
-        "todo_cards",
+        commands::TODO_CARDS,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -38,7 +40,7 @@ pub async fn cards(ledger_id: &str) -> Result<Vec<TodoCardDto>, IpcError> {
 /// 历史（已完成的事项）。
 pub async fn history(ledger_id: &str) -> Result<Vec<TodoHistoryDto>, IpcError> {
     ipc::call(
-        "todo_history",
+        commands::TODO_HISTORY,
         LedgerIdRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -49,7 +51,7 @@ pub async fn history(ledger_id: &str) -> Result<Vec<TodoHistoryDto>, IpcError> {
 /// 新建卡片（主题）。
 pub async fn card_create(ledger_id: &str, title: &str) -> Result<TodoCardDto, IpcError> {
     ipc::call(
-        "todo_card_create",
+        commands::TODO_CARD_CREATE,
         TodoCardCreateRequest {
             ledger_id: ledger_id.to_string(),
             title: title.to_string(),
@@ -60,13 +62,13 @@ pub async fn card_create(ledger_id: &str, title: &str) -> Result<TodoCardDto, Ip
 
 /// 删卡片（连它的事项与进度记录一起删）。
 pub async fn card_delete(id: &str) -> Result<(), IpcError> {
-    ipc::call_void("todo_card_delete", IdRequest { id: id.to_string() }).await
+    ipc::call_void(commands::TODO_CARD_DELETE, IdRequest { id: id.to_string() }).await
 }
 
 /// 拖动排序：把一张卡片挪到 `sort_order`。
 pub async fn card_sort(id: &str, sort_order: i32) -> Result<(), IpcError> {
     ipc::call_void(
-        "todo_card_sort",
+        commands::TODO_CARD_SORT,
         TodoCardSortRequest {
             id: id.to_string(),
             sort_order,
@@ -87,7 +89,7 @@ pub async fn item_create(
     importance: i32,
 ) -> Result<TodoItemDto, IpcError> {
     ipc::call(
-        "todo_item_create",
+        commands::TODO_ITEM_CREATE,
         TodoItemCreateRequest {
             ledger_id: ledger_id.to_string(),
             card_id: card_id.to_string(),
@@ -113,7 +115,7 @@ pub async fn item_update(
     importance: i32,
 ) -> Result<TodoItemDto, IpcError> {
     ipc::call(
-        "todo_item_update",
+        commands::TODO_ITEM_UPDATE,
         TodoItemUpdateRequest {
             ledger_id: ledger_id.to_string(),
             id: id.to_string(),
@@ -130,7 +132,7 @@ pub async fn item_update(
 /// 改状态（`done` 会进历史，`doing` 会退回卡片）。
 pub async fn item_status(ledger_id: &str, id: &str, status: &str) -> Result<TodoItemDto, IpcError> {
     ipc::call(
-        "todo_item_status",
+        commands::TODO_ITEM_STATUS,
         TodoItemStatusRequest {
             ledger_id: ledger_id.to_string(),
             id: id.to_string(),
@@ -142,7 +144,7 @@ pub async fn item_status(ledger_id: &str, id: &str, status: &str) -> Result<Todo
 
 /// 删事项（连它的进度记录一起删）。
 pub async fn item_delete(id: &str) -> Result<(), IpcError> {
-    ipc::call_void("todo_item_delete", IdRequest { id: id.to_string() }).await
+    ipc::call_void(commands::TODO_ITEM_DELETE, IdRequest { id: id.to_string() }).await
 }
 
 /// 追加一条进度记录。
@@ -152,7 +154,7 @@ pub async fn progress_add(
     content: &str,
 ) -> Result<TodoProgressDto, IpcError> {
     ipc::call(
-        "todo_progress_add",
+        commands::TODO_PROGRESS_ADD,
         TodoProgressCreateRequest {
             ledger_id: ledger_id.to_string(),
             item_id: item_id.to_string(),
@@ -164,13 +166,17 @@ pub async fn progress_add(
 
 /// 删一条进度记录。
 pub async fn progress_delete(id: &str) -> Result<(), IpcError> {
-    ipc::call_void("todo_progress_delete", IdRequest { id: id.to_string() }).await
+    ipc::call_void(
+        commands::TODO_PROGRESS_DELETE,
+        IdRequest { id: id.to_string() },
+    )
+    .await
 }
 
 /// 给一条进度记录打勾 / 取消打勾。
 pub async fn progress_done(id: &str, done: bool) -> Result<(), IpcError> {
     ipc::call_void(
-        "todo_progress_done",
+        commands::TODO_PROGRESS_DONE,
         TodoProgressDoneRequest {
             id: id.to_string(),
             done,

@@ -8,10 +8,11 @@
 //! | `update_cancel` | **无 `req` 形参** | `()` |
 //! | `update_download_status` | **无 `req` 形参** | [`UpdateSnapshot`]（当前完整状态） |
 //!
-//! 四个事件（名字与后端逐字一致），**载荷都是完整快照** [`UpdateSnapshot`]：
-//! * [`EVENT_DOWNLOAD_PROGRESS`] `update:download-progress`
-//! * [`EVENT_DOWNLOAD_COMPLETE`] `update:download-complete`
-//! * [`EVENT_DOWNLOAD_ERROR`] `update:download-error`
+//! 四个事件（名字在 `tr_domain::events`：外壳发送与界面订阅**共用同一份**），
+//! **载荷都是完整快照** [`UpdateSnapshot`]：
+//! * [`UPDATE_DOWNLOAD_PROGRESS`] `update:download-progress`
+//! * [`UPDATE_DOWNLOAD_COMPLETE`] `update:download-complete`
+//! * [`UPDATE_DOWNLOAD_ERROR`] `update:download-error`
 //!
 //! ## 界面侧只持有"最后一次快照"
 //!
@@ -37,16 +38,15 @@ use tr_domain::wire::{UpdateCheckResponse, UpdateDownloadRequest, UpdateResponse
 
 use crate::ipc::{self, IpcError};
 
-/// 事件名：下载进度（载荷是完整快照）。
-pub const EVENT_DOWNLOAD_PROGRESS: &str = "update:download-progress";
-/// 事件名：下载完成（载荷是完整快照）。
-pub const EVENT_DOWNLOAD_COMPLETE: &str = "update:download-complete";
-/// 事件名：下载失败（载荷是完整快照）。
-pub const EVENT_DOWNLOAD_ERROR: &str = "update:download-error";
+// 事件名只有一份定义（在 `tr_domain::events`）：外壳那边发的是同一个常量。
+// 这里再导出一次，是为了让"更新这条链路的事件"跟本模块的命令放在一起看。
+pub use tr_domain::events::{
+    UPDATE_DOWNLOAD_COMPLETE, UPDATE_DOWNLOAD_ERROR, UPDATE_DOWNLOAD_PROGRESS,
+};
 
 /// 检查更新（**无 `req` 形参**）：成功与失败都在返回里，交给状态机判定。
 pub async fn check() -> Result<UpdateCheckResponse, IpcError> {
-    ipc::call_no_args("update_check").await
+    ipc::call_no_args_by_name("update_check").await
 }
 
 /// 下载安装包（同时开始广播 `update:download-progress` 事件）。
@@ -56,7 +56,7 @@ pub async fn download(url: &str, digest: &str) -> Result<UpdateResponse, IpcErro
     } else {
         Some(digest.to_string())
     };
-    ipc::call(
+    ipc::call_by_name(
         "update_download",
         UpdateDownloadRequest {
             url: url.to_string(),
@@ -68,17 +68,17 @@ pub async fn download(url: &str, digest: &str) -> Result<UpdateResponse, IpcErro
 
 /// 打开已下载的安装包并退出应用（**无 `req` 形参**）。
 pub async fn install() -> Result<UpdateResponse, IpcError> {
-    ipc::call_no_args("update_install").await
+    ipc::call_no_args_by_name("update_install").await
 }
 
 /// 当前完整状态（**无 `req` 形参**）：界面进入「关于软件」时读它恢复状态与进度。
 pub async fn status() -> Result<UpdateSnapshot, IpcError> {
-    ipc::call_no_args("update_download_status").await
+    ipc::call_no_args_by_name("update_download_status").await
 }
 
 /// 取消下载并清理临时文件（**无 `req` 形参**）。
 pub async fn cancel() -> Result<(), IpcError> {
-    ipc::call_void_no_args("update_cancel").await
+    ipc::call_void_no_args_by_name("update_cancel").await
 }
 
 /// 下载请求被外壳拒绝时的三种结果（界面据此决定落哪个状态）。

@@ -828,13 +828,15 @@ fn TopBar() -> impl IntoView {
     let maximized = RwSignal::new(false);
 
     // 订阅外壳在每次 `Resized` 时广播的**真实**窗口状态
-    // （`src-tauri/src/shell.rs` 发 `window-state-changed`，载荷是 `bool`）。
+    // （`src-tauri/src/shell.rs` 发的是 `tr_domain::events::WINDOW_STATE_CHANGED`，载荷是 `bool`）。
     //
     // 为什么必须有它：双击标题栏 / Win+↑ / 拖到屏幕顶部贴靠都不会经过
     // `window_control`，只靠下面的"乐观取反"会让图标与真实状态漂移，
     // 于是"点一下"的文案与动作不一致。
     // 乐观取反保留（点击立刻有反馈），但事件到来后以事件值为准。
-    crate::ipc::listen::<bool, _>("window-state-changed", move |value| maximized.set(value));
+    crate::ipc::listen::<bool, _>(tr_domain::events::WINDOW_STATE_CHANGED, move |value| {
+        maximized.set(value)
+    });
 
     let send = move |action: api::desktop::WindowAction| {
         leptos::task::spawn_local(async move {

@@ -3,6 +3,7 @@
 //! 图表 DTO 是 camelCase（`chartId` / `ledgerId` / `chartType` / `isPreset` / `sortOrder`）。
 //! `chart_delete` 的入参字段名是 `chartId`（命令同时接受 `id`，这里统一发送 `chartId`）。
 
+use tr_domain::commands;
 use tr_domain::dto::{ChartDto, CreateChartRequest, UpdateChartRequest};
 use tr_domain::wire::{ChartIdRequest, ChartListRequest};
 
@@ -11,7 +12,7 @@ use crate::ipc::{self, IpcError};
 /// 列出某账本的全部图表（后端会先补齐预设图表）。
 pub async fn list(ledger_id: &str) -> Result<Vec<ChartDto>, IpcError> {
     ipc::call(
-        "chart_list",
+        commands::CHART_LIST,
         ChartListRequest {
             ledger_id: ledger_id.to_string(),
         },
@@ -21,18 +22,18 @@ pub async fn list(ledger_id: &str) -> Result<Vec<ChartDto>, IpcError> {
 
 /// 新建图表，返回完整 DTO。
 pub async fn create(request: CreateChartRequest) -> Result<ChartDto, IpcError> {
-    ipc::call("chart_create", request).await
+    ipc::call(commands::CHART_CREATE, request).await
 }
 
 /// 更新图表，返回更新后的完整 DTO。
 pub async fn update(request: UpdateChartRequest) -> Result<ChartDto, IpcError> {
-    ipc::call("chart_update", request).await
+    ipc::call(commands::CHART_UPDATE, request).await
 }
 
 /// 删除图表。
 pub async fn delete(chart_id: &str) -> Result<(), IpcError> {
     ipc::call_void(
-        "chart_delete",
+        commands::CHART_DELETE,
         ChartIdRequest {
             chart_id: chart_id.to_string(),
         },

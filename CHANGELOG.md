@@ -6,6 +6,48 @@
 
 ### 调整
 
+**命令名与事件名收成一份来源（界面侧不再有命令名字符串）**
+- **问题**：请求 / 响应类型早就收在 `tr_domain` 里（字段名不可能漂移），但**名字**还停在手抄 ——
+  85 条业务命令的名字是界面侧 10 个封装里的字符串字面量，4 个事件名在两侧**各写一份 `const`**，
+  "唯一权威，逐字照抄"这句注释出现在至少四个文件里。后果：名字打错、事件名改一边忘另一边、
+  注册表漏一条，都只在**运行时**表现为"命令不存在"或"事件永远不来"，而且这些约定没有任何测试。
+- **名字靠共享清单**：新增 `tr-domain::commands`（一条 `Command<Req, Res>` = **名字 + 请求类型 +
+  响应类型**，不含逻辑）与 `tr-domain::events`（4 个事件名）。界面侧的调用点改成
+  `ipc::call(commands::LEDGER_LIST, req)` —— 名字与两个类型从同一条目取，写错名字**编译期**就报错。
+- **三处一致由能跑的断言闭合**（不靠人读注释，两条都带负向断言）：
+  * `tr-ipc` 的 `implementations_match_the_catalog` 断言"本 crate 的命令实现 == 清单"，
+    `registration_name_is_the_function_name` 钉住"注册名 = 函数名"这个前提（命令不许 `rename`）；
+  * `src-tauri/src/registry.rs` 新增注册清单宏：`generate_handler![]` 的调用处与守卫读的是
+    **同一份 token**，`catalog_matches_registration` 断言"注册表 == 清单"。
+  * 两条合起来 = "注册的每一条都真的存在、存在的每一条都真的注册了"。
+- **事件名两侧合成一份**：应用里**每一个** IPC 事件名都进了 `tr-domain::events`（共 6 条：spec 点名的
+  `update:*` 三条与 `devtools:state-changed`，外加同一类问题的 `window-state-changed` 与
+  `workspace-changed` —— 前者两侧各写一个字面量，正是本票要消灭的形态）。外壳（`updater.rs` /
+  `commands.rs` / `shell.rs`）与界面（`api/update.rs` / `api/desktop.rs` / `shell.rs`）现在都引用同一份常量。
+- **对使用者零行为变化**：命令名、入参、返回、错误信封与文案一处未改，不新增依赖、不引入代码生成、
+  继续用 Tauri 官方的注册宏，也不需要数据库迁移。事件名逐字未改，只是从"两侧各写一遍"变成"引用同一份"。
+- **范围**：本轮清单里的是**业务命令那 85 条**。外壳 22 条 + 更新 5 条仍以字面量出现在
+  `api/{desktop,update}.rs`（走 `ipc::call_by_name` 等内部入口），把它们也收进清单是 #28；
+  它们的注册侧由 `src-tauri/src/registry.rs` 的注册清单覆盖（与 `generate_handler![]` 同源）。
+- **顺带修掉三处**：`api/ledger.rs` 的 `ledger_list` 从前发的是 `IdRequest`、命令收的是
+  `LedgerListRequest`（形状相同所以一直没暴露，线上 JSON 一字不差）；`fixtures/test.ps1` 里
+  `crates/tr-ui/src/api/update.rs` 被更靠前的通配规则挡住、拉不到 `update` 分组；
+  `fixtures/close-behavior.ps1` 的 `Get-MainWindow` 从前取"本进程的第一个顶层窗口"，
+  而 Tauri 的拖拽/缩放浮层同样是本进程的顶层窗口、且没有界面 —— 抓错时后半段按名字找
+  「关闭」按钮必然全落空（正是 AGENTS.md 那条"启动时抓主窗口"说的情形，全量档里偶发红过一次），
+  现在改成只认"窗口里已经有 Button"的那个。
+
+回归：全量档 `fixtures/test.ps1 -All` **34/35**——唯一红项就是上面那条 `close-behavior` 的
+偶发假红（同一份产物单独重跑两次全绿，证明与本次改动无关；加固后又连跑三次全绿）。
+其余 34 步都在本次最终代码上通过：`fmt` / `clippy` / `design-audit` / `test-domain`(88) /
+`test-store`(157) / `test-service`(76) / `test-ipc`(11) / `test-src-tauri`(44) / `test-draw`(37) /
+`check-ui-wasm` / `schema-diff` / `smoke` / `window-bounds` / `migrate-workspace` /
+`ui-smoke` / `ui-shots` / `ui-transactions` / `ui-crud` / `ui-drag` / `ui-key-event` /
+`ui-link-event` / `ui-diary-edit` / `ui-diary-ledger` / `ui-diary-io` / `ui-sync-ledger` /
+`ui-upload` / `ui-proxy` / `ui-about` / `ui-features` / `ui-stock`（真实行情）/ `ui-todo` /
+`ui-update-restore`。守卫的负向断言做过真实变异实验（删一条注册 / 重复注册 / 删一条清单条目
+→ 全红，还原后复绿）；既有 `ui-*` 端到端护栏的断言一处未改。
+
 **更新流程：状态机收成一处拥有，界面只渲染快照**
 
 - **问题**：一次"检查 → 下载 → 安装"的状态同时活在两个 module 里 —— 外壳只记"正在下载的键、
