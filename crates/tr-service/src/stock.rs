@@ -6,6 +6,15 @@
 //! （持仓 / 交易列表 / 轮次历史 / 统计取数）、本金类资金写入（设置本金 / 追加 / 支取 /
 //! 利息归本）与操作记录列表。
 //!
+//! **行情从哪来**：四个读概念（`get_overview` / `list_positions` /
+//! `list_trade_histories` / `lookup_stock_name`）都只留**一份**入口，行情源作为参数注入；
+//! 几个"写完顺带回读总览"的本金类入口（`set_principal` / `add_principal*` /
+//! `add_withdraw*` / `add_interest*`）也把同一个行情源一路透传下去。服务层**不自己创建**
+//! 行情源：生产 adapter（[`crate::quote::TencentStockQuoteFetcher`]）由**边界**选择一次 ——
+//! IPC 命令面（`tr-ipc` 的 `commands::stock::production_quotes`）与种子工具
+//! （`xtask` 的 `seed::production_quotes`）；测试在同一入口注入 stub，
+//! 于是生产控制流第一次也是可测的（见 issue #15）。
+//!
 //! 两处最容易踩空的：
 //!
 //! 1. **费用按委托一次计收**：最低佣金按「委托」而不是按每笔成交收；算法本身在
@@ -36,7 +45,7 @@ use tr_store::dao::stock::{StockDao, STOCK_OPERATION_LIMIT};
 use tr_store::Workspace;
 
 use crate::error::db;
-use crate::quote::{StockQuoteFetcher, TencentStockQuoteFetcher};
+use crate::quote::StockQuoteFetcher;
 use crate::{ServiceError, ServiceResult};
 
 /// 股票写入聚合（意图 + 事务 + 派生数据对齐），见 `crates/tr-service/src/stock/write.rs`。
@@ -232,12 +241,9 @@ pub(crate) fn contains_tag(tags: &[String], tag: &str) -> bool {
 }
 
 /// 账户总览（可用现金公式见函数内注释）。
-pub fn get_overview(workspace: &Workspace, ledger_id: &str) -> ServiceResult<StockOverviewDto> {
-    get_overview_with(workspace, ledger_id, &TencentStockQuoteFetcher::new())
-}
-
-/// 账户总览（可注入行情源，便于测试）。
-pub fn get_overview_with(
+///
+/// `fetcher` 由调用方注入（生产 adapter 在边界选择，见 module 头）。
+pub fn get_overview(
     workspace: &Workspace,
     ledger_id: &str,
     fetcher: &dyn StockQuoteFetcher,
@@ -287,11 +293,12 @@ pub fn get_overview_with(
     })
 }
 
-/// 设置初始本金。
+/// 设置初始本金；返回值是回读的账户总览（`fetcher` 由调用方注入）。
 pub fn set_principal(
     workspace: &Workspace,
     ledger_id: &str,
     amount: i64,
+    fetcher: &dyn StockQuoteFetcher,
 ) -> ServiceResult<StockOverviewDto> {
     if amount <= 0 {
         return Err(AppError::bad_request("本金必须大于 0").into());
@@ -319,16 +326,17 @@ pub fn set_principal(
         ledger_id,
         amount
     );
-    get_overview(workspace, ledger_id)
+    get_overview(workspace, ledger_id, fetcher)
 }
 
-/// 追加本金。
+/// 追加本金；返回值是回读的账户总览（`fetcher` 由调用方注入）。
 pub fn add_principal(
     workspace: &Workspace,
     ledger_id: &str,
     amount: i64,
+    fetcher: &dyn StockQuoteFetcher,
 ) -> ServiceResult<StockOverviewDto> {
-    add_principal_at_date(workspace, ledger_id, amount, "")
+    add_principal_at_date(workspace, ledger_id, amount, "", fetcher)
 }
 
 /// 追加本金并指定资金变化的发生日期；`date` 为空时按当天记录。
@@ -337,6 +345,7 @@ pub fn add_principal_at_date(
     ledger_id: &str,
     amount: i64,
     date: &str,
+    fetcher: &dyn StockQuoteFetcher,
 ) -> ServiceResult<StockOverviewDto> {
     if amount <= 0 {
         return Err(AppError::bad_request("追加金额必须大于 0").into());
@@ -400,17 +409,19 @@ pub fn add_principal_at_date(
         ledger_id,
         amount
     );
-    get_overview(workspace, ledger_id)
+    get_overview(workspace, ledger_id, fetcher)
 }
 
 /// 从股票账户支取：现金减少 `amount`，本金保持不变（本金始终是"累计投入"）。
 /// 总资产 = 可用现金 + 持仓市值，支取减少可用现金，总资产随之减少。
+/// 返回值是回读的账户总览（`fetcher` 由调用方注入）。
 pub fn add_withdraw(
     workspace: &Workspace,
     ledger_id: &str,
     amount: i64,
+    fetcher: &dyn StockQuoteFetcher,
 ) -> ServiceResult<StockOverviewDto> {
-    add_withdraw_at_date(workspace, ledger_id, amount, "")
+    add_withdraw_at_date(workspace, ledger_id, amount, "", fetcher)
 }
 
 /// 从股票账户支取并指定资金变化的发生日期；`date` 为空时按当天记录。
@@ -419,6 +430,7 @@ pub fn add_withdraw_at_date(
     ledger_id: &str,
     amount: i64,
     date: &str,
+    fetcher: &dyn StockQuoteFetcher,
 ) -> ServiceResult<StockOverviewDto> {
     if amount <= 0 {
         return Err(AppError::bad_request("支取金额必须大于 0").into());
@@ -480,19 +492,21 @@ pub fn add_withdraw_at_date(
         return Err(error);
     }
     tracing::info!("股票账户支取, ledger: {}, amount: {}", ledger_id, amount);
-    get_overview(workspace, ledger_id)
+    get_overview(workspace, ledger_id, fetcher)
 }
 
 /// 利息归本：账户利息 / 分红计入可用现金，`principal`（累计投入本金）保持不变。
 ///
 /// 与「追加本金」的区别是本金口径：追加本金改 `principal`（用户在统计里看到的投入），
 /// 利息是账户自己生出来的钱，只累计到 `interest_total` 并直接进可用现金。
+/// 返回值是回读的账户总览（`fetcher` 由调用方注入）。
 pub fn add_interest(
     workspace: &Workspace,
     ledger_id: &str,
     amount: i64,
+    fetcher: &dyn StockQuoteFetcher,
 ) -> ServiceResult<StockOverviewDto> {
-    add_interest_at_date(workspace, ledger_id, amount, "")
+    add_interest_at_date(workspace, ledger_id, amount, "", fetcher)
 }
 
 /// 利息归本并指定资金变化的发生日期；`date` 为空时按当天记录。
@@ -501,6 +515,7 @@ pub fn add_interest_at_date(
     ledger_id: &str,
     amount: i64,
     date: &str,
+    fetcher: &dyn StockQuoteFetcher,
 ) -> ServiceResult<StockOverviewDto> {
     if amount <= 0 {
         return Err(AppError::bad_request("利息金额必须大于 0").into());
@@ -559,7 +574,7 @@ pub fn add_interest_at_date(
         ledger_id,
         amount
     );
-    get_overview(workspace, ledger_id)
+    get_overview(workspace, ledger_id, fetcher)
 }
 
 /// 事务内等价 `get_or_create_account`（只依赖连接，供重放 / 资金链复用）。
@@ -781,16 +796,8 @@ pub fn list_fund_records(
     })
 }
 
-/// 持仓列表（只含未清仓股票，挂载行情）。
+/// 持仓列表（只含未清仓股票，挂载行情；`fetcher` 由调用方注入）。
 pub fn list_positions(
-    workspace: &Workspace,
-    ledger_id: &str,
-) -> ServiceResult<Vec<StockPositionDto>> {
-    list_positions_with(workspace, ledger_id, &TencentStockQuoteFetcher::new())
-}
-
-/// 持仓列表（可注入行情源）。
-pub fn list_positions_with(
     workspace: &Workspace,
     ledger_id: &str,
     fetcher: &dyn StockQuoteFetcher,
@@ -1188,16 +1195,8 @@ fn derive_trade_cycles(trades: &[StockTrade]) -> Vec<TradeCycle> {
         .collect()
 }
 
-/// 交易历史集合列表（左栏），按最近清仓时间倒序。
+/// 交易历史集合列表（左栏），按最近清仓时间倒序；`fetcher` 由调用方注入。
 pub fn list_trade_histories(
-    workspace: &Workspace,
-    ledger_id: &str,
-) -> ServiceResult<Vec<StockTradeHistoryDto>> {
-    list_trade_histories_with(workspace, ledger_id, &TencentStockQuoteFetcher::new())
-}
-
-/// 交易历史集合列表（可注入行情源）。
-pub fn list_trade_histories_with(
     workspace: &Workspace,
     ledger_id: &str,
     fetcher: &dyn StockQuoteFetcher,
@@ -1451,13 +1450,9 @@ pub fn get_trade_history_summary(
 
 // ---------- 股票名 ----------
 
-/// 按股票代码查询股票名称：优先本地已有交易记录，未命中时走外部行情接口兜底。
-pub fn lookup_stock_name(workspace: &Workspace, stock_code: &str) -> ServiceResult<StockNameDto> {
-    lookup_stock_name_with(workspace, stock_code, &TencentStockQuoteFetcher::new())
-}
-
-/// 股票名查询（可注入行情源）。
-pub fn lookup_stock_name_with(
+/// 按股票代码查询股票名称：优先本地已有交易记录，未命中时走外部行情接口兜底；
+/// `fetcher` 由调用方注入。
+pub fn lookup_stock_name(
     workspace: &Workspace,
     stock_code: &str,
     fetcher: &dyn StockQuoteFetcher,
@@ -1660,9 +1655,15 @@ mod tests {
         }
     }
 
+    /// 「无行情」stub：本模块大多数用例只关心库内数值，不需要挂行情。
+    /// 走的是**生产入口 + 注入 stub**（与线上同一条控制流，见 issue #15）。
+    fn no_quotes() -> StubQuoteFetcher {
+        StubQuoteFetcher::empty()
+    }
+
     /// 设置本金。
     fn set_principal_amount(workspace: &Workspace, amount: i64) -> ServiceResult<StockOverviewDto> {
-        set_principal(workspace, TEST_LEDGER_ID, amount)
+        set_principal(workspace, TEST_LEDGER_ID, amount, &no_quotes())
     }
 
     /// 设置本金并断言成功。
@@ -2340,7 +2341,7 @@ mod tests {
         .unwrap();
 
         // 与 seed 一致的收尾：写出第二轮复盘 + 第三轮标签/复盘
-        list_trade_histories(&workspace, TEST_LEDGER_ID).unwrap();
+        list_trade_histories(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
         let round2 = detail
             .rounds
@@ -2656,7 +2657,7 @@ mod tests {
         )
         .unwrap();
 
-        let before = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let before = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         // 买入成本 1000510，卖出净额 1198888 → 已实现盈亏 198378
         assert_eq!(before.realized_pnl, 198_378);
         assert_eq!(
@@ -2669,7 +2670,7 @@ mod tests {
             "无支取时总资产应等于可用现金"
         );
 
-        let after = add_withdraw(&workspace, TEST_LEDGER_ID, 200_000).unwrap();
+        let after = add_withdraw(&workspace, TEST_LEDGER_ID, 200_000, &no_quotes()).unwrap();
         assert_eq!(after.principal, before.principal, "支取不应改变本金");
         assert_eq!(after.withdrawn_total, 200_000);
         assert_eq!(after.available_cash, before.available_cash - 200_000);
@@ -2692,24 +2693,24 @@ mod tests {
         let (workspace, dir) = workspace("withdraw-over");
 
         seed_principal(&workspace, 5_000_000);
-        add_withdraw(&workspace, TEST_LEDGER_ID, 100_000).unwrap();
+        add_withdraw(&workspace, TEST_LEDGER_ID, 100_000, &no_quotes()).unwrap();
 
         // 支取超过当前现金（4900000 分）应被拒绝，且不产生新记录
-        let error = add_withdraw(&workspace, TEST_LEDGER_ID, 4_900_001).unwrap_err();
+        let error = add_withdraw(&workspace, TEST_LEDGER_ID, 4_900_001, &no_quotes()).unwrap_err();
         assert!(
             error.to_string().contains("不能超过可用现金"),
             "错误信息应说明现金限制, 实际: {error}"
         );
         assert!(
-            add_withdraw(&workspace, TEST_LEDGER_ID, 0).is_err(),
+            add_withdraw(&workspace, TEST_LEDGER_ID, 0, &no_quotes()).is_err(),
             "支取 0 应报错"
         );
         assert!(
-            add_withdraw(&workspace, TEST_LEDGER_ID, -100).is_err(),
+            add_withdraw(&workspace, TEST_LEDGER_ID, -100, &no_quotes()).is_err(),
             "负金额支取应报错"
         );
 
-        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(overview.withdrawn_total, 100_000);
         assert_eq!(overview.available_cash, 4_900_000);
         let page = list_fund_records(&workspace, TEST_LEDGER_ID, 1, 10).unwrap();
@@ -2723,13 +2724,13 @@ mod tests {
         let (workspace, dir) = workspace("withdraw-accumulate");
 
         seed_principal(&workspace, 5_000_000);
-        add_withdraw(&workspace, TEST_LEDGER_ID, 100_000).unwrap();
-        add_withdraw(&workspace, TEST_LEDGER_ID, 200_000).unwrap();
+        add_withdraw(&workspace, TEST_LEDGER_ID, 100_000, &no_quotes()).unwrap();
+        add_withdraw(&workspace, TEST_LEDGER_ID, 200_000, &no_quotes()).unwrap();
         // 追加本金后再支取，本金始终是累计投入
-        add_principal(&workspace, TEST_LEDGER_ID, 1_000_000).unwrap();
-        add_withdraw(&workspace, TEST_LEDGER_ID, 500_000).unwrap();
+        add_principal(&workspace, TEST_LEDGER_ID, 1_000_000, &no_quotes()).unwrap();
+        add_withdraw(&workspace, TEST_LEDGER_ID, 500_000, &no_quotes()).unwrap();
 
-        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(overview.principal, 6_000_000, "本金含追加且不受支取影响");
         assert_eq!(overview.withdrawn_total, 800_000);
         assert_eq!(overview.available_cash, 6_000_000 - 800_000);
@@ -2747,7 +2748,7 @@ mod tests {
 
         seed_principal(&workspace, 5_000_000);
         // 利息归本：现金 +100000，本金口径不动
-        let after = add_interest(&workspace, TEST_LEDGER_ID, 100_000).unwrap();
+        let after = add_interest(&workspace, TEST_LEDGER_ID, 100_000, &no_quotes()).unwrap();
         assert_eq!(after.principal, 5_000_000, "利息归本不应改变本金");
         assert_eq!(after.interest_total, 100_000);
         assert_eq!(after.withdrawn_total, 0);
@@ -2772,14 +2773,17 @@ mod tests {
         );
 
         // 利息是账户里真实存在的现金：可以再支取出来
-        let withdrawn = add_withdraw(&workspace, TEST_LEDGER_ID, 100_000).unwrap();
+        let withdrawn = add_withdraw(&workspace, TEST_LEDGER_ID, 100_000, &no_quotes()).unwrap();
         assert_eq!(withdrawn.interest_total, 100_000, "支取不影响累计利息");
         assert_eq!(withdrawn.available_cash, 5_000_000);
 
         // 非法金额被拦下且不产生记录
-        assert!(add_interest(&workspace, TEST_LEDGER_ID, 0).is_err());
-        assert!(add_interest(&workspace, TEST_LEDGER_ID, -100).is_err());
-        assert!(add_interest_at_date(&workspace, TEST_LEDGER_ID, 100, "not-a-date").is_err());
+        assert!(add_interest(&workspace, TEST_LEDGER_ID, 0, &no_quotes()).is_err());
+        assert!(add_interest(&workspace, TEST_LEDGER_ID, -100, &no_quotes()).is_err());
+        assert!(
+            add_interest_at_date(&workspace, TEST_LEDGER_ID, 100, "not-a-date", &no_quotes())
+                .is_err()
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2789,11 +2793,32 @@ mod tests {
         let (workspace, dir) = workspace("interest-principal-chain");
 
         seed_principal(&workspace, 1_000_000);
-        add_interest_at_date(&workspace, TEST_LEDGER_ID, 30_000, "2026-02-01").unwrap();
-        add_principal_at_date(&workspace, TEST_LEDGER_ID, 500_000, "2026-02-02").unwrap();
-        add_interest_at_date(&workspace, TEST_LEDGER_ID, 20_000, "2026-02-03").unwrap();
+        add_interest_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            30_000,
+            "2026-02-01",
+            &no_quotes(),
+        )
+        .unwrap();
+        add_principal_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            500_000,
+            "2026-02-02",
+            &no_quotes(),
+        )
+        .unwrap();
+        add_interest_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            20_000,
+            "2026-02-03",
+            &no_quotes(),
+        )
+        .unwrap();
 
-        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(overview.principal, 1_500_000, "只有追加本金抬高本金");
         assert_eq!(overview.interest_total, 50_000, "利息归本累计");
         assert_eq!(overview.available_cash, 1_550_000);
@@ -2834,7 +2859,7 @@ mod tests {
         .unwrap();
 
         let overview =
-            get_overview_with(&workspace, TEST_LEDGER_ID, &StubQuoteFetcher::empty()).unwrap();
+            get_overview(&workspace, TEST_LEDGER_ID, &StubQuoteFetcher::empty()).unwrap();
         // 行情缺失 → 市值按持仓成本计入，总资产 = 可用现金 + 持仓市值 = 本金
         assert_eq!(overview.position_market_value, 1_000_510);
         assert_eq!(
@@ -2857,7 +2882,7 @@ mod tests {
             "",
         )
         .unwrap();
-        let after = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let after = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(
             after.available_cash, after.total_assets,
             "清仓后可用现金应等于总资产"
@@ -2871,8 +2896,22 @@ mod tests {
         let (workspace, dir) = workspace("withdraw-date");
 
         seed_principal(&workspace, 5_000_000);
-        add_principal_at_date(&workspace, TEST_LEDGER_ID, 1_000_000, "2026-01-05").unwrap();
-        add_withdraw_at_date(&workspace, TEST_LEDGER_ID, 200_000, "2026-01-10").unwrap();
+        add_principal_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            1_000_000,
+            "2026-01-05",
+            &no_quotes(),
+        )
+        .unwrap();
+        add_withdraw_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            200_000,
+            "2026-01-10",
+            &no_quotes(),
+        )
+        .unwrap();
 
         let page = list_fund_records(&workspace, TEST_LEDGER_ID, 1, 10).unwrap();
         assert_eq!(page.total, 2);
@@ -2882,17 +2921,30 @@ mod tests {
         assert_eq!(page.items[1].record_date, "2026-01-05");
         assert_eq!(page.items[1].event_type, consts::STOCK_EVENT_ADD_PRINCIPAL);
 
-        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(overview.principal, 6_000_000);
         assert_eq!(overview.withdrawn_total, 200_000);
 
-        let error =
-            add_principal_at_date(&workspace, TEST_LEDGER_ID, 100_000, "2026/01/05").unwrap_err();
+        let error = add_principal_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            100_000,
+            "2026/01/05",
+            &no_quotes(),
+        )
+        .unwrap_err();
         assert!(
             error.to_string().contains("日期格式"),
             "错误信息应说明日期格式, 实际: {error}"
         );
-        assert!(add_withdraw_at_date(&workspace, TEST_LEDGER_ID, 100_000, "not-a-date").is_err());
+        assert!(add_withdraw_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            100_000,
+            "not-a-date",
+            &no_quotes()
+        )
+        .is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2911,8 +2963,8 @@ mod tests {
         );
 
         seed_principal(&workspace, 1_000_000);
-        add_withdraw(&workspace, TEST_LEDGER_ID, 10_000).unwrap();
-        let error = set_principal(&workspace, TEST_LEDGER_ID, 2_000_000).unwrap_err();
+        add_withdraw(&workspace, TEST_LEDGER_ID, 10_000, &no_quotes()).unwrap();
+        let error = set_principal(&workspace, TEST_LEDGER_ID, 2_000_000, &no_quotes()).unwrap_err();
         assert_eq!(error.to_string(), "已有资金变化记录，请使用「追加本金」");
         assert_eq!(error.into_app_error().status, 409);
 
@@ -3277,7 +3329,7 @@ mod tests {
         )
         .unwrap();
 
-        let items = list_positions_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        let items = list_positions(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].latest_price, Some(1100));
         assert_eq!(items[0].prev_close, Some(1050));
@@ -3311,7 +3363,7 @@ mod tests {
         )
         .unwrap();
 
-        let overview = get_overview_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(overview.available_cash, 10_000_000 - 1_000_510);
         assert_eq!(overview.position_market_value, 1100 * 1000);
         assert_eq!(overview.unrealized_pnl, 1100 * 1000 - 1_000_510);
@@ -3344,7 +3396,7 @@ mod tests {
         )
         .unwrap();
 
-        let overview = get_overview_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(overview.quote_failed_count, 1);
         assert_eq!(
             overview.position_market_value, 1_000_510,
@@ -3393,7 +3445,7 @@ mod tests {
         )
         .unwrap();
 
-        let positions = list_positions_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         let mut cost600 = 0;
         let mut cost000 = 0;
         let mut qty600 = 0;
@@ -3406,7 +3458,7 @@ mod tests {
             }
         }
 
-        let overview = get_overview_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(overview.quote_failed_count, 1);
         assert_eq!(overview.position_market_value, 1100 * qty600 + cost000);
         assert_eq!(overview.unrealized_pnl, 1100 * qty600 - cost600);
@@ -3498,7 +3550,7 @@ mod tests {
             .sum();
         assert_eq!(round.len(), 3, "本轮应切出建仓 / 加仓 / 减仓三笔");
 
-        let positions = list_positions_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(positions.len(), 1);
         let position = &positions[0];
         assert_eq!(position.quantity, 200);
@@ -3508,7 +3560,7 @@ mod tests {
         );
         assert_eq!(position.round_cost, want_cost, "持仓的本轮建仓成本合计");
 
-        let overview = get_overview_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(overview.position_market_value, 1100 * 200);
         assert_eq!(
             overview.unrealized_pnl,
@@ -3539,7 +3591,7 @@ mod tests {
         close_round_helper(&workspace, TEST_CODE, TEST_NAME, 1000, 1100); // 600000 有行情
         close_round_helper(&workspace, TEST_CODE_B, TEST_NAME_B, 2000, 1900); // 000001 行情缺失
 
-        let items = list_trade_histories_with(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
+        let items = list_trade_histories(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(items.len(), 2);
         let by_code: HashMap<&str, &StockTradeHistoryDto> = items
             .iter()
@@ -3676,7 +3728,7 @@ mod tests {
 
         delete_trade_order(&workspace, TEST_LEDGER_ID, &items[0].order_id).unwrap();
 
-        let positions = list_positions(&workspace, TEST_LEDGER_ID).unwrap();
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(positions.len(), 1);
         assert_eq!(
             positions[0].quantity, 200,
@@ -3723,7 +3775,7 @@ mod tests {
         assert_eq!(impact.removed_rounds[0].round_no, 1);
 
         // 预演必须回滚：持仓与交易保持原样
-        let positions = list_positions(&workspace, TEST_LEDGER_ID).unwrap();
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert!(positions.is_empty(), "预演不应改变持仓, 实际 {positions:?}");
         let trades = list_trades(&workspace, TEST_LEDGER_ID, TEST_ORDER_CODE).unwrap();
         assert_eq!(trades.len(), 3, "预演不应删除成交");
@@ -3827,7 +3879,14 @@ mod tests {
 
         seed_principal(&workspace, 10_000_000);
         // 先按「今天」追加 5 万元，再补录一笔 2023 年的历史交易
-        add_principal_at_date(&workspace, TEST_LEDGER_ID, 5_000_000, "2026-09-18").unwrap();
+        add_principal_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            5_000_000,
+            "2026-09-18",
+            &no_quotes(),
+        )
+        .unwrap();
         let trade = create_trade(
             &workspace,
             TEST_LEDGER_ID,
@@ -3934,7 +3993,14 @@ mod tests {
     fn repair_legacy_trade_fund_dates_fixes_date_and_cash_chain() {
         let (workspace, dir) = workspace("repair-legacy-dates");
 
-        add_principal_at_date(&workspace, TEST_LEDGER_ID, 10_000_000, "2026-08-20").unwrap();
+        add_principal_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            10_000_000,
+            "2026-08-20",
+            &no_quotes(),
+        )
+        .unwrap();
         let buy_time = local_seconds(&workspace.connection(), "2026-08-20 00:00:00");
         create_trade(
             &workspace,
@@ -4048,7 +4114,7 @@ mod tests {
         }
         let close_time = 1_700_000_300;
 
-        let histories = list_trade_histories(&workspace, TEST_LEDGER_ID).unwrap();
+        let histories = list_trade_histories(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(histories.len(), 1);
         assert_eq!(histories[0].stock_code, TEST_CODE);
         assert_eq!(histories[0].stock_name, TEST_NAME);
@@ -4147,7 +4213,7 @@ mod tests {
         )
         .unwrap();
 
-        let histories = list_trade_histories(&workspace, TEST_LEDGER_ID).unwrap();
+        let histories = list_trade_histories(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(histories.len(), 1, "多次交易应复用同一个历史集合");
         assert_eq!(histories[0].round_count, 2);
         assert_eq!(histories[0].last_closed_at, 1_700_001_300);
@@ -4198,7 +4264,7 @@ mod tests {
         }
         drop(conn);
 
-        let histories = list_trade_histories(&workspace, TEST_LEDGER_ID).unwrap();
+        let histories = list_trade_histories(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(histories.len(), 1, "存量交易应回填出 1 个历史集合");
         assert_eq!(histories[0].round_count, 2);
 
@@ -4214,7 +4280,7 @@ mod tests {
         }
 
         // 再次查询应幂等，不重复建轮次
-        let again = list_trade_histories(&workspace, TEST_LEDGER_ID).unwrap();
+        let again = list_trade_histories(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(again[0].round_count, 2, "回填应幂等");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -4251,7 +4317,7 @@ mod tests {
         )
         .unwrap();
 
-        let histories = list_trade_histories(&workspace, TEST_LEDGER_ID).unwrap();
+        let histories = list_trade_histories(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert!(histories.is_empty(), "在建持仓不应进入交易历史");
 
         // 随后清仓：本轮从第一次建仓开始完整归档
@@ -4637,7 +4703,7 @@ mod tests {
         .unwrap();
         assert_eq!(updated.review, "建仓理由：回踩年线企稳，等放量");
 
-        let positions = list_positions(&workspace, TEST_LEDGER_ID).unwrap();
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0].review, "建仓理由：回踩年线企稳，等放量");
 
@@ -4833,6 +4899,7 @@ mod tests {
             TEST_LEDGER_ID,
             30_000,
             &unix_to_date(1_690_100_000),
+            &no_quotes(),
         )
         .unwrap();
         // 第 2 轮再亏 100_000
@@ -5502,7 +5569,7 @@ mod tests {
         };
 
         // 本地无记录 → 走外部
-        let dto = lookup_stock_name_with(&workspace, TEST_CODE, &fetcher).unwrap();
+        let dto = lookup_stock_name(&workspace, TEST_CODE, &fetcher).unwrap();
         assert_eq!(dto.stock_code, TEST_CODE);
         assert_eq!(dto.stock_name, "外部名称");
 
@@ -5520,10 +5587,10 @@ mod tests {
             "",
         )
         .unwrap();
-        let dto = lookup_stock_name_with(&workspace, TEST_CODE, &fetcher).unwrap();
+        let dto = lookup_stock_name(&workspace, TEST_CODE, &fetcher).unwrap();
         assert_eq!(dto.stock_name, TEST_NAME);
 
-        assert!(lookup_stock_name(&workspace, "").is_err());
+        assert!(lookup_stock_name(&workspace, "", &no_quotes()).is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -5562,7 +5629,7 @@ mod tests {
         drop(conn);
 
         // 重建账户时本金归零
-        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(overview.principal, 0);
 
         std::fs::remove_dir_all(&dir).ok();
@@ -5607,6 +5674,7 @@ mod tests {
                 TEST_LEDGER_ID,
                 1000,
                 &format!("2026-01-{:02}", index + 1),
+                &no_quotes(),
             )
             .unwrap();
         }
@@ -5701,10 +5769,10 @@ mod tests {
     fn rollback_undoes_add_principal_and_pops_the_log() {
         let (workspace, dir) = workspace("op-rollback-principal");
         seed_principal(&workspace, 1_000_000);
-        let before = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let before = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
 
-        add_principal(&workspace, TEST_LEDGER_ID, 50_000).unwrap();
-        let after = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        add_principal(&workspace, TEST_LEDGER_ID, 50_000, &no_quotes()).unwrap();
+        let after = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(after.principal, before.principal + 50_000);
         assert_eq!(after.available_cash, before.available_cash + 50_000);
         assert_eq!(fund_record_count(&workspace), 1);
@@ -5720,7 +5788,7 @@ mod tests {
         assert_eq!(result.action, "追加本金");
         assert!(!result.skipped, "目标在，不该走跳过路径");
 
-        let restored = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let restored = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(restored.principal, before.principal, "本金要还原");
         assert_eq!(restored.available_cash, before.available_cash, "现金要还原");
         assert_eq!(fund_record_count(&workspace), 0, "那条资金记录要删掉");
@@ -5735,10 +5803,12 @@ mod tests {
     fn rollback_undoes_withdraw_and_interest_without_touching_principal() {
         let (workspace, dir) = workspace("op-rollback-fund-kinds");
         seed_principal(&workspace, 1_000_000);
-        let principal = get_overview(&workspace, TEST_LEDGER_ID).unwrap().principal;
+        let principal = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes())
+            .unwrap()
+            .principal;
 
-        add_interest(&workspace, TEST_LEDGER_ID, 12_345).unwrap();
-        let after_interest = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        add_interest(&workspace, TEST_LEDGER_ID, 12_345, &no_quotes()).unwrap();
+        let after_interest = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(after_interest.principal, principal, "利息不改本金");
         assert_eq!(
             list_operations(&workspace, TEST_LEDGER_ID).unwrap()[0].action,
@@ -5746,7 +5816,7 @@ mod tests {
         );
 
         rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
-        let restored = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let restored = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(
             restored.available_cash,
             after_interest.available_cash - 12_345
@@ -5754,15 +5824,15 @@ mod tests {
         assert_eq!(restored.principal, principal, "回滚利息也不改本金");
         assert_eq!(fund_record_count(&workspace), 0);
 
-        add_withdraw(&workspace, TEST_LEDGER_ID, 5_000).unwrap();
-        let after_withdraw = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        add_withdraw(&workspace, TEST_LEDGER_ID, 5_000, &no_quotes()).unwrap();
+        let after_withdraw = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(
             list_operations(&workspace, TEST_LEDGER_ID).unwrap()[0].action,
             "支取"
         );
 
         rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
-        let restored = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let restored = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(
             restored.available_cash,
             after_withdraw.available_cash + 5_000
@@ -5882,7 +5952,7 @@ mod tests {
         let (workspace, dir) = workspace("op-log-cap");
         seed_principal(&workspace, 10_000_000);
         for index in 1..=11 {
-            add_principal(&workspace, TEST_LEDGER_ID, index * 100).unwrap();
+            add_principal(&workspace, TEST_LEDGER_ID, index * 100, &no_quotes()).unwrap();
         }
 
         let operations = list_operations(&workspace, TEST_LEDGER_ID).unwrap();
@@ -5895,13 +5965,13 @@ mod tests {
         );
 
         // 裁剪掉的只是记录：本金仍然是 11 次追加的总和
-        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(overview.principal, 10_000_000 + (1..=11).sum::<i64>() * 100);
 
         // 回滚一次只撤销最新那条（第 11 次 = ¥11.00）
         let result = rollback_latest(&workspace, TEST_LEDGER_ID).unwrap();
         assert_eq!(result.action, "追加本金");
-        let overview = get_overview(&workspace, TEST_LEDGER_ID).unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         assert_eq!(overview.principal, 10_000_000 + (1..=10).sum::<i64>() * 100);
 
         std::fs::remove_dir_all(&dir).ok();
@@ -6000,7 +6070,7 @@ mod tests {
     fn reset_clears_the_operation_log() {
         let (workspace, dir) = workspace("op-reset-clears-log");
         seed_principal(&workspace, 1_000_000);
-        add_principal(&workspace, TEST_LEDGER_ID, 50_000).unwrap();
+        add_principal(&workspace, TEST_LEDGER_ID, 50_000, &no_quotes()).unwrap();
         create_trade(
             &workspace,
             TEST_LEDGER_ID,

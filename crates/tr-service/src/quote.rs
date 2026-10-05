@@ -5,6 +5,14 @@
 //! 集中在这里，并且**解析逻辑与网络分离**（`parse_tencent_quote_payload` 是纯函数，
 //! 可以直接用固定 payload 断言）。
 //!
+//! 端口就是 [`StockQuoteFetcher`] 这一个既有 trait，两个实现分别是生产用的
+//! [`TencentStockQuoteFetcher`] 与测试用的 stub —— 本模块不新增 trait、也不改端口签名。
+//!
+//! **生产 adapter 在哪一层被选**：服务层不再自己 `new` —— [`TencentStockQuoteFetcher`]
+//! 由**边界**选择一次（IPC 命令面 `tr-ipc` 的 `commands::stock::production_quotes`、
+//! 种子工具 `xtask` 的 `seed::production_quotes`），再作为 `&dyn StockQuoteFetcher`
+//! 一路注入（见 issue #15）。
+//!
 //! 网络约束：
 //! * `http://qt.gtimg.cn/q=<market><code>[,<market><code>...]`，**3 秒超时**；
 //! * 响应是 GBK 编码，需要按 GBK 解码后再按 `~` 切分；

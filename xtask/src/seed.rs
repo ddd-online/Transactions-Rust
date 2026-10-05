@@ -14,10 +14,17 @@ use tr_domain::dto::{
 use tr_domain::models::ChartLine;
 use tr_store::Workspace;
 
+use tr_service::quote::TencentStockQuoteFetcher;
 use tr_service::{
     category, chart, diary, key_event, ledger, stock, tag, transaction_record,
     transaction_template, ServiceError,
 };
+
+/// **生产行情源**：种子工具只在这里选择一次（服务层只收 `&dyn StockQuoteFetcher`；
+/// 走真实腾讯 adapter，行情拿不到时按缺失口径降级，与线上一致，见 issue #15）。
+fn production_quotes() -> TencentStockQuoteFetcher {
+    TencentStockQuoteFetcher::new()
+}
 
 /// 2026-01-05 / 2026-02-10 / 2026-03-15 的 UTC 秒（与前端的月份分桶对应）。
 const DAY_2026_01_05: i64 = 1_767_571_200;
@@ -299,7 +306,12 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
 
     // ---- 股票交易（覆盖最高风险的算法：委托级费用一次计收 + 分摊、持仓重放、轮次归档、资金链）----
     // 这些操作的输入**逐字写定**（种子即基线），因此这里的取值不可随意改动。
-    stock::set_principal(workspace, &main_ledger, PRINCIPAL_CENTS)?;
+    stock::set_principal(
+        workspace,
+        &main_ledger,
+        PRINCIPAL_CENTS,
+        &production_quotes(),
+    )?;
     stock::create_trade_order(
         workspace,
         &main_ledger,
@@ -348,10 +360,16 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "种子清仓",
         "打板",
     )?;
-    stock::add_withdraw_at_date(workspace, &main_ledger, WITHDRAW_CENTS, "2026-03-20")?;
+    stock::add_withdraw_at_date(
+        workspace,
+        &main_ledger,
+        WITHDRAW_CENTS,
+        "2026-03-20",
+        &production_quotes(),
+    )?;
     log.push_str("股票：本金 15 万元 / 建仓(2 笔成交) + 加仓 + 清仓(3 手, 打板) / 支取 1 万元\n");
 
-    let overview = stock::get_overview(workspace, &main_ledger)?;
+    let overview = stock::get_overview(workspace, &main_ledger, &production_quotes())?;
     log.push_str(&format!(
         "股票总览：本金={} 可用现金={} 已实现盈亏={}\n",
         overview.principal, overview.available_cash, overview.realized_pnl
@@ -714,7 +732,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     // 归档的历史集合由「交易历史」列表懒补齐（列表查询先做 backfill），
     // 详情查询自身不做补齐——所以必须先走一次列表查询，
     // 否则详情接口会报"该股票暂无交易历史"。
-    stock::list_trade_histories(workspace, &main_ledger)?;
+    stock::list_trade_histories(workspace, &main_ledger, &production_quotes())?;
     let detail = stock::get_trade_history_detail(workspace, &main_ledger, "600519")?;
     let round_id = detail
         .rounds
@@ -753,7 +771,13 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     ));
 
     // ---- 6d. 股票：追加本金 50 万（指定发生日期，避免依赖当天日期）----
-    stock::add_principal_at_date(workspace, &main_ledger, ADD_PRINCIPAL_CENTS, "2026-04-20")?;
+    stock::add_principal_at_date(
+        workspace,
+        &main_ledger,
+        ADD_PRINCIPAL_CENTS,
+        "2026-04-20",
+        &production_quotes(),
+    )?;
     log.push_str("股票：追加本金 50 万元\n");
 
     // ---- 6e. 股票：更新费用设置 ----
@@ -781,7 +805,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     ledger::delete_ledger_by_id(workspace, &other_ledger)?;
     log.push_str("账本：删除备用账本（级联清理）\n");
 
-    let final_overview = stock::get_overview(workspace, &main_ledger)?;
+    let final_overview = stock::get_overview(workspace, &main_ledger, &production_quotes())?;
     log.push_str(&format!(
         "股票总览（阶段 2 后）：本金={} 可用现金={} 已实现盈亏={}\n",
         final_overview.principal, final_overview.available_cash, final_overview.realized_pnl
@@ -805,7 +829,12 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     // 阶段 3 在**独立账本**上运行：避免与阶段 1/2 的持仓行、历史集合、资金记录互相影响，
     // 这样减仓/多轮次的行为可以单独验证。
     let phase3_ledger = ledger::create_ledger(workspace, "阶段三账本", "")?;
-    stock::set_principal(workspace, &phase3_ledger, PRINCIPAL_CENTS)?;
+    stock::set_principal(
+        workspace,
+        &phase3_ledger,
+        PRINCIPAL_CENTS,
+        &production_quotes(),
+    )?;
     log.push_str(&format!("---- 阶段 3（独立账本 {phase3_ledger}）----\n"));
     // ---- 3-1. 第二轮 600519：建仓 3 手 → 两次减仓（各 1 手）→ 加仓 1 手 → 清仓 2 手 ----
     stock::create_trade_order(
@@ -894,7 +923,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
     log.push_str("股票：600519 建仓3手 → 减仓1手 → 减仓1手 → 加仓1手 → 清仓2手（追涨）\n");
 
     // 第二轮归档后写复盘，供后续重放验证「轮次元数据按序号保留」
-    stock::list_trade_histories(workspace, &phase3_ledger)?;
+    stock::list_trade_histories(workspace, &phase3_ledger, &production_quotes())?;
     let detail = stock::get_trade_history_detail(workspace, &phase3_ledger, "600519")?;
     let round2_id = phase3_round_id(&detail, 1)?;
     stock::update_round_review(
@@ -938,7 +967,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "第二轮清仓",
         "",
     )?;
-    stock::list_trade_histories(workspace, &phase3_ledger)?;
+    stock::list_trade_histories(workspace, &phase3_ledger, &production_quotes())?;
     let detail = stock::get_trade_history_detail(workspace, &phase3_ledger, "600519")?;
     if detail.rounds.len() != 2 {
         return Err(ServiceError::Internal(format!(
@@ -1032,7 +1061,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         1,
         TRADE_TIME_R3_OPEN,
     )?;
-    stock::list_trade_histories(workspace, &phase3_ledger)?;
+    stock::list_trade_histories(workspace, &phase3_ledger, &production_quotes())?;
     let detail = stock::get_trade_history_detail(workspace, &phase3_ledger, "600519")?;
     let round2_after = detail
         .rounds
@@ -1103,7 +1132,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "第四轮清仓",
         "尾盘",
     )?;
-    stock::list_trade_histories(workspace, &phase3_ledger)?;
+    stock::list_trade_histories(workspace, &phase3_ledger, &production_quotes())?;
     let detail = stock::get_trade_history_detail(workspace, &phase3_ledger, PHASE3_STOCK_CODE)?;
     if detail.rounds.len() != 1 {
         return Err(ServiceError::Internal(format!(
@@ -1122,7 +1151,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         1,
         TRADE_TIME_R4_OPEN,
     )?;
-    stock::list_trade_histories(workspace, &phase3_ledger)?;
+    stock::list_trade_histories(workspace, &phase3_ledger, &production_quotes())?;
     let detail = stock::get_trade_history_detail(workspace, &phase3_ledger, PHASE3_STOCK_CODE)?;
     let round4_after = detail
         .rounds

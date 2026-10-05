@@ -29,12 +29,19 @@ use tr_domain::wire::{
     StockTradeCreateRequest, StockTradeImpactRequest, StockTradeOrderDeleteRequest,
     StockTradeUpdateRequest, StockTradesRequest,
 };
+use tr_service::quote::TencentStockQuoteFetcher;
 use tr_service::stock::{self, TradeFill};
 
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
 use super::require_ledger_id;
+
+/// **生产行情源**：整个命令面只在这里选择一次（服务层只收 `&dyn StockQuoteFetcher`，
+/// 不再自己 new；换实现只需改这一处，见 issue #15）。
+fn production_quotes() -> TencentStockQuoteFetcher {
+    TencentStockQuoteFetcher::new()
+}
 
 // ---------- 账户 / 费用设置 ----------
 
@@ -46,7 +53,11 @@ pub fn stock_overview(
 ) -> ApiResult<StockOverviewDto> {
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
-    Ok(stock::get_overview(&workspace, &req.ledger_id)?)
+    Ok(stock::get_overview(
+        &workspace,
+        &req.ledger_id,
+        &production_quotes(),
+    )?)
 }
 
 /// 追加本金（可指定发生日期）。
@@ -65,6 +76,7 @@ pub fn stock_principal_add(
         &req.ledger_id,
         amount,
         &req.date,
+        &production_quotes(),
     )?)
 }
 
@@ -84,6 +96,7 @@ pub fn stock_interest_add(
         &req.ledger_id,
         amount,
         &req.date,
+        &production_quotes(),
     )?)
 }
 
@@ -103,6 +116,7 @@ pub fn stock_withdraw(
         &req.ledger_id,
         amount,
         &req.date,
+        &production_quotes(),
     )?)
 }
 
@@ -220,7 +234,8 @@ pub async fn stock_positions(
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
     tauri::async_runtime::spawn_blocking(move || {
-        stock::list_positions(&workspace, &req.ledger_id).map_err(ApiError::from)
+        stock::list_positions(&workspace, &req.ledger_id, &production_quotes())
+            .map_err(ApiError::from)
     })
     .await
     .map_err(|error| ApiError::from(AppError::internal(error.to_string())))?
@@ -364,7 +379,8 @@ pub async fn stock_history(
     require_ledger_id(&req.ledger_id)?;
     let workspace = state.workspace()?;
     tauri::async_runtime::spawn_blocking(move || {
-        stock::list_trade_histories(&workspace, &req.ledger_id).map_err(ApiError::from)
+        stock::list_trade_histories(&workspace, &req.ledger_id, &production_quotes())
+            .map_err(ApiError::from)
     })
     .await
     .map_err(|error| ApiError::from(AppError::internal(error.to_string())))?
@@ -478,7 +494,8 @@ pub async fn stock_name(
     // `stock_code` 为空才报错，**不**要求 ledger_id
     let workspace = state.workspace()?;
     tauri::async_runtime::spawn_blocking(move || {
-        stock::lookup_stock_name(&workspace, &req.stock_code).map_err(ApiError::from)
+        stock::lookup_stock_name(&workspace, &req.stock_code, &production_quotes())
+            .map_err(ApiError::from)
     })
     .await
     .map_err(|error| ApiError::from(AppError::internal(error.to_string())))?
