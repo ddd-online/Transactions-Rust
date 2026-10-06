@@ -273,20 +273,6 @@ sha256 在应用自己的校验里通过）→ 切到「记账」再切回「关
 
 ## [0.13.1] - 2026-10-05
 
-**写路径的判据核心：`WriteTarget`（候选 2 的第一片）**
-
-- **问题**：读半边有 `query.rs` + `tr_draw::query`（去重 / generation / 复核判定，10 个真跑的测试），
-  写半边没有对应的东西 —— "账本在写的过程中被切走了"由每个页面各写一遍，全仓 **9 处**
-  `if AppStores::global().current_ledger_id.get_untracked() != ledger_id { return; }`；
-  而读半边那份 `QueryCore::settle` 比的是整个 `(key, generation)`，比这些手写比较**更强**。
-- **本片**：`tr_draw::change::WriteTarget` —— 出发时记下这次写替哪个账本做，回来后
-  `is_stale(现在的账本)` 判断还该不该落地；规则钉住了一个容易漏的边界：**空目标（还没选账本）
-  永远算过期**（那种写迟早被后端拒，落地只会让空态闪出旧数据）。日记的防抖自动保存是第一个调用点。
-- **还没做**：另一半"成功之后哪些读作废 / 回填"的那张表（见 #34 的分片）。
-
-回归：`cargo test -p tr-draw` **108 绿**（本片 +4）；`fixtures/test.ps1 -Unit diary` 6/6 绿；
-`clippy -D warnings` 与 `check-ui-wasm` 干净。
-
 ### 修复**筛选之后，底部统计条跟着筛选走**
 
 - 底栏那三个数（收入 / 支出 / 转账）原来只按「账本 + 时间范围」汇总，`items`（筛选条件）
@@ -392,20 +378,6 @@ sha256 在应用自己的校验里通过）→ 切到「记账」再切回「关
 回归：`-Unit core,ui` 全绿；dev 窗口实拍 + UIA 量矩形：功能项物理 67×66（逻辑 44×44）、
 头像 61×61（逻辑 40×40）、所有格子的中轴同为 41.7。
 
-**写路径的判据核心：`WriteTarget`（候选 2 的第一片）**
-
-- **问题**：读半边有 `query.rs` + `tr_draw::query`（去重 / generation / 复核判定，10 个真跑的测试），
-  写半边没有对应的东西 —— "账本在写的过程中被切走了"由每个页面各写一遍，全仓 **9 处**
-  `if AppStores::global().current_ledger_id.get_untracked() != ledger_id { return; }`；
-  而读半边那份 `QueryCore::settle` 比的是整个 `(key, generation)`，比这些手写比较**更强**。
-- **本片**：`tr_draw::change::WriteTarget` —— 出发时记下这次写替哪个账本做，回来后
-  `is_stale(现在的账本)` 判断还该不该落地；规则钉住了一个容易漏的边界：**空目标（还没选账本）
-  永远算过期**（那种写迟早被后端拒，落地只会让空态闪出旧数据）。日记的防抖自动保存是第一个调用点。
-- **还没做**：另一半"成功之后哪些读作废 / 回填"的那张表（见 #34 的分片）。
-
-回归：`cargo test -p tr-draw` **108 绿**（本片 +4）；`fixtures/test.ps1 -Unit diary` 6/6 绿；
-`clippy -D warnings` 与 `check-ui-wasm` 干净。
-
 ### 修复**气泡确认框不再被滚动容器裁掉（删除图表时只画出小半截）**
 
 - 面板原来是触发器的**绝对定位**子元素：只要中间隔着一层滚动容器（分析页的图表列表、
@@ -428,20 +400,6 @@ sha256 在应用自己的校验里通过）→ 切到「记账」再切回「关
 dev 窗口实拍（图表列表里点删除，气泡整个画在列表之外，不再被裁）。
 
 ## [0.12.1] - 2026-10-04
-
-**写路径的判据核心：`WriteTarget`（候选 2 的第一片）**
-
-- **问题**：读半边有 `query.rs` + `tr_draw::query`（去重 / generation / 复核判定，10 个真跑的测试），
-  写半边没有对应的东西 —— "账本在写的过程中被切走了"由每个页面各写一遍，全仓 **9 处**
-  `if AppStores::global().current_ledger_id.get_untracked() != ledger_id { return; }`；
-  而读半边那份 `QueryCore::settle` 比的是整个 `(key, generation)`，比这些手写比较**更强**。
-- **本片**：`tr_draw::change::WriteTarget` —— 出发时记下这次写替哪个账本做，回来后
-  `is_stale(现在的账本)` 判断还该不该落地；规则钉住了一个容易漏的边界：**空目标（还没选账本）
-  永远算过期**（那种写迟早被后端拒，落地只会让空态闪出旧数据）。日记的防抖自动保存是第一个调用点。
-- **还没做**：另一半"成功之后哪些读作废 / 回填"的那张表（见 #34 的分片）。
-
-回归：`cargo test -p tr-draw` **108 绿**（本片 +4）；`fixtures/test.ps1 -Unit diary` 6/6 绿；
-`clippy -D warnings` 与 `check-ui-wasm` 干净。
 
 ### 修复**「关联事件」弹窗：「解除关联」收进底栏那一颗按钮**
 
@@ -1375,20 +1333,6 @@ dev 实例 + 重建 release 产物（迭代期用的是 dev 链路）。
   18 个脚本改为 dot-source：**18 个脚本合计 7162 → 5566 行**。
   语义不同的变体（更强的失效守卫、不同的默认超时/文案）按"宁可少抽"保留在各自脚本里。
 
-**写路径的判据核心：`WriteTarget`（候选 2 的第一片）**
-
-- **问题**：读半边有 `query.rs` + `tr_draw::query`（去重 / generation / 复核判定，10 个真跑的测试），
-  写半边没有对应的东西 —— "账本在写的过程中被切走了"由每个页面各写一遍，全仓 **9 处**
-  `if AppStores::global().current_ledger_id.get_untracked() != ledger_id { return; }`；
-  而读半边那份 `QueryCore::settle` 比的是整个 `(key, generation)`，比这些手写比较**更强**。
-- **本片**：`tr_draw::change::WriteTarget` —— 出发时记下这次写替哪个账本做，回来后
-  `is_stale(现在的账本)` 判断还该不该落地；规则钉住了一个容易漏的边界：**空目标（还没选账本）
-  永远算过期**（那种写迟早被后端拒，落地只会让空态闪出旧数据）。日记的防抖自动保存是第一个调用点。
-- **还没做**：另一半"成功之后哪些读作废 / 回填"的那张表（见 #34 的分片）。
-
-回归：`cargo test -p tr-draw` **108 绿**（本片 +4）；`fixtures/test.ps1 -Unit diary` 6/6 绿；
-`clippy -D warnings` 与 `check-ui-wasm` 干净。
-
 ### 修复- `fixtures/contract-audit.ps1`：界面侧请求结构体表改为**跨 `crates/tr-ui/src/api/*.rs` 合并**
   （`api/mod.rs` 优先），共享结构体重新纳入逐字段比对 —— 比较数 **57 → 66**，
   "跳过（界面直接传 tr_domain 共享类型）"的原因说明恢复准确。
@@ -1425,20 +1369,6 @@ dev 实例 + 重建 release 产物（迭代期用的是 dev 链路）。
 - **关键事件**：卡片与关联交易卡改纸面 + 发丝描边，选中用强调色底。
 - **消费记录 / 设置 / 分类标签 / 数据分析**：分页、抽屉、日期选择器、空态等细节统一；
   新增 `time_range_picker` 组件，移除未使用的 `float_button`。
-
-**写路径的判据核心：`WriteTarget`（候选 2 的第一片）**
-
-- **问题**：读半边有 `query.rs` + `tr_draw::query`（去重 / generation / 复核判定，10 个真跑的测试），
-  写半边没有对应的东西 —— "账本在写的过程中被切走了"由每个页面各写一遍，全仓 **9 处**
-  `if AppStores::global().current_ledger_id.get_untracked() != ledger_id { return; }`；
-  而读半边那份 `QueryCore::settle` 比的是整个 `(key, generation)`，比这些手写比较**更强**。
-- **本片**：`tr_draw::change::WriteTarget` —— 出发时记下这次写替哪个账本做，回来后
-  `is_stale(现在的账本)` 判断还该不该落地；规则钉住了一个容易漏的边界：**空目标（还没选账本）
-  永远算过期**（那种写迟早被后端拒，落地只会让空态闪出旧数据）。日记的防抖自动保存是第一个调用点。
-- **还没做**：另一半"成功之后哪些读作废 / 回填"的那张表（见 #34 的分片）。
-
-回归：`cargo test -p tr-draw` **108 绿**（本片 +4）；`fixtures/test.ps1 -Unit diary` 6/6 绿；
-`clippy -D warnings` 与 `check-ui-wasm` 干净。
 
 ### 修复- **发布：0.2.0 的安装包资产曾经是 0.1.0 的安装包**（用户下载安装后仍是 0.1.0 的界面，
   两个 release 的资产字节数与 `sha256` 完全相同）。原因：`cargo tauri build` 不清 NSIS 产物目录，
