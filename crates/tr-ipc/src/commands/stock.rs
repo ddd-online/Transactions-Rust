@@ -460,19 +460,21 @@ pub fn stock_statistics(
     req: StockStatisticsRequest,
 ) -> ApiResult<StockStatisticsDto> {
     require_ledger_id(&req.ledger_id)?;
-    // `recent` 的取值规则在 tr_domain::statistics（候选 6 / #35）：字段缺失 / 空串 / **非数字串**
-    // 都按"没传"处理（宽松），数字 <= 0 才报错 —— 这里只做错误信封的转换，不再自己判一遍。
-    let recent = tr_domain::statistics::normalize_recent(query_number_as_i64(req.recent.as_ref()))
-        .map_err(AppError::bad_request)?
-        .unwrap_or(0);
+    // 筛选条件在这里拼成**一个值**再往下走（候选 6 / #35）：`recent` 的取值规则在
+    // tr_domain::statistics（字段缺失 / 空串 / 非数字串都按"没传"处理，数字 <= 0 才报错），
+    // 自洽规则（月区间与笔数互斥）由服务层调 filter.validate() 判。
+    let filter = tr_domain::statistics::StatisticsFilter::new(
+        req.start_month.clone(),
+        req.end_month.clone(),
+        tr_domain::statistics::normalize_recent(query_number_as_i64(req.recent.as_ref()))
+            .map_err(AppError::bad_request)?,
+        req.tag.clone(),
+    );
     let workspace = state.workspace()?;
-    Ok(tr_service::stock_statistics::get_statistics_range(
+    Ok(tr_service::stock_statistics::get_statistics_for(
         &workspace,
         &req.ledger_id,
-        &req.start_month,
-        &req.end_month,
-        recent,
-        &req.tag,
+        &filter,
     )?)
 }
 

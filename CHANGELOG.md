@@ -157,6 +157,17 @@ id 规则 / 七档指标的取值与缺省 / 胜率轴边界 / 参考线条件 /
 `fixtures/test.ps1 -Unit stock -SkipBuild` **4/4 绿**（ui-stock 202.8s，重建之后）、
 `clippy -D warnings` 干净。
 
+**统计取数的生产路径只收一个 `StatisticsFilter`**
+
+- 新入口 `get_statistics_for(workspace, ledger_id, &StatisticsFilter)`；`tr-ipc` 在命令体里把请求的
+  四段拼成筛选条件再往下传，命令层不再把四个字段当位置参数递下去。
+- 保留 `get_statistics_range(...)` 作为**与 wire 请求同形**的适配器（一行），18 处服务层测试因此
+  不必重写 —— 那些测试正是按"某月 / 某标签 / 最近 N 笔"逐条写规格的。
+- wire 契约与 `tr-ui` 调用点**零改动**（请求字段名不变）。
+
+回归：`cargo test -p tr-service` 157 绿、`cargo test -p tr-domain` 98 绿、
+`fixtures/test.ps1 -Unit stock -SkipBuild` 4/4 绿（ui-stock 199.6s，重建之后）、clippy 干净。
+
 ### 修复
 
 **更新状态只有一个持有者：外壳推进状态机，界面只渲染快照**

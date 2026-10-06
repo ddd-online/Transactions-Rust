@@ -60,9 +60,37 @@ pub fn get_statistics(workspace: &Workspace, ledger_id: &str) -> ServiceResult<S
 
 /// 筛选统计：时间范围（含首尾整月）与最近 N 笔二选一，两者均可与交易标签叠加。
 ///
-/// 前两条自洽规则（`recent` 非负、月区间与笔数互斥）的判据在
-/// `tr_domain::statistics::StatisticsFilter::validate`（纯逻辑、native 真跑）；这里只做
-/// "数据库相关"的那两件：标签必须存在、月份区间要能解析成日。
+/// **生产路径上的取数入口**（界面 → `tr-ipc` → 这里），只收一个筛选条件
+/// （`tr_domain::statistics::StatisticsFilter`）：自洽规则由它的 `validate()` 判，
+/// 这里只做"数据库相关"的两件 —— 标签必须存在、月份区间要能解析成日。
+pub fn get_statistics_for(
+    workspace: &Workspace,
+    ledger_id: &str,
+    filter: &tr_domain::statistics::StatisticsFilter,
+) -> ServiceResult<StockStatisticsDto> {
+    filter.validate().map_err(AppError::bad_request)?;
+    let (start_month, end_month) = (filter.start_month.as_str(), filter.end_month.as_str());
+    let tag = filter.tag.as_str();
+    if !tag.is_empty() {
+        let available_tags = get_trade_tags(workspace, ledger_id)?;
+        if !contains_tag(&available_tags, tag) {
+            return Err(AppError::bad_request("无效的交易标签").into());
+        }
+    }
+    let (from_day, to_day) = normalize_statistics_month_range(start_month, end_month)?;
+    statistics(
+        workspace,
+        ledger_id,
+        &from_day,
+        &to_day,
+        filter.recent.unwrap_or(0),
+        tag,
+    )
+}
+
+/// 四个裸字段形状的适配器（**与 wire 请求同形**，方便测试按"某月某标签某笔数"逐条写规格）。
+///
+/// 生产路径请用 [`get_statistics_for`]：那边筛选条件是一个值，不是六个位置参数。
 pub fn get_statistics_range(
     workspace: &Workspace,
     ledger_id: &str,
@@ -71,23 +99,17 @@ pub fn get_statistics_range(
     recent: i64,
     tag: &str,
 ) -> ServiceResult<StockStatisticsDto> {
-    tr_domain::statistics::StatisticsFilter::new(
-        start_month,
-        end_month,
-        // `0` 是"不限"；**负数要原样交给判据**（它才管得了"必须为正整数"这条）
-        (recent != 0).then_some(recent),
-        tag,
+    get_statistics_for(
+        workspace,
+        ledger_id,
+        &tr_domain::statistics::StatisticsFilter::new(
+            start_month,
+            end_month,
+            // `0` 是"不限"；**负数要原样交给判据**（它才管得了"必须为正整数"这条）
+            (recent != 0).then_some(recent),
+            tag,
+        ),
     )
-    .validate()
-    .map_err(AppError::bad_request)?;
-    if !tag.is_empty() {
-        let available_tags = get_trade_tags(workspace, ledger_id)?;
-        if !contains_tag(&available_tags, tag) {
-            return Err(AppError::bad_request("无效的交易标签").into());
-        }
-    }
-    let (from_day, to_day) = normalize_statistics_month_range(start_month, end_month)?;
-    statistics(workspace, ledger_id, &from_day, &to_day, recent, tag)
 }
 
 /// 结算统计实现。`from_day`/`to_day` 非空时按清仓日期区间筛选，`recent > 0` 时取最近 N 笔，
