@@ -488,22 +488,26 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
                                         .enumerate()
                                         .map(|(index, card)| {
                                             card_view(
-                                                card,
-                                                index,
-                                                card_drag,
-                                                drop_card,
-                                                expanded,
-                                                progress_text,
-                                                progress_saving,
-                                                open_new_item,
-                                                open_edit_item,
-                                                ask_delete_card,
-                                                complete,
-                                                remove_item,
-                                                toggle_progress,
-                                                add_progress,
-                                                remove_progress,
-                                                toggle_progress_done,
+                                                TodoCtx {
+                                                    card,
+                                                    index,
+                                                    drag: card_drag,
+                                                    expanded,
+                                                    progress_text,
+                                                    progress_saving,
+                                                },
+                                                TodoMutation {
+                                                    on_drop: drop_card,
+                                                    open_new_item,
+                                                    open_edit_item,
+                                                    ask_delete_card,
+                                                    complete,
+                                                    remove_item,
+                                                    toggle_progress,
+                                                    add_progress,
+                                                    remove_progress,
+                                                    toggle_progress_done,
+                                                },
                                             )
                                         })
                                         .collect_view()
@@ -689,14 +693,25 @@ fn elapsed_days(start_date: &str) -> Option<i64> {
 /// 拖动排序的抓手是**表头**：`DragSortItem` 只包住表头那一行，卡片里的输入框
 /// （进度记录）因此不会落在可拖区域内 —— 否则在输入框里框选文字会被浏览器当成"拖卡片"。
 #[allow(clippy::too_many_arguments)]
-fn card_view(
+/// 一张卡片要显示的东西（数据 + 页面局部状态）。
+///
+/// 从前这七项与九个动作一起做成 **16 个形参**（候选 12 / #43）：加一个动作要动签名、调用点与视图
+/// 三处，且全靠位置对齐。现在数据在这儿、动作在 [`TodoMutation`]，`card_view` 只收两个。
+struct TodoCtx {
     card: TodoCardDto,
     index: usize,
     drag: DragSortState,
-    on_drop: UnsyncCallback<(usize, usize)>,
     expanded: RwSignal<String>,
     progress_text: RwSignal<String>,
     progress_saving: RwSignal<bool>,
+}
+
+/// 卡片上那九个动作。
+///
+/// 刻意**不是** trait、也不泛型：调用点建一次、按值传给每张卡片即可（字段都是 Copy）。
+/// 判据是 deletion test —— 删掉它，复杂度会搬回调用点（加动作要改签名与每个调用点）。
+struct TodoMutation {
+    on_drop: UnsyncCallback<(usize, usize)>,
     open_new_item: UnsyncCallback<String>,
     open_edit_item: UnsyncCallback<(String, TodoItemDto)>,
     ask_delete_card: UnsyncCallback<(String, String)>,
@@ -706,7 +721,30 @@ fn card_view(
     add_progress: UnsyncCallback<String>,
     remove_progress: UnsyncCallback<String>,
     toggle_progress_done: UnsyncCallback<(String, bool)>,
-) -> AnyView {
+}
+
+fn card_view(ctx: TodoCtx, actions: TodoMutation) -> AnyView {
+    // 解构出与从前同名的局部量：函数体因此**一个字都不用改**，改的只有接口。
+    let TodoCtx {
+        card,
+        index,
+        drag,
+        expanded,
+        progress_text,
+        progress_saving,
+    } = ctx;
+    let TodoMutation {
+        on_drop,
+        open_new_item,
+        open_edit_item,
+        ask_delete_card,
+        complete,
+        remove_item,
+        toggle_progress,
+        add_progress,
+        remove_progress,
+        toggle_progress_done,
+    } = actions;
     let count = card.items.len();
     let delete_id = card.id.clone();
     let delete_title = card.title.clone();
