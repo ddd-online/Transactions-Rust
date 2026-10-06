@@ -519,7 +519,15 @@ pub async fn file_save_image(
     req: FileSaveRequest,
 ) -> ApiResult<FileSaveResponse> {
     let Ok(workspace) = ipc_state.workspace() else {
-        return Ok(save_failed("未打开工作空间"));
+        // **reject，而不是 resolve 一个 success:false**（候选 10 / #40）：
+        // 从前这里返回 `Ok(save_failed("未打开工作空间"))`，文案还是手写的 ——
+        // 界面靠 `IpcError::is_workspace_required()`（比对 `ERR_WORKSPACE_NOT_OPENED`）认出
+        // "未打开工作空间"并弹出选择屏，而这条路径**根本不会变成 IpcError**，所以它永远看不见。
+        // 同一件事只该有一条路径。
+        return Err(tr_domain::error::AppError::bad_request(
+            tr_domain::error::ERR_WORKSPACE_NOT_OPENED,
+        )
+        .into());
     };
 
     let assets_root = workspace.assets_directory();
