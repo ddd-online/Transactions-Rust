@@ -14,12 +14,14 @@
 
 use leptos::prelude::*;
 use tr_domain::dto::TransactionTemplateDto;
+use tr_draw::section::section_state;
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, Checkbox, CheckboxGroup, CheckboxOption, DragSortItem,
-    DragSortState, Empty, FeaturePage, Form, FormItem, FormLayout, Input, Modal, ModalSize,
-    Popconfirm, Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, Tag, TagKind,
+    AsyncSection, Button, ButtonSize, ButtonVariant, Checkbox, CheckboxGroup, CheckboxOption,
+    DragSortItem, DragSortState, Empty, FeaturePage, Form, FormItem, FormLayout, Input, Modal,
+    ModalSize, Popconfirm, Segmented, SegmentedOption, Select, SelectOption, Spin, SpinSize, Tag,
+    TagKind,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -255,31 +257,50 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
                 </div>
 
                 <div class="tpl-tbody">
-                    {move || {
-                        let list = templates.value.get();
-                        if list.is_empty() {
-                            if templates.loading.get() {
-                                view! {
-                                    <div class="tpl-loading">
-                                        <Spin spinning=true size=SpinSize::Small />
-                                        <span>"正在加载…"</span>
-                                    </div>
-                                }
-                                    .into_any()
-                            } else {
-                                view! { <Empty title="暂无模板" /> }.into_any()
+                    <AsyncSection
+                        state=Signal::derive(move || {
+                            section_state(
+                                templates.value.get().is_empty(),
+                                templates.loading.get(),
+                                templates.loaded.get(),
+                                templates.failed.get().as_deref(),
+                            )
+                        })
+                        loading=ViewFn::from(move || {
+                            view! {
+                                <div class="tpl-loading">
+                                    <Spin spinning=true size=SpinSize::Small />
+                                    <span>"正在加载…"</span>
+                                </div>
                             }
-                        } else {
-                            list
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, template)| {
-                                    template_row(template, index, drag, reorder, delete_template)
-                                })
-                                .collect_view()
                                 .into_any()
-                        }
-                    }}
+                        })
+                        empty=ViewFn::from(move || {
+                            view! { <Empty title="暂无模板" /> }.into_any()
+                        })
+                        content=ViewFn::from(move || {
+                            view! {
+                                {move || {
+                                    templates
+                                        .value
+                                        .get()
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(index, template)| {
+                                            template_row(
+                                                template,
+                                                index,
+                                                drag,
+                                                reorder,
+                                                delete_template,
+                                            )
+                                        })
+                                        .collect_view()
+                                }}
+                            }
+                                .into_any()
+                        })
+                    />
                 </div>
             </div>
 
