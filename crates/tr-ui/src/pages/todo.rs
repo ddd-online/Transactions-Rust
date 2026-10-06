@@ -354,24 +354,30 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
             return;
         }
         leptos::task::spawn_local(async move {
-            match api::todo::item_status(&ledger_id, &item_id, consts::TODO_STATUS_DONE).await {
-                Ok(_) => {
-                    Notifier::global().success("已完成，已移到历史", None);
-                    load(());
-                }
-                Err(error) => notify_error("更新状态失败", &error),
+            // 无在飞标记（这一处没有 loading 态）→ 只收失败面（#34 的处置表）
+            if crate::change::submit(
+                None,
+                "更新状态失败",
+                api::todo::item_status(&ledger_id, &item_id, consts::TODO_STATUS_DONE),
+            )
+            .await
+            .is_some()
+            {
+                Notifier::global().success("已完成，已移到历史", None);
+                load(());
             }
         });
     });
 
     let remove_item: UnsyncCallback<String> = UnsyncCallback::new(move |item_id: String| {
         leptos::task::spawn_local(async move {
-            match api::todo::item_delete(&item_id).await {
-                Ok(()) => {
-                    Notifier::global().success("事项已删除", None);
-                    load(());
-                }
-                Err(error) => notify_error("删除事项失败", &error),
+            // 无在飞标记 → 只收失败面（#34）
+            if crate::change::submit(None, "删除事项失败", api::todo::item_delete(&item_id))
+                .await
+                .is_some()
+            {
+                Notifier::global().success("事项已删除", None);
+                load(());
             }
         });
     });
@@ -1503,12 +1509,17 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
             return;
         }
         leptos::task::spawn_local(async move {
-            match api::todo::item_status(&ledger_id, &item_id, consts::TODO_STATUS_DOING).await {
-                Ok(_) => {
-                    Notifier::global().success("已退回进行中", None);
-                    load(());
-                }
-                Err(error) => notify_error("退回失败", &error),
+            // 无在飞标记 → 只收失败面（#34）
+            if crate::change::submit(
+                None,
+                "退回失败",
+                api::todo::item_status(&ledger_id, &item_id, consts::TODO_STATUS_DOING),
+            )
+            .await
+            .is_some()
+            {
+                Notifier::global().success("已退回进行中", None);
+                load(());
             }
         });
     });
@@ -1516,12 +1527,13 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
     // 删除（历史里也留着退路：错记的条目直接删掉）
     let remove: UnsyncCallback<String> = UnsyncCallback::new(move |item_id: String| {
         leptos::task::spawn_local(async move {
-            match api::todo::item_delete(&item_id).await {
-                Ok(()) => {
-                    Notifier::global().success("事项已删除", None);
-                    load(());
-                }
-                Err(error) => notify_error("删除事项失败", &error),
+            // 无在飞标记 → 只收失败面（#34）
+            if crate::change::submit(None, "删除事项失败", api::todo::item_delete(&item_id))
+                .await
+                .is_some()
+            {
+                Notifier::global().success("事项已删除", None);
+                load(());
             }
         });
     });
