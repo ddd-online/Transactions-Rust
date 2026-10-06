@@ -1159,14 +1159,14 @@ fn recalculate_cash_chain(conn: &rusqlite::Connection, ledger_id: &str) -> Servi
 }
 
 /// 判断 `a` 是否比 `b` 更「新」：(record_date, created_at, id) 三者依次比较。
+///
+/// 判据本身在 `tr_domain::fund::is_newer`（纯逻辑、native 真跑，并把"倒填记录会被跳过"这条现状
+/// 钉成了断言）—— 这里只是把模型字段取出来，避免第二份实现（#36）。
 fn fund_record_after(a: &StockFundRecord, b: &StockFundRecord) -> bool {
-    if a.record_date != b.record_date {
-        return a.record_date > b.record_date;
-    }
-    if a.created_at != b.created_at {
-        return a.created_at > b.created_at;
-    }
-    a.id > b.id
+    tr_domain::fund::is_newer(
+        (&a.record_date, a.created_at, &a.id),
+        (&b.record_date, b.created_at, &b.id),
+    )
 }
 
 // ==================================================================== 旧数据订正
