@@ -443,6 +443,10 @@ pub struct ListQuery<T: Send + Sync + 'static> {
     pub value: RwSignal<Vec<T>>,
     /// 是否有请求在飞行中
     pub loading: RwSignal<bool>,
+    /// 有没有**跑完过一次**（区分"还没回来"与"确实是空"）
+    pub loaded: RwSignal<bool>,
+    /// 失败文案（`"{前缀}: {msg}"`）；成功或静默失败时是 `None`
+    pub failed: RwSignal<Option<String>>,
     inner: Query<Vec<T>>,
 }
 
@@ -472,6 +476,8 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> ListQuery<T> {
         Self {
             value: inner.value,
             loading: inner.loading,
+            loaded: inner.loaded,
+            failed: inner.failed,
             inner,
         }
     }

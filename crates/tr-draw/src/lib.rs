@@ -41,6 +41,7 @@ pub mod list_order;
 pub mod paging;
 pub mod quadrant;
 pub mod query;
+pub mod section;
 pub mod stock_rows;
 pub mod stock_stats;
 pub mod text;

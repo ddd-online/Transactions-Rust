@@ -22,6 +22,7 @@
 //! 图片选择（隐藏 `input[type=file]` + 触发按钮）、
 //! 多文件上传进度条（总进度 + 逐文件 + 重试/跳过）。
 
+mod async_section;
 mod button;
 mod chart;
 mod checkbox;
@@ -105,6 +106,7 @@ pub(super) fn nav_button(
     .into_any()
 }
 
+pub use async_section::AsyncSection;
 pub use button::{Button, ButtonSize, ButtonVariant, IconButton, IconButtonVariant};
 pub use chart::{ChartConfig, ChartSeries, ChartValueKind, LineChart};
 // 自绘 SVG 的页面（待办的四象限图）也要按真实像素出图，但这不是对外的组件接口
