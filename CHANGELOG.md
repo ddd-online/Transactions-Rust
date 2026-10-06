@@ -130,6 +130,20 @@ id 规则 / 七档指标的取值与缺省 / 胜率轴边界 / 参考线条件 /
 `fixtures/test.ps1 -Unit ui-transactions,ui-sync-ledger,key-event -SkipBuild` 7/7 绿（重建之后）；
 `clippy -D warnings` 与 `check-ui-wasm` 干净。
 
+**`recent` 的取值规则收进 `tr-domain`（删掉一份与注释矛盾的实现）**
+
+- `tr-ipc` 里那段解析带着一句与代码**互相矛盾**的注释（"非数字串或 <= 0 一律报错"）—— 实际是
+  **非数字串按"没传"处理**（宽松），只有数字 `<= 0` 才报 `recent 必须为正整数`。界面上看不出来
+  （界面只送数字），但它是契约的一部分。
+- `tr_domain::statistics` 现在是这条规则的唯一实现：`parse_recent_text` / `normalize_recent` /
+  `normalize_month` + `StatisticsFilter`（三段的同一份样子；`start()` / `end()` / `tag_filter()` /
+  `is_unfiltered()` 给出"哪一端不限"的判据）；7 条断言把规则逐条钉住，含"不做 trim"与
+  "小数文本按没传处理"两个边界。`tr-ipc` 只留一句 `normalize_recent(...)` + 错误信封转换。
+- 还没做：把 `get_statistics_range` 的 6 个形参收成一个 `&StatisticsFilter`（见 #35）。
+
+回归：`cargo test -p tr-domain` **96 绿**（+7）；`cargo check -p tr-ipc --all-targets` 与
+`clippy --all-targets -D warnings` 干净。
+
 ### 修复
 
 **更新状态只有一个持有者：外壳推进状态机，界面只渲染快照**

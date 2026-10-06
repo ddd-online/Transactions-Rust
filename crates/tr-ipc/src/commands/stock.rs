@@ -460,17 +460,11 @@ pub fn stock_statistics(
     req: StockStatisticsRequest,
 ) -> ApiResult<StockStatisticsDto> {
     require_ledger_id(&req.ledger_id)?;
-    let mut recent = 0_i64;
-    if let Some(raw) = req.recent.as_ref() {
-        // 空串按"没传"处理（保持宽松）；非数字串或 <= 0 一律报错
-        let parsed = query_number_as_i64(Some(raw));
-        match parsed {
-            None => {}
-            Some(value) if value > 0 => recent = value,
-            // 解析失败或 <= 0 一律报 `recent 必须为正整数`
-            _ => return Err(AppError::bad_request("recent 必须为正整数").into()),
-        }
-    }
+    // `recent` 的取值规则在 tr_domain::statistics（候选 6 / #35）：字段缺失 / 空串 / **非数字串**
+    // 都按"没传"处理（宽松），数字 <= 0 才报错 —— 这里只做错误信封的转换，不再自己判一遍。
+    let recent = tr_domain::statistics::normalize_recent(query_number_as_i64(req.recent.as_ref()))
+        .map_err(AppError::bad_request)?
+        .unwrap_or(0);
     let workspace = state.workspace()?;
     Ok(tr_service::stock_statistics::get_statistics_range(
         &workspace,

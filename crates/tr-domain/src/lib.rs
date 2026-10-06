@@ -17,6 +17,7 @@ pub mod fee;
 pub mod models;
 pub mod money;
 pub mod proxy;
+pub mod statistics;
 pub mod update;
 pub mod util;
 pub mod wire;
