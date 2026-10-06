@@ -419,9 +419,17 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
     let remove_progress: UnsyncCallback<String> =
         UnsyncCallback::new(move |progress_id: String| {
             leptos::task::spawn_local(async move {
-                match api::todo::progress_delete(&progress_id).await {
-                    Ok(()) => load(()),
-                    Err(error) => notify_error("删除进度失败", &error),
+                // 这一处**没有**在飞标记（进度行没有 loading 态），所以只收失败面：
+                // `running = None` —— 不为统一而凭空造一个信号（#34 的处置表）
+                if crate::change::submit(
+                    None,
+                    "删除进度失败",
+                    api::todo::progress_delete(&progress_id),
+                )
+                .await
+                .is_some()
+                {
+                    load(());
                 }
             });
         });
@@ -430,9 +438,15 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
     let toggle_progress_done: UnsyncCallback<(String, bool)> =
         UnsyncCallback::new(move |(progress_id, done): (String, bool)| {
             leptos::task::spawn_local(async move {
-                match api::todo::progress_done(&progress_id, done).await {
-                    Ok(()) => load(()),
-                    Err(error) => notify_error("更新进度状态失败", &error),
+                if crate::change::submit(
+                    None,
+                    "更新进度状态失败",
+                    api::todo::progress_done(&progress_id, done),
+                )
+                .await
+                .is_some()
+                {
+                    load(());
                 }
             });
         });
