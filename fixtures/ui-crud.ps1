@@ -175,21 +175,33 @@ function Find-RowButton { param($Window, [string]$RowName, [string]$ButtonName)
     }
     $rowRect = $row.Current.BoundingRectangle
     [TrUia]::SetCursorPos([int]($rowRect.X + $rowRect.Width / 2), [int]($rowRect.Y + $rowRect.Height / 2)) | Out-Null
-    Start-Sleep -Milliseconds 500
 
+    # 行内操作区是 `.ct-item-actions { display: none }`，只在 :hover / .is-active 时 display: flex ——
+    # 而 display:none 的元素**不进 UIA 树**，所以"移到行上"之后必须**轮询等它进树**。
+    # 从前这里是一次 Start-Sleep 500ms 再查：全量档里 35 个脚本连跑、机器忙时那一击经常落空
+    # （实测全量档红过一次"找到标签行「删除」按钮"，单跑即绿）。改成最多 5 轮、每轮 300ms 的轮询，
+    # 只要出现"在本行右侧且垂直落在行内"的候选就立刻用。
     $rowCenter = $rowRect.Y + $rowRect.Height / 2
     $candidates = @()
-    foreach ($button in (Find-All $Window $ButtonName)) {
-        $rect = $button.Current.BoundingRectangle
-        $center = $rect.Y + $rect.Height / 2
-        $candidates += [pscustomobject]@{
-            Element  = $button
-            Distance = [Math]::Abs($center - $rowCenter)
-            RightOf  = $rect.X -ge ($rowRect.X - 40)
-            VertIn   = [Math]::Abs($center - $rowCenter) -le 60
+    $pick = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        Start-Sleep -Milliseconds 300
+        $candidates = @()
+        foreach ($button in (Find-All $Window $ButtonName)) {
+            $rect = $button.Current.BoundingRectangle
+            $center = $rect.Y + $rect.Height / 2
+            $candidates += [pscustomobject]@{
+                Element  = $button
+                Distance = [Math]::Abs($center - $rowCenter)
+                RightOf  = $rect.X -ge ($rowRect.X - 40)
+                VertIn   = [Math]::Abs($center - $rowCenter) -le 60
+            }
         }
+        $pick = $candidates | Where-Object { $_.VertIn -and $_.RightOf } | Sort-Object Distance | Select-Object -First 1
+        if ($pick) { break }
+        # 鼠标可能被别的窗口抢走：每轮再移一次，保证 hover 真的落在这一行上
+        [TrUia]::SetCursorPos([int]($rowRect.X + $rowRect.Width / 2), [int]($rowRect.Y + $rowRect.Height / 2)) | Out-Null
     }
-    $pick = $candidates | Where-Object { $_.VertIn -and $_.RightOf } | Sort-Object Distance | Select-Object -First 1
     if (-not $pick) { $pick = $candidates | Sort-Object Distance | Select-Object -First 1 }
     if (-not $pick -or $pick.Distance -gt 120) {
         Write-Host "    行「$RowName」$($rowRect) 附近没有「$ButtonName」（同名 $($candidates.Count) 个）：" -ForegroundColor DarkYellow
