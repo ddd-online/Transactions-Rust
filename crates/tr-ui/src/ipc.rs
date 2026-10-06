@@ -37,7 +37,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use tr_domain::commands::Command;
-use tr_domain::error::ERR_WORKSPACE_NOT_OPENED;
+use tr_domain::error::ERR_CODE_WORKSPACE_NOT_OPENED;
 
 #[wasm_bindgen]
 extern "C" {
@@ -52,16 +52,21 @@ extern "C" {
     fn tauri_listen(event: &str, handler: &js_sys::Function) -> Result<js_sys::Promise, JsValue>;
 }
 
-/// 命令调用失败：携带错误信封里的 msg/status。
+/// 命令调用失败：携带错误信封里的 code/msg/status。
+///
+/// `code` 是**失败的种类**（候选 10 / #40）：判定"未打开工作空间"这类情形要看它，
+/// **不要**比 `msg` —— 文案是用户可见的、随时可能改。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpcError {
+    pub code: i32,
     pub msg: String,
     pub status: u16,
 }
 
 impl IpcError {
-    pub fn new(msg: impl Into<String>, status: u16) -> Self {
+    pub fn new(code: i32, msg: impl Into<String>, status: u16) -> Self {
         Self {
+            code,
             msg: msg.into(),
             status,
         }
@@ -81,7 +86,7 @@ impl IpcError {
 
     /// 是否为"未打开工作空间"（外壳据此弹出工作空间选择）。
     pub fn is_workspace_required(&self) -> bool {
-        self.msg == ERR_WORKSPACE_NOT_OPENED
+        self.code == ERR_CODE_WORKSPACE_NOT_OPENED
     }
 }
 
@@ -210,26 +215,37 @@ async fn send_void(command: &str, args: js_sys::Object) -> Result<(), IpcError> 
 
 /// 序列化/反序列化失败：属于本地桥接错误，与内核无关。
 fn json_error(error: serde_wasm_bindgen::Error) -> IpcError {
-    IpcError::new(format!("IPC 数据编码失败: {error}"), 500)
+    IpcError::new(
+        tr_domain::error::ERR_CODE_DEFAULT,
+        format!("IPC 数据编码失败: {error}"),
+        500,
+    )
 }
 
 /// 把 IPC 拒绝载荷解析为 [`IpcError`]；载荷不是预期结构时退化为字符串。
 fn parse_error(error: JsValue) -> IpcError {
     #[derive(serde::Deserialize)]
     struct Envelope {
+        /// 失败的种类（老信封没有这个字段时按"普通业务失败"处理）
+        #[serde(default = "default_code")]
+        code: i32,
         msg: String,
         #[serde(default = "default_status")]
         status: u16,
+    }
+    fn default_code() -> i32 {
+        tr_domain::error::ERR_CODE_DEFAULT
     }
     fn default_status() -> u16 {
         500
     }
 
     if let Ok(parsed) = serde_wasm_bindgen::from_value::<Envelope>(error.clone()) {
-        return IpcError::new(parsed.msg, parsed.status);
+        return IpcError::new(parsed.code, parsed.msg, parsed.status);
     }
 
     IpcError::new(
+        tr_domain::error::ERR_CODE_DEFAULT,
         error
             .as_string()
             .unwrap_or_else(|| "内核调用失败".to_string()),
