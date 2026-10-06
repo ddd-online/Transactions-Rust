@@ -246,15 +246,18 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
         }
         card_deleting.set(true);
         leptos::task::spawn_local(async move {
-            match api::todo::card_delete(&id).await {
-                Ok(()) => {
-                    card_delete.set(None);
-                    Notifier::global().success("卡片已删除", None);
-                    load(());
-                }
-                Err(error) => notify_error("删除卡片失败", &error),
+            // 在飞与失败面走 `change::submit`（同"建卡片"/"保存事项"两处）
+            let deleted = crate::change::submit(
+                Some(card_deleting),
+                "删除卡片失败",
+                api::todo::card_delete(&id),
+            )
+            .await;
+            if deleted.is_some() {
+                card_delete.set(None);
+                Notifier::global().success("卡片已删除", None);
+                load(());
             }
-            card_deleting.set(false);
         });
     };
 
