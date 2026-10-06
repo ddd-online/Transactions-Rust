@@ -70,6 +70,17 @@ pub fn withdraw_limit_message(available_cash: i64) -> String {
     )
 }
 
+/// 现金链上的一步：新余额 = 上一条余额 + 本次变动。
+///
+/// 四种资金事件（追加本金 / 支取 / 利息归本 / 买卖）**共用这一条**：入库时 `amount_change`
+/// 已经带符号（追加本金与利息归本是 `+amount`，支取是 `-amount`），所以余额算式不需要按事件分支。
+/// 这条约定这一轮才核实清楚（读 `tr-service` 的三处写入），此前它是三份手写的加减。
+///
+/// 别在别处再写 `prev - amount` 这类按事件分叉的算式 —— 符号在写流水时就定下了。
+pub fn cash_after(prev_cash: i64, amount_change: i64) -> i64 {
+    prev_cash + amount_change
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +93,19 @@ mod tests {
         assert_eq!(cash_before(Some(-500), 99_999), -500);
         assert_eq!(cash_before(None, 99_999), 99_999);
         assert_eq!(cash_before(None, 0), 0, "本金也为 0 时就是 0");
+    }
+
+    /// 现金链上的一步：`amount_change` 已带符号，所以"支取"就是"加一个负数"。
+    #[test]
+    fn cash_after_adds_a_signed_change() {
+        assert_eq!(cash_after(10_000, 5_000), 15_000, "追加本金");
+        assert_eq!(
+            cash_after(10_000, -4_000),
+            6_000,
+            "支取（符号在 amount_change 里）"
+        );
+        assert_eq!(cash_after(10_000, 0), 10_000);
+        assert_eq!(cash_after(0, -500), -500);
     }
 
     /// 超限那句的**逐字**断言（用户可见文案）。

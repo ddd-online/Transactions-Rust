@@ -372,7 +372,7 @@ pub fn add_principal_at_date(
             event_type: consts::STOCK_EVENT_ADD_PRINCIPAL.to_string(),
             event_text: "追加本金".to_string(),
             amount_change: amount,
-            cash_balance: prev_cash + amount,
+            cash_balance: tr_domain::fund::cash_after(prev_cash, amount),
             net_pnl: None,
             remark: format!(
                 "本金 {} → {}",
@@ -446,7 +446,7 @@ pub fn add_withdraw_at_date(
             );
         }
 
-        let after_cash = prev_cash - amount;
+        let after_cash = tr_domain::fund::cash_after(prev_cash, -amount);
         let record = StockFundRecord {
             id: tr_store::util::new_uuid(),
             ledger_id: ledger_id.to_string(),
