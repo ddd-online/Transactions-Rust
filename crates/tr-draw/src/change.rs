@@ -23,6 +23,15 @@ pub struct WriteTarget {
     ledger_id: String,
 }
 
+/// 判据本体（自由函数版）：`recorded` 是出发时记下的账本，`current` 是现在的。
+///
+/// 两种用法各取所需（`/code-review` 的 Standards 轴点名 `WriteTarget` "只包了一个 `String`"）：
+/// 需要**跨 `await` 持有**快照时用 [`WriteTarget`]（名字说明这个字符串是"出发时"的）；
+/// 只是当场比一下就用这个自由函数，不必为了比较造一个值。
+pub fn is_stale(recorded: &str, current: &str) -> bool {
+    recorded.is_empty() || recorded != current
+}
+
 impl WriteTarget {
     /// 记下这次写是替哪个账本做的。
     pub fn new(ledger_id: impl Into<String>) -> Self {
@@ -38,7 +47,7 @@ impl WriteTarget {
 
     /// 账本已经切走（或压根没选）→ 这次写的结果**不该落地**。
     pub fn is_stale(&self, current_ledger_id: &str) -> bool {
-        self.ledger_id.is_empty() || self.ledger_id != current_ledger_id
+        is_stale(&self.ledger_id, current_ledger_id)
     }
 }
 

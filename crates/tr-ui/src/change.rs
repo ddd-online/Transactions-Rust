@@ -9,7 +9,6 @@
 //! `WriteTarget::new(...)` + `is_stale(...)`，那样子在手上、时机也更显眼。
 
 use leptos::prelude::GetUntracked;
-use tr_draw::change::WriteTarget;
 
 use crate::store::AppStores;
 
@@ -17,7 +16,10 @@ use crate::store::AppStores;
 ///
 /// `true` → 这次写的结果属于旧账本：本地不落地、也不提示。
 pub fn stale(ledger_id: &str) -> bool {
-    WriteTarget::new(ledger_id).is_stale(&AppStores::global().current_ledger_id.get_untracked())
+    tr_draw::change::is_stale(
+        ledger_id,
+        &AppStores::global().current_ledger_id.get_untracked(),
+    )
 }
 
 /// 反过来那一问（少数调用点写的是 `== ledger_id` 才继续）。
