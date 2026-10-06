@@ -58,6 +58,18 @@ pub fn cash_before(latest_balance: Option<i64>, principal: i64) -> i64 {
     latest_balance.unwrap_or(principal)
 }
 
+/// 支取超限时给用户看的整句（**用户可见文案，改动即影响界面/接口**）。
+///
+/// 口径：支取金额不能超过可用现金（可用现金由 [`cash_before`] 给出）。这句话从前硬编码在
+/// `tr-service` 的 `AppError::bad_request(format!(...))` 里 —— 搬到这儿是为了让它可断言
+/// （含分 → 元的展示口径：`money::cents_to_yuan`）。
+pub fn withdraw_limit_message(available_cash: i64) -> String {
+    format!(
+        "支取金额不能超过可用现金（{} 元）",
+        crate::money::cents_to_yuan(available_cash)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +82,23 @@ mod tests {
         assert_eq!(cash_before(Some(-500), 99_999), -500);
         assert_eq!(cash_before(None, 99_999), 99_999);
         assert_eq!(cash_before(None, 0), 0, "本金也为 0 时就是 0");
+    }
+
+    /// 超限那句的**逐字**断言（用户可见文案）。
+    #[test]
+    fn the_withdraw_limit_message_mentions_the_available_cash_in_yuan() {
+        assert_eq!(
+            withdraw_limit_message(123_456),
+            "支取金额不能超过可用现金（1234.56 元）"
+        );
+        assert_eq!(
+            withdraw_limit_message(500),
+            "支取金额不能超过可用现金（5.00 元）"
+        );
+        assert_eq!(
+            withdraw_limit_message(0),
+            "支取金额不能超过可用现金（0.00 元）"
+        );
     }
 
     fn entry(date: &str, created_at: i64, id: i64) -> FundEntry {

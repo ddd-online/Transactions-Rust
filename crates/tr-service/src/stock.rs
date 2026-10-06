@@ -440,11 +440,10 @@ pub fn add_withdraw_at_date(
         let prev_cash = cash_before_records(conn, ledger_id, account.principal)?;
 
         if amount > prev_cash {
-            return Err(AppError::bad_request(format!(
-                "支取金额不能超过可用现金（{} 元）",
-                tr_domain::money::cents_to_yuan(prev_cash)
-            ))
-            .into());
+            // 超限那句是用户可见文案，口径在 tr_domain::fund（#36）
+            return Err(
+                AppError::bad_request(tr_domain::fund::withdraw_limit_message(prev_cash)).into(),
+            );
         }
 
         let after_cash = prev_cash - amount;
