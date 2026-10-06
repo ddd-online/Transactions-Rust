@@ -56,7 +56,8 @@ use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::query::{OnError, Query};
 use crate::store::AppStores;
-use crate::time::{format_ymd_cn, split_ymd, today_ymd, weekday_cn};
+use crate::time::today_ymd;
+use tr_draw::calendar::{format_ymd_cn, parse_ymd, weekday_cn, Ymd};
 
 /// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "日记";
@@ -358,7 +359,7 @@ pub fn DiaryPage() -> impl IntoView {
         let today = today_ymd();
         go_to_date(today.clone());
         // 展开今天所在的年与月，并让日期树滚到今天（瞄准图标的「定位」语义）
-        if let Some((year, month, _)) = split_ymd(&today) {
+        if let Some(Ymd { year, month, .. }) = parse_ymd(&today) {
             collapsed_years.update(|years| {
                 years.remove(&year);
             });
@@ -375,7 +376,7 @@ pub fn DiaryPage() -> impl IntoView {
             .get_untracked()
             .iter()
             .filter_map(|item| {
-                split_ymd(&item.date).map(|(year, month, _)| format!("{year}-{month}"))
+                parse_ymd(&item.date).map(|date| format!("{}-{}", date.year, date.month))
             })
             .collect::<BTreeSet<_>>();
         collapsed_years.set(BTreeSet::new());
@@ -387,7 +388,7 @@ pub fn DiaryPage() -> impl IntoView {
         let years = dates
             .get_untracked()
             .iter()
-            .filter_map(|item| split_ymd(&item.date).map(|(year, _, _)| year))
+            .filter_map(|item| parse_ymd(&item.date).map(|date| date.year))
             .collect::<BTreeSet<_>>();
         collapsed_years.set(years);
         expanded_months.set(BTreeSet::new());
@@ -401,7 +402,7 @@ pub fn DiaryPage() -> impl IntoView {
         if date.is_empty() {
             return;
         }
-        if let Some((year, month, _)) = split_ymd(&date) {
+        if let Some(Ymd { year, month, .. }) = parse_ymd(&date) {
             collapsed_years.update(|years| {
                 years.remove(&year);
             });
@@ -605,7 +606,7 @@ type TreeMap = BTreeMap<i32, BTreeMap<u32, Vec<DayNode>>>;
 fn build_tree(items: &[DiaryDateItem]) -> TreeMap {
     let mut map: TreeMap = BTreeMap::new();
     for item in items {
-        let Some((year, month, day)) = split_ymd(&item.date) else {
+        let Some(Ymd { year, month, day }) = parse_ymd(&item.date) else {
             continue;
         };
         map.entry(year)
@@ -657,7 +658,7 @@ fn day_node_id(date: &str) -> String {
 ///
 /// 推到下一帧再滚：月展开后日节点由 `<Show>` 挂载，这一帧的 DOM 才算数。
 fn scroll_to_date(date: String) {
-    let Some((year, month, _)) = split_ymd(&date) else {
+    let Some(Ymd { year, month, .. }) = parse_ymd(&date) else {
         return;
     };
     let Some(window) = web_sys::window() else {
@@ -714,10 +715,10 @@ fn DiaryTree(
         let focus = if focus.is_empty() { today_ymd() } else { focus };
         let mut collapsed = items
             .iter()
-            .filter_map(|item| split_ymd(&item.date).map(|(year, _, _)| year))
+            .filter_map(|item| parse_ymd(&item.date).map(|date| date.year))
             .collect::<BTreeSet<_>>();
         let mut expanded = BTreeSet::new();
-        if let Some((year, month, _)) = split_ymd(&focus) {
+        if let Some(Ymd { year, month, .. }) = parse_ymd(&focus) {
             collapsed.remove(&year);
             expanded.insert(format!("{year}-{month}"));
         }

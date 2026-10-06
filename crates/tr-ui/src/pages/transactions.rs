@@ -63,10 +63,10 @@ use tr_domain::dto::{
 };
 use tr_domain::models::QueryConditionItem;
 use tr_domain::money::yuan_to_cents;
+use tr_draw::calendar::{normalize_range, parse_year_month, shift_period};
 
 use crate::api;
-// 时间范围选择器是共享组件（与分析子功能共用）；其中三个日期算术 helper 本页也要用
-use crate::components::ui::time_range_picker::{normalize_range, shift_period, split_ymd};
+// 日期算术（区间对齐 / 按粒度翻周期 / 取年月）住在 tr-draw，本页与时间范围选择器共用同一份
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, CheckboxGroup, DatePicker, Empty, FeaturePage, Form,
     FormItem, FormLayout, Input, Modal, ModalSize, Pagination, Segmented, SegmentedOption, Select,
@@ -337,7 +337,7 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
     let go_this_year = move || {
         range_mode.set("year".to_string());
         let today = today_ymd();
-        if let Some((year, _)) = split_ymd(&today) {
+        if let Some((year, _)) = parse_year_month(&today) {
             let start = format!("{year:04}-01-01");
             let end = format!("{year:04}-12-31");
             range_start.set(start);

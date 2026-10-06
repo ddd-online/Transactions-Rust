@@ -5,37 +5,18 @@
 //! * `total_pages`：由调用方自己算出
 //! * `page_size`（`None` 时隐藏每页条数控件）
 //!
-//! 页码收敛规则：首页、末页、当前页 ±1 必显，其余折叠为 `…`；
-//! 靠近两端时多显示几个，避免出现 `1 … 2` 这类空洞。
+//! 页码收敛（首页 / 末页 / 当前页 ±1 必显，其余折成 `…`，两端多显示几个避免 `1 … 2`）
+//! 是**规则**，住在 `tr_draw::paging`（native 上有断言）；这里只负责画出来。
 
 use super::with_class;
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::IntoAny;
+use tr_draw::paging::page_slots;
 
 use crate::icons::{self, Icon};
 
 /// 每页条数可选项。
 pub const PAGE_SIZE_OPTIONS: [i32; 6] = [15, 20, 30, 50, 100, 200];
-
-/// 页码槽位：`None` 表示省略号。
-pub fn page_slots(current: i32, pages: i32) -> Vec<Option<i32>> {
-    let pages = pages.max(1);
-    let current = current.clamp(1, pages);
-    let mut slots: Vec<Option<i32>> = Vec::new();
-    for candidate in 1..=pages {
-        let visible = candidate == 1
-            || candidate == pages
-            || (candidate - current).abs() <= 1
-            || (current <= 3 && candidate <= 5)
-            || (current >= pages - 2 && candidate >= pages - 4);
-        if visible {
-            slots.push(Some(candidate));
-        } else if !slots.last().map(|slot| slot.is_none()).unwrap_or(false) {
-            slots.push(None);
-        }
-    }
-    slots
-}
 
 /// 分页控件（上一页 / 页码 / 下一页 / 每页条数）。
 #[component]

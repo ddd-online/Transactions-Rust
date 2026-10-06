@@ -9,6 +9,11 @@
 //! * [`query`]：页面取数的决策核心（去重键与 generation 的推进、要不要发这次请求、
 //!   缓存复核的判定、失效规则）—— 绘制只是本 crate 的第一批住户，见
 //!   `docs/adr/0001-pure-draw-crate.md` 的补充说明。
+//! * [`calendar`]：公历日历的纯算法（解析 / 格式化、月长、加减月与天、周与区间对齐、
+//!   按粒度翻周期）。**只装日期串之间的算术**：日期串 ↔ Unix 秒的换算要时区数据库，
+//!   留在界面侧的 `tr-ui::time`。
+//! * [`paging`]：页码窗口的收敛规则（哪些页显示、哪里折成 `…`）。
+//! * [`quadrant`]：四象限的判定、弹窗排序与同坐标点的固定偏移。
 //! * [`heic`]：HEIC/HEIF（iPhone 照片）→ RGBA8 —— 界面侧解码，
 //!   因为 WebView2/系统那条路根本走不通（见该模块的说明）。
 //!
@@ -20,7 +25,10 @@
 //! * `cargo test -p tr-draw` 是这些算法的唯一测试面：改算法先在这里红，
 //!   界面侧（`tr-ui`）只负责把 DOM 测量值喂进来、把结果画出去。
 
+pub mod calendar;
 pub mod chart;
 pub mod crop;
 pub mod heic;
+pub mod paging;
+pub mod quadrant;
 pub mod query;

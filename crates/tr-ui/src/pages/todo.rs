@@ -22,6 +22,8 @@ use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
 use tr_domain::consts;
 use tr_domain::dto::{TodoCardDto, TodoHistoryDto, TodoItemDto, TodoProgressDto};
+use tr_draw::calendar::days_between;
+use tr_draw::quadrant::{rows as quadrant_rows, Quadrant, QuadrantItem as QuadrantEntry};
 
 use crate::api;
 use crate::components::ui::{
@@ -34,7 +36,7 @@ use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::query::ListQuery;
 use crate::store::AppStores;
-use crate::time::{format_timestamp, today_ymd, ymd_to_seconds, DAY_SECONDS};
+use crate::time::{format_timestamp, today_ymd};
 
 /// 页面标题（固定文案，改动即影响界面）。侧栏条目名也用这一个来源。
 pub const PAGE_TITLE: &str = "待办";
@@ -656,13 +658,13 @@ fn level_options() -> Vec<SelectOption> {
 }
 
 /// 开始时间「已过 N 天」（`None` = 没填开始时间，或开始日期还没到）。
+///
+/// 天数差是公历事实（`tr_draw::calendar::days_between`）；这里只负责取"今天"这个宿主事实。
 fn elapsed_days(start_date: &str) -> Option<i64> {
     if start_date.is_empty() {
         return None;
     }
-    let start = ymd_to_seconds(start_date)?;
-    let today = ymd_to_seconds(&today_ymd())?;
-    let days = (today - start) / DAY_SECONDS;
+    let days = days_between(start_date, &today_ymd())?;
     (days >= 0).then_some(days)
 }
 
@@ -989,56 +991,32 @@ fn progress_panel(
 
 // ==================================================================== 四象限图
 
-/// 四个象限（四象限管理法则）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Quadrant {
-    /// 重要且紧急
-    Now,
-    /// 重要但不紧急
-    Plan,
-    /// 不重要且不紧急
-    Less,
-    /// 紧急但不重要
-    Delegate,
+/// 象限名（画面上的水印字，也是弹窗标题的前半）。
+///
+/// 判定落在哪个象限、弹窗按什么顺序列、同坐标的点怎么错开，都在 `tr_draw::quadrant`
+/// （native 上 `cargo test -p tr-draw` 真跑）；这里只剩文案与配色。
+fn quadrant_label(quad: Quadrant) -> &'static str {
+    match quad {
+        Quadrant::Now => "马上做",
+        Quadrant::Plan => "计划做",
+        Quadrant::Less => "减少做",
+        Quadrant::Delegate => "授权做",
+    }
 }
 
-impl Quadrant {
-    /// 象限名（画面上的水印字，也是弹窗标题的前半）
-    fn name(self) -> &'static str {
-        match self {
-            Self::Now => "马上做",
-            Self::Plan => "计划做",
-            Self::Less => "减少做",
-            Self::Delegate => "授权做",
-        }
+/// 象限的含义（弹窗标题的后半）：图上不再写这行说明，弹窗里要写 —— 点开就是为了看它。
+fn quadrant_meaning(quad: Quadrant) -> &'static str {
+    match quad {
+        Quadrant::Now => "重要且紧急",
+        Quadrant::Plan => "重要但不紧急",
+        Quadrant::Less => "不重要且不紧急",
+        Quadrant::Delegate => "紧急但不重要",
     }
+}
 
-    /// 象限的含义（弹窗标题的后半）：图上不再写这行说明，弹窗里要写 —— 点开就是为了看它。
-    fn meaning(self) -> &'static str {
-        match self {
-            Self::Now => "重要且紧急",
-            Self::Plan => "重要但不紧急",
-            Self::Less => "不重要且不紧急",
-            Self::Delegate => "紧急但不重要",
-        }
-    }
-
-    /// 事项落在哪个象限：纵轴 = 重要度、横轴 = 紧急度。
-    /// 两轴是六档（`TODO_LEVELS`：-5 / -3 / -1 / 1 / 3 / 5），**没有 0** —— 所以"正负"
-    /// 就是判据，不用处理"正好压在轴上"这类边界。
-    fn of(urgency: i32, importance: i32) -> Self {
-        match (importance > 0, urgency > 0) {
-            (true, true) => Self::Now,
-            (true, false) => Self::Plan,
-            (false, false) => Self::Less,
-            (false, true) => Self::Delegate,
-        }
-    }
-
-    /// 水印里唯一带色的那一格（见 CSS 的 `.todo-quadrant__name--now`）
-    fn is_accent(self) -> bool {
-        matches!(self, Self::Now)
-    }
+/// 水印里唯一带色的那一格（见 CSS 的 `.todo-quadrant__name--now`）。
+fn quadrant_is_accent(quad: Quadrant) -> bool {
+    quad == Quadrant::Now
 }
 
 /// 四象限图里的一个事项：图上是一个点，弹窗里是一行。
@@ -1062,25 +1040,15 @@ impl QuadrantItem {
     }
 }
 
-/// 弹窗里列哪些、按什么顺序：该象限的**进行中事项**，先按紧急度降序、再按重要度降序。
-///
-/// `sort_by` 是**稳定**排序 —— 同紧急同重要的两条保持卡片视图里的顺序（卡片序 → 事项序），
-/// 同一份数据每次打开弹窗都排成一个样。
-fn quadrant_rows(items: &[QuadrantItem], open: Option<Quadrant>) -> Vec<QuadrantItem> {
-    let Some(quad) = open else {
-        return Vec::new();
-    };
-    let mut rows: Vec<QuadrantItem> = items
-        .iter()
-        .filter(|item| item.quadrant() == quad)
-        .cloned()
-        .collect();
-    rows.sort_by(|a, b| {
-        b.urgency
-            .cmp(&a.urgency)
-            .then(b.importance.cmp(&a.importance))
-    });
-    rows
+/// 只要两个档位就能落进象限（判定与排序在 `tr_draw::quadrant`）。
+impl QuadrantEntry for QuadrantItem {
+    fn urgency(&self) -> i32 {
+        self.urgency
+    }
+
+    fn importance(&self) -> i32 {
+        self.importance
+    }
 }
 
 /// 一个象限名：静置是水印，**鼠标悬停 / 键盘聚焦时亮起**（见 CSS），点击打开该象限的事项列表。
@@ -1098,7 +1066,7 @@ fn quadrant_name(
     open: RwSignal<Option<Quadrant>>,
 ) -> AnyView {
     // 悬停/聚焦的"亮起"色由 CSS 给：这里只管挂类名（「马上做」是唯一带色的那格）
-    let class = if quad.is_accent() {
+    let class = if quadrant_is_accent(quad) {
         "todo-quadrant__name todo-quadrant__name--now"
     } else {
         "todo-quadrant__name"
@@ -1112,7 +1080,7 @@ fn quadrant_name(
             text-anchor="middle"
             role="button"
             tabindex="0"
-            aria-label=format!("{} · {} 项进行中", quad.name(), count)
+            aria-label=format!("{} · {} 项进行中", quadrant_label(quad), count)
             on:click=move |_| open.set(Some(quad))
             on:keydown=move |event: web_sys::KeyboardEvent| {
                 // 键盘激活：Enter / Space 与按钮一致（`role=button` 的约定）
@@ -1124,9 +1092,9 @@ fn quadrant_name(
             }
         >
             <title>
-                {format!("{} · {}（{} 项进行中，点击查看列表）", quad.name(), quad.meaning(), count)}
+                {format!("{} · {}（{} 项进行中，点击查看列表）", quadrant_label(quad), quadrant_meaning(quad), count)}
             </title>
-            {quad.name()}
+            {quadrant_label(quad)}
         </text>
     }
     .into_any()
@@ -1230,7 +1198,10 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
     // 它的句柄（Copy）—— 否则整份 Vec 会被 move 进弹窗的 children 工厂，那个工厂要能被
     // 求值多次（每次打开弹窗），move 出去就退化成 `FnOnce` 编不过。
     let items_for_rows = items.clone();
-    let rows_of = Memo::new(move |_| quadrant_rows(&items_for_rows, open_quad.get()));
+    let rows_of = Memo::new(move |_| match open_quad.get() {
+        Some(quad) => quadrant_rows(&items_for_rows, quad),
+        None => Vec::new(),
+    });
 
     view! {
         <div class="todo-quadrant">
@@ -1345,7 +1316,7 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                                 {items_for_points
                                     .iter()
                                     .map(|item| {
-                                        let (dx, dy) = jitter_of(&item.id);
+                                        let (dx, dy) = tr_draw::quadrant::jitter_of(&item.id);
                                         view! {
                                             <circle
                                                 class="todo-quadrant__point"
@@ -1376,7 +1347,7 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
         <Modal
             open=Signal::derive(move || open_quad.get().is_some())
             title=Signal::derive(move || match open_quad.get() {
-                Some(quad) => format!("{} · {}", quad.name(), quad.meaning()),
+                Some(quad) => format!("{} · {}", quadrant_label(quad), quadrant_meaning(quad)),
                 None => String::new(),
             })
             size=ModalSize::Medium
@@ -1410,18 +1381,8 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
 /// 事项点的抖动偏移（单位：px）：紧急度与重要度都相同的事项会叠成一坨，
 /// 按 id 给每个点一个固定的小偏移，远近只够分开两颗点、不改变它落在哪个象限。
 ///
-/// 用 `DefaultHasher`（标准库、固定种子）而不是随机数：同一份数据每次渲染都落在同一处，
-/// 重渲染不会让点自己抖。
-fn jitter_of(id: &str) -> (f64, f64) {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    id.hash(&mut hasher);
-    let bits = hasher.finish();
-    // ±10px（点半径 9px）
-    let dx = (bits % 21) as f64 - 10.0;
-    let dy = ((bits >> 21) % 21) as f64 - 10.0;
-    (dx, dy)
-}
+/// 实现搬到了 `tr_draw::quadrant::jitter_of`（native 上可断言：同一个 id 永远同一处、
+/// 一批 id 必须散得开）。
 
 // ==================================================================== 子功能二：历史
 

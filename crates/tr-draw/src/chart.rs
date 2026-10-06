@@ -215,6 +215,29 @@ pub fn rewrite_tags(svg: &str, open: &str, f: impl Fn(&str) -> Option<String>) -
     out
 }
 
+/// 数据点改成**实心**：给出每个序列的色号（`#RRGGBB` 或带 alpha 的 `#RRGGBBAA`）。
+///
+/// charts-rs 的 `Symbol::Circle(r, None)` 表示"不填充"（渲染出来是空心环），而它只提供
+/// "整个图表一个 symbol"的开关、没法逐序列指定填充色。所以在 SVG 串里按 `<circle>` 标签
+/// 做定向替换：`stroke="#该序列色" fill="none"` → `fill="#该序列色"`。
+///
+/// **必须逐标签处理**：折线路径同样是 `stroke="#色" fill="none"`，整串替换会把折线
+/// 填成一整块面积（下面 `solid_dots_only_touches_circles` 锁的就是这条）。
+///
+/// 色号由界面侧给（`charts_rs::Color` 只有渲染侧认识，本 crate 不许依赖它）。
+pub fn solid_dots(svg: String, hexes: &[String]) -> String {
+    rewrite_tags(&svg, "<circle", |tag| {
+        let mut tag = tag.to_string();
+        for hex in hexes {
+            let ring = format!("stroke=\"{hex}\" fill=\"none\"");
+            if tag.contains(&ring) {
+                tag = tag.replace(&ring, &format!("stroke=\"{hex}\" fill=\"{hex}\""));
+            }
+        }
+        Some(tag)
+    })
+}
+
 /// 0 轴的 y 像素：由填充 path 的**收尾基线**（绘图区底边）与 Y 轴范围反推。
 ///
 /// 填充 path 的形状是"折线各点 + 三个收尾点"，倒数第三个点的 y 就是绘图区底边。
@@ -869,6 +892,36 @@ pub fn format_value(value: f64, kind: ChartValueKind, with_symbol: bool) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 实心点只碰 `<circle>`：折线路径同样是 `stroke="#色" fill="none"`，整串替换会把折线填成面积。
+    /// （这条断言从前住在 `tr-ui` 的 `#[cfg(test)]` 里，而 `cargo test -p tr-ui --lib` 一条都不执行。）
+    #[test]
+    fn solid_dots_only_touches_circles() {
+        let svg = concat!(
+            r##"<path d="M0 0 L1 1" stroke="#DC2626" fill="none"/>"##,
+            r##"<circle cx="1" cy="1" r="2.5" stroke-width="2" stroke="#DC2626" fill="none"/>"##,
+            r##"<circle cx="3" cy="3" r="5.5" stroke-width="2" stroke="#16A34A" fill="#16A34A"/>"##,
+        )
+        .to_string();
+        let hexes = ["#DC2626".to_string(), "#16A34A".to_string()];
+        let out = solid_dots(svg, &hexes);
+        // 折线路径**不许**被填成面积
+        assert!(out.contains(r##"<path d="M0 0 L1 1" stroke="#DC2626" fill="none"/>"##));
+        // 数据点变成实心
+        assert!(out.contains(
+            r##"<circle cx="1" cy="1" r="2.5" stroke-width="2" stroke="#DC2626" fill="#DC2626"/>"##
+        ));
+        // 图例标记本来就是实心，保持原样
+        assert!(out.contains(
+            r##"<circle cx="3" cy="3" r="5.5" stroke-width="2" stroke="#16A34A" fill="#16A34A"/>"##
+        ));
+        // 认不出的色号不动它：序列色不在调色板里时保持原样，不会被填错色
+        let untouched = solid_dots(
+            r##"<circle cx="9" cy="9" r="2" stroke="#000000" fill="none"/>"##.to_string(),
+            &hexes,
+        );
+        assert!(untouched.contains(r##"stroke="#000000" fill="none"/>"##));
+    }
 
     #[test]
     fn thin_labels_keeps_first_and_last() {

@@ -110,7 +110,9 @@ pub use chart::{ChartConfig, ChartSeries, ChartValueKind, LineChart};
 // 自绘 SVG 的页面（待办的四象限图）也要按真实像素出图，但这不是对外的组件接口
 pub(crate) use chart::watch_canvas_size;
 pub use checkbox::{Checkbox, CheckboxGroup, CheckboxOption};
-pub use date_picker::{add_months, parse_ymd, today, DatePicker, DateRangePicker, Ymd};
+// 日期算术（月长 / 加减月 / 周几 / 区间对齐）住在 tr-draw（native 上可测）；
+// 只有"今天"这件事要宿主时区，留在 `date_picker::today`。
+pub use date_picker::{DatePicker, DateRangePicker};
 pub use divider::Divider;
 pub use drag_sort::{DragSortItem, DragSortState};
 pub use drawer::Drawer;
@@ -131,7 +133,8 @@ pub use tr_draw::crop::{cover_scale, crop_rect, max_offset, CropRect, CROP_VIEWP
 // 关闭按钮（×）：弹窗 / 抽屉 / 通知共用，见 `modal::close_button`
 pub(crate) use modal::close_button;
 pub use page_header::PageHeader;
-pub use pagination::{page_slots, Pagination, PAGE_SIZE_OPTIONS};
+pub use pagination::{Pagination, PAGE_SIZE_OPTIONS};
+// 页码收敛规则住在 tr-draw（native 上可测）；对外路径保持不变。
 pub use popconfirm::Popconfirm;
 pub use popover::Popover;
 pub use progress::Progress;
@@ -142,6 +145,7 @@ pub use switch::Switch;
 pub use table::{Table, TableAlign, TableColumn};
 pub use tabs::{TabItem, TabPane, Tabs};
 pub use tag::{Tag, TagKind};
+pub use tr_draw::paging::page_slots;
 // 时间范围选择器：消费记录页与分析子功能共用
 pub use textarea::Textarea;
 pub use time_range_picker::TimeRangePicker;

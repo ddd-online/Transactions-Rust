@@ -3,10 +3,12 @@
 //! 值一律是 `YYYY-MM-DD` 字符串（与后端 `transactionAt` 的日期表示一致），
 //! 不做时区换算——只有 `time::ymd_to_seconds` 才把日期串变成 Unix 秒。
 //!
-//! ## 日期算术为什么用 `js_sys::Date`
+//! ## 日期算术在哪
 //!
-//! 与 [`crate::time`] 同样的理由：宿主本地时区 + 夏令时由 JS 引擎负责，
-//! Rust 侧手算会在跨时区/闰年边界上与宿主不一致。
+//! 解析 / 月长 / 加减月 / 周几 / 日序号都在 `tr_draw::calendar` —— 它们是**无时区的公历事实**，
+//! 放那儿才能在 `cargo test -p tr-draw` 里断言（从前这里用 `js_sys::Date` 的"下月第 0 天"
+//! 取月长，界面只编 wasm32，那几行永远测不到）。
+//! 本文件只留"今天"：那才真的需要宿主时区。
 //!
 //! ## 设计取舍
 //!
@@ -18,38 +20,16 @@ use super::backdrop;
 use super::nav_button;
 use super::with_class;
 use leptos::prelude::*;
+use tr_draw::calendar::{add_months, days_in_month, monday_offset, parse_ymd, Ymd};
 
 use crate::icons::{self, Icon};
 
 // ---------------------------------------------------------------- 日期算术
 
-/// 一个公历日期（月 / 日都是 1 起）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Ymd {
-    pub year: i32,
-    pub month: u32,
-    pub day: u32,
-}
-
-impl Ymd {
-    /// `YYYY-MM-DD`（补零；字符串比较即时间先后比较）。
-    pub fn to_string_padded(self) -> String {
-        format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
-    }
-}
-
-/// 解析 `YYYY-MM-DD`；格式非法返回 `None`。
-pub fn parse_ymd(input: &str) -> Option<Ymd> {
-    let trimmed = input.trim();
-    let mut parts = trimmed.split('-');
-    let year: i32 = parts.next()?.parse().ok()?;
-    let month: u32 = parts.next()?.parse().ok()?;
-    let day: u32 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    Some(Ymd { year, month, day })
-}
+// 公历算术（解析 / 月长 / 加减月 / 周几 / 日序号）住在 `tr_draw::calendar`：它们是
+// **无时区的事实**，放那儿才能在 `cargo test -p tr-draw` 里断言 —— 搬过来之前这里用
+// `js_sys::Date` 的"下月第 0 天"取月长、用本地秒差判区间，界面不编 native 就一条都测不到。
+// 这里只剩"今天"一件事：那是真的需要宿主时区。
 
 /// 今天（本地时区）。
 pub fn today() -> Ymd {
@@ -59,27 +39,6 @@ pub fn today() -> Ymd {
         month: now.get_month() + 1,
         day: now.get_date(),
     }
-}
-
-/// 月份加减（`delta` 可负）。
-pub fn add_months(year: i32, month: u32, delta: i32) -> (i32, u32) {
-    let total = year * 12 + (month as i32 - 1) + delta;
-    let next_year = total.div_euclid(12);
-    let next_month = total.rem_euclid(12) as u32 + 1;
-    (next_year, next_month)
-}
-
-/// 某年某月的天数（用 JS 的"下月第 0 天"技巧，自动处理闰年）。
-pub(super) fn days_in_month(year: i32, month: u32) -> u32 {
-    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32, 0);
-    date.get_date()
-}
-
-/// 某月 1 号是星期几（0 = 周一 … 6 = 周日）。
-fn monday_offset(year: i32, month: u32) -> u32 {
-    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, 1);
-    // JS 的 get_day() 是 0 = 周日，换算成周一起始
-    (date.get_day() + 6) % 7
 }
 
 const WEEKDAYS: [&str; 7] = ["一", "二", "三", "四", "五", "六", "日"];
@@ -151,7 +110,7 @@ fn CalendarPanel(
     #[prop(into)]
     on_pick: UnsyncCallback<String>,
 ) -> impl IntoView {
-    let today_value = today().to_string_padded();
+    let today_value = today().padded();
     let today_for_class = today_value.clone();
 
     let title = move || {
@@ -198,7 +157,7 @@ fn CalendarPanel(
                     month_grid(year, month)
                         .into_iter()
                         .map(|cell| {
-                            let value = cell.date.to_string_padded();
+                            let value = cell.date.padded();
                             let is_start = !start_value.is_empty() && value == start_value;
                             let is_end = !end_value.is_empty() && value == end_value;
                             let in_range = !start_value.is_empty() && !end_value.is_empty()
@@ -336,7 +295,7 @@ pub fn DatePicker(
                             class="ui-btn ui-btn--secondary ui-btn--sm"
                             on:click=move |_| {
                                 let now = today();
-                                let picked = now.to_string_padded();
+                                let picked = now.padded();
                                 visible.set((now.year, now.month));
                                 value.set(picked.clone());
                                 open.set(false);

@@ -4,6 +4,37 @@
 
 ## [未发布]
 
+### 调整
+
+**公历日历 / 分页窗口 / 四象限 / 实心点改写搬进 `tr-draw`（ADR-0001 的第二波）**
+
+- **问题**：ADR-0001 立的规矩是"界面里凡是能在 native 上断言的纯算法都放 `tr-draw`"，但第二波纯算法
+  又攒在只编 wasm32 的文件里：月长靠 `js_sys::Date` 的"下月第 0 天"取、周几靠 `Date.get_day()`、
+  "区间是不是整周"靠**本地秒差**除以 86400、页码窗口与象限判定直接写死在组件/页面里。
+  `tr-ui` 只编 wasm32，`cargo test -p tr-ui --lib` 是**绿的 0 个测试** —— 这些规则一条都跑不到。
+- **搬走的东西**（各一个小 interface，`cargo test -p tr-draw` 真跑）：
+  * `tr_draw::calendar`：`Ymd` / `parse_ymd` / `parse_year_month` / `format_ymd_cn` / `weekday_cn` /
+    `days_in_month` / `add_months` / `add_days` / `days_between` / `month_span` / `year_span` /
+    `week_bounds` / `monday_offset` / `is_six_days` / `normalize_range` / `shift_period` ——
+    全是**无时区的公历事实**（日序号用 Howard Hinnant 的 days_from_civil：无循环、无时区）；
+  * `tr_draw::paging::page_slots`：页码窗口的收敛规则（首页 / 末页 / 当前页 ±1 必显，两端多显示几个）；
+  * `tr_draw::quadrant`：`Quadrant::of` / `rows`（稳定排序，同档位保持卡片序）/ `jitter_of`
+    （`DefaultHasher` 固定种子，重渲染不让点自己抖）；
+  * `tr_draw::chart::solid_dots`：实心点的 SVG 定点改写 —— 连同那条"只碰 `<circle>`、别把折线填成面积"
+    的断言一起搬（它从前住在 `tr-ui` 的 `#[cfg(test)]` 里，注释还写着"tests 里锁了这条"，而那条测试永不执行）。
+- **留在界面侧的**：日期串 ↔ Unix 秒的换算（`tr-ui::time` 的 `format_timestamp` / `today_ymd` /
+  `now_seconds` / `ymd_to_seconds` / `range_to_seconds`）—— 那需要一个时区数据库，只有宿主有；
+  外加"今天"（`date_picker::today`）与全部渲染。
+- **顺带修掉两个只在夏令时区才露头的算法问题**：`is_six_days`（"整周"判定）与待办的"已过 N 天"从前
+  都拿本地秒差除以 86400，夏令时切换那一周会少算一天（整周被判成单日、翻页只挪一天）；现在按**日序号差**算。
+- **收窄的对外面**：`components/ui/mod.rs` 不再转发没人用的 `parse_ymd` / `add_months` / `today` / `Ymd`，
+  `page_slots` 的对外路径改为直接指向 `tr_draw::paging`；`time::DAY_SECONDS` 降为私有。
+
+回归：`cargo test -p tr-draw` **57 绿**（新增 16 条：闰年与月长 / 日序号 200 年往返 / 周几锚点 /
+区间对齐 / 整周判定 / 页码窗口不变量 / 象限判定与稳定排序 / 抖动散度 / 实心点只碰 `<circle>`）；
+全量档 `fixtures/test.ps1 -All` **35/35 绿**（1247.7s，含重新构建的 release 产物、
+`ui-stock` 真实行情、`ui-proxy` 假代理日志、`ui-todo` 四象限、`ui-transactions` 的时间范围与分页）。
+
 ### 修复
 
 **更新状态只有一个持有者：外壳推进状态机，界面只渲染快照**

@@ -1,18 +1,23 @@
-//! 时间格式化。
+//! 时间格式化：**日期串 ↔ Unix 秒**这一段（需要宿主时区的那半）。
 //!
-//! 全部按**宿主（WebView）的本地时区**格式化，与后端的 Unix 秒语义对应。
+//! 全部按**宿主（WebView）的本地时区**换算，与后端的 Unix 秒语义对应。
 //!
 //! 为什么用 `js_sys::Date` 而不是自己按秒算：本地时区/夏令时只有宿主知道，
 //! Rust 侧没有时区数据库，手算必然在跨时区、夏令时上分叉。
 //! `js_sys::Date` 的 `get_month()` / `get_date()` 等访问器同样是本地时区语义。
 //!
+//! **纯公历的那一半不在这儿**：解析 / 月长 / 加减月与天 / 周几 / 区间对齐都在
+//! `tr_draw::calendar`（native 上 `cargo test -p tr-draw` 真跑）。判据是"要不要时区数据库"：
+//! `2026-06-19` 是星期五与宿主无关，而"这个时间戳在本地是几号"只有宿主知道。
+//!
 //! 支持的占位符：`YYYY` 年、`MM` 月、`DD` 日、`HH` 时、`mm` 分、`ss` 秒
 //! ——够当前界面使用。
 
+use tr_draw::calendar::parse_ymd;
 use wasm_bindgen::JsValue;
 
-/// 一天的秒数（时间范围翻页等纯整数计算用；不做时区换算）。
-pub const DAY_SECONDS: i64 = 86_400;
+/// 一天的秒数（`range_to_seconds` 把"闭区间终点"补到 23:59:59 用它）。
+const DAY_SECONDS: i64 = 86_400;
 
 /// 秒级时间戳 → 本地时间格式化字符串。
 ///
@@ -86,12 +91,13 @@ pub fn now_seconds() -> i64 {
 ///
 /// 解析失败返回 `None`（调用方决定提示文案）。
 pub fn ymd_to_seconds(input: &str) -> Option<i64> {
-    let (year, month, day) = split_ymd(input)?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
+    let date = parse_ymd(input)?;
     // 0 基月份 + 本地时区
-    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32);
+    let date = js_sys::Date::new_with_year_month_day(
+        date.year as u32,
+        date.month as i32 - 1,
+        date.day as i32,
+    );
     Some((date.get_time() / 1000.0) as i64)
 }
 
@@ -104,54 +110,4 @@ pub fn range_to_seconds(from: &str, to: &str) -> Option<(i64, i64)> {
     let start = ymd_to_seconds(from)?;
     let end = ymd_to_seconds(to)?;
     Some((start, end + DAY_SECONDS - 1))
-}
-
-/// 星期中文名（`js_sys::Date::get_day()` 的 0 = 周日）。
-const WEEKDAY_CN: [&str; 7] = [
-    "星期日",
-    "星期一",
-    "星期二",
-    "星期三",
-    "星期四",
-    "星期五",
-    "星期六",
-];
-
-/// `YYYY-MM-DD` → `2026年6月19日`。
-///
-/// 解析失败时原样返回输入（不 panic）。
-pub fn format_ymd_cn(input: &str) -> String {
-    // 去掉前导零：月 / 日
-    match split_ymd(input) {
-        Some((year, month, day)) => format!("{year}年{month}月{day}日"),
-        None => input.to_string(),
-    }
-}
-
-/// `YYYY-MM-DD` → 星期中文名（中文 locale）。
-///
-/// 解析失败返回空串。
-pub fn weekday_cn(input: &str) -> String {
-    let Some((year, month, day)) = split_ymd(input) else {
-        return String::new();
-    };
-    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32);
-    WEEKDAY_CN
-        .get(date.get_day() as usize)
-        .copied()
-        .unwrap_or_default()
-        .to_string()
-}
-
-/// 拆分 `YYYY-MM-DD` → `(年, 月, 日)`（解析失败返回 `None`）。
-pub fn split_ymd(input: &str) -> Option<(i32, u32, u32)> {
-    let trimmed = input.trim();
-    let mut parts = trimmed.split('-');
-    let year = parts.next()?.parse().ok()?;
-    let month = parts.next()?.parse().ok()?;
-    let day = parts.next()?.parse().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((year, month, day))
 }

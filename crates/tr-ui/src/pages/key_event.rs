@@ -52,7 +52,8 @@ use crate::icons::{self, Icon};
 use crate::notify::Notifier;
 use crate::query::{OnError, Query};
 use crate::store::AppStores;
-use crate::time::{split_ymd, today_ymd};
+use crate::time::today_ymd;
+use tr_draw::calendar::parse_ymd;
 
 /// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "事件";
@@ -128,8 +129,8 @@ pub fn KeyEventPage() -> impl IntoView {
 
     // ---- 年份 / 列表 ----
     let year = RwSignal::new(
-        split_ymd(&today_ymd())
-            .map(|(year, _, _)| year)
+        parse_ymd(&today_ymd())
+            .map(|date| date.year)
             .unwrap_or(1970),
     );
 

@@ -31,7 +31,7 @@
 //!
 //! 两处**在它生成的 SVG 上做定点改写**（它没暴露对应开关）：
 //!
-//! * 数据点改实心（[`solid_dots`]）；
+//! * 数据点改实心（`tr_draw::chart::solid_dots`）；
 //! * 面积填充的基线挪到 0 轴（[`anchor_fill_at_zero`]，它只肯闭到绘图区底边）。
 //!
 //! 叠层需要"每个类目的像素坐标"，而 charts-rs 不暴露布局 —— 但它会为每个数据点画
@@ -69,8 +69,8 @@ use crate::store::AppStores;
 // `use crate::components::ui::{ChartSeries, ChartValueKind}` 一个字都不用改。
 use tr_draw::chart::{
     anchor_fill_at_zero, display_range, display_value, group_is_series, hit_index, nice_axis_range,
-    paint_by_sign, place_tooltip, rewrite_tags, thin_labels, ChartGeometry, MeasuredPoints,
-    FALLBACK_WIDTH, MARGIN, TICK_FONT_PX, TOOLTIP_FALLBACK_WIDTH, Y_SPLITS,
+    paint_by_sign, place_tooltip, thin_labels, ChartGeometry, MeasuredPoints, FALLBACK_WIDTH,
+    MARGIN, TICK_FONT_PX, TOOLTIP_FALLBACK_WIDTH, Y_SPLITS,
 };
 pub use tr_draw::chart::{ChartSeries, ChartValueKind};
 
@@ -601,30 +601,16 @@ fn build_chart(
             &hex_of(&resolve_color(above)),
             &hex_of(&resolve_color(below)),
         ),
-        None => solid_dots(anchor_fill_at_zero(svg, axis_range), &palette),
+        None => tr_draw::chart::solid_dots(
+            anchor_fill_at_zero(svg, axis_range),
+            &solid_dot_hexes(&palette),
+        ),
     }
 }
 
-/// 数据点改成**实心**。
-///
-/// charts-rs 的 `Symbol::Circle(r, None)` 表示"不填充"（渲染出来是空心环），而它只提供
-/// "整个图表一个 symbol"的开关、没法逐序列指定填充色。所以在 SVG 串里按 `<circle>` 标签
-/// 做定向替换：`stroke="#该序列色" fill="none"` → `fill="#该序列色"`。
-///
-/// **必须逐标签处理**：折线路径同样是 `stroke="#色" fill="none"`，整串替换会把折线
-/// 填成一整块面积（tests 里锁了这条）。
-fn solid_dots(svg: String, palette: &[ChartColor]) -> String {
-    let hexes: Vec<String> = palette.iter().map(hex_of).collect();
-    rewrite_tags(&svg, "<circle", |tag| {
-        let mut tag = tag.to_string();
-        for hex in &hexes {
-            let ring = format!("stroke=\"{hex}\" fill=\"none\"");
-            if tag.contains(&ring) {
-                tag = tag.replace(&ring, &format!("stroke=\"{hex}\" fill=\"{hex}\""));
-            }
-        }
-        Some(tag)
-    })
+/// 序列色 → 实心点改写用的色号（`charts_rs::Color` 只有渲染侧认识，改写本身在 tr-draw）。
+fn solid_dot_hexes(palette: &[ChartColor]) -> Vec<String> {
+    palette.iter().map(hex_of).collect()
 }
 
 // ---------------------------------------------------------------- 颜色
@@ -913,40 +899,6 @@ mod tests {
         assert!(!all_zero.is_empty());
     }
 
-    #[test]
-    fn solid_dots_only_touches_circles() {
-        let svg = concat!(
-            r##"<path d="M0 0 L1 1" stroke="#DC2626" fill="none"/>"##,
-            r##"<circle cx="1" cy="1" r="2.5" stroke-width="2" stroke="#DC2626" fill="none"/>"##,
-            r##"<circle cx="3" cy="3" r="5.5" stroke-width="2" stroke="#16A34A" fill="#16A34A"/>"##,
-        )
-        .to_string();
-        let palette = [
-            ChartColor {
-                r: 0xDC,
-                g: 0x26,
-                b: 0x26,
-                a: 255,
-            },
-            ChartColor {
-                r: 0x16,
-                g: 0xA3,
-                b: 0x4A,
-                a: 255,
-            },
-        ];
-        let out = solid_dots(svg, &palette);
-        // 折线路径**不许**被填成面积
-        assert!(out.contains(r##"<path d="M0 0 L1 1" stroke="#DC2626" fill="none"/>"##));
-        // 数据点变成实心
-        assert!(out.contains(
-            r##"<circle cx="1" cy="1" r="2.5" stroke-width="2" stroke="#DC2626" fill="#DC2626"/>"##
-        ));
-        // 图例标记本来就是实心，保持原样
-        assert!(out.contains(
-            r##"<circle cx="3" cy="3" r="5.5" stroke-width="2" stroke="#16A34A" fill="#16A34A"/>"##
-        ));
-    }
     #[test]
     fn css_color_parsing() {
         assert_eq!(

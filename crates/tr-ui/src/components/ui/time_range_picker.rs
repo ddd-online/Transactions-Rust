@@ -18,162 +18,24 @@ use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
 
 use super::backdrop;
-use super::date_picker::{add_months, days_in_month};
 use super::nav_button;
 use super::{DateRangePicker, Segmented, SegmentedOption};
 use crate::icons::{self, Icon};
-use crate::time::{format_timestamp, today_ymd, ymd_to_seconds, DAY_SECONDS};
+use tr_draw::calendar::{
+    add_days, add_months, days_in_month, month_span, normalize_range, parse_year_month,
+    shift_period, week_bounds, year_span,
+};
+
+use crate::time::today_ymd;
 
 /// 时间范围粒度标签（日 / 月 / 年）。
 const TIME_RANGE_MODES: [(&str, &str); 3] = [("date", "日"), ("month", "月"), ("year", "年")];
 
-// ==================================================================== 日期算术（纯整数，无新依赖）
-
-/// 拆分 `YYYY-MM-DD` → `(年, 月)`。
-///
-/// 注意：这里**故意**不复用 [`crate::time::split_ymd`]——那个是"三段都必须是数字"的
-/// 完整 `(年, 月, 日)` 解析（`2026-01-xx` → `None`），而本文件的调用点只需要年月，
-/// 允许日缺失/非法（`2026-01-xx` → `Some((2026, 1))`）。
-pub(crate) fn split_ymd(input: &str) -> Option<(i32, u32)> {
-    let trimmed = input.trim();
-    let (year, rest) = trimmed.split_once('-')?;
-    let (month, _) = rest.split_once('-')?;
-    Some((year.parse().ok()?, month.parse().ok()?))
-}
-
-/// 某天所在周的周一。
-///
-/// 一周从周一算起：`get_day()` 的 0 是周日，用 `(day + 6) % 7` 折算成距周一的偏移；
-fn week_monday(ymd: &str) -> Option<String> {
-    let (year, month, day) = crate::time::split_ymd(ymd)?;
-    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32);
-    let offset = ((date.get_day() + 6) % 7) as i32; // 0 = 周一
-    if offset == 0 {
-        return Some(ymd.to_string());
-    }
-    let monday =
-        js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32 - offset);
-    Some(format!(
-        "{:04}-{:02}-{:02}",
-        monday.get_full_year(),
-        monday.get_month() + 1,
-        monday.get_date()
-    ))
-}
-
-/// 某天所在周的周日。
-fn week_sunday(ymd: &str) -> Option<String> {
-    let (year, month, day) = crate::time::split_ymd(ymd)?;
-    let date = js_sys::Date::new_with_year_month_day(year as u32, month as i32 - 1, day as i32 + 6);
-    Some(format!(
-        "{:04}-{:02}-{:02}",
-        date.get_full_year(),
-        date.get_month() + 1,
-        date.get_date()
-    ))
-}
-
-/// 区间是否恰好 6 天（`end.diff(start, 'day') === 6`，即整周）。
-fn is_six_days(start: &str, end: &str) -> bool {
-    match (ymd_to_seconds(start), ymd_to_seconds(end)) {
-        (Some(from), Some(to)) => (to - from) / DAY_SECONDS == 6,
-        _ => false,
-    }
-}
-
-/// 月份粒度对齐：起点 1 号、终点当月最后一天。
-fn month_bounds(ymd: &str) -> Option<(String, String)> {
-    let (year, month) = split_ymd(ymd)?;
-    let last = days_in_month(year, month);
-    Some((
-        format!("{year:04}-{month:02}-01"),
-        format!("{year:04}-{month:02}-{last:02}"),
-    ))
-}
-
-/// 年份粒度对齐：1 月 1 日 ~ 12 月 31 日。
-fn year_bounds(ymd: &str) -> Option<(String, String)> {
-    let (year, _) = split_ymd(ymd)?;
-    Some((format!("{year:04}-01-01"), format!("{year:04}-12-31")))
-}
-
-/// `normalizeTimeRange`：按粒度对齐后，起点取当天 00:00、终点取当天 23:59:59
-/// （这里只需处理日期部分，秒数在 [`crate::time::range_to_seconds`] 里补齐）。
-pub(crate) fn normalize_range(start: &str, end: &str, mode: &str) -> (String, String) {
-    let (from, to) = match mode {
-        "month" => {
-            let from = month_bounds(start)
-                .map(|bounds| bounds.0)
-                .unwrap_or_default();
-            let to = month_bounds(end).map(|bounds| bounds.1).unwrap_or_default();
-            (from, to)
-        }
-        "year" => {
-            let from = year_bounds(start)
-                .map(|bounds| bounds.0)
-                .unwrap_or_default();
-            let to = year_bounds(end).map(|bounds| bounds.1).unwrap_or_default();
-            (from, to)
-        }
-        _ => (start.to_string(), end.to_string()),
-    };
-    if from.is_empty() || to.is_empty() || from > to {
-        (start.to_string(), end.to_string())
-    } else {
-        (from, to)
-    }
-}
-
-/// `shiftPeriod`：按粒度前后翻一个周期。
-///
-/// * `date`：区间正好 6 天 → 整周（±7 天）；否则 ±1 天
-/// * `month`：`start ± 1 月` 的月初 / `end ± 1 月` 的月末
-/// * `year`：`start ± 1 年` 的年初 / `end ± 1 年` 的年末
-pub(crate) fn shift_period(start: &str, end: &str, mode: &str, direction: i32) -> (String, String) {
-    match mode {
-        "month" => {
-            let Some((start_year, start_month)) = split_ymd(start) else {
-                return (start.to_string(), end.to_string());
-            };
-            let Some((end_year, end_month)) = split_ymd(end) else {
-                return (start.to_string(), end.to_string());
-            };
-            let (next_start_year, next_start_month) =
-                add_months(start_year, start_month, direction);
-            let (next_end_year, next_end_month) = add_months(end_year, end_month, direction);
-            let last = days_in_month(next_end_year, next_end_month);
-            (
-                format!("{next_start_year:04}-{next_start_month:02}-01"),
-                format!("{next_end_year:04}-{next_end_month:02}-{last:02}"),
-            )
-        }
-        "year" => {
-            let Some((start_year, _)) = split_ymd(start) else {
-                return (start.to_string(), end.to_string());
-            };
-            let Some((end_year, _)) = split_ymd(end) else {
-                return (start.to_string(), end.to_string());
-            };
-            (
-                format!("{:04}-01-01", start_year + direction),
-                format!("{:04}-12-31", end_year + direction),
-            )
-        }
-        _ => {
-            let days = if is_six_days(start, end) { 7 } else { 1 };
-            let delta = DAY_SECONDS * i64::from(days) * i64::from(direction);
-            let next_start = ymd_to_seconds(start).map(|seconds| seconds + delta);
-            let next_end = ymd_to_seconds(end).map(|seconds| seconds + delta);
-            match (
-                next_start.map(|seconds| format_timestamp(seconds, "YYYY-MM-DD")),
-                next_end.map(|seconds| format_timestamp(seconds, "YYYY-MM-DD")),
-            ) {
-                (Some(from), Some(to)) => (from, to),
-                _ => (start.to_string(), end.to_string()),
-            }
-        }
-    }
-}
+// ==================================================================== 日期算术
+//
+// 全部住在 `tr_draw::calendar`（native 上 `cargo test -p tr-draw` 真跑）：解析、月长、
+// 加减月、周几、区间对齐、按粒度翻周期都是**无时区的公历事实**。这里只保留"按粒度选区间"
+// 这件事本身的界面部分（两次点击协议、文案、面板）。
 
 /// 时间范围的展示文案（范围输入框里的内容）：
 /// **按粒度给出对应精度**——日 → `2026-09-19`、月 → `2026-09`、年 → `2026`；
@@ -183,7 +45,7 @@ fn range_text(start: &str, end: &str, mode: &str) -> String {
         return "请选择时间范围".to_string();
     }
     let label = |ymd: &str| -> String {
-        match (mode, split_ymd(ymd)) {
+        match (mode, parse_year_month(ymd)) {
             ("month", Some((year, month))) => format!("{year:04}-{month:02}"),
             ("year", Some((year, _))) => format!("{year:04}"),
             _ => ymd.to_string(),
@@ -236,18 +98,8 @@ fn pick_period(
 /// 月粒度下点「今天」会得到"粒度是月、区间只有一天"的自相矛盾状态。
 fn preset_ranges(mode: &str) -> Vec<(&'static str, String, String)> {
     let today = today_ymd();
-    let Some((year, month)) = split_ymd(&today) else {
+    let Some((year, month)) = parse_year_month(&today) else {
         return Vec::new();
-    };
-    let month_span = |year: i32, month: u32| -> (String, String) {
-        let last = days_in_month(year, month);
-        (
-            format!("{year:04}-{month:02}-01"),
-            format!("{year:04}-{month:02}-{last:02}"),
-        )
-    };
-    let year_span = |year: i32| -> (String, String) {
-        (format!("{year:04}-01-01"), format!("{year:04}-12-31"))
     };
     // 近 N 个月（含本月）的区间
     let months_ago = |back: i32| -> (String, String) {
@@ -281,14 +133,10 @@ fn preset_ranges(mode: &str) -> Vec<(&'static str, String, String)> {
         _ => {
             let mut presets: Vec<(&'static str, String, String)> = Vec::new();
             presets.push(("今天", today.clone(), today.clone()));
-            if let Some(seconds) = ymd_to_seconds(&today) {
-                presets.push((
-                    "近 7 天",
-                    format_timestamp(seconds - DAY_SECONDS * 6, "YYYY-MM-DD"),
-                    today.clone(),
-                ));
+            if let Some(from) = add_days(&today, -6) {
+                presets.push(("近 7 天", from, today.clone()));
             }
-            if let (Some(monday), Some(sunday)) = (week_monday(&today), week_sunday(&today)) {
+            if let Some((monday, sunday)) = week_bounds(&today) {
                 presets.push(("本周", monday, sunday));
             }
             let (from, to) = month_span(year, month);
@@ -314,7 +162,7 @@ pub fn TimeRangePicker(
 ) -> impl IntoView {
     let picker_open = RwSignal::new(false);
     // 面板当前展示的 (年, 月)：整数二元组是 `Copy`，可以随便进闭包
-    let visible = RwSignal::new(split_ymd(&start.get_untracked()).unwrap_or((1970, 1)));
+    let visible = RwSignal::new(parse_year_month(&start.get_untracked()).unwrap_or((1970, 1)));
 
     let shift = move |delta: i32| {
         let current_start = start.get_untracked();
@@ -326,7 +174,7 @@ pub fn TimeRangePicker(
     };
 
     let open_picker = move |_| {
-        let next = split_ymd(&start.get_untracked()).unwrap_or((1970, 1));
+        let next = parse_year_month(&start.get_untracked()).unwrap_or((1970, 1));
         visible.set(next);
         picker_open.update(|open| *open = !*open);
     };
