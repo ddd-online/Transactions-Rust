@@ -348,7 +348,7 @@ pub fn workspace_set(state: State<'_, DesktopState>, req: WorkspaceDirRequest) -
 ///
 /// 界面（`crates/tr-ui` 的 `open_workspace`）是唯一调用方：成功后它自己收起选择屏、
 /// 刷新账本列表即可 —— 窗口从头到尾只有一个（见 `shell.rs` 的模块注释），没有切换。
-/// 界面**不要**再调 `workspace:init`（那只是保留的命令面）。
+/// 界面**不要**再自己写配置里的工作空间目录：`workspace_open` 就是唯一入口
 #[tauri::command]
 pub fn workspace_open(
     app: AppHandle,
@@ -391,26 +391,6 @@ pub fn workspace_open(
     }
 
     let _ = app.emit(EVENT_WORKSPACE_CHANGED, raw.to_string());
-
-    Ok(())
-}
-
-/// 只写配置里的工作空间目录（保留 `workspace:init` 命令面）。
-///
-/// **界面不用它**：真正的入口是 [`workspace_open`]（打开数据库 + 刷新账本）。
-/// 早先这个命令还负责"初始化窗口 → 主窗口"的切换；现在只有一个窗口（见 `shell.rs`），
-/// 它退化成一个纯粹的配置写入，留着只是为了命令面不变。
-#[tauri::command]
-pub fn workspace_init(state: State<'_, DesktopState>, req: WorkspaceDirRequest) -> ApiResult<()> {
-    let raw = req.workspace_dir.trim().to_string();
-    if raw.is_empty() {
-        return Err(ApiError::from(AppError::bad_request(
-            "工作目录路径不能为空",
-        )));
-    }
-    state
-        .config
-        .update(|config| config.workspace_dir = raw.clone());
 
     Ok(())
 }

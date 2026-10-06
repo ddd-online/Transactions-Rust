@@ -30,7 +30,7 @@
 //!
 //! **应用里每一条 IPC 命令都在这儿**（共 112 条）：22 条外壳命令（`src-tauri/src/commands.rs`）、
 //! 5 条更新命令（`src-tauri/src/updater.rs`）、85 条业务命令（`tr-ipc`）。
-//! 清单按模块分成三组（[`SHELL_COMMANDS`] 22 / [`UPDATE_COMMANDS`] 5 / [`BUSINESS_COMMANDS`] 85），
+//! 清单按模块分成三组（[`SHELL_COMMANDS`] 21 / [`UPDATE_COMMANDS`] 5 / [`BUSINESS_COMMANDS`] 85），
 //! 于是"注册表里的这一段 == 清单里的这一组"可以逐组比对 —— 注册表的路径前缀与分组一一对应，
 //! 不需要什么人去记"哪条命令归谁"（`src-tauri/src/registry.rs` 的 `SEGMENTS` 就是这张对应表）。
 
@@ -148,7 +148,6 @@ command_catalog! {
     WORKSPACE_ICON_GET = "workspace_icon_get": () => String,
     WORKSPACE_ICON_SET = "workspace_icon_set": WorkspaceIconRequest => String,
     WORKSPACE_OPEN = "workspace_open": WorkspaceDirRequest => (),
-    WORKSPACE_INIT = "workspace_init": WorkspaceDirRequest => (),
     DIALOG_OPEN = "dialog_open": DialogOpenRequest => DialogOpenResponse,
     FILE_SAVE_IMAGE = "file_save_image": FileSaveRequest => FileSaveResponse,
     DEVTOOLS_GET_STATE = "devtools_get_state": () => bool,
@@ -356,7 +355,7 @@ mod tests {
     /// 一致性守卫会紧接着告诉你哪里对不上。
     #[test]
     fn the_table_covers_every_command() {
-        assert_eq!(SHELL_COMMANDS.len(), 22);
+        assert_eq!(SHELL_COMMANDS.len(), 21);
         assert_eq!(UPDATE_COMMANDS.len(), 5);
         assert_eq!(BUSINESS_COMMANDS.len(), 85);
         assert_eq!(COMMAND_GROUPS.len(), 3);
@@ -365,7 +364,7 @@ mod tests {
                 .iter()
                 .map(|group| group.len())
                 .sum::<usize>(),
-            112
+            111
         );
     }
 

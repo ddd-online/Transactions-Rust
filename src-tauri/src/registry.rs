@@ -69,7 +69,6 @@ app_commands! {
     crate::commands::workspace_icon_get,
     crate::commands::workspace_icon_set,
     crate::commands::workspace_open,
-    crate::commands::workspace_init,
     crate::commands::dialog_open,
     crate::commands::file_save_image,
     crate::commands::devtools_get_state,
