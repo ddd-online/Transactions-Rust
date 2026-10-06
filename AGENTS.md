@@ -456,11 +456,14 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 - **IPC 契约**：命令统一只收一个 `req` 形参（个别命令的 `req` 本身就是数组 / DTO ——
   `tr_batch_create`、`tr_create`、`template_create` 是这样，见 `tr_domain::commands` 的清单），
   字段名是硬契约，改动即破坏兼容。成功时 promise 直接 resolve
-  为数据本身；失败时 reject 载荷为 `{"code":-1,"msg":"...","status":500}`。`msg` 是用户可见文案。
+  为数据本身；失败时 reject 载荷为 `{"code":-1,"msg":"...","status":500}` —— 其中 `code` 是**失败种类**
+  而非固定值（普通业务失败 `-1`、"未打开工作空间" `-2`，取值定义在 `tr_domain::error`；界面按种类分支，
+  不再比 `msg` 文案）。`msg` 是用户可见文案。
   * **字段名靠共享类型，名字靠共享清单**：请求 / 响应类型在 `tr-domain`（`wire` / `dto` / `models`），
     命令名与事件名在 `tr_domain::commands` / `tr_domain::events`（事件名 6 条，应用里每一个都在那儿）。
-    **每一条命令都在清单里**（112 条 = 外壳 22 + 更新 5 + 业务 85，清单按模块分成 `SHELL_COMMANDS` /
-    `UPDATE_COMMANDS` / `BUSINESS_COMMANDS` 三组），界面侧**不再出现命令名字符串字面量**：
+    **每一条命令都在清单里**（111 条 = 外壳 21 + 更新 5 + 业务 85；其中 `workspace_init` 已随候选 11 删除，
+    见下），清单按模块分成 `SHELL_COMMANDS` /
+    `UPDATE_COMMANDS` / `BUSINESS_COMMANDS` 三组，界面侧**不再出现命令名字符串字面量**：
     `ipc::call(commands::LEDGER_LIST, req)`；没有 `req` 形参的写 `ipc::call_no_args(commands::CONFIG_GET)`，
     连"无返回"也是条目的一部分（`Command<Req, ()>` 才交给 `call_void`）—— 拼错名字是编译错误，
     不是运行时的"命令不存在"。
@@ -490,7 +493,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   `inert`（鼠标、键盘、读屏都进不去），外壳侧同时拒绝关闭请求（`close_allowed`）。选完目录后
   `workspace_open` 打开数据库、界面收起选择屏即可，没有窗口切换。
   历史：早期为此单开过一个 600×560 的初始化窗口 + `transition_from_init`（在主线程回调外建主窗口再 destroy），
-  被用户吐槽"背景没渲染、全是文案"；那一整套已删除。界面**不要**再调 `workspace_init`（只剩配置写入）。
+  被用户吐槽"背景没渲染、全是文案"；那一整套已删除。界面**不要**自己写配置里的工作空间目录：`workspace_open` 是唯一入口（旧的 `workspace_init` 已删除）。
 - **配置文件是用户数据**：`~/.transactions.json`（dev 为 `~/.transactions-dev.json`）的键名与位置都不变，读写时
   必须保留未知键（`AppConfig.extra`）。`features: { accounting, stock, keyEvent, diary }` 是「应用设置 → 功能
   开关」，**缺省全开**（`#[serde(default)]` + 字段默认 `true`）；它跨层面：外壳只落盘（`config_set_feature`），
