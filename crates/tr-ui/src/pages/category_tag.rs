@@ -36,6 +36,7 @@
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
 use tr_domain::dto::{CategoryDto, TagDto};
+use tr_draw::list_order::reorder_with_changes;
 
 use crate::api;
 use crate::components::ui::{
@@ -441,9 +442,13 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         }
         let transaction_type = active_type.get_untracked();
         let current = categories.get_untracked();
-        let Some((reordered, changed)) =
-            reorder_with_changes(&current, from, to, |category| category.name.clone())
-        else {
+        let Some((reordered, changed)) = reorder_with_changes(
+            &current,
+            from,
+            to,
+            |category| category.name.clone(),
+            |category| category.sort_order,
+        ) else {
             return;
         };
 
@@ -477,9 +482,13 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
             .get(&category)
             .cloned()
             .unwrap_or_default();
-        let Some((reordered, changed)) =
-            reorder_with_changes(&current, from, to, |tag| tag.name.clone())
-        else {
+        let Some((reordered, changed)) = reorder_with_changes(
+            &current,
+            from,
+            to,
+            |tag| tag.name.clone(),
+            |tag| tag.sort_order,
+        ) else {
             return;
         };
 
@@ -827,58 +836,6 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
 // ------------------------------------------------------------------ 辅助
 
 /// 需要落库的一项：`(新下标, 名字)`。
-type SortChange = (usize, String);
-
-/// 重排列表并算出"需要落库的项"。
-///
-/// 做法：先把被拖动的项从 `from` 取出、插到 `to`，随后**全量重排**
-/// `sortOrder`，但只把 `sortOrder` 与新下标不一致的项放进结果（调用方据此发请求）。
-///
-/// 返回 `(新顺序, 需要落库的项)`；下标越界或原位返回 `None`。
-fn reorder_with_changes<T, F>(
-    list: &[T],
-    from: usize,
-    to: usize,
-    key: F,
-) -> Option<(Vec<T>, Vec<SortChange>)>
-where
-    T: Clone + SortOrder,
-    F: Fn(&T) -> String,
-{
-    if from == to || from >= list.len() || to >= list.len() {
-        return None;
-    }
-
-    let mut reordered = list.to_vec();
-    let moved = reordered.remove(from);
-    reordered.insert(to, moved);
-
-    let mut changed: Vec<SortChange> = Vec::new();
-    for (index, item) in reordered.iter().enumerate() {
-        if item.sort_order() != index as i32 {
-            changed.push((index, key(item)));
-        }
-    }
-    Some((reordered, changed))
-}
-
-/// 列表项携带排序号。
-trait SortOrder {
-    fn sort_order(&self) -> i32;
-}
-
-impl SortOrder for CategoryDto {
-    fn sort_order(&self) -> i32 {
-        self.sort_order
-    }
-}
-
-impl SortOrder for TagDto {
-    fn sort_order(&self) -> i32 {
-        self.sort_order
-    }
-}
-
 /// 删除弹窗标题（分类 / 标签两个固定分支）。
 fn delete_modal_title(kind: CtrDeleteKind) -> String {
     match kind {

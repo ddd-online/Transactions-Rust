@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# 界面侧的纯算法层：绘制（坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何）
-# 与取数决策核心。
+# 界面侧的纯算法层：绘制（坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何）、
+# 取数决策核心、公历日历、页码窗口、四象限、展示词汇与页面规则。
 #
 # 为什么单开一个 crate（而不是塞进 tr-domain、也不把 tr-ui 改成双目标）：
 # 见 docs/adr/0001-pure-draw-crate.md。
@@ -14,6 +14,9 @@ license.workspace = true
 # * native 与 wasm32 两种目标都要能编 —— 不许出现 web-sys / leptos / charts-rs。
 # * 本 crate 是这些算法**唯一的测试面**：`cargo test -p tr-draw`。
 [dependencies]
+# 纯领域层（双可编、零 I/O）：展示词汇要用它的金额换算（`money`）与文本工具（`util`）。
+# 这条依赖不破上面两条纪律 —— tr-domain 本身也是双可编、零 I/O。
+tr-domain = { workspace = true }
 # HEIC/HEIF → RGBA8。核是 no_std + alloc、零 I/O（`io` 模块在默认特性里，已关掉），
 # 所以本 crate 的两条纪律（双可编、零 I/O）都不破。
 heic-rs = { workspace = true }

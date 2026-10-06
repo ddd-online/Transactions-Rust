@@ -62,8 +62,8 @@ use tr_domain::dto::{
     CategoryDto, QueryConditionSortField, TagDto, TransactionRecordDto, TransactionTemplateDto,
 };
 use tr_domain::models::QueryConditionItem;
-use tr_domain::money::yuan_to_cents;
 use tr_draw::calendar::{normalize_range, parse_year_month, shift_period};
+use tr_draw::text::parse_amount_cents;
 
 use crate::api;
 // 日期算术（区间对齐 / 按粒度翻周期 / 取年月）住在 tr-draw，本页与时间范围选择器共用同一份
@@ -1417,7 +1417,7 @@ fn record_modal(
             Notifier::global().error("请选择消费类型".to_string(), None);
             return;
         }
-        let cents = match parse_price(&price_text.get_untracked()) {
+        let cents = match parse_amount_cents(&price_text.get_untracked()) {
             Ok(cents) => cents,
             Err(message) => {
                 price_error.set(message);
@@ -1698,35 +1698,8 @@ fn combine_date_and_time(ymd: &str) -> Option<i64> {
     Some(day_start + 12 * 3600)
 }
 
-/// 金额校验（正则 `^(0|[1-9]\d*)(\.\d{1,2})?$` + [`yuan_to_cents`]）：
-///
-/// * 空串 → 「请输入金额」
-/// * 不匹配正则 → 「请输入 ≥0 的有效金额，最多两位小数」
-/// * 格式通过后再交给 [`yuan_to_cents`]（`MoneyError` 的 Display 是「无效的金额格式」，兜底用）
-fn parse_price(input: &str) -> Result<i64, String> {
-    let text = input.trim();
-    if text.is_empty() {
-        return Err("请输入金额".to_string());
-    }
-    let mut parts = text.splitn(2, '.');
-    let integer = parts.next().unwrap_or_default();
-    let decimals = parts.next();
-
-    let integer_ok = integer == "0"
-        || (!integer.is_empty()
-            && !integer.starts_with('0')
-            && integer.bytes().all(|byte| byte.is_ascii_digit()));
-    let decimals_ok = match decimals {
-        None => true,
-        Some(part) => {
-            !part.is_empty() && part.len() <= 2 && part.bytes().all(|byte| byte.is_ascii_digit())
-        }
-    };
-    if !integer_ok || !decimals_ok {
-        return Err("请输入不小于 0 的金额，最多两位小数".to_string());
-    }
-    yuan_to_cents(text).map_err(|error| error.to_string())
-}
+/// 金额文本 → 分（含中文文案）搬进了 `tr_draw::text::parse_amount_cents`：
+/// 它是纯校验规则，测试面在 `cargo test -p tr-draw`。
 
 // ==================================================================== 标签多选
 

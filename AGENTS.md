@@ -15,6 +15,7 @@ crates/tr-draw/      # 界面侧纯算法层：绘制（坐标与刻度 / SVG �
                      #   + 页面取数的决策核心（query：去重 / generation / 复核判定）
                      #   + 公历日历（calendar：月长 / 加减月天 / 周几 / 区间对齐 / 按粒度翻周期）
                      #   + 分页窗口（paging）与四象限（quadrant；判定 / 排序 / 点的抖动偏移）
+                     #   + 展示词汇（format）、输入文本解析（text）、拖拽重排（list_order）、成交流水行（stock_rows）
 crates/tr-store/     # 存储层：建库 + 迁移引擎（migrations）+ 格式校验 + 各 Dao（rusqlite）
 crates/tr-service/   # 服务层：业务规则（账本/交易/…/股票），不依赖 tauri
 crates/tr-ipc/       # IPC 命令面：全部 #[tauri::command] + 统一错误信封
@@ -83,7 +84,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 | `ui-upload` | 图片按原字节落盘 + 缩略图 + `trasset://` 资产协议 |
 | `ui-proxy` / `ui-about` / `ui-features` / `ui-update-restore` | 假代理日志当判据（行情 `qt.gtimg.cn`、更新 `api.github.com`）；版本自报；功能开关落盘并重启生效；下载状态跨页面恢复（依赖真实 GitHub API，离线用 `-SkipNetwork`） |
 | `migrate-workspace` | 降级 → 升级 → 备份 → 幂等（**迁移引擎这条最高风险路径就靠它**） |
-| `test-draw` | 界面侧**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 + 页面取数的决策（去重 / generation / 复核判定 / 失效）+ **公历日历**（闰年与月长 / 日序号往返 / 周几 / 区间对齐 / 整周判定）+ 分页页码窗口 + 四象限（判定 / 稳定排序 / 抖动偏移）+ 实心点只有 `<circle>` 被改写 |
+| `test-draw` | 界面侧**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 + 页面取数的决策（去重 / generation / 复核判定 / 失效）+ **公历日历**（闰年与月长 / 日序号往返 / 周几 / 区间对齐 / 整周判定）+ 分页页码窗口 + 四象限（判定 / 稳定排序 / 抖动偏移）+ 实心点只有 `<circle>` 被改写 + **展示词汇**（金额符号两个口径 / 紧凑金额阈值 / 百分比与 `NaN` 兜底 / 按字符截断）+ **输入文本**（金额文本的合法与非法集合、费率文本的 `NaN`·`inf`）+ **拖拽重排**（只报序号变化的行）+ **成交流水行**（按委托分组的加权均价与求和） |
 | `test-src-tauri` | **应用外壳**的纯逻辑真跑（`cargo test -p transactions`）：配置键名与往返、命令面请求形状、**命令注册表 == `tr_domain::commands` 清单**（`src-tauri/src/registry.rs` 的 `catalog_matches_registration`）、日志轮转、资产路径穿越校验、更新器解析；更新流程的状态机本身在 `tr-domain::update`（由 `test-domain` 跑） |
 
 护栏总原则：一律真的启动应用、用 UI Automation 或真实鼠标键盘驱动；**断言落在库/磁盘上**，不落在"点到了没有"。

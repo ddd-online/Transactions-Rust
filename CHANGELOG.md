@@ -35,6 +35,26 @@
 全量档 `fixtures/test.ps1 -All` **35/35 绿**（1247.7s，含重新构建的 release 产物、
 `ui-stock` 真实行情、`ui-proxy` 假代理日志、`ui-todo` 四象限、`ui-transactions` 的时间范围与分页）。
 
+**展示词汇与页面规则也进 `tr-draw`（ADR-0001 第二波·续）**
+
+- **搬走的东西**：`tr-ui/src/format.rs` 整个模块（229 行：金额符号 / 紧凑金额 / 百分比 / 盈亏文字 /
+  交易类型与股票文案 / 手数 / 短日期 / 截断，此前**一条断言都没有**）+ `scaled_text`（统计标尺）；
+  `tr_draw::text`（`parse_amount_cents` 金额文本 → 分、`parse_rate` 费率文本 → f64 —— 两处实现合成一处，
+  文案逐字不变）；`tr_draw::list_order::reorder_with_changes`（拖拽重排后**哪些行要落库**，
+  它决定发几条写请求）；`tr_draw::stock_rows`（`TradeRow` + `group_trades`：按委托分组、组内按
+  `orderSeq` 排序、**加权均价**、费用求和、单笔不合并的键约定）。
+- **`tr-ui` 侧零调用点改动**：`format` 用 `pub use tr_draw::format;` 转发（131 处 `crate::format::*`
+  一个字没改，同 `components/ui/mod.rs` 转发裁剪几何的先例）；重排从 `SortOrder` trait 改成两个取值闭包
+  —— trait 与 DTO 都在别的 crate 里，impl 会撞孤儿规则，闭包顺手解掉这层耦合。
+- **新增依赖**：`tr-draw` → `tr-domain`（金额换算与文本工具）。不破它的两条纪律：
+  `tr-domain` 本身也是 native + wasm32 双可编、零 I/O。
+
+回归：`cargo test -p tr-draw` **85 绿**（本批新增 28 条：两个符号口径 / 百分比三档与 `NaN` 兜底 /
+盈亏比 `∞` / 紧凑金额阈值 / 行情缺失占位 / 手数向下取整 / 按字符截断 / 金额文本的合法与非法集合与
+两句中文文案 / 费率文本的 `NaN`·`inf` / 重排"只报序号变化的行"与越界 / 成交分组的加权均价与求和）；
+`clippy --all-targets -D warnings` 与 `check-ui-wasm` 干净；全量档 `fixtures/test.ps1 -All`
+**35/35 绿**（1240.4s）。
+
 ### 修复
 
 **更新状态只有一个持有者：外壳推进状态机，界面只渲染快照**

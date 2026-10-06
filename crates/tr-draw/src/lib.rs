@@ -14,6 +14,10 @@
 //!   留在界面侧的 `tr-ui::time`。
 //! * [`paging`]：页码窗口的收敛规则（哪些页显示、哪里折成 `…`）。
 //! * [`quadrant`]：四象限的判定、弹窗排序与同坐标点的固定偏移。
+//! * [`format`]：展示词汇（金额符号 / 紧凑金额 / 百分比 / 交易类型与股票文案 / 截断）。
+//! * [`text`]：用户输入文本 → 数值（金额文本 → 分、费率文本 → f64）。
+//! * [`list_order`]：拖拽重排 —— 新顺序是什么、哪些行需要落库。
+//! * [`stock_rows`]：成交流水的渲染行（按委托分组 + 加权均价）。
 //! * [`heic`]：HEIC/HEIF（iPhone 照片）→ RGBA8 —— 界面侧解码，
 //!   因为 WebView2/系统那条路根本走不通（见该模块的说明）。
 //!
@@ -28,7 +32,11 @@
 pub mod calendar;
 pub mod chart;
 pub mod crop;
+pub mod format;
 pub mod heic;
+pub mod list_order;
 pub mod paging;
 pub mod quadrant;
 pub mod query;
+pub mod stock_rows;
+pub mod text;

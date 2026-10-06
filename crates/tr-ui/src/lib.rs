@@ -9,7 +9,7 @@
 //! | [`notify`] | message / notification 全局队列 |
 //! | [`api`] | 按业务域的命令封装 |
 //! | [`store`] | 账本 / 统计 / 外观 的界面级共享状态 |
-//! | [`format`] | 金额与类型文案（金额换算走 `tr_domain::money`） |
+//! | [`format`] | 金额与类型文案（金额换算走 `tr_domain::money`）—— 实现住在 `tr_draw::format` |
 //! | [`time`] | 秒级时间戳 → 本地时间字符串 |
 //! | [`icons`] | 内联 SVG 图标集 |
 //! | [`components::ui`] | 通用组件套件 |
@@ -26,7 +26,9 @@
 pub mod api;
 pub mod components;
 pub mod error_handler;
-pub mod format;
+// 展示词汇（金额符号 / 紧凑金额 / 百分比 / 类型与股票文案 / 截断）住在 tr-draw：
+// 它是纯函数，测试面在 `cargo test -p tr-draw`。对外路径 `crate::format::*` 保持不变。
+pub use tr_draw::format;
 pub mod icons;
 pub mod ipc;
 pub mod notify;

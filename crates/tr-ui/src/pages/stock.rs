@@ -78,6 +78,8 @@ use crate::notify::Notifier;
 use crate::query::{Cache, OnError, Query};
 use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd};
+use tr_draw::stock_rows::{group_trades, TradeRow};
+use tr_draw::text::parse_rate;
 
 /// 页面标题（固定文案，改动即影响界面）。侧栏条目名也用这一个来源。
 pub const PAGE_TITLE: &str = "股票";
@@ -2334,91 +2336,6 @@ fn trade_modal(
 
 // ==================================================================== 成交表渲染
 
-/// 一条渲染行：委托内的多笔成交聚合成父行 + 子行。
-#[derive(Debug, Clone, PartialEq)]
-struct TradeRow {
-    key: String,
-    is_group: bool,
-    is_child: bool,
-    trades: Vec<StockTradeDto>,
-    trade_type: String,
-    price: i64,
-    lots: i64,
-    amount: i64,
-    fee: i64,
-    commission: i64,
-    stamp_duty: i64,
-    transfer_fee: i64,
-    trade_time: i64,
-    realized_pnl: Option<i64>,
-}
-
-/// 按 `orderId` 分组（键 = `orderId || id`，组内按 `orderSeq` 升序）。
-fn group_trades(trades: &[StockTradeDto]) -> Vec<TradeRow> {
-    let mut groups: Vec<(String, Vec<StockTradeDto>)> = Vec::new();
-    for trade in trades {
-        let key = if trade.order_id.is_empty() {
-            trade.id.clone()
-        } else {
-            trade.order_id.clone()
-        };
-        match groups.iter_mut().find(|(existing, _)| *existing == key) {
-            Some((_, items)) => items.push(trade.clone()),
-            None => groups.push((key, vec![trade.clone()])),
-        }
-    }
-
-    groups
-        .into_iter()
-        .map(|(key, mut items)| {
-            items.sort_by_key(|trade| trade.order_seq);
-            let first = items.first().cloned().unwrap_or_default();
-            let shares: i64 = items.iter().map(|trade| trade.shares).sum();
-            let amount: i64 = items.iter().map(|trade| trade.amount).sum();
-            let fee: i64 = items.iter().map(|trade| trade.fee).sum();
-            let commission: i64 = items.iter().map(|trade| trade.commission).sum();
-            let stamp_duty: i64 = items.iter().map(|trade| trade.stamp_duty).sum();
-            let transfer_fee: i64 = items.iter().map(|trade| trade.transfer_fee).sum();
-            let lots: i64 = items.iter().map(|trade| trade.lots).sum();
-            let pnl_values: Vec<i64> = items
-                .iter()
-                .filter_map(|trade| trade.realized_pnl)
-                .collect();
-            let realized_pnl = if pnl_values.is_empty() {
-                None
-            } else {
-                Some(pnl_values.iter().sum())
-            };
-            let price = if shares > 0 {
-                ((amount as f64) / (shares as f64)).round() as i64
-            } else {
-                0
-            };
-            let single = items.len() == 1;
-            TradeRow {
-                key: if single {
-                    first.id.clone()
-                } else {
-                    format!("order-{key}")
-                },
-                is_group: !single,
-                is_child: false,
-                trades: items,
-                trade_type: first.trade_type.clone(),
-                price: if single { first.price } else { price },
-                lots,
-                amount,
-                fee,
-                commission,
-                stamp_duty,
-                transfer_fee,
-                trade_time: first.trade_time,
-                realized_pnl,
-            }
-        })
-        .collect()
-}
-
 /// 渲染成交表的所有行（父行 + 子行）。
 fn trade_table_rows(
     trades: RwSignal<Vec<StockTradeDto>>,
@@ -4125,10 +4042,10 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
 
     // 回填：佣金 ×10000、最低佣金（分→元）、印花税/过户费 ×100
     let fill_fee_form = move |setting: &StockFeeSetting| {
-        fee_commission.set(format_scaled(setting.commission_rate, 10_000.0, 4));
+        fee_commission.set(format::scaled_text(setting.commission_rate, 10_000.0, 4));
         fee_min.set(cents_to_yuan(setting.min_commission));
-        fee_stamp.set(format_scaled(setting.stamp_duty_rate, 100.0, 3));
-        fee_transfer.set(format_scaled(setting.transfer_fee_rate, 100.0, 3));
+        fee_stamp.set(format::scaled_text(setting.stamp_duty_rate, 100.0, 3));
+        fee_transfer.set(format::scaled_text(setting.transfer_fee_rate, 100.0, 3));
     };
 
     // 费用设置取回来 → 回填表单（空账本清空表单）
@@ -4216,7 +4133,7 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
         }
 
         // 校验顺序与文案固定（改动即影响界面）
-        let Some(commission) = parse_number(&fee_commission.get_untracked()) else {
+        let Some(commission) = parse_rate(&fee_commission.get_untracked()) else {
             Notifier::global().error("请输入大于 0 的佣金费率", None);
             return;
         };
@@ -4225,7 +4142,7 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
             return;
         }
         let min_text = fee_min.get_untracked();
-        let Some(min_commission_yuan) = parse_number(&min_text) else {
+        let Some(min_commission_yuan) = parse_rate(&min_text) else {
             Notifier::global().error("请输入不小于 0 的最低佣金", None);
             return;
         };
@@ -4233,11 +4150,11 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
             Notifier::global().error("请输入不小于 0 的最低佣金", None);
             return;
         }
-        let Some(stamp_duty) = parse_number(&fee_stamp.get_untracked()) else {
+        let Some(stamp_duty) = parse_rate(&fee_stamp.get_untracked()) else {
             Notifier::global().error("印花税与过户费需不小于 0", None);
             return;
         };
-        let Some(transfer_fee) = parse_number(&fee_transfer.get_untracked()) else {
+        let Some(transfer_fee) = parse_rate(&fee_transfer.get_untracked()) else {
             Notifier::global().error("印花税与过户费需不小于 0", None);
             return;
         };
@@ -4847,23 +4764,7 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
 }
 
 // ---------------------------------------------------------------- 工具函数
-
-/// 按 `scale` 换算并格式化：
-/// 先按 `scale` 换算，再四舍五入到 `digits` 位小数，最后去掉多余的 0。
-fn format_scaled(value: f64, scale: f64, digits: i32) -> String {
-    let factor = 10_f64.powi(digits);
-    let rounded = (value * scale * factor).round() / factor;
-    format!("{rounded}")
-}
-
-/// 解析用户输入的数值：非数字 / 非有限值（`NaN` / `inf`）视为非法。
-fn parse_number(input: &str) -> Option<f64> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    match trimmed.parse::<f64>() {
-        Ok(value) if value.is_finite() => Some(value),
-        _ => None,
-    }
-}
+//
+// `format_scaled`（按 scale 换算并格式化）搬进了 `tr_draw::format::scaled_text`；
+// `parse_number`（费率文本 → f64）搬进了 `tr_draw::text::parse_rate` —— 两者都是纯函数，
+// 测试面在 `cargo test -p tr-draw`。
