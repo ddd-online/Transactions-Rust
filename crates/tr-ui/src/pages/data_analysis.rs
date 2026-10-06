@@ -33,6 +33,7 @@ use tr_domain::dto::{
     CreateChartRequest, UpdateChartRequest,
 };
 use tr_domain::models::ChartLine;
+use tr_draw::section::{section_state, SectionState};
 
 use crate::api;
 use crate::components::ui::{
@@ -368,10 +369,22 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
                     {move || {
                         let items = charts.value.get();
                         if items.is_empty() {
+                            // 判据在 tr_draw::section（四态的优先级只该有一份实现）：这条查询走
+                            // ListQuery（失败会记进 `failed`），所以失败时显示「加载失败」而不是
+                            // 「暂无图表」——从前这两件事在用户眼里长得一样。
                             return view! {
                                 <div class="da-list__empty">
                                     {move || {
-                                        if charts.loading.get() { "正在加载…" } else { "暂无图表" }
+                                        match section_state(
+                                            charts.value.get().is_empty(),
+                                            charts.loading.get(),
+                                            charts.loaded.get(),
+                                            charts.failed.get().as_deref(),
+                                        ) {
+                                            SectionState::Loading => "正在加载…",
+                                            SectionState::Failed => "加载失败",
+                                            _ => "暂无图表",
+                                        }
                                     }}
                                 </div>
                             }
