@@ -7,14 +7,22 @@
 #
 # 断言：
 #   1. 关于页能算出「有更新」（依赖真实 GitHub API；网络不可用时显式 SKIP 并非零退出提示）；
-#   2. 点「立即更新」后进入下载态（出现「取消下载」）；
-#   3. **切到别的页面再切回关于页**，仍然处于下载态（进度/取消按钮还在）——
+#   2. **换页再切回：检查结果必须还在**（外壳是状态机唯一持有者；若界面自己跑一台状态机，
+#      切回来会读外壳那份 idle 快照，把「已是最新版本 / 立即更新」抹成「检查更新」）；
+#   3. 点「立即更新」后进入下载态（出现「取消下载」）；
+#   4. **切到别的页面再切回关于页**，仍然处于下载态（进度/取消按钮还在）——
 #      若下载已经跑完，则必须显示「下载完成 / 安装并退出」（两种终态都算通过，
 #      因为安装包只有几 MB，可能在切页那一瞬间就下完了）；
-#   4. 取消下载后回到「立即更新」。
+#   5. 取消下载后回到「立即更新」。
 #
 # 用法（pwsh 7；需要内嵌界面的产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/ui-update-restore.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>]
+#
+# 注意：第 3~5 步只在「真的有更新可下载」时执行（当前版本 == 最新 release 时，检查会停在
+# `no-update`，脚本按设计只验证检查链路）。要跑下载那几步，用**更低的版本号**构建一份探针产物：
+#   $env:TAURI_CONFIG='{"version":"0.13.1"}'
+#   cargo build --release -p transactions --features tauri/custom-protocol
+# （源码一行不改；跑完记得去掉该环境变量并重新构建，否则「关于软件」会自报旧版本号。）
 
 param(
     [string]$Exe,
@@ -141,7 +149,7 @@ try {
     [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Seconds 1
 
-    Write-Host "`n[update] 1/4 打开「应用设置 → 关于软件」，等更新检查出结果"
+    Write-Host "`n[update] 1/5 打开「应用设置 → 关于软件」，等更新检查出结果"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置' -TimeoutSec 20)) '打开「应用设置」页'
     Start-Sleep -Seconds 3
     Assert-True (Select-Tab -Window $window -Name '关于软件') '页签「关于软件」可选中'
@@ -155,6 +163,27 @@ try {
     } while (($state -eq 'unknown' -or $state -eq 'checking') -and (Get-Date) -lt $deadline)
     Write-Host "    更新检查终态: $state"
 
+    # 2/5 换页再切回：检查结果必须还在。
+    # 外壳是状态机唯一持有者（update_check / update_download / update_cancel 各自在命令体里
+    # apply），update_download_status 读到的就是它推进后的快照。若界面自己跑一台状态机，
+    # 这一趟回来会读到外壳那份 idle 快照，把结果抹成「检查更新」。
+    if ($state -in @('no-update', 'available')) {
+        Write-Host '[update] 2/5 换页再切回：检查结果必须还在'
+        Assert-True (Invoke-Element (Wait-Element -Root $window -Name '记账' -TimeoutSec 15)) '切到「记账」页'
+        Start-Sleep -Seconds 2
+        Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置' -TimeoutSec 15)) '切回「应用设置」页'
+        Start-Sleep -Seconds 2
+        Assert-True (Select-Tab -Window $window -Name '关于软件') '再次选中「关于软件」页签'
+        Start-Sleep -Seconds 2
+        $after_check = Get-UpdateState -Window $window
+        Write-Host "    切回后的状态: $after_check"
+        Assert-True ($after_check -eq $state) `
+            "换页切回后检查结果不变（期望 $state，实际 $after_check —— 变成「检查更新」说明外壳的快照没被它的检查喂过）"
+    }
+    else {
+        Write-Host '[update] 2/5 检查没走到可断言的终态，跳过「换页切回」这一步' -ForegroundColor Yellow
+    }
+
     if ($state -eq 'no-update') {
         # 当前就是最新版 → 没有可下载的更新，这条护栏只验证"检查链路通"
         Write-Host '[update] 当前已是最新版本：没有可下载的更新，仅验证检查链路' -ForegroundColor Yellow
@@ -164,13 +193,13 @@ try {
         Assert-True $false "更新检查应给出「有更新」或「已是最新」（实际 $state；网络不可用时请重试）"
     }
     else {
-        Write-Host "[update] 2/4 点「立即更新」开始下载"
+        Write-Host "[update] 3/5 点「立即更新」开始下载"
         Assert-True (Invoke-Element (Wait-Element -Root $window -Name '立即更新' -TimeoutSec 10)) '点「立即更新」'
         Start-Sleep -Milliseconds 1500
         $started = Get-UpdateState -Window $window
         Assert-True ($started -eq 'downloading' -or $started -eq 'downloaded') "进入下载态（实际 $started）"
 
-        Write-Host "[update] 3/4 切走再切回「关于软件」——下载是外壳侧单例，状态必须恢复"
+        Write-Host "[update] 4/5 切走再切回「关于软件」——下载是外壳侧单例，状态必须恢复"
         Assert-True (Invoke-Element (Wait-Element -Root $window -Name '记账' -TimeoutSec 15)) '切到「记账」页'
         Start-Sleep -Seconds 2
         Assert-True (Invoke-Element (Wait-Element -Root $window -Name '应用设置' -TimeoutSec 15)) '切回「应用设置」页'
@@ -183,7 +212,7 @@ try {
         Assert-True ($restored -eq 'downloading' -or $restored -eq 'downloaded') `
             "切回来仍是下载态（下载中或已完成；实际 $restored —— 若为 available 说明状态没恢复）"
 
-        Write-Host "[update] 4/4 取消下载（若已完成则跳过），断言回到「立即更新」"
+        Write-Host "[update] 5/5 取消下载（若已完成则跳过），断言回到「立即更新」"
         if ($restored -eq 'downloading') {
             $cancel = Wait-Element -Root $window -Name '取消下载' -TimeoutSec 10
             Assert-True ([bool]$cancel) '找到「取消下载」'

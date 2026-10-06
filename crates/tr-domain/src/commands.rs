@@ -66,9 +66,8 @@ use crate::wire::{
     StockTradesRequest, TagDeleteRequest, TagListRequest, TemplateIdRequest, TemplateListRequest,
     TemplateSortRequest, TodoCardCreateRequest, TodoCardSortRequest, TodoItemCreateRequest,
     TodoItemStatusRequest, TodoItemUpdateRequest, TodoProgressCreateRequest,
-    TodoProgressDoneRequest, UnlinkRequest, UpdateCheckResponse, UpdateDownloadRequest,
-    UpdateLedgerRequest, UpdateResponse, WindowControlRequest, WorkspaceDirRequest,
-    WorkspaceIconRequest, YearRequest,
+    TodoProgressDoneRequest, UnlinkRequest, UpdateDownloadRequest, UpdateLedgerRequest,
+    UpdateResponse, WindowControlRequest, WorkspaceDirRequest, WorkspaceIconRequest, YearRequest,
 };
 
 /// 一条 IPC 命令的声明：**名字 + 请求类型 + 响应类型**（没有任何逻辑）。
@@ -160,10 +159,13 @@ command_catalog! {
     UPDATE_COMMANDS;
 
     // ---- 自动更新（`src-tauri/src/updater.rs`，自研实现）----
-    UPDATE_CHECK = "update_check": () => UpdateCheckResponse,
-    UPDATE_DOWNLOAD = "update_download": UpdateDownloadRequest => UpdateResponse,
+    //
+    // 三个会推进状态的命令都返回**完整快照**：外壳是状态机的唯一持有者，
+    // 界面拿返回值直接渲染（`update_download_status` 是"不推进、只读"的那一个）。
+    UPDATE_CHECK = "update_check": () => UpdateSnapshot,
+    UPDATE_DOWNLOAD = "update_download": UpdateDownloadRequest => UpdateSnapshot,
     UPDATE_DOWNLOAD_STATUS = "update_download_status": () => UpdateSnapshot,
-    UPDATE_CANCEL = "update_cancel": () => (),
+    UPDATE_CANCEL = "update_cancel": () => UpdateSnapshot,
     UPDATE_INSTALL = "update_install": () => UpdateResponse,
 }
 

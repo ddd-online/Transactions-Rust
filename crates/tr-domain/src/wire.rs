@@ -789,10 +789,12 @@ pub struct DevToolsToggleRequest {
 
 // ================================================================ 自动更新
 
-/// `update_check` 的返回。
+/// 一次更新检查的结果（`tr_domain::update` 的 `UpdateEvent::CheckFinished` 的载荷）。
 ///
-/// **不会 reject**：网络失败时它 resolve 出 `error` 字段，界面必须把
-/// 「`hasUpdate == false` + 有 `error`」当成"检查失败"而不是"已是最新"。
+/// **不是命令的返回值**：`update_check` 返回的是推进后的 [`crate::update::UpdateSnapshot`]
+/// （外壳是状态机的唯一持有者）。这个形状只描述"GitHub 那边查到了什么"。
+/// 它**不会 reject**：网络失败时它带着 `error` 字段 —— 状态机据此进 `failed`，
+/// 而不是"已是最新"（`hasUpdate == false` 且没有 `error` 才是最新）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UpdateCheckResponse {
@@ -811,8 +813,10 @@ pub struct UpdateCheckResponse {
     pub error: Option<String>,
 }
 
-/// `update_download` / `update_install` 的返回：**不会 reject**，
-/// 失败时 resolve 出 `{ success: false, error }`。
+/// `update_install` 的返回：**不会 reject**，失败时 resolve 出 `{ success: false, error }`。
+///
+/// 这道命令是更新链路里唯一还带"带内成败"的：它要么把安装器拉起来（随后进程退出），
+/// 要么回一句原因 —— 中间没有可写进快照的状态。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UpdateResponse {
@@ -834,11 +838,6 @@ impl UpdateResponse {
             success: false,
             error: Some(message.into()),
         }
-    }
-
-    /// 是否为"用户主动取消"（后端用固定文案 `cancelled` 表示）。
-    pub fn is_cancelled(&self) -> bool {
-        self.error.as_deref() == Some("cancelled")
     }
 }
 

@@ -372,12 +372,20 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
     `downloaded` / `failed`）**序列化取值就是契约**（`no-update` 是连字符）；`UpdateEvent::apply` 是唯一的迁移
     入口，四条规则写在里面：**"检查失败 ≠ 已是最新"**（带 `error` 一律进 `failed`）、进度只在 `downloading` 时
     生效（迟到的进度不会把状态拉回来）、重复事件幂等、没有下载地址不进下载态。
+    **"唯一持有者"是字面意思**：推进状态机的命令只有三个，每一个都在**命令体里** `apply` 并把推进后的快照返回
+    （`update_check` / `update_download` / `update_cancel` → `UpdateSnapshot`；`update_download_status` 只读不推进）。
+    界面**不跑状态机**：`UpdateState` 只有 `accept(快照)` 一个写入口，"正在检查"是它自己的一个在飞 bool（渲染用）。
+    新增一条会推进状态的命令时照这个形状写，别让界面自己 `apply` —— 曾经界面自己喂 `CheckFinished`、外壳从没被喂过，
+    于是 `update_download_status` 永远是 `idle`，换页切回「关于软件」把检查结果抹掉（`ui-update-restore.ps1` 第 2 步
+    就是这条回归）。
   * **事件载荷是完整快照**（`UpdateSnapshot`，camelCase）：`update:download-progress|complete|error` 三个名字
     不变（改名字另有其票），改的是"从前各自带一小块字段、界面再拼"这件事。`update_download_status` 返回同一份
     快照 —— 所以"进页面补状态"与"事件推过来"永远一致，谁先到都不影响结果。
   * **界面（`crates/tr-ui/src/pages/settings.rs` 的「关于软件」）只渲染快照**：`match` 的分支就是词表（穷尽匹配），
     不再出现 `"downloading"` 这类字符串比较，也不再自己判断"失败还是最新"。文案常量（按钮 / 通知标题）也在
     `tr-domain::update` 里，两侧共用，单元测试遍历所有取值断言"每个状态都有文案"。
+    下载请求被外壳拒绝（地址为空 / 不在白名单）走 `UpdateEvent::DownloadRejected`，落点与"下载中途失败"一致 ——
+    界面**不再**自己拼落点（`failed_after_download_attempt` 已删）。
   * 剩下的纯函数（`parse_release`、`is_newer_version`、`digest_matches` / `normalize_digest`、`format_speed`）
     有一半已搬进 `tr-domain::update`，留在外壳的（`parse_release` / `url_host` / 缓存文件 digest 复核 / 去重键）
     由 `cargo test -p transactions` 覆盖 —— 这条链路以前**一个单元测试都不执行**。回归：

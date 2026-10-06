@@ -57,7 +57,7 @@ use tr_domain::proxy::{
     join_http_proxy, split_http_proxy, ProxySetting, PROXY_MODE_AUTO, PROXY_MODE_MANUAL,
     PROXY_MODE_OFF, PROXY_SCHEME_HTTP,
 };
-use tr_domain::update::{UpdateEvent, UpdateSnapshot, UpdateStatus, NOTIFY_DOWNLOAD_FAILED};
+use tr_domain::update::{UpdateSnapshot, UpdateStatus, NOTIFY_DOWNLOAD_FAILED};
 
 use crate::api;
 use crate::components::ui::{
@@ -1263,8 +1263,15 @@ fn diary_failed_row(item: DiaryExportFileError) -> impl IntoView {
 struct UpdateState {
     app_name: RwSignal<String>,
     version: RwSignal<String>,
-    /// 外壳发来的最后一份完整更新快照（事件与 `update_download_status` 同一份口径）。
+    /// 外壳发来的最后一份完整更新快照（事件、命令返回值与 `update_download_status` 同一份口径）。
     snapshot: RwSignal<UpdateSnapshot>,
+    /// **界面自己的在飞标记**：从点下「检查更新」到外壳回话之间显示"正在检查"。
+    ///
+    /// 它只是渲染用的一个 bool，**不是**界面推进状态机：词表与迁移只有外壳一个持有者
+    /// （外壳在 `update_check` 里 `CheckStarted` / `CheckFinished`）。从前这里放的是
+    /// `advance_with(UpdateEvent)` —— 界面跑第二台状态机，于是外壳那份快照永远停在 idle，
+    /// 换页切回来就把检查结果冲掉了。
+    checking: RwSignal<bool>,
 }
 
 thread_local! {
@@ -1289,6 +1296,7 @@ impl UpdateState {
             app_name: RwSignal::new(String::new()),
             version: RwSignal::new(String::new()),
             snapshot: RwSignal::new(UpdateSnapshot::default()),
+            checking: RwSignal::new(false),
         }
     }
 
@@ -1313,7 +1321,7 @@ impl UpdateState {
         state
     }
 
-    /// 把外壳发来的快照换进来（界面唯一改状态的方式）。
+    /// 把外壳发来的快照换进来（界面**唯一**改状态的方式）。
     fn accept(self, snapshot: UpdateSnapshot) {
         self.snapshot.set(snapshot);
     }
@@ -1323,12 +1331,14 @@ impl UpdateState {
         self.snapshot.get_untracked()
     }
 
-    /// 本地乐观推进（点下按钮到外壳回话之间那一段），走**同一个状态机**。
+    /// 渲染用的状态：检查在飞时显示"正在检查"，其余照抄快照里的那一档。
     ///
-    /// 例如「检查更新」：`Checking` 只有界面会显示（外壳在命令返回前不改状态），
-    /// 但状态本身仍然由 `UpdateEvent::CheckStarted` 推导，界面不自己拼字段。
-    fn advance_with(self, event: UpdateEvent) {
-        self.snapshot.set(event.apply(&self.current()));
+    /// 这是**显示层的推导**（读两个信号），不是状态迁移 —— 迁移全在外壳。
+    fn display_status(self) -> UpdateStatus {
+        if self.checking.get() {
+            return UpdateStatus::Checking;
+        }
+        self.snapshot.get().status
     }
 
     /// 订阅事件（`ipc::listen` 内部保活闭包，界面进程即应用进程，无需退订）。
@@ -1387,35 +1397,35 @@ fn AboutSetting() -> impl IntoView {
         }
     });
 
-    // 检查更新：本地先把状态机推进到「检查中」（外壳在命令返回前不改状态，
-    // 但这一档由状态机定义，界面不自己拼字段），拿到返回后交给同一个状态机。
-    //
-    // `update_check` **不会 reject**：请求失败时它 resolve 出 `error` 字段 ——
-    // "检查失败 ≠ 已是最新"这条规则在状态机里（`UpdateEvent::CheckFinished`），界面不再判断。
+    // 检查更新：外壳推进状态机（`CheckStarted` → `CheckFinished`），返回值就是新快照。
+    // 界面只做两件事：亮起"正在检查"这个在飞标记，以及把失败告诉用户。
     let check_for_update = move || {
         if !state.current().status.allows_new_check() {
             return;
         }
-        // 记下这一刻的快照：命令层**自身**失败时（信封错误）要退回这里 ——
-        // 那种失败外壳根本没收到调用，不会有事件来收拾"检查中"这个临时态。
-        let before = state.current();
-        state.advance_with(UpdateEvent::CheckStarted);
-
+        state.checking.set(true);
         leptos::task::spawn_local(async move {
-            match api::update::check().await {
-                Ok(result) => {
-                    let failed = result.error.clone();
-                    state.advance_with(UpdateEvent::CheckFinished(result));
-                    if let Some(message) = failed {
-                        // 界面只负责"把失败告诉用户"；是哪一档失败由状态机决定
-                        Notifier::global()
-                            .error(tr_domain::update::NOTIFY_CHECK_FAILED, Some(message));
+            let result = api::update::check().await;
+            state.checking.set(false);
+            match result {
+                Ok(snapshot) => {
+                    let failed = snapshot.status == UpdateStatus::Failed;
+                    let message = snapshot.error.clone();
+                    state.accept(snapshot);
+                    if failed {
+                        // 界面只负责"把失败告诉用户"；是哪一档失败由快照里的状态决定
+                        Notifier::global().error(
+                            tr_domain::update::NOTIFY_CHECK_FAILED,
+                            Some(message.unwrap_or_default()),
+                        );
                     }
                 }
                 Err(error) => {
-                    // 命令层本身就失败了（信封错误）：外壳没收到调用，状态机也就没话说，
-                    // 退回点击前的状态并提示。
-                    state.accept(before);
+                    // 命令层自身失败（信封错误）：外壳没收到这次调用，状态机也就没话说。
+                    // 重新读一次外壳的真实状态，别在原地猜。
+                    if let Ok(current) = api::update::status().await {
+                        state.accept(current);
+                    }
                     notify_error(tr_domain::update::NOTIFY_CHECK_FAILED, &error);
                 }
             }
@@ -1440,45 +1450,38 @@ fn AboutSetting() -> impl IntoView {
         check_for_update();
     });
 
-    // 下载：本地先把状态机推进到「下载中」（按钮立刻有反应），响应回来后按
-    // `api::update::download_followup` 落位（完成 / 取消 / 失败 / "已经有了一笔"）。
+    // 下载：外壳推进状态机（`DownloadStarted` → 完成 / 取消 / 失败 / 被拒），
+    // 返回值就是新快照；进度由事件推过来，两者同一份口径。
     let download_update = move || {
         let current = state.current();
         if current.download_url.is_empty() || current.is_downloading() {
             return;
         }
         let (url, digest) = (current.download_url.clone(), current.digest.clone());
-        state.advance_with(UpdateEvent::DownloadStarted {
-            url: url.clone(),
-            digest: digest.clone(),
-        });
 
         leptos::task::spawn_local(async move {
             match api::update::download(&url, &digest).await {
-                Ok(response) => {
+                Ok(snapshot) => {
                     // 失败的通知由 `update:download-error` 事件那条监听负责（只发一次）
-                    if let Some(next) = api::update::download_followup(&response, &state.current())
-                    {
-                        state.accept(next);
-                    }
+                    state.accept(snapshot);
                 }
                 Err(error) => {
                     // 命令层失败（信封错误）是"外壳压根没收到调用"这一档 ——
-                    // 只把状态从"下载中"救回来，**不重复提示**：真的下载失败由事件那条通知负责。
-                    let next = state
-                        .current()
-                        .failed_after_download_attempt(error.message());
-                    state.accept(next);
+                    // 不重复提示：真的下载失败由事件那条通知负责；这里只把状态读回来。
+                    if let Ok(current) = api::update::status().await {
+                        state.accept(current);
+                    }
+                    notify_error("下载更新失败", &error);
                 }
             }
         });
     };
 
-    // 取消：外壳把状态退回「可下载」并不广播（发起方就是界面），这里本地落同一档。
+    // 取消：外壳把状态退回「可下载」并把新快照回给我们。
     let cancel_download = move || {
         leptos::task::spawn_local(async move {
             match api::update::cancel().await {
-                Ok(()) => state.advance_with(UpdateEvent::DownloadCancelled),
+                Ok(snapshot) => state.accept(snapshot),
                 Err(error) => notify_error("取消下载", &error),
             }
         });
@@ -1539,11 +1542,10 @@ fn AboutSetting() -> impl IntoView {
                 </div>
 
                 // 纯渲染：`match` 的分支就是状态词表（穷尽匹配，加一档会被编译器逼着补文案），
-                // 每个分支只读快照里的字段，不做任何状态推导。
+                // 每个分支只读快照里的字段；"正在检查"那一档由界面自己的在飞标记顶上
+                // （`display_status`），它不改状态机。
                 <div class="st-about-update">
-                    {move || {
-                        let current = snapshot.get();
-                        match current.status {
+                    {move || match state.display_status() {
                             UpdateStatus::Checking => {
                                 view! {
                                     <div class="st-update-row">
@@ -1683,7 +1685,7 @@ fn AboutSetting() -> impl IntoView {
                                     .into_any()
                             }
                         }
-                    }}
+                    }
                 </div>
 
                 <Show when=show_release_body>

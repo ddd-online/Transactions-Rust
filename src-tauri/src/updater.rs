@@ -169,15 +169,28 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .into()
 }
 
-/// 检查更新。
+/// 检查更新（**外壳自己推进状态机**，返回推进后的完整快照）。
 ///
 /// 失败不抛错：把原因交回状态机（它负责"失败 ≠ 已是最新"），界面读快照即可。
+/// 一进门 `CheckStarted`、拿到结果 `CheckFinished` —— 与下载那几条一样，这里是**唯一**
+/// 推进"检查"这段状态的地方。从前界面自己 apply 这两步，外壳的状态机只被下载喂过，
+/// 于是 `update_download_status` 返回的永远是 idle：检查出「已是最新 / 有新版本」之后
+/// 换页再切回「关于软件」会把结果抹掉（实测确认过，见 CHANGELOG 的 0.15.0 一节）。
 #[tauri::command]
-pub async fn update_check(app: AppHandle) -> ApiResult<UpdateCheckResponse> {
+pub async fn update_check(
+    app: AppHandle,
+    state: State<'_, UpdaterState>,
+) -> ApiResult<UpdateSnapshot> {
+    state.apply(UpdateEvent::CheckStarted);
     let current_version = app.package_info().version.to_string();
-    tauri::async_runtime::spawn_blocking(move || check_update(&current_version))
-        .await
-        .map_err(internal)
+    // 阻塞任务自身炸了也要落一档：否则状态机会永远停在 `checking`
+    let result =
+        match tauri::async_runtime::spawn_blocking(move || check_update(&current_version)).await {
+            Ok(response) => response,
+            Err(error) => error_response(format!("更新检查任务失败: {error}")),
+        };
+    state.apply(UpdateEvent::CheckFinished(result));
+    Ok(state.snapshot())
 }
 
 fn check_update(current_version: &str) -> UpdateCheckResponse {
@@ -279,50 +292,59 @@ fn error_response(message: String) -> UpdateCheckResponse {
     }
 }
 
-/// 下载安装包（阻塞；由命令层放到工作线程执行）。
+/// 下载安装包（**外壳自己推进状态机**，返回推进后的完整快照）。
 ///
-/// 下载是**单例**：同一时间只允许一笔。已有下载在跑时**状态机原样不动**、直接返回
-/// `already_downloading`（界面据此不重复触发，也不会被搅乱）。下载期间状态机停在
-/// `downloading` 并广播进度，供界面切回时恢复。
+/// 下载是**单例**：同一时间只允许一笔。已有下载在跑时**状态机原样不动**、直接把当前
+/// 快照还回去（界面继续显示进度，也不会重复触发）。下载期间状态机停在 `downloading`
+/// 并广播进度，供界面切回时恢复。
 ///
-/// 两条**没有进度事件**的早退路径（地址为空 / 不在白名单）不额外发明事件：它们只回
-/// `{ success: false, error }`，界面按 [`UpdateSnapshot::failed_after_download_attempt`]
-/// 自己落位（那里与状态机同口径）。状态机本身的纪律是"没有下载地址就不进下载态"。
+/// 两条**没有进度事件**的早退路径（地址为空 / 不在白名单）落 `DownloadRejected`：
+/// 与"下载中途失败"同一个落点。界面从前要按 `UpdateSnapshot::failed_after_download_attempt`
+/// 自己拼一个落点 —— 那条规则已经并进状态机。
 #[tauri::command]
 pub async fn update_download(
     app: AppHandle,
     state: State<'_, UpdaterState>,
     req: UpdateDownloadRequest,
-) -> ApiResult<UpdateResponse> {
+) -> ApiResult<UpdateSnapshot> {
     let key = request_key(&req.url, req.digest.as_deref());
     {
         let mut active = state.active.lock().expect("更新状态锁中毒");
         if active.is_some() {
-            return Ok(UpdateResponse::failed(update_state::ALREADY_DOWNLOADING));
+            // 已经有一笔在跑：**不动状态**，把当前快照还回去（界面继续显示进度）
+            return Ok(state.snapshot());
         }
         *active = Some(key);
     }
     state.clear_progress();
 
-    let result = run_download(&app, &state, req).await;
+    run_download(&app, &state, req).await?;
     // 无论成败都要把"正在下载"清掉，否则会永远挡住下一次下载
     *state.active.lock().expect("更新状态锁中毒") = None;
     state.clear_progress();
-    result
+    Ok(state.snapshot())
 }
 
-/// 真正执行下载（单例判断由 [`update_download`] 负责）。
+/// 真正执行下载（单例判断由 [`update_download`] 负责）：**这里只推进状态机，不再回响应体**。
 async fn run_download(
     app: &AppHandle,
     state: &State<'_, UpdaterState>,
     req: UpdateDownloadRequest,
-) -> ApiResult<UpdateResponse> {
-    // URL 白名单：仅允许 GitHub 域名（防止界面被注入后下载任意地址）
+) -> ApiResult<()> {
+    // URL 白名单：仅允许 GitHub 域名（防止界面被注入后下载任意地址）。
+    // 被拒的两条路都**没有进度事件**，所以要显式落一档：`DownloadRejected` 与"下载中途失败"
+    // 同一个落点（`failed` + 原因），界面不必再自己拼一个落点。
     let Some(host) = url_host(&req.url) else {
-        return Ok(UpdateResponse::failed("无效的下载地址"));
+        state.apply(UpdateEvent::DownloadRejected {
+            message: "无效的下载地址".to_string(),
+        });
+        return Ok(());
     };
     if !host.ends_with("github.com") && !host.ends_with("objects.githubusercontent.com") {
-        return Ok(UpdateResponse::failed("下载地址不在白名单内"));
+        state.apply(UpdateEvent::DownloadRejected {
+            message: "下载地址不在白名单内".to_string(),
+        });
+        return Ok(());
     }
 
     // 进入下载态（状态机决定 `idle` / `available` 到这里意味着什么）
@@ -350,19 +372,19 @@ async fn run_download(
             state.remember_downloaded(Some(path));
             state.apply(UpdateEvent::DownloadFinished);
             state.emit_snapshot(app, UPDATE_DOWNLOAD_COMPLETE);
-            Ok(UpdateResponse::ok())
+            Ok(())
         }
         Err(message) if message == CANCELLED => {
             // 用户主动取消：状态回到"可下载"，不广播（发起方就是界面，它自己知道）
             state.apply(UpdateEvent::DownloadCancelled);
-            Ok(UpdateResponse::failed(CANCELLED))
+            Ok(())
         }
         Err(message) => {
             state.apply(UpdateEvent::DownloadFailed {
                 message: message.clone(),
             });
             state.emit_snapshot(app, UPDATE_DOWNLOAD_ERROR);
-            Ok(UpdateResponse::failed(message))
+            Ok(())
         }
     }
 }
@@ -386,7 +408,7 @@ fn request_key(url: &str, digest: Option<&str>) -> String {
 /// 只有真的有一笔在跑时才动状态：拿到取消按钮的用户必然在下载中，但幂等一点更安全
 /// （重复调用不会把 `downloaded` 打回 `available`）。
 #[tauri::command]
-pub fn update_cancel(state: State<'_, UpdaterState>) -> ApiResult<()> {
+pub fn update_cancel(state: State<'_, UpdaterState>) -> ApiResult<UpdateSnapshot> {
     state.cancel.store(true, Ordering::SeqCst);
     if state.active.lock().expect("更新状态锁中毒").is_some() {
         state.apply(UpdateEvent::DownloadCancelled);
@@ -395,7 +417,7 @@ pub fn update_cancel(state: State<'_, UpdaterState>) -> ApiResult<()> {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(part_path_of(&path));
     }
-    Ok(())
+    Ok(state.snapshot())
 }
 
 /// 打开已下载的安装包并退出应用（给安装器留出启动时间后再退出）。

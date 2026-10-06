@@ -4,6 +4,38 @@
 
 ## [未发布]
 
+### 修复
+
+**更新状态只有一个持有者：外壳推进状态机，界面只渲染快照**
+
+- **用户可见的缺陷**：查出「已是最新版本 / 发现新版本」之后，切到别的页面再切回
+  「应用设置 → 关于软件」，结果会被抹掉、退回初始的「检查更新」。
+- **根因**：`update_check` 连 `State<UpdaterState>` 都没有，外壳因此**从没被喂过**
+  `CheckFinished`（`UpdaterState::apply` 是唯一改状态的地方，而生产代码里只有下载那几条在调它）。
+  界面自己 `apply(CheckStarted)` / `apply(CheckFinished)` 跑第二台状态机，于是
+  `update_download_status` 返回的永远是外壳那份 `idle` 快照 —— 而界面再次进入关于页时会把它整份
+  `accept` 下来。"状态的唯一持有者是外壳"（AGENTS.md 与 `tr-domain::update` 的模块注释都这么写）
+  从前不是真的。
+- **改法**：三个会推进状态的命令各自在**命令体里**推进状态机，并返回推进后的完整快照
+  （`update_check` / `update_download` / `update_cancel` 的返回类型改成 `UpdateSnapshot`；
+  `update_download_status` 保持"只读"）。`update_download` 的两条早退路径（地址为空 / 不在白名单）
+  改用新的 `UpdateEvent::DownloadRejected` 落档 —— 落点与"下载中途失败"一致，界面不必再自己拼
+  （`UpdateSnapshot::failed_after_download_attempt` 与 `UpdateResponse::is_cancelled` /
+  `update_state::ALREADY_DOWNLOADING` 一并删除，`UpdateResponse` 只剩 `update_install` 一个使用者）。
+- **界面侧删掉第二台状态机**：`UpdateState::advance_with` 与 `api::update` 的 `DownloadOutcome` /
+  `download_outcome` / `download_followup` 全部删除；界面只剩 `accept(快照)` 一个改状态的入口，
+  "正在检查"降级成它自己的一个渲染用 bool（`display_status` 读它，不推进状态机）。
+- **护栏**：`ui-update-restore.ps1` 新增第 2 步「换页再切回：检查结果必须还在」——
+  从前它只覆盖"下载中切走再切回"，而那一刻外壳状态恰好非 idle，所以一直是绿的。
+- **实测**：用真产物 + 真鼠标探针（`target/tests/update-reentry/probe.ps1`，不入库）对比
+  修复前后 —— 修复前 `before=重新检查 after=检查更新 same=False`，修复后
+  `before=重新检查 after=重新检查 same=True`。
+
+回归：`fixtures/test.ps1 -Unit update` **6/6 绿**（31.6s），其中新加的第 2 步实测
+`更新检查终态: no-update` → 换页切回后仍是 `no-update`；`fmt` / `clippy --all-targets -D warnings` /
+`design-audit` 一并绿。`cargo test`：tr-domain 89、transactions 44 全绿。
+（当前版本 == 最新 release，所以第 3~5 步（下载）按设计跳过；跑法写在该脚本头部注释里。）
+
 ### 调整
 
 **外壳与更新那 27 条命令也进了同一份清单 —— 界面侧 112/112 都走常量**

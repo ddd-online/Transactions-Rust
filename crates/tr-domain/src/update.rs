@@ -47,7 +47,9 @@ pub enum UpdateStatus {
     /// 界面**本地**用它表示"查不到可更新内容"（见页面的检查分支），外壳不主动发它。
     #[default]
     Idle,
-    /// 正在检查（只有界面会显示它："点下去"与"外壳回话"之间那段）。
+    /// 正在检查。外壳在检查开始时进入它（`update_check` 一进门就 `CheckStarted`），
+    /// 界面在"点下去"到"外壳回话"之间也按它渲染 —— 但那一档是**界面自己的在飞标记**，
+    /// 不是界面推进状态机（词表与迁移只有外壳一个持有者）。
     Checking,
     /// 查到了更新的版本，可以下载。
     Available,
@@ -108,6 +110,12 @@ pub enum UpdateEvent {
     CheckStarted,
     /// 检查结束（`update_check` 的返回，成功与失败都在里面）。
     CheckFinished(UpdateCheckResponse),
+    /// 外壳拒绝了这次下载请求（地址为空 / 不在白名单）。
+    ///
+    /// 这是一条**没有进度事件**的失败：从前它由页面自己拼落点
+    /// （`UpdateSnapshot::failed_after_download_attempt`），现在落点与"下载中途失败"完全一致 ——
+    /// 一个持有者、一条规则。落点保留手上的版本号与发行说明，所以用户仍看得见自己在更新什么。
+    DownloadRejected { message: String },
     /// 开始下载（外壳已确认没有别的下载在跑）。
     DownloadStarted { url: String, digest: String },
     /// 下载进度（百分比 0..=100 + 已格式化的速度串）。
@@ -190,6 +198,12 @@ impl UpdateEvent {
                 next.percent = 100;
                 next.speed.clear();
                 next.error = None;
+            }
+            UpdateEvent::DownloadRejected { message } => {
+                next.status = UpdateStatus::Failed;
+                next.error = Some(message);
+                next.percent = 0;
+                next.speed.clear();
             }
             UpdateEvent::DownloadFailed { message } => {
                 // 取消之后迟到的失败事件不该翻成 error
@@ -275,24 +289,6 @@ impl UpdateSnapshot {
         }
     }
 
-    /// 失败后回到「发现新版本、等待下载」；没有可用更新信息时退回 `idle`。
-    ///
-    /// 用于下载请求被外壳拒绝（地址为空 / 不在白名单）这类**没有进度事件**的失败：
-    /// 界面不能停在"下载中"等一个永远不会来的事件。
-    pub fn failed_after_download_attempt(&self, message: &str) -> UpdateSnapshot {
-        let mut next = self.back_to_available();
-        if next.latest_version.is_empty() {
-            // 没有可更新信息（例如地址为空）→ 退回 idle，让用户能再点「检查更新」
-            next.status = UpdateStatus::Idle;
-        } else {
-            next.status = UpdateStatus::Failed;
-        }
-        next.error = Some(message.to_string());
-        next.percent = 0;
-        next.speed.clear();
-        next
-    }
-
     /// 是否正处在"下载中"。
     pub fn is_downloading(&self) -> bool {
         self.status == UpdateStatus::Downloading
@@ -313,11 +309,8 @@ pub struct AvailableUpdate {
     pub body: String,
 }
 
-/// `update_download` 被外壳拒绝时的固定文案：已经有一笔在跑。
-pub const ALREADY_DOWNLOADING: &str = "already_downloading";
-/// 用户主动取消时后端给出的固定文案（`UpdateResponse::is_cancelled` 认它）。
+/// 用户主动取消时后端给出的固定文案（下载线程用它把"取消"与"真失败"分开）。
 pub const CANCELLED: &str = "cancelled";
-
 // ------------------------------------------------------------------ 纯函数（原先在外壳里）
 
 /// 版本比较（按点分段数值比较；`v` 前缀可有可无，段数不同按 0 补齐）。
@@ -630,20 +623,28 @@ mod tests {
         assert_eq!(stuck.status, UpdateStatus::Available);
     }
 
-    /// 外壳拒绝下载（地址为空 / 不在白名单）后界面回到能重试的位置：
-    /// 有更新信息就回 `failed`（可再点「立即更新」），没有就退回 `idle`。
+    /// 外壳拒绝下载（地址为空 / 不在白名单）→ 落 `failed`，且**保留**手上的版本号与说明：
+    /// 用户还能看清自己在更新什么，也能直接再点一次（`failed` 允许重新检查 / 重试）。
     #[test]
-    fn rejected_download_request_lands_somewhere_clickable() {
+    fn rejected_download_request_lands_in_failed_and_keeps_what_it_knows() {
         let found = available();
-        let rejected = found.failed_after_download_attempt("下载地址不在白名单内");
+        let rejected = UpdateEvent::DownloadRejected {
+            message: "下载地址不在白名单内".to_string(),
+        }
+        .apply(&found);
         assert_eq!(rejected.status, UpdateStatus::Failed);
         assert_eq!(rejected.error.as_deref(), Some("下载地址不在白名单内"));
         assert_eq!(rejected.latest_version, "0.29.0");
+        assert_eq!(rejected.release_body, found.release_body);
+        assert!(rejected.status.shows_release_body());
 
-        let nothing_known =
-            UpdateSnapshot::default().failed_after_download_attempt("无效的下载地址");
-        assert_eq!(nothing_known.status, UpdateStatus::Idle);
-        assert_eq!(nothing_known.error.as_deref(), Some("无效的下载地址"));
+        // 连版本号都没有时同样是 `failed`：仍然可点（不是把用户丢在一个不能重试的界面里）
+        let nothing_known = UpdateEvent::DownloadRejected {
+            message: "无效的下载地址".to_string(),
+        }
+        .apply(&UpdateSnapshot::default());
+        assert_eq!(nothing_known.status, UpdateStatus::Failed);
+        assert!(nothing_known.status.allows_new_check());
     }
 
     /// 下载完成后重启进程（界面拿到的是一份新快照）：已下载的安装包仍可安装。
