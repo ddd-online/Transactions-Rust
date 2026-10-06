@@ -543,6 +543,14 @@ PR）只会生成一行 `Full Changelog` 链接 —— 想给正文就自己填�
 号，发布后再 `gh release view <tag> --json assets` 核对 `digest` 与本地 `Get-FileHash` 一致（同一个 digest 出现
 在两个 tag 下就是发错了）。
 
+**改 `CHANGELOG.md` 一律用 `edit` 工具，别用 PowerShell 的字符串替换**（踩过两次，两次都推上去了才肉眼发现）：
+`### 修复` 这个锚点在文件里出现**多次**（每个历史版本一个），
+`$t.Replace("### 修复`n", <新小节 + "### 修复`n")` 会把新小节复制到**每一个**历史版本的修复段之前；
+而 PowerShell here-string 的结尾常常不带换行，于是原 `### 修复` 标题还会和下一行**粘成一行**
+（`### 修复**更新状态只有一个持有者…**`）。两次的现场都在 `git show <我的提交之前>:CHANGELOG.md` 里能对照出来。
+自查两行命令：`(Select-String -Path CHANGELOG.md -Pattern '<新小节的标题>').Count` 应当等于 1；
+`Select-String -Path CHANGELOG.md -Pattern '^### \S'` 不该多出 `### 修复**` / `### 修复- ` 这类粘连行。
+
 ## AI 工具（DSH）
 
 本项目用 DeepSeek Harness（DSH）开发。
