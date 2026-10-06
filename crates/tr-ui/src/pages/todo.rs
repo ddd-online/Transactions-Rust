@@ -24,12 +24,13 @@ use tr_domain::consts;
 use tr_domain::dto::{TodoCardDto, TodoHistoryDto, TodoItemDto, TodoProgressDto};
 use tr_draw::calendar::days_between;
 use tr_draw::quadrant::{rows as quadrant_rows, Quadrant, QuadrantItem as QuadrantEntry};
+use tr_draw::section::section_state;
 
 use crate::api;
 use crate::components::ui::{
-    watch_canvas_size, Button, ButtonSize, ButtonVariant, DatePicker, DragSortItem, DragSortState,
-    Empty, FeaturePage, IconButton, IconButtonVariant, Input, Modal, ModalSize, Popconfirm, Select,
-    SelectOption, TabItem, TabPane, Tabs,
+    watch_canvas_size, AsyncSection, Button, ButtonSize, ButtonVariant, DatePicker, DragSortItem,
+    DragSortState, Empty, FeaturePage, IconButton, IconButtonVariant, Input, Modal, ModalSize,
+    Popconfirm, Select, SelectOption, TabItem, TabPane, Tabs,
 };
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
@@ -454,52 +455,64 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
         <div class="todo-body">
             // ---- 待办视图：竖直排列的卡片 ----
             <TabPane active=tab key=TAB_BOARD class="todo-pane">
-                {move || {
-                    let list = cards.value.get();
-                    if list.is_empty() {
-                        if cards.loading.get() {
-                            return view! { <div class="todo-loading">"正在加载…"</div> }
-                                .into_any();
-                        }
-                        return view! {
+                <AsyncSection
+                    state=Signal::derive(move || {
+                        section_state(
+                            cards.value.get().is_empty(),
+                            cards.loading.get(),
+                            cards.loaded.get(),
+                            cards.failed.get().as_deref(),
+                        )
+                    })
+                    loading=ViewFn::from(move || {
+                        view! { <div class="todo-loading">"正在加载…"</div> }.into_any()
+                    })
+                    empty=ViewFn::from(move || {
+                        view! {
                             <Empty
                                 title="还没有卡片"
                                 description="卡片是一个「主题」。先建一张，再往里加事项。"
                                 icon=Icon::CheckCircle
                             />
                         }
-                            .into_any();
-                    }
-                    view! {
-                        <div class="todo-cards">
-                            {list
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, card)| {
-                                    card_view(
-                                        card,
-                                        index,
-                                        card_drag,
-                                        drop_card,
-                                        expanded,
-                                        progress_text,
-                                        progress_saving,
-                                        open_new_item,
-                                        open_edit_item,
-                                        ask_delete_card,
-                                        complete,
-                                        remove_item,
-                                        toggle_progress,
-                                        add_progress,
-                                        remove_progress,
-                                        toggle_progress_done,
-                                    )
-                                })
-                                .collect_view()}
-                        </div>
-                    }
-                        .into_any()
-                }}
+                            .into_any()
+                    })
+                    content=ViewFn::from(move || {
+                        view! {
+                            <div class="todo-cards">
+                                {move || {
+                                    cards
+                                        .value
+                                        .get()
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(index, card)| {
+                                            card_view(
+                                                card,
+                                                index,
+                                                card_drag,
+                                                drop_card,
+                                                expanded,
+                                                progress_text,
+                                                progress_saving,
+                                                open_new_item,
+                                                open_edit_item,
+                                                ask_delete_card,
+                                                complete,
+                                                remove_item,
+                                                toggle_progress,
+                                                add_progress,
+                                                remove_progress,
+                                                toggle_progress_done,
+                                            )
+                                        })
+                                        .collect_view()
+                                }}
+                            </div>
+                        }
+                            .into_any()
+                    })
+                />
             </TabPane>
 
             // ---- 四象限图 ----
