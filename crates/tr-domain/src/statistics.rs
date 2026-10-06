@@ -19,6 +19,9 @@
 /// `recent <= 0` 时的错误文案（与 `tr-ipc` 的 `AppError::bad_request` 用同一句）。
 pub const RECENT_NOT_POSITIVE: &str = "recent 必须为正整数";
 
+/// 月区间与"最近 N 笔"同时给时的错误文案（服务层原来硬编码这一句）。
+pub const RANGE_AND_RECENT: &str = "时间范围与笔数筛选不能同时使用";
+
 /// 文本 → 数字那一半：**解析失败一律 `None`**（宽松，与既有行为逐字一致；不做 trim）。
 pub fn parse_recent_text(raw: &str) -> Option<i64> {
     raw.parse::<i64>().ok()
@@ -92,6 +95,23 @@ impl StatisticsFilter {
             && self.recent.is_none()
             && self.tag_filter().is_none()
     }
+
+    /// 筛选条件本身是否自洽（与数据库无关的那两条规则）。
+    ///
+    /// 从 `tr-service::stock_statistics::get_statistics_range` 开头那两句搬来 —— 那条
+    /// "月区间与最近 N 笔互斥"的口径从前只写在服务层的 `if` 里。
+    ///
+    /// 注意 [`StatisticsFilter::recent`] 已是"归一化之后"的值（`None` = 不限），所以这里不处理
+    /// `recent == 0`；负数只在调用方绕过归一化时才会出现，保留判断以防万一。
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if matches!(self.recent, Some(value) if value < 0) {
+            return Err(RECENT_NOT_POSITIVE);
+        }
+        if self.recent.is_some() && (self.start().is_some() || self.end().is_some()) {
+            return Err(RANGE_AND_RECENT);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -162,5 +182,46 @@ mod tests {
         assert!(!StatisticsFilter::new("", "2026-12", None, "").is_unfiltered());
         assert!(!StatisticsFilter::new("", "", Some(5), "").is_unfiltered());
         assert!(!StatisticsFilter::new("", "", None, "打新").is_unfiltered());
+    }
+
+    /// 两条与数据库无关的自洽规则（从服务层的两句 `if` 搬来）。
+    #[test]
+    fn range_and_recent_are_mutually_exclusive() {
+        assert_eq!(
+            StatisticsFilter::new("2026-01", "2026-06", Some(5), "").validate(),
+            Err(RANGE_AND_RECENT)
+        );
+        assert_eq!(
+            StatisticsFilter::new("2026-01", "", Some(5), "").validate(),
+            Err(RANGE_AND_RECENT),
+            "只填一端也算用了区间"
+        );
+        assert_eq!(
+            StatisticsFilter::new("", "2026-06", Some(5), "").validate(),
+            Err(RANGE_AND_RECENT)
+        );
+        // 各自单独用都合法
+        assert_eq!(
+            StatisticsFilter::new("2026-01", "2026-06", None, "").validate(),
+            Ok(())
+        );
+        assert_eq!(
+            StatisticsFilter::new("", "", Some(5), "").validate(),
+            Ok(())
+        );
+        assert_eq!(StatisticsFilter::default().validate(), Ok(()));
+        // 带空白的一端正则化为"不限"，于是不再与 recent 冲突
+        assert_eq!(
+            StatisticsFilter::new("   ", "", Some(5), "").validate(),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_negative_recent_is_rejected_wherever_it_comes_from() {
+        assert_eq!(
+            StatisticsFilter::new("", "", Some(-1), "").validate(),
+            Err(RECENT_NOT_POSITIVE)
+        );
     }
 }

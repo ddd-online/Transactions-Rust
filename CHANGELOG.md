@@ -144,6 +144,19 @@ id 规则 / 七档指标的取值与缺省 / 胜率轴边界 / 参考线条件 /
 回归：`cargo test -p tr-domain` **96 绿**（+7）；`cargo check -p tr-ipc --all-targets` 与
 `clippy --all-targets -D warnings` 干净。
 
+**统计筛选的两条自洽规则也收进 `tr-domain`**
+
+- `StatisticsFilter::validate()` 承接 `get_statistics_range` 开头那两句与数据库无关的 `if`
+  （`recent` 非负、月区间与笔数互斥），错误文案是共享常量；服务层只剩"标签必须存在""月份要能解析成日"
+  两件数据库相关的事。
+- **既有测试抓到我一次回归**：第一版把 `recent = -1` 归一化成"不限"，负数不再报错 ——
+  `statistics_range_validation` 的 `("", "", -1)` 立刻变红；改成 `(recent != 0).then_some(recent)`
+  后全绿。这条正说明那 11 条测试的价值。
+
+回归：`cargo test -p tr-service` **157 绿**、`cargo test -p tr-domain` **98 绿**、
+`fixtures/test.ps1 -Unit stock -SkipBuild` **4/4 绿**（ui-stock 202.8s，重建之后）、
+`clippy -D warnings` 干净。
+
 ### 修复
 
 **更新状态只有一个持有者：外壳推进状态机，界面只渲染快照**

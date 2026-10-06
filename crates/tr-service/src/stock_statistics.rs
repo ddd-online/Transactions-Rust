@@ -59,6 +59,10 @@ pub fn get_statistics(workspace: &Workspace, ledger_id: &str) -> ServiceResult<S
 }
 
 /// 筛选统计：时间范围（含首尾整月）与最近 N 笔二选一，两者均可与交易标签叠加。
+///
+/// 前两条自洽规则（`recent` 非负、月区间与笔数互斥）的判据在
+/// `tr_domain::statistics::StatisticsFilter::validate`（纯逻辑、native 真跑）；这里只做
+/// "数据库相关"的那两件：标签必须存在、月份区间要能解析成日。
 pub fn get_statistics_range(
     workspace: &Workspace,
     ledger_id: &str,
@@ -67,12 +71,15 @@ pub fn get_statistics_range(
     recent: i64,
     tag: &str,
 ) -> ServiceResult<StockStatisticsDto> {
-    if recent < 0 {
-        return Err(AppError::bad_request("recent 必须为正整数").into());
-    }
-    if recent > 0 && (!start_month.is_empty() || !end_month.is_empty()) {
-        return Err(AppError::bad_request("时间范围与笔数筛选不能同时使用").into());
-    }
+    tr_domain::statistics::StatisticsFilter::new(
+        start_month,
+        end_month,
+        // `0` 是"不限"；**负数要原样交给判据**（它才管得了"必须为正整数"这条）
+        (recent != 0).then_some(recent),
+        tag,
+    )
+    .validate()
+    .map_err(AppError::bad_request)?;
     if !tag.is_empty() {
         let available_tags = get_trade_tags(workspace, ledger_id)?;
         if !contains_tag(&available_tags, tag) {
