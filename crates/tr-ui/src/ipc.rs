@@ -4,7 +4,8 @@
 //! 把后端的 `{code,msg,data}` 信封解析为返回值或 [`IpcError`]，对外语义保持一致：
 //!
 //! * 成功 → 直接返回数据
-//! * 失败 → 抛出 [`IpcError`]；若 `msg == "未打开工作空间"`，额外派发 `workspace-required` 事件
+//! * 失败 → 抛出 [`IpcError`]；若它的 **`code` 是 `ERR_CODE_WORKSPACE_NOT_OPENED`**（不是比文案！），
+//!   额外派发 workspace-required 事件
 //!   （外壳据此打开工作空间选择）
 //!
 //! ## 命令名从哪来

@@ -341,6 +341,15 @@ pub fn workspace_set(state: State<'_, DesktopState>, req: WorkspaceDirRequest) -
     Ok(())
 }
 
+/// "未打开工作空间"的错误信封 —— **唯一构造点**。
+///
+/// 必须走 `AppError::workspace_not_opened()`（`code = ERR_CODE_WORKSPACE_NOT_OPENED = -2`）：
+/// 界面靠 `IpcError::is_workspace_required()`（判 `code`）弹工作空间选择屏。
+/// 曾经这里用 `bad_request(ERR_WORKSPACE_NOT_OPENED)` 拼同一句文案 —— 文案一样、`code` 是 -1，
+/// 界面认不出来（`/code-review` 的 Spec 轴核出的缺陷，候选 10 / #40）。
+fn workspace_required_error() -> ApiError {
+    tr_domain::error::AppError::workspace_not_opened().into()
+}
 /// 打开工作空间：**六步，顺序即契约**（候选 11 / #42）。
 ///
 /// 1. **校验路径非空** —— 空则 `bad_request`，不动任何状态；
@@ -540,13 +549,11 @@ pub async fn file_save_image(
     let Ok(workspace) = ipc_state.workspace() else {
         // **reject，而不是 resolve 一个 success:false**（候选 10 / #40）：
         // 从前这里返回 `Ok(save_failed("未打开工作空间"))`，文案还是手写的 ——
-        // 界面靠 `IpcError::is_workspace_required()`（比对 `ERR_WORKSPACE_NOT_OPENED`）认出
-        // "未打开工作空间"并弹出选择屏，而这条路径**根本不会变成 IpcError**，所以它永远看不见。
-        // 同一件事只该有一条路径。
-        return Err(tr_domain::error::AppError::bad_request(
-            tr_domain::error::ERR_WORKSPACE_NOT_OPENED,
-        )
-        .into());
+        // 界面靠 `IpcError::is_workspace_required()`（判 `code == -2`）认出"未打开工作空间"并弹选择屏，
+        // 而这条路径**根本不会变成 IpcError**，所以它从前永远看不见。同一件事只该有一条路径 ——
+        // 走唯一的构造点 `workspace_required_error()`（**不能用 `bad_request(...)` 拼同一句文案**：
+        // 那样 `code` 还是 -1，界面照样认不出来，等于没修）。
+        return Err(workspace_required_error());
     };
 
     let assets_root = workspace.assets_directory();
@@ -638,6 +645,19 @@ pub fn config_file_path(state: State<'_, DesktopState>) -> ApiResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// "未打开工作空间"的唯一构造点必须带专属码（界面据此弹选择屏）—— 这条钉的是**调用点**，
+    /// 而不只是常量本身（`/code-review` 指出：只断言常量的话，调用点写错也照样绿）。
+    #[test]
+    fn the_workspace_required_error_carries_the_special_code() {
+        let error = workspace_required_error();
+        assert_eq!(
+            error.code,
+            tr_domain::error::ERR_CODE_WORKSPACE_NOT_OPENED,
+            "界面按 code 判类别，写成 bad_request 就会退回 -1、弹不出选择屏"
+        );
+        assert_eq!(error.status, 500);
+        assert_eq!(error.msg, tr_domain::error::ERR_WORKSPACE_NOT_OPENED);
+    }
 
     /// 锁住外壳命令的**入参字段名**：界面是按字面量手写 JSON 的，改名不会编译报错。
     /// 这两条对应真实踩过的坑（见 `AssetUrlRequest` / `DialogOpenRequest` 的注释）：
