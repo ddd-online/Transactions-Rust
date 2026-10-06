@@ -320,28 +320,28 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
         let due = item_due.get_untracked();
         item_saving.set(true);
         leptos::task::spawn_local(async move {
-            let result = if editing.is_empty() {
-                api::todo::item_create(
-                    &ledger_id, &card_id, &title, &start, &due, urgency, importance,
-                )
-                .await
-                .map(|_| ())
-            } else {
-                api::todo::item_update(
-                    &ledger_id, &editing, &title, &start, &due, urgency, importance,
-                )
-                .await
-                .map(|_| ())
-            };
-            match result {
-                Ok(()) => {
-                    item_open.set(false);
-                    Notifier::global().success("事项已保存", None);
-                    load(());
+            // 两条命令（新建 / 编辑）先归一成一次请求，再交给 `change::submit` 管在飞与失败面
+            let request = async move {
+                if editing.is_empty() {
+                    api::todo::item_create(
+                        &ledger_id, &card_id, &title, &start, &due, urgency, importance,
+                    )
+                    .await
+                    .map(|_| ())
+                } else {
+                    api::todo::item_update(
+                        &ledger_id, &editing, &title, &start, &due, urgency, importance,
+                    )
+                    .await
+                    .map(|_| ())
                 }
-                Err(error) => notify_error("保存事项失败", &error),
+            };
+            let saved = crate::change::submit(Some(item_saving), "保存事项失败", request).await;
+            if saved.is_some() {
+                item_open.set(false);
+                Notifier::global().success("事项已保存", None);
+                load(());
             }
-            item_saving.set(false);
         });
     };
 
