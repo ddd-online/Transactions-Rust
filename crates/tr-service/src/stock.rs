@@ -519,7 +519,7 @@ pub fn add_interest_at_date(
         // 当前现金：末条资金记录余额，无记录时为本金
         let prev_cash = cash_before_records(conn, ledger_id, account.principal)?;
 
-        let after_cash = prev_cash + amount;
+        let after_cash = tr_domain::fund::cash_after(prev_cash, amount);
         let record = StockFundRecord {
             id: tr_store::util::new_uuid(),
             ledger_id: ledger_id.to_string(),
