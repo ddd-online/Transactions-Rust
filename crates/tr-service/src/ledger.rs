@@ -9,38 +9,12 @@
 use tr_domain::models::Ledger;
 use tr_store::dao::key_event_image::KeyEventImageDao;
 use tr_store::dao::ledger::LedgerDao;
+// 清单只在测试里用（覆盖断言读它），生产路径走 LedgerDao::delete_cascade
+#[cfg(test)]
+use tr_store::dao::ledger_cascade::LEDGER_CASCADE;
 use tr_store::Workspace;
 
 use crate::{assets, ServiceError, ServiceResult};
-
-/// 删除账本时的级联清理顺序（**逐条固定**，新增业务表必须同步补进这个数组）：
-/// 交易标签 → 交易 → 分类 → 标签 → 图表 → 模板 → 关键事件图片 → 关键事件 → 日记
-/// → 股票（资金记录/费用设置/标签设置/交易/轮次/历史/持仓/账户）→
-/// 待办（进度记录/事项/卡片）→ 账本本身。
-const LEDGER_CASCADE: &[&str] = &[
-    "DELETE FROM tbl_billadm_transaction_record_tag WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_transaction_record WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_category WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_tag WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_chart WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_transaction_tpl WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_key_event_image WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_key_event WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_diary_entry WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_stock_fund_record WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_stock_fee_setting WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_stock_trade_tag_setting WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_stock_trade WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_stock_trade_round WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_stock_trade_history WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_stock_position WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_stock_account WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_stock_operation WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_todo_progress WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_todo_item WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_todo_card WHERE ledger_id = ?1",
-    "DELETE FROM tbl_billadm_ledger WHERE id = ?1",
-];
 
 /// 新建账本，返回新账本 ID。
 pub fn create_ledger(
@@ -113,9 +87,7 @@ pub fn delete_ledger_by_id(workspace: &Workspace, ledger_id: &str) -> ServiceRes
 
     workspace
         .transaction(|conn| {
-            for sql in LEDGER_CASCADE {
-                conn.execute(sql, [ledger_id])?;
-            }
+            LedgerDao::delete_cascade(conn, ledger_id)?;
             Ok(())
         })
         .map_err(|error: ServiceError| {

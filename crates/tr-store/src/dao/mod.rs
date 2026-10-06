@@ -13,6 +13,7 @@ pub mod diary;
 pub mod key_event;
 pub mod key_event_image;
 pub mod ledger;
+pub mod ledger_cascade;
 pub mod stock;
 pub mod tag;
 pub mod todo;
