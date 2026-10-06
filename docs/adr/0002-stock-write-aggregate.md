@@ -73,3 +73,13 @@
   `fixtures/ui-stock.ps1`。落地时的验证：`cargo test -p tr-service` 157 绿；
   `fixtures/test.ps1 -Unit stock,service` 5/5 绿（`ui-stock` 全生命周期 203.6s，含真实行情）；
   `fixtures/test.ps1 -All -SkipBuild` 32/32 绿。
+
+## 补充：资金流水为什么不另立 `FundLedger`（2026-10-07）
+
+候选 3（`#36`）的验收原本写的是"5 个 `query_latest_fund_record` 调用点归零，改走 `FundLedger::latest`"。
+做下来发现剩下 3 处服务的是**不同的问题**：`cash_before_records` 要的是"本金那一刻之前的余额"，
+现金链复算要的是"按 (日期, 创建时间, ID) 定位到某一条"，最后一笔余额查询要的是"末条"。把它们塞进一个
+`FundLedger::latest` 只会让三种语义共用一个名字。
+
+**结论**：资金流水的写入与重算沿用本 ADR 的聚合（`stock::write`），**不另立 owner**；
+读的那三种定位各留各的函数，口径判据（新旧、余额、支取上限）统一在 `tr_domain::fund`。
