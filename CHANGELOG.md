@@ -114,7 +114,16 @@ id 规则 / 七档指标的取值与缺省 / 胜率轴边界 / 参考线条件 /
   永远算过期**（那种写迟早被后端拒，落地只会让空态闪出旧数据）。日记的防抖自动保存是第一个调用点。
 - **还没做**：另一半"成功之后哪些读作废 / 回填"的那张表（见 #34 的分片）。
 
+**9 处手写过期守卫归零**
+
+- `crates/tr-ui/src/change.rs` 把那条判据接到全局账本信号上（`stale(ledger_id)` / `current(ledger_id)`）：
+  `transactions.rs` 7 处、`key_event.rs` 1 处、日记自动保存 1 处全部换过去 ——
+  `Select-String 'current_ledger_id.get_untracked() [!=]= ledger_id'` 现在**一处都没有**，
+  "什么算过期"只剩一份已测实现（`tr_draw::change::WriteTarget`）。
+- 行为未变：同账本 / 切账本 / 空目标（还没选账本 = 永远过期）三档判定逐条照旧。
+
 回归：`cargo test -p tr-draw` **108 绿**（本片 +4）；`fixtures/test.ps1 -Unit diary` 6/6 绿；
+`fixtures/test.ps1 -Unit ui-transactions,ui-sync-ledger,key-event -SkipBuild` 7/7 绿（重建之后）；
 `clippy -D warnings` 与 `check-ui-wasm` 干净。
 
 ### 修复

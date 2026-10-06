@@ -707,7 +707,7 @@ fn load_ledger_meta(
             .ok();
 
         // 账本在查询途中被切换时丢弃过期结果
-        if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+        if crate::change::stale(&ledger_id) {
             return;
         }
         has_any_records.set(record_total.map(|total| total > 0));
@@ -1264,7 +1264,7 @@ fn record_modal(
                 .await
                 .unwrap_or_default();
             let template_list = api::template::list(&ledger_id).await.unwrap_or_default();
-            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+            if crate::change::stale(&ledger_id) {
                 return;
             }
             // 新建时分类取该类型的第一个
@@ -1298,7 +1298,7 @@ fn record_modal(
             let category_list = api::category::list(&current_type, &ledger_id)
                 .await
                 .unwrap_or_default();
-            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+            if crate::change::stale(&ledger_id) {
                 return;
             }
             // 当前分类不在新类型下时回落到第一个；
@@ -1321,7 +1321,7 @@ fn record_modal(
             }
             let key = format!("{current_category}:{current_type}");
             let available = api::tag::list(&key, &ledger_id).await.unwrap_or_default();
-            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+            if crate::change::stale(&ledger_id) {
                 return;
             }
             let names: Vec<String> = available.iter().map(|item| item.name.clone()).collect();
@@ -1392,7 +1392,7 @@ fn record_modal(
                     let ledger_id = stores.current_ledger_id.get_untracked();
                     if !ledger_id.is_empty() {
                         let list = api::template::list(&ledger_id).await.unwrap_or_default();
-                        if AppStores::global().current_ledger_id.get_untracked() == ledger_id {
+                        if crate::change::current(&ledger_id) {
                             templates.set(list);
                         }
                     }
@@ -1895,7 +1895,7 @@ fn filter_modal(
             let list = api::category::list(&current_type, &ledger_id)
                 .await
                 .unwrap_or_default();
-            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+            if crate::change::stale(&ledger_id) {
                 return;
             }
             categories.set(list);
@@ -1916,7 +1916,7 @@ fn filter_modal(
         leptos::task::spawn_local(async move {
             let key = format!("{current_category}:{current_type}");
             let list = api::tag::list(&key, &ledger_id).await.unwrap_or_default();
-            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+            if crate::change::stale(&ledger_id) {
                 return;
             }
             tag_list.set(list);

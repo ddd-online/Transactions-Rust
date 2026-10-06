@@ -1085,7 +1085,7 @@ fn finish_upload(controls: UploadControls, state: std::rc::Rc<PendingUpload>) {
     let asset_urls = controls.asset_urls;
     leptos::task::spawn_local(async move {
         if let Ok(items) = api::key_event::images_list(&date, &ledger_id).await {
-            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+            if crate::change::stale(&ledger_id) {
                 return;
             }
             images.set(items.clone());

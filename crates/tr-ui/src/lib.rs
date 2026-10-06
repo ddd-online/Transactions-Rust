@@ -29,6 +29,7 @@ pub mod error_handler;
 // 展示词汇（金额符号 / 紧凑金额 / 百分比 / 类型与股票文案 / 截断）住在 tr-draw：
 // 它是纯函数，测试面在 `cargo test -p tr-draw`。对外路径 `crate::format::*` 保持不变。
 pub use tr_draw::format;
+pub mod change;
 pub mod icons;
 pub mod ipc;
 pub mod notify;
