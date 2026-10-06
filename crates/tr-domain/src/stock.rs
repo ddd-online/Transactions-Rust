@@ -64,6 +64,53 @@ pub fn current_round_trades(trades: &[StockTrade]) -> Vec<StockTrade> {
     result
 }
 
+/// 当前轮次的**资金口径**（与界面「资金变动」列同一套算法）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RoundFlow {
+    /// 本轮买入成本合计（成交额 + 费用）
+    pub buy_cost: i64,
+    /// 本轮资金变动合计：买入为 `−(成交额 + 费用)`、卖出为 `成交额 − 费用`
+    pub cash_flow: i64,
+}
+
+/// 买入方向（建仓 / 加仓）。
+pub fn is_buy(trade_type: &str) -> bool {
+    matches!(
+        trade_type,
+        consts::STOCK_TRADE_OPEN | consts::STOCK_TRADE_ADD
+    )
+}
+
+/// 卖出方向（减仓 / 清仓）。
+pub fn is_sell(trade_type: &str) -> bool {
+    matches!(
+        trade_type,
+        consts::STOCK_TRADE_REDUCE | consts::STOCK_TRADE_CLOSE
+    )
+}
+
+/// 把当前轮次（最近一次清仓之后）的成交折成一组金额。
+///
+/// 从 `tr-service/src/stock.rs` 搬来（候选 7 / #37）。两条口径从前只写在注释里、没有断言守着：
+///
+/// * **买入**（建仓 / 加仓）：`buy_cost += 成交额 + 费用`，同时 `cash_flow −= 成交额 + 费用`
+///   （钱从现金里出去）；
+/// * **卖出**（减仓 / 清仓）：只 `cash_flow += 成交额 − 费用`；**`buy_cost` 不回落** ——
+///   它是"这一轮为买入花了多少"，不是当前持仓成本。
+pub fn round_flow(trades_asc: &[StockTrade]) -> RoundFlow {
+    let mut flow = RoundFlow::default();
+    for trade in current_round_trades(trades_asc) {
+        if is_buy(&trade.trade_type) {
+            let cost = trade.amount + trade.fee;
+            flow.buy_cost += cost;
+            flow.cash_flow -= cost;
+        } else if is_sell(&trade.trade_type) {
+            flow.cash_flow += trade.amount - trade.fee;
+        }
+    }
+    flow
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +121,50 @@ mod tests {
             shares,
             ..StockTrade::default()
         }
+    }
+
+    /// 带金额与费用的成交（资金口径用）。
+    fn money_trade(trade_type: &str, shares: i64, amount: i64, fee: i64) -> StockTrade {
+        StockTrade {
+            trade_type: trade_type.to_string(),
+            shares,
+            amount,
+            fee,
+            ..StockTrade::default()
+        }
+    }
+
+    #[test]
+    fn a_buy_takes_money_out_of_cash_and_adds_to_the_buy_cost() {
+        let flow = round_flow(&[money_trade(consts::STOCK_TRADE_OPEN, 100, 1_000_000, 500)]);
+        assert_eq!(flow.buy_cost, 1_000_500, "买入成本 = 成交额 + 费用");
+        assert_eq!(flow.cash_flow, -1_000_500, "买入是负数");
+    }
+
+    #[test]
+    fn a_sell_only_moves_the_cash_flow_and_keeps_the_buy_cost() {
+        let flow = round_flow(&[
+            money_trade(consts::STOCK_TRADE_OPEN, 100, 1_000_000, 500),
+            money_trade(consts::STOCK_TRADE_CLOSE, 100, 1_100_000, 600),
+        ]);
+        // 清仓把轮次收尾 → 当前轮为空（见 current_round_trades 的口径）
+        assert_eq!(flow, RoundFlow::default(), "清仓之后当前轮没有成交");
+    }
+
+    /// 减仓（没清完）留一轮里：买入成本保留，卖出只加现金。
+    #[test]
+    fn a_partial_round_mixes_both_directions() {
+        let flow = round_flow(&[
+            money_trade(consts::STOCK_TRADE_OPEN, 200, 2_000_000, 1_000),
+            money_trade(consts::STOCK_TRADE_REDUCE, 100, 1_200_000, 700),
+        ]);
+        assert_eq!(flow.buy_cost, 2_001_000);
+        assert_eq!(flow.cash_flow, -2_001_000 + (1_200_000 - 700));
+    }
+
+    #[test]
+    fn an_empty_round_has_a_zero_flow() {
+        assert_eq!(round_flow(&[]), RoundFlow::default());
     }
 
     #[test]

@@ -949,29 +949,13 @@ fn compute_held_market_value(
     (market_value, unrealized_pnl, quote_failed_count)
 }
 
-/// 一只股票当前轮次的资金口径（单位：分）。
-#[derive(Debug, Clone, Copy, Default)]
-struct RoundFlow {
-    /// 本轮建仓 / 加仓合计成本（含手续费）
-    pub buy_cost: i64,
-    /// 本轮资金变动合计：买入为 −(成交额 + 费用)、卖出为 成交额 − 费用
-    pub cash_flow: i64,
-}
+// 当前轮次的资金口径（buy_cost / cash_flow）与它的算法都在 tr_domain::stock（#37），
+// 这里只把类型引进来，不再各写一份。
+use tr_domain::stock::RoundFlow;
 
-/// 本轮资金口径：按成交记录里「资金变动」列同一套算法，
-/// 把当前轮次（最近一次清仓之后）的成交折成一组金额。
+/// 本轮资金口径（算法在 `tr_domain::stock::round_flow`，native 真跑）。
 fn round_flow(trades_asc: &[StockTrade]) -> RoundFlow {
-    let mut flow = RoundFlow::default();
-    for trade in current_round_trades(trades_asc) {
-        if is_buy(&trade.trade_type) {
-            let cost = trade.amount + trade.fee;
-            flow.buy_cost += cost;
-            flow.cash_flow -= cost;
-        } else if is_sell(&trade.trade_type) {
-            flow.cash_flow += trade.amount - trade.fee;
-        }
-    }
-    flow
+    tr_domain::stock::round_flow(trades_asc)
 }
 
 /// 整个账本按股票切出本轮资金口径（一次查询，避免逐股查库）。
