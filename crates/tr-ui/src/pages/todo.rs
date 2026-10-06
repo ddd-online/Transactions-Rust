@@ -220,16 +220,20 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
         }
         card_saving.set(true);
         leptos::task::spawn_local(async move {
-            match api::todo::card_create(&ledger_id, &title).await {
-                Ok(_) => {
-                    card_open.set(false);
-                    card_title.set(String::new());
-                    Notifier::global().success(format!("卡片「{title}」已创建"), None);
-                    load(());
-                }
-                Err(error) => notify_error("创建卡片失败", &error),
+            // 在飞与失败面走 `change::submit`（"成败都要复位"那条规则只有一份实现，见 #34 的结论）；
+            // 成功之后的界面动作留在调用点 —— 那才是这一处独有的知识。
+            let created = crate::change::submit(
+                Some(card_saving),
+                "创建卡片失败",
+                api::todo::card_create(&ledger_id, &title),
+            )
+            .await;
+            if created.is_some() {
+                card_open.set(false);
+                card_title.set(String::new());
+                Notifier::global().success(format!("卡片「{title}」已创建"), None);
+                load(());
             }
-            card_saving.set(false);
         });
     };
 
