@@ -480,3 +480,271 @@
     gap: var(--transactions-space-md);
   }
 }
+
+/* ============================================
+ * 交易页的表格 / 列表样式（从 app.css 搬来，候选 13 / #41）
+ *
+ * 这些选择器只在交易页出现，从前住在全局的 app.css 里 —— 谁在用它们要全仓找，
+ * 改一条也不敢删。搬到这里之后，"交易页的样式"与"交易页的代码"在一起。
+ * ============================================ */
+
+/* 内容区：吃掉工具栏/底栏之外的全部高度。
+ * 页面自己的容器（`.tr-body` / `.st-panes` / `.diary-body` …）在这些高度里排布，
+ * 谁需要滚动由谁自己声明 —— 这里给一层兜底滚动，避免内容比区域高时被直接裁掉。 */
+.page-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+/* 版心内的内容容器内边距（各页在自己文件里只需要管排布）。
+ *
+ * **顶部怎么留白，取决于内容形态**：
+ *   * **贴边型**（表格 / 分栏列表）：顶部为 0 —— 表头与行的分隔线要从工具栏底边那条
+ *     发丝线开始（`.tr-body`、`.ct-column*`、`.tpl-pane`、`.st-panes`、`.stock-body`）。
+ *   * **卡片型**（卡片列表 / 面板）：四边都留 16px —— 卡片/面板不该贴着工具栏的线
+ *     （事件的三条轨道、分析的图表面板都是这类；两处都曾被我按贴边型一刀切成 0）。
+ *
+ * 多栏网格（`.ct-main` / `.key-event-body` / `.diary-body`）不在列表里：
+ * 它们的内边距下放给各栏自己，栏目分隔线才能从版心顶贯通到底。
+ *
+ * 逐页的例外（一律在下面按页写清理由）：
+ *   * `.tr-body` **四边都不留**：消费记录的表格要**通到版心边缘**（表头底边线、
+ *     行分隔线从版心左边一路到右边），内缩交给单元格自己的 padding；
+ *     分页行与空态各自带内边距。 */
+.st-panes {
+  padding: 0 var(--transactions-space-lg) var(--transactions-space-lg);
+}
+
+.tr-body {
+  padding: 0;
+}
+
+/* 消费记录页工具栏：底边线与外边距由 `.page-toolbar` 统一给，这里只管左右两簇的排布 */
+.tr-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-md);
+  flex: 1;
+}
+
+.tr-toolbar-left,
+.tr-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-md);
+}
+
+.tr-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.tr-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* 分页行（版心的最后一行，底栏之上）：左侧「共 N 条」+ 右侧翻页控件，整行贴右。
+ * 收支合计在底栏（`.page-footer-bar`）。 */
+.tr-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-md);
+  padding: var(--transactions-space-lg);
+}
+
+.tr-footer-total {
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.tr-footer-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-md);
+}
+
+.tr-pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+}
+
+/* 页码按钮与「每页条数」下拉共用同一套外观（原来两份逐字重复的声明） */
+.tr-pagination__item,
+.tr-pagination__size {
+  height: 32px;
+  padding: 0 var(--transactions-space-sm);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-major-background);
+  color: var(--transactions-color-text-major);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-body-sm);
+  cursor: pointer;
+}
+
+/* 页码按钮自己的部分：居中 + 最小宽度 + 过渡（`__size` 是原生 select，不需要这些） */
+.tr-pagination__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  transition: all var(--transactions-transition-fast);
+}
+
+.tr-pagination__item:hover:not(:disabled) {
+  border-color: var(--transactions-color-primary);
+  color: var(--transactions-color-primary);
+}
+
+.tr-pagination__item.is-active {
+  border-color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
+  font-weight: var(--transactions-weight-medium);
+}
+
+.tr-pagination__item:disabled {
+  cursor: not-allowed;
+  color: var(--transactions-color-text-disabled);
+}
+
+.tr-pagination__item:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+.tr-pagination__ellipsis {
+  padding: 0 var(--transactions-space-2xs);
+  color: var(--transactions-color-text-tertiary);
+  font-size: var(--transactions-size-text-body-sm);
+}
+
+/* `.tr-pagination__size` 的外观与 `.tr-pagination__item` 共用（见上方合并规则） */
+.tr-pagination__size:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+/* 表格单元格 */
+.tr-table {
+  min-width: 880px;
+}
+
+.tr-cell {
+  white-space: nowrap;
+}
+
+.tr-cell--center {
+  text-align: center;
+}
+
+.tr-cell-date {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
+}
+
+.tr-cell-type {
+  font-size: var(--transactions-size-text-caption);
+  font-weight: var(--transactions-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--transactions-tracking-label);
+}
+
+.tr-cell-type.type-income {
+  color: var(--transactions-color-income);
+}
+
+.tr-cell-type.type-expense {
+  color: var(--transactions-color-expense);
+}
+
+.tr-cell-type.type-transfer {
+  color: var(--transactions-color-transfer);
+}
+
+.tr-cell-category {
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-major);
+}
+
+.tr-cell-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-xs);
+}
+
+.tr-cell-description {
+  font-size: var(--transactions-size-text-body);
+  color: var(--transactions-color-text-major);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tr-cell-price {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-body);
+  font-weight: var(--transactions-weight-medium);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
+}
+
+.tr-cell-price.price-income {
+  color: var(--transactions-color-income);
+}
+
+.tr-cell-price.price-expense {
+  color: var(--transactions-color-expense);
+}
+
+.tr-cell-price.price-transfer {
+  color: var(--transactions-color-transfer);
+}
+
+/* 行底色按交易类型（row-type-*） */
+.tr-table tbody > tr.row-type-income > td {
+  background-color: var(--transactions-color-income-tint);
+}
+
+.tr-table tbody > tr.row-type-expense > td {
+  background-color: var(--transactions-color-expense-tint);
+}
+
+.tr-table tbody > tr.row-type-transfer > td {
+  background-color: var(--transactions-color-transfer-tint);
+}
+
+.tr-table tbody > tr:hover > td {
+  background-color: var(--transactions-color-hover-bg);
+}
+
+/* 空态引导（empty-guide）
+ * `height: 100%` 是必需的：父容器 `.tr-content` 是**块级滚动容器**（不是 flex），
+ * 不给高度的话这一块只有内容那么高，"justify-content: center" 就没有垂直居中的参照。 */
+.empty-guide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--transactions-space-md);
+  height: 100%;
+  padding: var(--transactions-space-3xl);
+  text-align: center;
+}
+
