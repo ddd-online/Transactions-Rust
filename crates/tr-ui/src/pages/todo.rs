@@ -521,7 +521,32 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
 
             // ---- 四象限图 ----
             <TabPane active=tab key=TAB_QUADRANT class="todo-pane">
-                {move || quadrant_view(&cards.value.get())}
+                // 四态判据与卡片/历史两个页签共用（候选 4 / #33 的遗留：这一处当时漏了，
+                // 于是"还没加载完"会显示成「还没有进行中的事项」）
+                <AsyncSection
+                    state=Signal::derive(move || {
+                        section_state(
+                            cards.value.get().is_empty(),
+                            cards.loading.get(),
+                            cards.loaded.get(),
+                            cards.failed.get().as_deref(),
+                        )
+                    })
+                    loading=ViewFn::from(move || {
+                        view! { <div class="todo-loading">"正在加载…"</div> }.into_any()
+                    })
+                    empty=ViewFn::from(move || {
+                        view! {
+                            <Empty
+                                title="还没有进行中的事项"
+                                description="把事项的紧急度与重要度填上，这里就会把它们摆进四个象限。"
+                                icon=Icon::Aim
+                            />
+                        }
+                            .into_any()
+                    })
+                    content=ViewFn::from(move || quadrant_view(&cards.value.get()))
+                />
             </TabPane>
         </div>
     }
@@ -1213,16 +1238,8 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
         })
         .collect();
 
-    if items.is_empty() {
-        return view! {
-            <Empty
-                title="还没有进行中的事项"
-                description="把事项的紧急度与重要度填上，这里就会把它们摆进四个象限。"
-                icon=Icon::Aim
-            />
-        }
-        .into_any();
-    }
+    // 空态不在这里：四象限那个页签现在走 `AsyncSection`（加载中 / 失败 / 空 / 就绪），
+    // 空态文案在槽位里（候选 4 / #33）—— 这里直接渲染四象限。
 
     // 画布按**实测像素**出图（1 个用户单位 = 1px）：固定 viewBox 缩放到卡片宽度时，
     // 四象限会在卡片里留出大片空白（宽高比不匹配就必然有一边空着），量到的宽高才对得上。
