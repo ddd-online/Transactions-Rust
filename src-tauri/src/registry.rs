@@ -232,6 +232,57 @@ mod tests {
     /// 两边都是"名字"：一边来自界面侧取名字的清单，一边来自注册闭包本身
     /// （`generate_handler![]` 与 [`REGISTERED_PATHS`] 同源）—— 所以这条断言真的在测
     /// "注册表漏了一条没有"。
+    /// 事件名不许在应用里以**字面量**出现（除了清单本身）。
+    ///
+    /// 两侧都该用 `tr_domain::events::*`（编译期就保证名字对）；复制粘贴一份字面量就是漂移的开始 ——
+    /// 改清单不会改到它，而且没有任何编译错误。命令名那条链守的是"注册表 == 清单"，
+    /// 这一条守的是"没人绕过清单"（候选 9 / #39）。
+    ///
+    /// 扫描范围：`src-tauri/src` 与 `crates/tr-ui/src`（清单所在 crate 自己不算）。
+    #[test]
+    fn event_names_are_never_written_as_literals() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri 上一级就是仓库根")
+            .to_path_buf();
+
+        let mut offenders: Vec<String> = Vec::new();
+        for relative in ["src-tauri/src", "crates/tr-ui/src"] {
+            let mut stack = vec![root.join(relative)];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                        continue;
+                    }
+                    let Ok(text) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    for name in tr_domain::events::ALL {
+                        if text.contains(&format!("\"{name}\"")) {
+                            offenders.push(format!(
+                                "{}: \"{name}\"",
+                                path.strip_prefix(&root).unwrap_or(&path).display()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "事件名以字面量出现（应当走 tr_domain::events::*）：{offenders:#?}"
+        );
+    }
+
     #[test]
     fn catalog_matches_registration() {
         assert_eq!(
