@@ -832,6 +832,8 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     .start();
     let positions = positions_q.value;
     let positions_loading = Signal::derive(move || positions_q.loading.get());
+    let positions_loaded = Signal::derive(move || positions_q.loaded.get());
+    let positions_failed = Signal::derive(move || positions_q.failed.get());
     let trades_q = Query::<Vec<StockTradeDto>>::new(
         move || {
             let ledger_id = stores.current_ledger_id.get();
@@ -1282,10 +1284,15 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                             view! {
                                 <div class="stock-empty">
                                     {move || {
-                                        if positions_loading.get() {
-                                            "正在加载持仓…"
-                                        } else {
-                                            "暂无持仓，先点下方「建仓」"
+                                        match section_state(
+                                            positions.get().is_empty(),
+                                            positions_loading.get(),
+                                            positions_loaded.get(),
+                                            positions_failed.get().as_deref(),
+                                        ) {
+                                            SectionState::Loading => "正在加载持仓…",
+                                            SectionState::Failed => "加载失败",
+                                            _ => "暂无持仓，先点下方「建仓」",
                                         }
                                     }}
                                 </div>
@@ -2547,6 +2554,8 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
     .start();
     let histories = histories_q.value;
     let histories_loading = Signal::derive(move || histories_q.loading.get());
+    let histories_loaded = Signal::derive(move || histories_q.loaded.get());
+    let histories_failed = Signal::derive(move || histories_q.failed.get());
     let summary_q = Query::<StockTradeHistorySummaryDto>::new(
         move || {
             let ledger_id = stores.current_ledger_id.get();
@@ -2585,6 +2594,8 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
     .start();
     let detail = detail_q.value;
     let detail_loading = Signal::derive(move || detail_q.loading.get());
+    let detail_loaded = Signal::derive(move || detail_q.loaded.get());
+    let detail_failed = Signal::derive(move || detail_q.failed.get());
     let collapsed_rounds = RwSignal::new(BTreeSet::<String>::new());
     let collapsed_reviews = RwSignal::new(BTreeSet::<String>::new());
     let review_editing = RwSignal::new(String::new());
@@ -2718,10 +2729,15 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                             view! {
                                 <div class="stock-empty">
                                     {move || {
-                                        if histories_loading.get() {
-                                            "正在加载…"
-                                        } else {
-                                            "暂无已清仓股票"
+                                        match section_state(
+                                            histories.get().is_empty(),
+                                            histories_loading.get(),
+                                            histories_loaded.get(),
+                                            histories_failed.get().as_deref(),
+                                        ) {
+                                            SectionState::Loading => "正在加载…",
+                                            SectionState::Failed => "加载失败",
+                                            _ => "暂无已清仓股票",
                                         }
                                     }}
                                 </div>
@@ -2790,10 +2806,15 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                             return view! {
                                 <div class="stock-empty">
                                     {move || {
-                                        if detail_loading.get() {
-                                            "正在加载…"
-                                        } else {
-                                            "选择左侧股票查看交易历史"
+                                        match section_state(
+                                            detail.get().is_none(),
+                                            detail_loading.get(),
+                                            detail_loaded.get(),
+                                            detail_failed.get().as_deref(),
+                                        ) {
+                                            SectionState::Loading => "正在加载…",
+                                            SectionState::Failed => "加载失败",
+                                            _ => "选择左侧股票查看交易历史",
                                         }
                                     }}
                                 </div>
@@ -3936,6 +3957,8 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     .keep_stale(true)
     .start();
     let tags_loading = Signal::derive(move || tags_q.loading.get());
+    let tags_loaded = Signal::derive(move || tags_q.loaded.get());
+    let tags_failed = Signal::derive(move || tags_q.failed.get());
     let operations_q = Query::<Vec<StockOperationDto>>::new(
         move || {
             let ledger_id = stores.current_ledger_id.get();
@@ -4280,12 +4303,20 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     };
 
     let tag_empty_text = move || {
-        if tags_loading.get() {
-            "正在加载…".to_string()
-        } else if stores.current_ledger_id.get().is_empty() {
-            "选择工作空间后即可配置交易标签".to_string()
-        } else {
-            "暂无标签".to_string()
+        // 判据在 tr_draw::section：失败不再显示成「暂无标签」；"还没选工作空间"那一档仍然单独说
+        // （否则用户会以为标签是空的，而不是自己还没选工作空间）。
+        match section_state(
+            true,
+            tags_loading.get(),
+            tags_loaded.get(),
+            tags_failed.get().as_deref(),
+        ) {
+            SectionState::Loading => "正在加载…".to_string(),
+            SectionState::Failed => "加载失败".to_string(),
+            _ if stores.current_ledger_id.get().is_empty() => {
+                "选择工作空间后即可配置交易标签".to_string()
+            }
+            _ => "暂无标签".to_string(),
         }
     };
 
