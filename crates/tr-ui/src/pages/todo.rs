@@ -24,7 +24,7 @@ use tr_domain::consts;
 use tr_domain::dto::{TodoCardDto, TodoHistoryDto, TodoItemDto, TodoProgressDto};
 use tr_draw::calendar::days_between;
 use tr_draw::quadrant::{rows as quadrant_rows, Quadrant, QuadrantItem as QuadrantEntry};
-use tr_draw::section::section_state;
+use tr_draw::section::{section_state, SectionState};
 
 use crate::api;
 use crate::components::ui::{
@@ -1463,17 +1463,38 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
                 return view! {
                     <div class="todo-history">
                         {head}
-                        {if rows.loading.get() {
-                            view! { <div class="todo-loading">"正在加载…"</div> }.into_any()
-                        } else {
-                            view! {
-                                <Empty
-                                    title="还没有已完成的事项"
-                                    description="在「记录」里把事项标记为已完成，它就会落到这里。"
-                                    icon=Icon::History
-                                />
+                        {move || {
+                            match section_state(
+                                true,
+                                rows.loading.get(),
+                                rows.loaded.get(),
+                                rows.failed.get().as_deref(),
+                            ) {
+                                SectionState::Loading => {
+                                    view! { <div class="todo-loading">"正在加载…"</div> }
+                                        .into_any()
+                                }
+                                SectionState::Failed => {
+                                    view! {
+                                        <Empty
+                                            title="加载失败"
+                                            description=rows.failed.get().unwrap_or_default()
+                                            icon=Icon::WarningCircle
+                                        />
+                                    }
+                                        .into_any()
+                                }
+                                _ => {
+                                    view! {
+                                        <Empty
+                                            title="还没有已完成的事项"
+                                            description="在「记录」里把事项标记为已完成，它就会落到这里。"
+                                            icon=Icon::History
+                                        />
+                                    }
+                                        .into_any()
+                                }
                             }
-                                .into_any()
                         }}
                     </div>
                 }
