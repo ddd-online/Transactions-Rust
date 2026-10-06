@@ -172,7 +172,7 @@ pub fn has_quote(latest_price: Option<i64>) -> bool {
 
 /// 股数 → 手数（1 手 = 100 股，**向下取整**）。
 pub fn lots_of(shares: i64) -> i64 {
-    shares.div_euclid(100)
+    shares.div_euclid(tr_domain::stock::SHARES_PER_LOT)
 }
 
 /// 按 `scale` 换算并格式化：先按 `scale` 换算，再四舍五入到 `digits` 位小数，最后去掉多余的 0。
@@ -197,7 +197,9 @@ pub fn trade_type_label(trade_type: &str) -> String {
 
 /// 是否为买入方向（`open` / `add`）。
 pub fn is_buy(trade_type: &str) -> bool {
-    matches!(trade_type, "open" | "add")
+    // 判据只有一份：`tr_domain::stock::is_buy`（用 `consts::STOCK_TRADE_*`，不是裸字面量）。
+    // 从前这里自己写了一遍 `"open" | "add"` —— 两处漂移的开始（/code-review 的 Standards 轴点名）。
+    tr_domain::stock::is_buy(trade_type)
 }
 
 /// 轮次盈亏结果标签：`盈利` / `亏损` / `平`。

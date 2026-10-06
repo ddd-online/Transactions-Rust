@@ -150,7 +150,7 @@ mod tests {
             order_seq,
             shares,
             price,
-            lots: shares / 100,
+            lots: shares / tr_domain::stock::SHARES_PER_LOT,
             amount: shares * price,
             trade_type: "open".to_string(),
             trade_time: 1_700_000_000 + order_seq,

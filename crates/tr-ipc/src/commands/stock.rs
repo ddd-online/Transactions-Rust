@@ -4,8 +4,9 @@
 //! 路径/查询形态的参数一律搬进 `req`（Tauri 命令只有一个入参），
 //! 其中 `code` / `id` / `orderId` 保留大小写原样。
 //!
-//! **`recent`**：从请求里取字符串再解析，非正整数报
-//! `recent 必须为正整数`。这里用 `Option<String>` 保留"显式传了非法值"与"没传"的差异。
+//! **`recent`**：规则本体在 `tr_domain::statistics`（`parse_recent_text` / `normalize_recent`）。
+//! 实际口径是：字段缺失 / 空串 / **非数字串**都按"没传"处理（宽松）；只有数字 `<= 0` 才报
+//! `recent 必须为正整数` —— 注释从前写的是"非正整数报错"，与实现对不上（/code-review 的 Spec 轴点名）。
 //!
 //! **价格**：元 → 分走 `money::price_yuan_to_cents`（浮点那条）—— 别改用
 //! `money::yuan_to_cents`（字符串那条）：两者在"第三位小数恰好进位"的边界上口径不同，
