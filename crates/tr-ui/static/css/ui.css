@@ -900,20 +900,12 @@
  * ============================================ */
 
 /* ============================================
- * Table —— 表头 / 对齐 / 选中行 / 空态
+ * 表格的选中行（各页手写的表格共用 `.table-wrapper`）
+ *
+ * 这里曾经还有 `.ui-table__head-cell` / `.ui-table__cell--center` / `.ui-table__cell--right`
+ * 三条规则 —— 它们服务的 `components/ui/Table` 组件全仓没有调用点，已随组件一起删除
+ * （候选 13 / #41）。留着只会让下一个人以为"有个 Table 组件在用它们"。
  * ============================================ */
-
-.ui-table__head-cell {
-  white-space: nowrap;
-}
-
-.ui-table__cell--center {
-  text-align: center;
-}
-
-.ui-table__cell--right {
-  text-align: right;
-}
 
 /* 选中行：主色 10% 底（与 `.ui-select__option.is-selected` 同一语义色） */
 .table-wrapper tbody > tr.is-selected > td {
