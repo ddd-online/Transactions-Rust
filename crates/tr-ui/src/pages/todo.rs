@@ -402,14 +402,17 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
         }
         progress_saving.set(true);
         leptos::task::spawn_local(async move {
-            match api::todo::progress_add(&ledger_id, &item_id, &content).await {
-                Ok(_) => {
-                    progress_text.set(String::new());
-                    load(());
-                }
-                Err(error) => notify_error("记录进度失败", &error),
+            // 在飞与失败面走 `change::submit`（#34；处置表里带在飞标记的最后一处）
+            let added = crate::change::submit(
+                Some(progress_saving),
+                "记录进度失败",
+                api::todo::progress_add(&ledger_id, &item_id, &content),
+            )
+            .await;
+            if added.is_some() {
+                progress_text.set(String::new());
+                load(());
             }
-            progress_saving.set(false);
         });
     });
 
