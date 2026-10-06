@@ -49,9 +49,28 @@ pub fn latest_index(entries: &[FundEntry]) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
+/// 追加 / 支取前的可用现金：取现金链**末条**的余额；链还是空的（这个账本从没记过资金）才用当前本金。
+///
+/// 这条"没有记录就退回本金"的口径在 `tr-service/src/stock.rs` 里写了三遍
+/// （追加本金 359 / 支取 444 / 利息归本 529 附近），三处的 `match` 都是同一件事：
+/// `Ok(latest) => latest.cash_balance`、`Err(NotFound) => account.principal`。
+pub fn cash_before(latest_balance: Option<i64>, principal: i64) -> i64 {
+    latest_balance.unwrap_or(principal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 有记录就用记录的余额（哪怕本金已经变了）；没记录才退回本金。
+    #[test]
+    fn cash_before_falls_back_to_the_principal_only_without_records() {
+        assert_eq!(cash_before(Some(12_345), 99_999), 12_345);
+        assert_eq!(cash_before(Some(0), 99_999), 0, "余额 0 是余额，不是缺失");
+        assert_eq!(cash_before(Some(-500), 99_999), -500);
+        assert_eq!(cash_before(None, 99_999), 99_999);
+        assert_eq!(cash_before(None, 0), 0, "本金也为 0 时就是 0");
+    }
 
     fn entry(date: &str, created_at: i64, id: i64) -> FundEntry {
         FundEntry::new(date, created_at, id)
