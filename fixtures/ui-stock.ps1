@@ -422,14 +422,27 @@ function Select-TradeTag { param($Window, [string]$Value)
     [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
     Start-Sleep -Milliseconds 200
     [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
-    Start-Sleep -Milliseconds 800
-    $option = Wait-Element -Root $Window -Name $Value -TimeoutSec 8
+    # 点开下拉之后**轮询等选项进树**（不要一次 sleep 后取）：下拉是 portal 出去的浮层，
+    # 机器忙时 800ms 不够（实测全量档里这一步偶发失败一次、单跑即绿）。最多 5 轮、每轮 300ms；
+    # 每轮重新点一次触发器 —— 浮层可能被别的东西抢走焦点而收起。
+    $option = $null
+    for ($attempt = 1; $attempt -le 5 -and -not $option; $attempt++) {
+        Start-Sleep -Milliseconds 300
+        $option = Wait-Element -Root $Window -Name $Value -TimeoutSec 2
+        if (-not $option -and $attempt -lt 5) {
+            [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        }
+    }
     if (-not $option) { return $false }
     $optionRect = $option.Current.BoundingRectangle
     [TrUia]::Click([int]($optionRect.X + $optionRect.Width / 2), [int]($optionRect.Y + $optionRect.Height / 2))
-    Start-Sleep -Milliseconds 800
-    $after = Find-TagTrigger -Window $Window
-    return [bool]($after -and $after.Current.Name -eq $Value)
+    # 选完也要轮询到"触发器的名字变成目标值"为止（同样是"等状态"，不是"睡一觉就当成了"）
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        Start-Sleep -Milliseconds 300
+        $after = Find-TagTrigger -Window $Window
+        if ($after -and $after.Current.Name -eq $Value) { return $true }
+    }
+    return $false
 }
 
 function Get-TradeTagValue { param($Window)
