@@ -240,8 +240,23 @@ try {
     if ($dialog) {
         $yes = Find-DialogButton -Dialog $dialog -Names @('是(Y)', '是', '&Yes', 'Yes', '确定', 'OK')
         Assert-True ($null -ne $yes) '找到「是」按钮'
-        [void](Invoke-Element $yes)
-        Assert-True (Wait-Exit $p 15) '选「是」后进程退出'
+        # 机器忙时这一击可能落空（对话窗还在动、坐标取到的是上一帧的矩形，InvokePattern 也未必
+        # 暴露出来）——全量档里偶发红过一次，而单跑三次都绿。点完等一小会儿就查进程：没退就重新
+        # 找一次按钮再点。判据仍然是"进程必须退出"，只是不再把一次点击当成一次保证。
+        $exited = $false
+        for ($attempt = 1; $attempt -le 3 -and -not $exited; $attempt++) {
+            $target = $yes
+            if ($attempt -gt 1) {
+                $again = Find-DialogButton -Dialog $dialog -Names @('是(Y)', '是', '&Yes', 'Yes', '确定', 'OK')
+                if ($again) { $target = $again }
+            }
+            [void](Invoke-Element $target)
+            $exited = Wait-Exit $p 5
+            if (-not $exited -and $attempt -lt 3) {
+                Write-Host "    第 $attempt 次点「是」后还没退出，重试" -ForegroundColor Yellow
+            }
+        }
+        Assert-True $exited '选「是」后进程退出'
     }
 }
 finally { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }

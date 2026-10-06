@@ -55,6 +55,29 @@
 `clippy --all-targets -D warnings` 与 `check-ui-wasm` 干净；全量档 `fixtures/test.ps1 -All`
 **35/35 绿**（1240.4s）。
 
+**页面里剩下的纯函数也收进 `tr-draw`（ADR-0001 第二波·收尾）**
+
+- **搬走的东西**：`tr_draw::diary_tree`（日记目录树的年 → 月 → 日分组与排序 + 三种节点的 DOM id ——
+  渲染侧与"滚动定位"侧必须用同一份 id 规则，从前分居两处）；`tr_draw::stock_stats::Metric`
+  （统计曲线七档指标的取值 / Y 轴语义与**上下界规则** / 0 轴参考线 —— 胜率那一档不给上下界就会多画一条
+  150% 的网格线）；`tr_draw::stock_rows` 补上 `removed_rounds_text` / `impact_summary`
+  （影响预览的两段文案，顺带把那三个从来没用过的形参删掉）；`tr_draw::text` 补上
+  `parse_year_bound` / `parse_year_month_bound`（应用设置里"自定义年份"的筛选输入，**空 = 不限**是
+  这条规则的一半）。
+- **刻意留在界面侧的**（ADR-0001 的"渲染配置留在界面侧"）：`data_analysis.rs` 的
+  `series_color` / `transaction_type_color` —— 它们返回的是 CSS 令牌字符串
+  （`var(--transactions-color-*)`），而且 `series_color` 还依赖界面侧的调色板；`visible_type`
+  只是"按名字找一条曲线"的五行查表，没有规则可断言。
+
+回归：`cargo test -p tr-draw` **98 绿**（本批新增 13 条：日期的分组与降序 / 解析不出的日期跳过 /
+id 规则 / 七档指标的取值与缺省 / 胜率轴边界 / 参考线条件 / 影响预览文案 / 年份筛选的"空 = 不限"）；
+`clippy --all-targets -D warnings` 与 `check-ui-wasm` 干净。
+全量档第一次 **34/35**：唯一红项是 `close-behavior` 场景 3「选「是」后进程退出」——
+与本批改动无关的既有偶发（单跑三次全绿；全量档里它跑在另外 15 个界面护栏之后，机器正忙，
+点「是」那一击可能落在上一帧的矩形上）。按仓库纪律把它加固成"点完等一小会儿、没退就重新找一次
+按钮再点"（判据仍然是**进程必须退出**，只是不再把一次点击当成一次保证）：加固后单跑 **3/3 绿**，
+`fixtures/test.ps1 -All -SkipBuild` **33/33 绿**（1009.4s，跳过两条构建步骤）。
+
 ### 修复
 
 **更新状态只有一个持有者：外壳推进状态机，界面只渲染快照**

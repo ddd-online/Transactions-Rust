@@ -59,7 +59,7 @@ use tr_domain::dto::{
     StockFundRecordDto, StockFundRecordPage, StockOperationDto, StockOperationRollbackPreviewDto,
     StockOverviewDto, StockPositionDto, StockStatisticsDto, StockStatisticsPointDto, StockTradeDto,
     StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
-    StockTradeImpactDto, StockTradeImpactRoundDto, StockTradeRoundDto, StockTradeTagSettingDto,
+    StockTradeImpactDto, StockTradeRoundDto, StockTradeTagSettingDto,
 };
 use tr_domain::fee::{compute_order_fee, is_shanghai_code, is_valid_stock_code};
 use tr_domain::models::StockFeeSetting;
@@ -67,9 +67,9 @@ use tr_domain::money::{cents_to_yuan, price_yuan_to_cents, yuan_to_cents};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, DatePicker, Empty,
-    FeaturePage, Form, FormItem, FormLayout, Input, LineChart, Modal, ModalSize, Pagination,
-    Segmented, SegmentedOption, Select, SelectOption, TabItem, TabPane, Tabs, Textarea, Tooltip,
+    Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, DatePicker, Empty, FeaturePage,
+    Form, FormItem, FormLayout, Input, LineChart, Modal, ModalSize, Pagination, Segmented,
+    SegmentedOption, Select, SelectOption, TabItem, TabPane, Tabs, Textarea, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::format::{self, lots_of};
@@ -78,7 +78,8 @@ use crate::notify::Notifier;
 use crate::query::{Cache, OnError, Query};
 use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd};
-use tr_draw::stock_rows::{group_trades, TradeRow};
+use tr_draw::stock_rows::{group_trades, impact_summary, removed_rounds_text, TradeRow};
+use tr_draw::stock_stats::Metric;
 use tr_draw::text::parse_rate;
 
 /// 页面标题（固定文案，改动即影响界面）。侧栏条目名也用这一个来源。
@@ -1186,7 +1187,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                         impact.set(Some(ImpactPrompt {
                             action: "update_trade".to_string(),
                             title: "确认修改这笔成交？".to_string(),
-                            summary: impact_summary(&preview, &trade, lots, None),
+                            summary: impact_summary(&preview),
                             trade: Some(StockTradeDto {
                                 price: price_yuan_to_cents(price),
                                 lots,
@@ -1814,45 +1815,6 @@ fn start_delete_order(
             Err(error) => notify_error("预演交易影响失败", &error),
         }
     });
-}
-
-/// 「失效轮次」段落固定文案（改动即影响界面）。
-///
-/// 两个调用点共用同一份文案：编辑/删除成交的影响预演（[`impact_summary`]）与
-/// 回滚确认框（回滚清仓/减仓会让轮次不再成立，该轮的复盘与标签随之丢失）。
-fn removed_rounds_text(removed_rounds: &[StockTradeImpactRoundDto]) -> String {
-    if removed_rounds.is_empty() {
-        return "不会影响任何一轮的复盘。".to_string();
-    }
-    let numbers = removed_rounds
-        .iter()
-        .map(|round| round.round_no.to_string())
-        .collect::<Vec<_>>()
-        .join("、");
-    let loses_review = removed_rounds.iter().any(|round| round.has_review);
-    if loses_review {
-        format!("第 {numbers} 轮不再成立，该轮复盘会一并丢失。")
-    } else {
-        format!("第 {numbers} 轮不再成立。")
-    }
-}
-
-/// 编辑成交时的确认弹窗摘要。
-fn impact_summary(
-    impact: &StockTradeImpactDto,
-    _trade: &StockTradeDto,
-    _lots: i64,
-    _unused: Option<()>,
-) -> String {
-    let position = format!(
-        "{} 变动后持仓 {} 手",
-        impact.stock_name,
-        lots_of(impact.position_after)
-    );
-    format!(
-        "{position}\n持仓、资金记录、轮次与统计都会按新数据重算。\n{}",
-        removed_rounds_text(&impact.removed_rounds)
-    )
 }
 
 /// 影响预演确认弹窗。
@@ -3156,86 +3118,6 @@ fn round_card(
     .into_any()
 }
 // ==================================================================== 分栏四：交易统计
-
-/// 统计曲线的指标定义（顺序与文案固定，改动即影响界面）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Metric {
-    TotalPnl,
-    WinRate,
-    AvgWin,
-    AvgLoss,
-    PnlRatio,
-    Expectancy,
-    MaxDrawdown,
-}
-
-impl Metric {
-    const ALL: [Metric; 7] = [
-        Metric::TotalPnl,
-        Metric::WinRate,
-        Metric::AvgWin,
-        Metric::AvgLoss,
-        Metric::PnlRatio,
-        Metric::Expectancy,
-        Metric::MaxDrawdown,
-    ];
-
-    fn label(self) -> &'static str {
-        match self {
-            Metric::TotalPnl => "累计盈亏",
-            Metric::WinRate => "胜率",
-            Metric::AvgWin => "平均盈利",
-            Metric::AvgLoss => "平均亏损",
-            Metric::PnlRatio => "实际盈亏比",
-            Metric::Expectancy => "期望值",
-            Metric::MaxDrawdown => "最大回撤",
-        }
-    }
-
-    fn kind(self) -> ChartValueKind {
-        match self {
-            Metric::WinRate | Metric::MaxDrawdown => ChartValueKind::Percent,
-            Metric::PnlRatio => ChartValueKind::Ratio,
-            _ => ChartValueKind::Money,
-        }
-    }
-
-    /// Y 轴上下界：只有**天生有边界**的指标才给。
-    ///
-    /// 胜率是百分比（0..100；出现负数时 -100..100）—— 不给的话自动挑刻度会把
-    /// "数据正好压在 100%"当成"上界还要再大一档"，于是多画一条 150% 的网格线。
-    /// 最大回撤同样是百分比，但它没有天然天花板（`4%` 的回撤画在 0..100 的轴上没法看），
-    /// 因此交给按数据自动挑。
-    fn y_bounds(self, values: &[f64]) -> Option<(f64, f64)> {
-        match self {
-            Metric::WinRate => Some(if values.iter().any(|value| *value < 0.0) {
-                (-100.0, 100.0)
-            } else {
-                (0.0, 100.0)
-            }),
-            _ => None,
-        }
-    }
-
-    /// 是否画 y=0 虚线参考线（金额类且可能为负的指标才画）。
-    fn has_reference(self) -> bool {
-        matches!(self, Metric::TotalPnl | Metric::Expectancy)
-    }
-
-    /// 曲线取值（分 / 百分数 / 倍数）。
-    fn value(self, point: &StockStatisticsPointDto) -> f64 {
-        match self {
-            Metric::TotalPnl => point.total_pnl as f64,
-            Metric::WinRate => point.win_rate,
-            Metric::AvgWin => point.avg_win as f64,
-            // 平均亏损取负（曲线在 0 轴下方）
-            Metric::AvgLoss => -(point.avg_loss as f64),
-            Metric::PnlRatio => point.pnl_ratio.unwrap_or(0.0),
-            Metric::Expectancy => point.expectancy as f64,
-            Metric::MaxDrawdown => point.max_drawdown_pct,
-        }
-    }
-}
 
 /// 统计子功能的两个分栏（工具栏左侧 `Tabs` 的 key，固定文案，改动即影响界面）。
 const STATS_TAB_SUMMARY: &str = "summary";

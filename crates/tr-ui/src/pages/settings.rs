@@ -58,6 +58,7 @@ use tr_domain::proxy::{
     PROXY_MODE_OFF, PROXY_SCHEME_HTTP,
 };
 use tr_domain::update::{UpdateSnapshot, UpdateStatus, NOTIFY_DOWNLOAD_FAILED};
+use tr_draw::text::{parse_year_bound as parse_year, parse_year_month_bound as parse_year_month};
 
 use crate::api;
 use crate::components::ui::{
@@ -1720,25 +1721,6 @@ fn AboutSetting() -> impl IntoView {
 }
 
 // ---------------------------------------------------------------- 工具函数
-
-/// `YYYY` → 年；空串或非法一律 `None`（表示"不限"）。
-fn parse_year(input: &str) -> Option<i64> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    trimmed.parse::<i64>().ok().filter(|value| *value > 0)
-}
-
-/// `YYYY-MM` → (年, 月)；空串或非法一律 `(None, None)`（表示"不限"）。
-fn parse_year_month(input: &str) -> (Option<i64>, Option<i64>) {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return (None, None);
-    }
-    match trimmed.split_once('-') {
-        Some((year, month)) => (parse_year(year), parse_year(month)),
-        // 只填年份时按"按年"处理
-        None => (parse_year(trimmed), None),
-    }
-}
+//
+// 年份 / 年月输入的解析（空 = 不限）在 `tr_draw::text`（native 上可断言）：
+// `parse_year_bound` / `parse_year_month_bound`。

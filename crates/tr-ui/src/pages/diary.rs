@@ -58,6 +58,7 @@ use crate::query::{OnError, Query};
 use crate::store::AppStores;
 use crate::time::today_ymd;
 use tr_draw::calendar::{format_ymd_cn, parse_ymd, weekday_cn, Ymd};
+use tr_draw::diary_tree::{build_tree, day_node_id, month_node_id, year_node_id, DayNode};
 
 /// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "日记";
@@ -589,60 +590,9 @@ pub fn DiaryPage() -> impl IntoView {
 }
 
 // ==================================================================== 日期树
-
-/// 一个日期节点。
-#[derive(Debug, Clone, PartialEq)]
-struct DayNode {
-    date: String,
-    day: u32,
-    word_count: i64,
-    mood: String,
-}
-
-/// 年 → 月 → 日的分组结果。
-type TreeMap = BTreeMap<i32, BTreeMap<u32, Vec<DayNode>>>;
-
-/// 把日期列表按年/月分组（年降序、月降序、日降序）。
-fn build_tree(items: &[DiaryDateItem]) -> TreeMap {
-    let mut map: TreeMap = BTreeMap::new();
-    for item in items {
-        let Some(Ymd { year, month, day }) = parse_ymd(&item.date) else {
-            continue;
-        };
-        map.entry(year)
-            .or_default()
-            .entry(month)
-            .or_default()
-            .push(DayNode {
-                date: item.date.clone(),
-                day,
-                word_count: item.word_count,
-                mood: item.mood.clone(),
-            });
-    }
-    for months in map.values_mut() {
-        for days in months.values_mut() {
-            days.sort_by(|left, right| right.date.cmp(&left.date));
-        }
-    }
-    map
-}
-
-/// 年 / 月 / 日三种树节点的 DOM id。
-///
-/// 滚动定位靠 id 反查元素（见 [`scroll_to_date`]）：日节点只在它那个月展开时才存在，
-/// 所以渲染侧与滚动侧必须用**同一份** id 规则 —— 就这三条，别在别处手写字符串。
-fn year_node_id(year: i32) -> String {
-    format!("diary-tree-year-{year}")
-}
-
-fn month_node_id(year: i32, month: u32) -> String {
-    format!("diary-tree-month-{year}-{month}")
-}
-
-fn day_node_id(date: &str) -> String {
-    format!("diary-tree-day-{date}")
-}
+//
+// 分组与排序（年 / 月 / 日降序）、三种节点的 DOM id 都在 tr_draw::diary_tree
+// （native 上可断言）：渲染侧与滚动定位侧必须用同一份 id 规则。
 
 /// 把「定位到今天」的落点滚进视野：那天 → 那天所在月 → 那天所在年，逐级退让。
 ///

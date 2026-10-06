@@ -10,7 +10,9 @@
 //!
 //! 前两条从前只活在页面的渲染路径里，改错了要靠截图发现。
 
-use tr_domain::dto::StockTradeDto;
+use tr_domain::dto::{StockTradeDto, StockTradeImpactDto, StockTradeImpactRoundDto};
+
+use crate::format::lots_of;
 
 /// 一条渲染行：委托内的多笔成交聚合成父行 + 子行。
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +103,40 @@ pub fn group_trades(trades: &[StockTradeDto]) -> Vec<TradeRow> {
             }
         })
         .collect()
+}
+
+/// 「失效轮次」段落固定文案（改动即影响界面）。
+///
+/// 两个调用点共用同一份文案：编辑/删除成交的影响预演（[`impact_summary`]）与
+/// 回滚确认框（回滚清仓/减仓会让轮次不再成立，该轮的复盘与标签随之丢失）。
+pub fn removed_rounds_text(removed_rounds: &[StockTradeImpactRoundDto]) -> String {
+    if removed_rounds.is_empty() {
+        return "不会影响任何一轮的复盘。".to_string();
+    }
+    let numbers = removed_rounds
+        .iter()
+        .map(|round| round.round_no.to_string())
+        .collect::<Vec<_>>()
+        .join("、");
+    let loses_review = removed_rounds.iter().any(|round| round.has_review);
+    if loses_review {
+        format!("第 {numbers} 轮不再成立，该轮复盘会一并丢失。")
+    } else {
+        format!("第 {numbers} 轮不再成立。")
+    }
+}
+
+/// 编辑成交时的确认弹窗摘要。
+pub fn impact_summary(impact: &StockTradeImpactDto) -> String {
+    let position = format!(
+        "{} 变动后持仓 {} 手",
+        impact.stock_name,
+        lots_of(impact.position_after)
+    );
+    format!(
+        "{position}\n持仓、资金记录、轮次与统计都会按新数据重算。\n{}",
+        removed_rounds_text(&impact.removed_rounds)
+    )
 }
 
 #[cfg(test)]
@@ -214,5 +250,54 @@ mod tests {
     #[test]
     fn an_empty_list_yields_no_rows() {
         assert!(group_trades(&[]).is_empty());
+    }
+
+    /// 影响预览的两段文案：没有失效轮次、有失效轮次（其中一轮带复盘）。
+    #[test]
+    fn removed_rounds_copy_says_whether_a_review_is_lost() {
+        assert_eq!(
+            removed_rounds_text(&[]),
+            "不会影响任何一轮的复盘。".to_string()
+        );
+        let plain = [StockTradeImpactRoundDto {
+            round_no: 3,
+            has_review: false,
+            ..StockTradeImpactRoundDto::default()
+        }];
+        assert_eq!(removed_rounds_text(&plain), "第 3 轮不再成立。");
+        let with_review = [
+            StockTradeImpactRoundDto {
+                round_no: 3,
+                has_review: false,
+                ..StockTradeImpactRoundDto::default()
+            },
+            StockTradeImpactRoundDto {
+                round_no: 5,
+                has_review: true,
+                ..StockTradeImpactRoundDto::default()
+            },
+        ];
+        assert_eq!(
+            removed_rounds_text(&with_review),
+            "第 3、5 轮不再成立，该轮复盘会一并丢失。"
+        );
+    }
+
+    #[test]
+    fn impact_summary_mentions_the_position_after_and_the_rounds() {
+        let impact = StockTradeImpactDto {
+            stock_name: "贵州茅台".to_string(),
+            position_after: 250,
+            removed_rounds: vec![StockTradeImpactRoundDto {
+                round_no: 2,
+                has_review: false,
+                ..StockTradeImpactRoundDto::default()
+            }],
+            ..StockTradeImpactDto::default()
+        };
+        let summary = impact_summary(&impact);
+        assert!(summary.starts_with("贵州茅台 变动后持仓 2 手"), "{summary}");
+        assert!(summary.contains("持仓、资金记录、轮次与统计都会按新数据重算。"));
+        assert!(summary.ends_with("第 2 轮不再成立。"), "{summary}");
     }
 }

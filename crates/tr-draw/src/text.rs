@@ -53,9 +53,60 @@ pub fn parse_rate(input: &str) -> Option<f64> {
     }
 }
 
+/// `YYYY` → 年；空串或非法（含 `<= 0`）一律 `None`（表示"不限"）。
+///
+/// 应用设置里的"自定义年份"筛选用它 —— 空 = 不限是这条规则的一半。
+pub fn parse_year_bound(input: &str) -> Option<i64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<i64>().ok().filter(|value| *value > 0)
+}
+
+/// `YYYY-MM` → `(年, 月)`；空串或非法一律 `(None, None)`（表示"不限"）。
+///
+/// 只填年份时按"按年"处理（月份留空），与界面上的分段选择一致。
+pub fn parse_year_month_bound(input: &str) -> (Option<i64>, Option<i64>) {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return (None, None);
+    }
+    match trimmed.split_once('-') {
+        Some((year, month)) => (parse_year_bound(year), parse_year_bound(month)),
+        None => (parse_year_bound(trimmed), None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 筛选用的年份 / 年月输入：空 = 不限，非法也当"不限"（不会把筛选拦下来）。
+    #[test]
+    fn year_and_month_bounds_treat_blank_and_invalid_as_unbounded() {
+        assert_eq!(parse_year_bound("2026"), Some(2026));
+        assert_eq!(parse_year_bound(" 2026 "), Some(2026));
+        assert_eq!(parse_year_bound(""), None);
+        assert_eq!(parse_year_bound("0"), None, "0 年不是有效边界");
+        assert_eq!(parse_year_bound("-3"), None);
+        assert_eq!(parse_year_bound("abc"), None);
+
+        assert_eq!(parse_year_month_bound("2026-06"), (Some(2026), Some(6)));
+        assert_eq!(parse_year_month_bound(" 2026-6 "), (Some(2026), Some(6)));
+        assert_eq!(
+            parse_year_month_bound("2026"),
+            (Some(2026), None),
+            "只填年份 = 按年"
+        );
+        assert_eq!(parse_year_month_bound(""), (None, None));
+        assert_eq!(
+            parse_year_month_bound("2026-坏"),
+            (Some(2026), None),
+            "月份非法时只丢月份这一半"
+        );
+        assert_eq!(parse_year_month_bound("坏-06"), (None, Some(6)));
+    }
 
     #[test]
     fn amount_text_becomes_cents() {
