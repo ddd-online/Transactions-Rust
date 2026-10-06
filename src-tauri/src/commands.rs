@@ -373,7 +373,20 @@ pub fn workspace_open(
             "工作目录路径不能为空",
         )));
     }
+    // 第 1 步（校验）留在命令体里：它只读请求；2–6 步是"真的去打开"，见 `open_pipeline`。
+    open_pipeline(&app, state.inner(), ipc_state.inner(), raw)
+}
 
+/// 打开工作空间的 2–6 步（**顺序与每步的失败处置见 [`workspace_open`] 的文档**）。
+///
+/// 抽成具名函数是为了让"顺序即契约"由结构表达，而不只是注释里的一张表：
+/// 打开库 → 切日志 → 落配置 → 订正旧数据（吞掉失败）→ 发事件。
+fn open_pipeline(
+    app: &AppHandle,
+    state: &DesktopState,
+    ipc_state: &AppState,
+    raw: &str,
+) -> ApiResult<()> {
     let directory = PathBuf::from(raw);
     let opened = match ipc_state.ws.open_workspace(&directory) {
         Ok(opened) => opened,
