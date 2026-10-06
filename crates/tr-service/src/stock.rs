@@ -356,13 +356,7 @@ pub fn add_principal_at_date(
         let account = get_or_create_account_in(conn, ledger_id)?;
 
         // 追加前现金：末条记录余额，无记录则为本金
-        // "末条余额，无记录则本金"的口径在 tr_domain::fund::cash_before（#36）
-        let latest_cash = match StockDao::query_latest_fund_record(conn, ledger_id) {
-            Ok(latest) => Some(latest.cash_balance),
-            Err(error) if is_not_found(&error) => None,
-            Err(error) => return Err(ServiceError::Database(error)),
-        };
-        let prev_cash = tr_domain::fund::cash_before(latest_cash, account.principal);
+        let prev_cash = cash_before_records(conn, ledger_id, account.principal)?;
 
         let new_principal = account.principal + amount;
         db(StockDao::update_account_principal(
@@ -443,13 +437,7 @@ pub fn add_withdraw_at_date(
         let account = get_or_create_account_in(conn, ledger_id)?;
 
         // 当前现金：末条资金记录余额，无记录时为本金
-        // "末条余额，无记录则本金"的口径在 tr_domain::fund::cash_before（#36）
-        let latest_cash = match StockDao::query_latest_fund_record(conn, ledger_id) {
-            Ok(latest) => Some(latest.cash_balance),
-            Err(error) if is_not_found(&error) => None,
-            Err(error) => return Err(ServiceError::Database(error)),
-        };
-        let prev_cash = tr_domain::fund::cash_before(latest_cash, account.principal);
+        let prev_cash = cash_before_records(conn, ledger_id, account.principal)?;
 
         if amount > prev_cash {
             return Err(AppError::bad_request(format!(
@@ -530,13 +518,7 @@ pub fn add_interest_at_date(
         let account = get_or_create_account_in(conn, ledger_id)?;
 
         // 当前现金：末条资金记录余额，无记录时为本金
-        // "末条余额，无记录则本金"的口径在 tr_domain::fund::cash_before（#36）
-        let latest_cash = match StockDao::query_latest_fund_record(conn, ledger_id) {
-            Ok(latest) => Some(latest.cash_balance),
-            Err(error) if is_not_found(&error) => None,
-            Err(error) => return Err(ServiceError::Database(error)),
-        };
-        let prev_cash = tr_domain::fund::cash_before(latest_cash, account.principal);
+        let prev_cash = cash_before_records(conn, ledger_id, account.principal)?;
 
         let after_cash = prev_cash + amount;
         let record = StockFundRecord {
@@ -773,6 +755,24 @@ pub fn save_trade_tags(
 // ---------- 资金记录 / 持仓 ----------
 
 /// 资金记录分页。
+/// 现金链**末条的余额**（这个账本从没记过资金时退回本金）—— 三个资金事件共用这一处。
+///
+/// 口径本身在 `tr_domain::fund::cash_before`（纯逻辑、native 真跑）；这里只负责把 DAO 的
+/// `NotFound` 折成 `None`、其余错误往上抛。
+fn cash_before_records(
+    conn: &rusqlite::Connection,
+    ledger_id: &str,
+    principal: i64,
+) -> ServiceResult<i64> {
+    match StockDao::query_latest_fund_record(conn, ledger_id) {
+        Ok(latest) => Ok(tr_domain::fund::cash_before(
+            Some(latest.cash_balance),
+            principal,
+        )),
+        Err(error) if is_not_found(&error) => Ok(tr_domain::fund::cash_before(None, principal)),
+        Err(error) => Err(ServiceError::Database(error)),
+    }
+}
 pub fn list_fund_records(
     workspace: &Workspace,
     ledger_id: &str,
