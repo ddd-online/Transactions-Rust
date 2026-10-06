@@ -54,6 +54,7 @@ use crate::query::{OnError, Query};
 use crate::store::AppStores;
 use crate::time::today_ymd;
 use tr_draw::calendar::parse_ymd;
+use tr_draw::section::{section_state, SectionState};
 
 /// 页面标题（固定文案，改动即影响界面）。
 pub const PAGE_TITLE: &str = "事件";
@@ -167,6 +168,7 @@ pub fn KeyEventPage() -> impl IntoView {
     .start();
     let events = Signal::derive(move || year_query.value.get().events);
     let list_loading = Signal::derive(move || year_query.loading.get());
+    let list_loaded = Signal::derive(move || year_query.loaded.get());
 
     // ---- 选中事件 ----
     let selected_date = RwSignal::new(String::new());
@@ -481,6 +483,7 @@ pub fn KeyEventPage() -> impl IntoView {
                 {event_list(
                     events,
                     list_loading,
+                    list_loaded,
                     selected_date,
                     UnsyncCallback::new(move |date: String| select_event(date)),
                     pending_delete,
@@ -1122,6 +1125,7 @@ fn mark_file(controls: UploadControls, index: usize, mutate: impl FnOnce(&mut Up
 fn event_list(
     events: Signal<Vec<KeyEvent>>,
     loading: Signal<bool>,
+    loaded: Signal<bool>,
     selected_date: RwSignal<String>,
     on_select: UnsyncCallback<String>,
     request_delete: RwSignal<Option<(String, String)>>,
@@ -1142,7 +1146,18 @@ fn event_list(
                         <div class="key-event-empty">
                             <span class="key-event-empty__text">
                                 {move || {
-                                    if loading.get() { "正在加载…" } else { "暂无事件" }
+                                    // 判据在 tr_draw::section（四态的优先级只该有一份实现）：
+                                    // 这条查询是 OnError::Silent，所以没有失败文案这一档。
+                                    match section_state(
+                                        sorted().is_empty(),
+                                        loading.get(),
+                                        loaded.get(),
+                                        None,
+                                    ) {
+                                        SectionState::Loading => "正在加载…",
+                                        SectionState::Failed => "加载失败",
+                                        _ => "暂无事件",
+                                    }
                                 }}
                             </span>
                         </div>
