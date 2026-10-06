@@ -180,6 +180,46 @@ mod tests {
         ))
     }
 
+    /// 界面侧的开关键必须与这里落盘的键**逐字相同**（候选 9 / #39）。
+    ///
+    /// 两边靠字符串对齐（`tr-ui` 的 `Page::feature_key` ↔ 这里 `FeatureFlags` 的 serde 键）：
+    /// 名字写错**不会编译报错**，只会让用户看到一句「无效的功能开关」（AGENTS.md 记过这个坑）。
+    /// 这里用源码扫描把它变成能跑的断言 —— 界面侧新增或改名一个开关，这条就会红。
+    /// **代价**：`include_str!` 绑定了 `shell.rs` 的路径，改名要同步改这里。
+    #[test]
+    fn every_ui_feature_key_is_a_persisted_key() {
+        let config = AppConfig::default();
+        let json = serde_json::to_value(&config).unwrap();
+        let known: std::collections::BTreeSet<String> = json["features"]
+            .as_object()
+            .expect("features 应当是对象")
+            .keys()
+            .cloned()
+            .collect();
+
+        let ui = include_str!("../../crates/tr-ui/src/shell.rs");
+        let start = ui
+            .find("fn feature_key")
+            .expect("shell.rs 里应当有 feature_key");
+        let end = start
+            + ui[start..]
+                .find("fn toggleable")
+                .expect("feature_key 之后应当是 toggleable");
+        // 取出 match 里所有引号字面量（`"accounting"` / `"keyEvent"` …，空串是「设置」那一档）
+        let ui_keys: std::collections::BTreeSet<String> = ui[start..end]
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|key| !key.is_empty())
+            .map(|key| key.to_string())
+            .collect();
+
+        assert!(
+            !ui_keys.is_empty(),
+            "没扫到界面侧的开关键 —— 扫描锚点过期了"
+        );
+        assert_eq!(ui_keys, known, "界面侧的开关键与落盘键不一致");
+    }
     #[test]
     fn defaults_match_documented_initial_values() {
         let config = AppConfig::default();
