@@ -238,6 +238,33 @@ mod tests {
     /// 这一条守的是"没人绕过清单"（候选 9 / #39）。
     ///
     /// 扫描范围：`src-tauri/src` 与 `crates/tr-ui/src`（清单所在 crate 自己不算）。
+    /// 检测逻辑抽成 [`event_literal_offenders`]，并由
+    /// [`the_event_literal_detector_flags_both_directions`] 做**负向断言** ——
+    /// 这条守卫原本只有正向（Spec 轴对 #39 的验收意见：守卫要有一条"故意改坏就变红"的证据，
+    /// 否则"扫错地方/扫了空目录"也会恒绿）。
+    fn event_literal_offenders(source: &str, events: &[&str]) -> Vec<String> {
+        events
+            .iter()
+            .filter(|name| source.contains(&format!("\"{name}\"")))
+            .map(|name| (*name).to_string())
+            .collect()
+    }
+
+    /// **负向断言**：检测函数两个方向都测 —— 走常量不报、字面量必报。
+    #[test]
+    fn the_event_literal_detector_flags_both_directions() {
+        let events = ["workspace-changed", "window-state-changed"];
+        assert!(
+            event_literal_offenders("let e = events::WORKSPACE_CHANGED;", &events).is_empty(),
+            "走常量不算违规"
+        );
+        assert_eq!(
+            event_literal_offenders(r#"let name = "workspace-changed";"#, &events),
+            vec!["workspace-changed".to_string()],
+            "字面量必须被点名"
+        );
+    }
+
     #[test]
     fn event_names_are_never_written_as_literals() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -261,16 +288,20 @@ mod tests {
                     if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
                         continue;
                     }
+                    // 跳过本文件：它的**负向断言**必须把事件名写成字面量才能验证检测函数
+                    // （`the_event_literal_detector_flags_both_directions`）—— 否则守卫会把自己的测试
+                    // 当成违规。这条"跳过"是守卫脆性的可见代价：它扫的是**源码文本**。
+                    if path.file_name().and_then(|name| name.to_str()) == Some("registry.rs") {
+                        continue;
+                    }
                     let Ok(text) = std::fs::read_to_string(&path) else {
                         continue;
                     };
-                    for name in tr_domain::events::ALL {
-                        if text.contains(&format!("\"{name}\"")) {
-                            offenders.push(format!(
-                                "{}: \"{name}\"",
-                                path.strip_prefix(&root).unwrap_or(&path).display()
-                            ));
-                        }
+                    for name in event_literal_offenders(&text, tr_domain::events::ALL) {
+                        offenders.push(format!(
+                            "{}: \"{name}\"",
+                            path.strip_prefix(&root).unwrap_or(&path).display()
+                        ));
                     }
                 }
             }
