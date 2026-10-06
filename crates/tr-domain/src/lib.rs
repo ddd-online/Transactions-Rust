@@ -14,6 +14,7 @@ pub mod dto;
 pub mod error;
 pub mod events;
 pub mod fee;
+pub mod fund;
 pub mod models;
 pub mod money;
 pub mod proxy;
