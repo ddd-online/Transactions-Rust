@@ -32,6 +32,7 @@
 //!   界面侧（`tr-ui`）只负责把 DOM 测量值喂进来、把结果画出去。
 
 pub mod calendar;
+pub mod change;
 pub mod chart;
 pub mod crop;
 pub mod diary_tree;

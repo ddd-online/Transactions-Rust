@@ -58,6 +58,7 @@ use crate::query::{OnError, Query};
 use crate::store::AppStores;
 use crate::time::today_ymd;
 use tr_draw::calendar::{format_ymd_cn, parse_ymd, weekday_cn, Ymd};
+use tr_draw::change::WriteTarget;
 use tr_draw::diary_tree::{build_tree, day_node_id, month_node_id, year_node_id, DayNode};
 
 /// 页面标题（固定文案，改动即影响界面）。
@@ -239,11 +240,13 @@ pub fn DiaryPage() -> impl IntoView {
         // 快照：用来判断"保存期间草稿又变了没有"
         let content_at_start = content.clone();
         let mood_at_start = mood_value.clone();
+        // 这次写是替哪个账本做的（判据在 tr_draw::change，见候选 2 / #34）
+        let target = WriteTarget::new(ledger_id.clone());
         leptos::task::spawn_local(async move {
             let saved = api::diary::upsert(&date, &content, &mood_value, &ledger_id).await;
             saving.set(false);
             // 账本已经切走：这次写入属于**旧**账本，界面此刻是新账本的数据，不能合并回去
-            if AppStores::global().current_ledger_id.get_untracked() != ledger_id {
+            if target.is_stale(&AppStores::global().current_ledger_id.get_untracked()) {
                 return;
             }
             match saved {
