@@ -1740,7 +1740,7 @@ mod tests {
                 price,
                 lots,
                 shares: lots * 100,
-                amount: price * lots * 100,
+                amount: tr_domain::stock::amount_of_lots(price, lots),
                 trade_time: at,
                 ..StockTrade::default()
             };

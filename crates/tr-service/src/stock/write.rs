@@ -100,7 +100,7 @@ fn trade_order_remark(
     total_amount: i64,
     count: usize,
 ) -> String {
-    let shares = total_lots * 100;
+    let shares = tr_domain::stock::shares_of(total_lots);
     let avg_price = if shares > 0 {
         (total_amount as f64 / shares as f64).round() as i64
     } else {
@@ -176,7 +176,7 @@ pub fn create_trade_order(
     let mut total_amount = 0_i64;
     let mut total_lots = 0_i64;
     for (index, fill) in fills.iter().enumerate() {
-        let shares = fill.lots * 100;
+        let shares = tr_domain::stock::shares_of(fill.lots);
         let amount = fill.price_cents * shares;
         total_amount += amount;
         total_lots += fill.lots;
@@ -672,12 +672,12 @@ fn update_trade_fill_tx(
         if item.id == trade_id {
             item.price = price_cents;
             item.lots = lots;
-            item.shares = lots * 100;
+            item.shares = tr_domain::stock::shares_of(lots);
         }
         if trade_time > 0 {
             item.trade_time = trade_time;
         }
-        item.amount = item.price * item.shares;
+        item.amount = tr_domain::stock::amount_of(item.price, item.shares);
         amounts.push(item.amount);
     }
 
