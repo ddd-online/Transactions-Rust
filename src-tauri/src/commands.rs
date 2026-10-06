@@ -411,9 +411,13 @@ pub fn workspace_open(
 /// 当前工作空间的自定义图标（相对 `data/assets` 的路径；**未设置时是空串**）。
 ///
 /// 图标放在工作空间里（见 `tr_service::assets` 的说明），所以它天然跟着目录走。
-/// 未打开工作空间时返回空串而不是报错：界面在打开失败的分支里也会读一次。
+/// 未打开工作空间时返回空串而不是报错：界面在打开失败的分支里也会读一次 ——
+/// 这里问的正是 [`workspace_is_open`]（唯一判据），不是"配置里有没有目录"。
 #[tauri::command]
 pub fn workspace_icon_get(ipc_state: State<'_, AppState>) -> ApiResult<String> {
+    if !workspace_is_open(ipc_state.inner()) {
+        return Ok(String::new());
+    }
     Ok(ipc_state
         .workspace()
         .map(|workspace| tr_service::assets::workspace_icon_relative(&workspace))
@@ -441,6 +445,17 @@ pub fn workspace_icon_set(
 }
 
 // ------------------------------------------------------------ 对话框
+
+/// **是否已经打开工作空间**（唯一判据：能拿到 `Workspace` 就算打开）。
+///
+/// 候选 11 / #42：同一个问题今天有好几种问法 —— 拿 `AppState::workspace()` 的 `Result`、
+/// 看配置里的 `workspaceDir` 非空、看当前账本 id 非空。它们的答案**并不等价**：
+/// 配置里的目录可能指向一个打不开的位置（配置是用户数据，可以被手改），
+/// 而"当前账本为空"只是"这个工作空间里还没有账本"，与"有没有打开"无关。
+/// 需要问这个问题时用这里；需要**拿**它时用 `ipc_state.workspace()`（那是取值的唯一入口）。
+fn workspace_is_open(ipc_state: &AppState) -> bool {
+    ipc_state.workspace().is_ok()
+}
 
 /// 文件夹对话框的兜底起始目录：用户主目录（正常一定存在）；
 /// 万一它也不存在（一次性 HOME 的冒烟/测试环境），退回程序所在目录。
