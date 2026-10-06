@@ -78,6 +78,7 @@ use crate::notify::Notifier;
 use crate::query::{Cache, OnError, Query};
 use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd};
+use tr_draw::section::{section_state, SectionState};
 use tr_draw::stock_rows::{group_trades, impact_summary, removed_rounds_text, TradeRow};
 use tr_draw::stock_stats::Metric;
 use tr_draw::text::parse_rate;
@@ -3220,6 +3221,10 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     .start();
     let stats = stats_q.value;
     let loading = Signal::derive(move || stats_q.loading.get());
+    // 判据在 tr_draw::section：这两个是它的另一半输入 —— 没它们，"查询失败"与"确实没有统计"
+    // 在用户眼里长得一样（都是「暂无统计」）。
+    let loaded = Signal::derive(move || stats_q.loaded.get());
+    let failed = Signal::derive(move || stats_q.failed.get());
     let tag_settings_q = Query::<StockTradeTagSettingDto>::new(
         move || {
             let ledger_id = stores.current_ledger_id.get();
@@ -3398,7 +3403,18 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                 if stats.get().is_none() {
                     return view! {
                         <div class="stock-empty">
-                            {move || if loading.get() { "正在加载…" } else { "暂无统计" }}
+                            {move || {
+                                match section_state(
+                                    stats.get().is_none(),
+                                    loading.get(),
+                                    loaded.get(),
+                                    failed.get().as_deref(),
+                                ) {
+                                    SectionState::Loading => "正在加载…",
+                                    SectionState::Failed => "加载失败",
+                                    _ => "暂无统计",
+                                }
+                            }}
                         </div>
                     }
                         .into_any();
@@ -3649,7 +3665,18 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                 if stats.get().is_none() {
                     return view! {
                         <div class="stock-empty">
-                            {move || if loading.get() { "正在加载…" } else { "暂无统计" }}
+                            {move || {
+                                match section_state(
+                                    stats.get().is_none(),
+                                    loading.get(),
+                                    loaded.get(),
+                                    failed.get().as_deref(),
+                                ) {
+                                    SectionState::Loading => "正在加载…",
+                                    SectionState::Failed => "加载失败",
+                                    _ => "暂无统计",
+                                }
+                            }}
                         </div>
                     }
                         .into_any();
