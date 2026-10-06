@@ -439,7 +439,7 @@ fn close_round(
         ledger_id: ledger_id.to_string(),
         stock_code: stock_code.to_string(),
         history_id: history.id,
-        round_no: count + 1,
+        round_no: tr_domain::stock::next_round_no(count, 0),
         opened_at,
         closed_at,
         tag,

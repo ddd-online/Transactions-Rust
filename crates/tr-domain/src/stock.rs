@@ -64,6 +64,13 @@ pub fn current_round_trades(trades: &[StockTrade]) -> Vec<StockTrade> {
     result
 }
 
+/// 轮次号的分配规则：已完成的轮次数 + 序号（从 0 起）+ 1。
+///
+/// 从前这条 `+ 1` 写在两处（`stock/write.rs` 的 `close_round`、`stock.rs` 的重放路径），
+/// 各自拼一次 —— 轮次号错一个，详情区、统计与复盘都会对不上（候选 7 / #37）。
+pub fn next_round_no(completed_rounds: i64, index: i64) -> i64 {
+    completed_rounds + index + 1
+}
 /// 当前轮次的**资金口径**（与界面「资金变动」列同一套算法）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RoundFlow {
@@ -167,6 +174,12 @@ mod tests {
         assert_eq!(round_flow(&[]), RoundFlow::default());
     }
 
+    #[test]
+    fn round_numbers_start_from_one_after_the_completed_ones() {
+        assert_eq!(next_round_no(0, 0), 1);
+        assert_eq!(next_round_no(3, 0), 4);
+        assert_eq!(next_round_no(3, 1), 5, "重放时按序号往后排");
+    }
     #[test]
     fn open_and_add_stay_in_the_current_round() {
         let round = current_round_trades(&[

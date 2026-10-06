@@ -1090,7 +1090,7 @@ pub fn ensure_stock_history_backfill(
             ledger_id: ledger_id.to_string(),
             stock_code: stock_code.to_string(),
             history_id: history.id.clone(),
-            round_no: count + index as i64 + 1,
+            round_no: tr_domain::stock::next_round_no(count, index as i64),
             opened_at: cycle.opened_at,
             closed_at: cycle.closed_at,
             tag: consts::STOCK_TAG_ANALYSIS.to_string(),
