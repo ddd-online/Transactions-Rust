@@ -1036,29 +1036,11 @@ pub fn list_trades(
 }
 
 /// 从按时间升序的交易流中切出当前在建轮次（最近一次清仓之后）的交易。
-/// 卖出把持仓数量归零时结束一轮，该笔卖出属于已完成的轮次，不计入当前轮。
+///
+/// 算法在 `tr_domain::stock::current_round_trades`（纯逻辑、native 真跑，含"减仓不算新轮次"
+/// "清仓那笔不留在结果里""超量减仓归零"等断言）—— 这里只做一次转发，避免第二份实现（#37）。
 fn current_round_trades(trades: &[StockTrade]) -> Vec<StockTrade> {
-    let mut result: Vec<StockTrade> = Vec::new();
-    let mut shares = 0_i64;
-    for trade in trades {
-        match trade.trade_type.as_str() {
-            consts::STOCK_TRADE_OPEN | consts::STOCK_TRADE_ADD => {
-                shares += trade.shares;
-                result.push(trade.clone());
-            }
-            consts::STOCK_TRADE_REDUCE | consts::STOCK_TRADE_CLOSE => {
-                shares -= trade.shares;
-                if shares > 0 {
-                    result.push(trade.clone());
-                } else {
-                    shares = 0;
-                    result.clear();
-                }
-            }
-            _ => {}
-        }
-    }
-    result
+    tr_domain::stock::current_round_trades(trades)
 }
 
 // ---------- 历史与详情 ----------
