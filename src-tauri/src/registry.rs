@@ -10,7 +10,7 @@
 //! 现在清单只写一次（[`app_commands!`] 的调用处）：注册闭包与注册名清单
 //! （[`REGISTERED_PATHS`]）从**同一份 token** 展开，所以"注册的东西"和
 //! "守卫读的东西"不可能各说各话。[`tests::catalog_matches_registration`]
-//! 再拿注册名去核对 `tr_domain::commands` 的业务命令清单 —— 那是界面侧取名字的地方。
+//! 再拿注册名去核对 `tr_domain::commands` 的**全表**（112 条）—— 那是界面侧取名字的地方。
 //!
 //! ## 名字怎么来的
 //!
@@ -21,9 +21,9 @@
 //!
 //! ## 覆盖范围
 //!
-//! 全部 112 条：22 条外壳命令 + 5 条更新命令（**尚未进 `tr_domain::commands` 清单**，
-//! 见 #28）+ 85 条业务命令。因此本文件只对"业务命令"那一段做清单核对；
-//! 等 #28 落地，核对范围自然扩到全表。
+//! 全部 112 条：22 条外壳命令 + 5 条更新命令 + 85 条业务命令，
+//! 与 `tr_domain::commands` 的全表一一对应（分组的名字清单也在那边：
+//! `SHELL_COMMANDS` / `UPDATE_COMMANDS` / `BUSINESS_COMMANDS`）。
 
 /// 声明全部 IPC 命令：写一次函数路径清单，同时得到注册闭包与注册名清单。
 ///
@@ -174,38 +174,60 @@ app_commands! {
 mod tests {
     use super::*;
 
-    use tr_domain::commands::{catalog_mismatch, BUSINESS_COMMANDS};
+    use tr_domain::commands::{
+        catalog_mismatch, BUSINESS_COMMANDS, COMMAND_GROUPS, SHELL_COMMANDS, UPDATE_COMMANDS,
+    };
 
-    /// 注册名的前缀：`tr-ipc` 提供的那些（其余是外壳 / 更新命令，尚未进清单）。
-    const BUSINESS_PREFIX: &str = "tr_ipc::commands::";
+    /// 注册表里的**路径前缀 → 清单里的那一组**。这张表是"哪条命令归谁"的唯一出处：
+    /// 前缀与模块一一对应（外壳命令在 `commands.rs`、更新命令在 `updater.rs`、
+    /// 业务命令在 `tr-ipc`），每组有多少条由 `tr_domain::commands` 说了算。
+    const SEGMENTS: &[(&str, &[&str])] = &[
+        ("crate::commands::", SHELL_COMMANDS),
+        ("crate::updater::", UPDATE_COMMANDS),
+        ("tr_ipc::commands::", BUSINESS_COMMANDS),
+    ];
 
     /// 函数路径的最后一段 —— `#[tauri::command]` 就是拿它当线上命令名。
     fn command_name(path: &str) -> &str {
         path.rsplit("::").next().unwrap_or(path)
     }
 
+    /// 注册清单里属于某个前缀的那些名字。
+    fn names_with_prefix<'a>(paths: &[&'a str], prefix: &str) -> Vec<&'a str> {
+        paths
+            .iter()
+            .filter(|path| path.starts_with(prefix))
+            .map(|path| command_name(path))
+            .collect()
+    }
+
     /// **守卫本体**：拿一份注册清单（正常是 [`REGISTERED_PATHS`]，测试里也会喂改坏的
-    /// 副本）去核对 `tr_domain::commands` 的业务命令清单，一一对应返回 `None`。
+    /// 副本）逐段核对 `tr_domain::commands`，一一对应返回 `None`。
     ///
     /// 断言与"怎么比"分开，是为了让负向测试能跑**同一个函数**：只换掉输入，
     /// 不换断言路径。
     fn guard(paths: &[&str]) -> Option<String> {
-        let registered: Vec<&str> = paths
-            .iter()
-            .filter(|path| path.starts_with(BUSINESS_PREFIX))
-            .map(|path| command_name(path))
-            .collect();
-        if registered.len() != BUSINESS_COMMANDS.len() {
-            return Some(format!(
-                "条数不同：清单 {} 条，注册表 {} 条",
-                BUSINESS_COMMANDS.len(),
-                registered.len()
-            ));
+        let mut matched = 0;
+        for (prefix, expected) in SEGMENTS {
+            let observed = names_with_prefix(paths, prefix);
+            matched += observed.len();
+            if let Some(problem) = catalog_mismatch(expected, &observed) {
+                return Some(format!("{prefix} 那一段：{problem}"));
+            }
         }
-        catalog_mismatch(BUSINESS_COMMANDS, &registered)
+        // 各段都对上还不够：注册表里可能出现哪一段都不认的路径（模块名打错）。
+        if matched != paths.len() {
+            let unknown: Vec<&str> = paths
+                .iter()
+                .copied()
+                .filter(|path| !SEGMENTS.iter().any(|(prefix, _)| path.starts_with(prefix)))
+                .collect();
+            return Some(format!("注册表里有清单不认的路径：{unknown:?}"));
+        }
+        None
     }
 
-    /// **本票的核心断言**：注册表里的业务命令 == `tr_domain::commands` 的业务命令清单。
+    /// **本票的核心断言**：注册表 == `tr_domain::commands` 的全表（112 条，不重不漏）。
     ///
     /// 两边都是"名字"：一边来自界面侧取名字的清单，一边来自注册闭包本身
     /// （`generate_handler![]` 与 [`REGISTERED_PATHS`] 同源）—— 所以这条断言真的在测
@@ -215,7 +237,14 @@ mod tests {
         assert_eq!(
             guard(REGISTERED_PATHS),
             None,
-            "业务命令清单与注册表不一致：要么清单加了命令没注册，要么注册了没进清单"
+            "命令清单与注册表不一致：要么清单加了命令没注册，要么注册了没进清单"
+        );
+        assert_eq!(
+            REGISTERED_PATHS.len(),
+            COMMAND_GROUPS
+                .iter()
+                .map(|group| group.len())
+                .sum::<usize>()
         );
     }
 
@@ -225,21 +254,30 @@ mod tests {
     fn guard_catches_a_mutated_registry() {
         assert_eq!(guard(REGISTERED_PATHS), None);
 
-        // ① 注册表少一条（清单里有、没人注册）
-        let without_one: Vec<&str> = REGISTERED_PATHS
-            .iter()
-            .copied()
-            .filter(|path| *path != "tr_ipc::commands::ledger_list")
-            .collect();
-        assert_eq!(without_one.len(), REGISTERED_PATHS.len() - 1);
-        assert!(guard(&without_one).is_some(), "注册表少一条没被发现");
+        // ① 注册表少一条（清单里有、没人注册）—— 每一段各试一次
+        for (prefix, group) in SEGMENTS {
+            let dropped = REGISTERED_PATHS
+                .iter()
+                .find(|path| path.starts_with(prefix))
+                .expect("每一段都该有命令");
+            let without_one: Vec<&str> = REGISTERED_PATHS
+                .iter()
+                .copied()
+                .filter(|path| *path != *dropped)
+                .collect();
+            assert_eq!(without_one.len(), REGISTERED_PATHS.len() - 1);
+            assert!(
+                guard(&without_one).is_some(),
+                "注册表少一条（{dropped}，属于 {group:?} 那一组）没被发现"
+            );
+        }
 
         // ② 注册表里某条换了名字（改了线上契约）
         let renamed: Vec<&str> = REGISTERED_PATHS
             .iter()
             .map(|path| {
-                if *path == "tr_ipc::commands::ledger_list" {
-                    "tr_ipc::commands::ledger_list_renamed"
+                if *path == "crate::updater::update_check" {
+                    "crate::updater::update_check_renamed"
                 } else {
                     *path
                 }
@@ -249,17 +287,27 @@ mod tests {
 
         // ③ 注册表里同一个函数写两遍（多出一条死的匹配臂）
         let mut duplicated: Vec<&str> = REGISTERED_PATHS.to_vec();
-        duplicated.push("tr_ipc::commands::ledger_list");
+        duplicated.push("crate::commands::window_control");
         assert!(guard(&duplicated).is_some(), "注册表重复没被发现");
 
-        // ④ 业务命令整段没注册（前缀筛选也一并被验到）
-        let desktop_only: Vec<&str> = REGISTERED_PATHS
-            .iter()
-            .copied()
-            .filter(|path| !path.starts_with(BUSINESS_PREFIX))
-            .collect();
-        assert!(!desktop_only.is_empty(), "外壳命令应当在注册表里");
-        assert!(guard(&desktop_only).is_some(), "整段漏注册没被发现");
+        // ④ 每一段各自整段没注册（前缀筛选也一并被验到）
+        for (prefix, group) in SEGMENTS {
+            let without_this: Vec<&str> = REGISTERED_PATHS
+                .iter()
+                .copied()
+                .filter(|path| !path.starts_with(prefix))
+                .collect();
+            assert!(without_this.len() < REGISTERED_PATHS.len());
+            assert!(
+                guard(&without_this).is_some(),
+                "{prefix}（{group:?}）整段漏注册没被发现"
+            );
+        }
+
+        // ⑤ 注册表里混进一个哪一段都不认的路径（模块名打错）
+        let mut stray: Vec<&str> = REGISTERED_PATHS.to_vec();
+        stray.push("tr_ipc::command::ledger_list");
+        assert!(guard(&stray).is_some(), "不认的路径没被发现");
     }
 
     /// 注册表本身不能有重复项。
@@ -268,26 +316,6 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for path in REGISTERED_PATHS {
             assert!(seen.insert(*path), "注册表里重复出现了：{path}");
-        }
-    }
-
-    /// 外壳与更新那 27 条命令**仍在**注册表里（它们还没进清单，#28 才收）。
-    /// 这条防的是"搬清单时把外壳那一段漏掉了"。
-    #[test]
-    fn desktop_commands_are_still_registered() {
-        for path in [
-            "crate::commands::window_control",
-            "crate::commands::config_get",
-            "crate::commands::workspace_open",
-            "crate::commands::devtools_toggle",
-            "crate::updater::update_check",
-            "crate::updater::update_install",
-            "crate::updater::update_cancel",
-        ] {
-            assert!(
-                REGISTERED_PATHS.contains(&path),
-                "外壳/更新命令不在注册表里：{path}"
-            );
         }
     }
 
@@ -303,5 +331,14 @@ mod tests {
         assert!(REGISTERED_PATHS
             .iter()
             .all(|path| !command_name(path).is_empty()));
+    }
+
+    /// 清单里的三组与注册表的三段前缀一一对应 —— 组的名字改了、前缀表忘了改，这条会红。
+    #[test]
+    fn every_group_has_a_registry_segment() {
+        assert_eq!(SEGMENTS.len(), COMMAND_GROUPS.len());
+        for (index, group) in COMMAND_GROUPS.iter().enumerate() {
+            assert_eq!(*group, SEGMENTS[index].1, "第 {index} 组与 SEGMENTS 对不上");
+        }
     }
 }

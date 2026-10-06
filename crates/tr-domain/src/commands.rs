@@ -26,10 +26,13 @@
 //! `catalog_matches_registration`，跑在 `fixtures/test.ps1` 的 `test-src-tauri` 里）——
 //! 命令注册表唯一存在于 `generate_handler![]` 的调用处，只有那儿能证明这件事。
 //!
-//! ## 边界
+//! ## 覆盖范围
 //!
-//! 这里只有**业务命令**（`tr-ipc` 实现的 85 条）。桌面外壳与更新那 27 条命令的名字
-//! 仍在各自的封装里以字符串出现，纳入本清单是另一票的事（#28）。
+//! **应用里每一条 IPC 命令都在这儿**（共 112 条）：22 条外壳命令（`src-tauri/src/commands.rs`）、
+//! 5 条更新命令（`src-tauri/src/updater.rs`）、85 条业务命令（`tr-ipc`）。
+//! 清单按模块分成三组（[`SHELL_COMMANDS`] 22 / [`UPDATE_COMMANDS`] 5 / [`BUSINESS_COMMANDS`] 85），
+//! 于是"注册表里的这一段 == 清单里的这一组"可以逐组比对 —— 注册表的路径前缀与分组一一对应，
+//! 不需要什么人去记"哪条命令归谁"（`src-tauri/src/registry.rs` 的 `SEGMENTS` 就是这张对应表）。
 
 use std::marker::PhantomData;
 
@@ -45,28 +48,35 @@ use crate::dto::{
     UpdateCategorySortRequest, UpdateChartRequest, UpdateTagSortRequest,
 };
 use crate::models::{DiaryDateItem, DiaryEntry, KeyEvent, KeyEventImage, StockFeeSetting};
+use crate::proxy::ProxySetting;
+use crate::update::UpdateSnapshot;
 use crate::wire::{
-    CategoryDeleteRequest, CategoryListRequest, ChartIdRequest, ChartListRequest,
-    CreateLedgerRequest, DiaryDateRequest, DiaryImportFileRequest, DiaryLedgerRequest,
-    DiaryScanRequest, IdRequest, InitializeCategoriesRequest, KeyEventDateRequest,
-    KeyEventImageAddRequest, KeyEventUpsertRequest, LedgerIdRequest, LedgerListRequest,
-    LinkRequest, LinkedByDateRequest, StockAmountDateRequest, StockArchiveRequest,
-    StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
-    StockRoundReviewRequest, StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest,
-    StockTradeCreateRequest, StockTradeImpactRequest, StockTradeOrderDeleteRequest,
-    StockTradeUpdateRequest, StockTradesRequest, TagDeleteRequest, TagListRequest,
-    TemplateIdRequest, TemplateListRequest, TemplateSortRequest, TodoCardCreateRequest,
-    TodoCardSortRequest, TodoItemCreateRequest, TodoItemStatusRequest, TodoItemUpdateRequest,
-    TodoProgressCreateRequest, TodoProgressDoneRequest, UnlinkRequest, UpdateLedgerRequest,
-    YearRequest,
+    AppInfoRequest, AssetUrlRequest, CategoryDeleteRequest, CategoryListRequest, ChartIdRequest,
+    ChartListRequest, ConfigSnapshot, CreateLedgerRequest, DevToolsToggleRequest,
+    DialogOpenRequest, DialogOpenResponse, DiaryDateRequest, DiaryImportFileRequest,
+    DiaryLedgerRequest, DiaryScanRequest, FeatureFlags, FileSaveRequest, FileSaveResponse,
+    IdRequest, InitializeCategoriesRequest, KeyEventDateRequest, KeyEventImageAddRequest,
+    KeyEventUpsertRequest, LedgerIdRequest, LedgerListRequest, LinkRequest, LinkedByDateRequest,
+    ProxyDetectResponse, SetAppearanceRequest, SetCloseBehaviorRequest, SetFeatureRequest,
+    SetKeyEventLinkedOpenRequest, SetSidebarCollapsedRequest, StockAmountDateRequest,
+    StockArchiveRequest, StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest,
+    StockPositionReviewRequest, StockRoundReviewRequest, StockRoundTagRequest,
+    StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
+    StockTradesRequest, TagDeleteRequest, TagListRequest, TemplateIdRequest, TemplateListRequest,
+    TemplateSortRequest, TodoCardCreateRequest, TodoCardSortRequest, TodoItemCreateRequest,
+    TodoItemStatusRequest, TodoItemUpdateRequest, TodoProgressCreateRequest,
+    TodoProgressDoneRequest, UnlinkRequest, UpdateCheckResponse, UpdateDownloadRequest,
+    UpdateLedgerRequest, UpdateResponse, WindowControlRequest, WorkspaceDirRequest,
+    WorkspaceIconRequest, YearRequest,
 };
 
 /// 一条 IPC 命令的声明：**名字 + 请求类型 + 响应类型**（没有任何逻辑）。
 ///
 /// `Req` / `Res` 只是类型参数，运行时不占空间；它们的作用是让界面侧的
 /// `ipc::call(条目, req)` 从条目本身推出该发什么、该收什么 —— 名字与类型因此
-/// 不可能各说各话。无请求形参的命令用 `()` 当 `Req`（业务命令里没有这种，
-/// 桌面/更新命令才有，见模块注释的边界）。
+/// 不可能各说各话。没有 `req` 形参的命令用 `()` 当 `Req`（外壳 / 更新里那些
+/// `config_get` / `workspace_get` / `update_check` … 就是这一类）。
 pub struct Command<Req, Res> {
     name: &'static str,
     kinds: PhantomData<fn(Req) -> Res>,
@@ -98,24 +108,68 @@ impl<Req, Res> Copy for Command<Req, Res> {}
 
 /// 声明清单：一行 = 一条命令（常量 = 命令名 + 请求类型 => 响应类型）。
 ///
-/// 常量与 [`BUSINESS_COMMANDS`] 从**同一次声明**展开，所以不存在
-/// "常量写了一个名字、清单里是另一个"这种半漂移。
+/// 第一个参数是这一组的**名字清单**常量名（`SHELL_COMMANDS` / `UPDATE_COMMANDS` / `BUSINESS_COMMANDS`），
+/// 它与条目从**同一次声明**展开，所以不存在"常量写了一个名字、清单里是另一个"这种半漂移。
 macro_rules! command_catalog {
-    ($($konst:ident = $name:literal : $req:ty => $res:ty),* $(,)?) => {
+    ($names:ident; $($konst:ident = $name:literal : $req:ty => $res:ty),* $(,)?) => {
         $(
             #[doc = concat!("`", $name, "`")]
             pub const $konst: Command<$req, $res> = Command::new($name);
         )*
 
-        /// 清单里的全部业务命令名（声明顺序）。
+        /// 这一组里的全部命令名（声明顺序 = `src-tauri/src/registry.rs` 的注册顺序）。
         ///
-        /// 应用外壳的注册守卫拿它去核"清单 == 注册表"；顺序也在这里固定下来，
-        /// 便于人读（与 `src-tauri/src/registry.rs` 的注册顺序一致）。
-        pub const BUSINESS_COMMANDS: &[&str] = &[$($name),*];
+        /// 守卫拿它去核"这一段清单 == 注册表里对应的那一段"；顺序固定下来是为了人读。
+        pub const $names: &[&str] = &[$($name),*];
     };
 }
 
+/// 清单的**全部分组**（外壳 + 更新、业务命令）—— 需要遍历整表时用它
+/// （例如断言"全表没有重名"或数总数），单独一段的比对仍用各组的常量。
+pub const COMMAND_GROUPS: &[&[&str]] = &[SHELL_COMMANDS, UPDATE_COMMANDS, BUSINESS_COMMANDS];
+
 command_catalog! {
+    SHELL_COMMANDS;
+
+    // ---- 外壳命令（`src-tauri/src/commands.rs`）----
+    WINDOW_CONTROL = "window_control": WindowControlRequest => (),
+    APP_INFO = "app_info": AppInfoRequest => String,
+    ASSET_URL = "asset_url": AssetUrlRequest => String,
+    CONFIG_GET = "config_get": () => ConfigSnapshot,
+    CONFIG_SET_CLOSE_BEHAVIOR = "config_set_close_behavior": SetCloseBehaviorRequest => (),
+    CONFIG_SET_APPEARANCE = "config_set_appearance": SetAppearanceRequest => (),
+    CONFIG_SET_PROXY = "config_set_proxy": ProxySetting => ProxySetting,
+    CONFIG_SET_FEATURE = "config_set_feature": SetFeatureRequest => FeatureFlags,
+    CONFIG_SET_KEY_EVENT_LINKED_OPEN = "config_set_key_event_linked_open": SetKeyEventLinkedOpenRequest => bool,
+    CONFIG_SET_SIDEBAR_COLLAPSED = "config_set_sidebar_collapsed": SetSidebarCollapsedRequest => bool,
+    PROXY_DETECT = "proxy_detect": () => ProxyDetectResponse,
+    CONFIG_FILE_PATH = "config_file_path": () => String,
+    WORKSPACE_GET = "workspace_get": () => String,
+    WORKSPACE_SET = "workspace_set": WorkspaceDirRequest => (),
+    WORKSPACE_ICON_GET = "workspace_icon_get": () => String,
+    WORKSPACE_ICON_SET = "workspace_icon_set": WorkspaceIconRequest => String,
+    WORKSPACE_OPEN = "workspace_open": WorkspaceDirRequest => (),
+    WORKSPACE_INIT = "workspace_init": WorkspaceDirRequest => (),
+    DIALOG_OPEN = "dialog_open": DialogOpenRequest => DialogOpenResponse,
+    FILE_SAVE_IMAGE = "file_save_image": FileSaveRequest => FileSaveResponse,
+    DEVTOOLS_GET_STATE = "devtools_get_state": () => bool,
+    DEVTOOLS_TOGGLE = "devtools_toggle": DevToolsToggleRequest => bool,
+}
+
+command_catalog! {
+    UPDATE_COMMANDS;
+
+    // ---- 自动更新（`src-tauri/src/updater.rs`，自研实现）----
+    UPDATE_CHECK = "update_check": () => UpdateCheckResponse,
+    UPDATE_DOWNLOAD = "update_download": UpdateDownloadRequest => UpdateResponse,
+    UPDATE_DOWNLOAD_STATUS = "update_download_status": () => UpdateSnapshot,
+    UPDATE_CANCEL = "update_cancel": () => (),
+    UPDATE_INSTALL = "update_install": () => UpdateResponse,
+}
+
+command_catalog! {
+    BUSINESS_COMMANDS;
+
     // ---- 账本 ----
     LEDGER_LIST = "ledger_list": LedgerListRequest => Vec<LedgerDto>,
     LEDGER_CREATE = "ledger_create": CreateLedgerRequest => String,
@@ -271,24 +325,50 @@ mod tests {
         "todo",
     ];
 
+    /// 全表：名字不重、一律 snake_case，且总数与分组数对得上。
+    ///
+    /// 重名检查必须跨组做：外壳里出现一条与业务命令同名的命令，注册表就会多出一条
+    /// 覆盖同一名字的匹配臂 —— 那是真事故，不是风格问题。
     #[test]
     fn names_are_unique_and_snake_case() {
         let mut seen = std::collections::BTreeSet::new();
-        for name in BUSINESS_COMMANDS {
-            assert!(seen.insert(*name), "命令名重复：{name}");
-            assert!(
-                name.chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
-                "命令名必须是 snake_case：{name}"
-            );
-            assert!(
-                name.starts_with(|c: char| c.is_ascii_lowercase()),
-                "命令名不能以 '_' 或数字开头：{name}"
-            );
+        for group in COMMAND_GROUPS {
+            for name in *group {
+                assert!(seen.insert(*name), "命令名重复（含跨组）：{name}");
+                assert!(
+                    name.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                    "命令名必须是 snake_case：{name}"
+                );
+                assert!(
+                    name.starts_with(|c: char| c.is_ascii_lowercase()),
+                    "命令名不能以 '_' 或数字开头：{name}"
+                );
+            }
         }
-        assert_eq!(seen.len(), BUSINESS_COMMANDS.len());
     }
 
+    /// 分组与数量的口径：外壳 22 + 更新 5 在应用外壳 crate 里，业务 85 条在 `tr-ipc` 里。
+    ///
+    /// 数量变了就顺手核一遍调用点：这里对不上说明清单被改过，而注册表 / 界面的
+    /// 一致性守卫会紧接着告诉你哪里对不上。
+    #[test]
+    fn the_table_covers_every_command() {
+        assert_eq!(SHELL_COMMANDS.len(), 22);
+        assert_eq!(UPDATE_COMMANDS.len(), 5);
+        assert_eq!(BUSINESS_COMMANDS.len(), 85);
+        assert_eq!(COMMAND_GROUPS.len(), 3);
+        assert_eq!(
+            COMMAND_GROUPS
+                .iter()
+                .map(|group| group.len())
+                .sum::<usize>(),
+            112
+        );
+    }
+
+    /// 外壳 / 更新那两组没有"域前缀"这种约定（`config_*` / `workspace_*` / `update_*`
+    /// 是历史命名），所以域前缀只对业务命令断言。
     #[test]
     fn every_name_is_prefixed_by_a_known_domain() {
         for name in BUSINESS_COMMANDS {

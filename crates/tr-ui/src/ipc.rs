@@ -9,11 +9,15 @@
 //!
 //! ## 命令名从哪来
 //!
-//! 业务命令走 [`call`] / [`call_void`]：入参是 [`tr_domain::commands`] 清单里的**条目**，
-//! 名字与请求 / 响应类型都从条目取，界面侧不再出现命令名字符串字面量。
+//! 入参一律是 [`tr_domain::commands`] 清单里的**条目**：名字与请求 / 响应类型都从条目取，
+//! 界面侧不再出现命令名字符串字面量。四种形状各有一个入口：
 //!
-//! 桌面外壳与更新那 27 条命令还没进清单，暂时走按名字的 `call_by_name` 等四个
-//! 内部入口（把它们也收进清单是另一票的事，见 `tr_domain::commands` 的模块注释）。
+//! | 入口 | 条目形状 | 例 |
+//! |---|---|---|
+//! | [`call`] | `Command<Req, Res>` | `ledger_list` |
+//! | [`call_void`] | `Command<Req, ()>` | `ledger_delete` |
+//! | [`call_no_args`] | `Command<(), Res>`（命令没有 `req` 形参） | `config_get` / `update_check` |
+//! | [`call_void_no_args`] | `Command<(), ()>` | `update_cancel` |
 //!
 //! 命令统一只收一个 `req` 参数对象，字段名与 `tr-ipc` 的命令定义逐字段一致
 //! （请求 / 响应类型本身也是共享的，见 `api` 模块的注释）。
@@ -127,52 +131,25 @@ where
     invoke_void(command.name(), req).await
 }
 
-/// 按名字调用一个命令（带 `req`）。
-///
-/// **只给尚未进清单的命令用**（桌面外壳与更新的那 27 条），因此是 crate 内部的：
-/// 业务命令一律走 [`call`]。它们进清单之后这两个入口就可以一起删掉。
-pub(crate) async fn call_by_name<Req, Res>(command: &str, req: Req) -> Result<Res, IpcError>
-where
-    Req: Serialize,
-    Res: DeserializeOwned,
-{
-    invoke(command, req).await
-}
-
-/// 按名字调用一个返回空值的命令。只给尚未进清单的命令用，见 `call_by_name`。
-pub(crate) async fn call_void_by_name<Req>(command: &str, req: Req) -> Result<(), IpcError>
-where
-    Req: Serialize,
-{
-    invoke_void(command, req).await
-}
-
 /// 调用一个**没有 `req` 形参**的命令（`config_get` / `workspace_get` /
-/// `devtools_get_state` / `config_file_path` 属于这一类）。
+/// `devtools_get_state` / `update_check` … 属于这一类）。
 ///
-/// 为什么不复用 `call_by_name` 发一个空的 `req`：那些命令的签名里根本没有 `req`，
+/// 为什么不走 [`call`] 发一个空的 `req`：那些命令的签名里根本没有 `req`，
 /// 传空参数虽然目前会被 Tauri 忽略，但那是实现细节；显式走"无参数"路径更稳。
-pub(crate) async fn call_no_args_by_name<Res>(command: &str) -> Result<Res, IpcError>
+/// 条目里的请求类型写成 `()` 就是"这条命令没有 `req` 形参"的记号。
+pub async fn call_no_args<Res>(command: Command<(), Res>) -> Result<Res, IpcError>
 where
     Res: DeserializeOwned,
 {
-    let promise = tauri_invoke(command, js_sys::Object::new().into()).map_err(parse_error)?;
-    match JsFuture::from(promise).await {
-        Ok(value) => serde_wasm_bindgen::from_value(value).map_err(json_error),
-        Err(error) => Err(handle_rejection(error)),
-    }
+    invoke_no_args(command.name()).await
 }
 
-/// 调用一个**没有 `req` 形参**、返回空值的命令（`update_cancel` 属于这一类）。
+/// 调用一个**没有 `req` 形参**、返回空值的命令（`update_cancel` 是全应用唯一一条）。
 ///
-/// 与 `call_void_by_name` 的差别只在参数：那条路径会发出一个 `{}` 作为 `req`
+/// 与 [`call_void`] 的差别只在参数：那条路径会发出一个 `{}` 作为 `req`
 /// （对没有该形参的命令无害，但那是实现细节），这里显式走"无参数"路径。
-pub(crate) async fn call_void_no_args_by_name(command: &str) -> Result<(), IpcError> {
-    let promise = tauri_invoke(command, js_sys::Object::new().into()).map_err(parse_error)?;
-    match JsFuture::from(promise).await {
-        Ok(_) => Ok(()),
-        Err(error) => Err(handle_rejection(error)),
-    }
+pub async fn call_void_no_args(command: Command<(), ()>) -> Result<(), IpcError> {
+    invoke_void_no_args(command.name()).await
 }
 
 /// 发一次 IPC（带 `req` 参数）并把结果反序列化为 `Res`。
@@ -182,11 +159,7 @@ where
     Res: DeserializeOwned,
 {
     let args = build_args(&req)?;
-    let promise = tauri_invoke(command, args.into()).map_err(parse_error)?;
-    match JsFuture::from(promise).await {
-        Ok(value) => serde_wasm_bindgen::from_value(value).map_err(json_error),
-        Err(error) => Err(handle_rejection(error)),
-    }
+    send::<Res>(command, args).await
 }
 
 /// 发一次 IPC（带 `req` 参数）并**忽略返回值**（`ApiResult<()>`）。
@@ -198,6 +171,36 @@ where
     Req: Serialize,
 {
     let args = build_args(&req)?;
+    send_void(command, args).await
+}
+
+/// 发一次**不带参数**的 IPC 并把结果反序列化为 `Res`。
+async fn invoke_no_args<Res>(command: &str) -> Result<Res, IpcError>
+where
+    Res: DeserializeOwned,
+{
+    send::<Res>(command, js_sys::Object::new()).await
+}
+
+/// 发一次**不带参数**的 IPC 并忽略返回值。
+async fn invoke_void_no_args(command: &str) -> Result<(), IpcError> {
+    send_void(command, js_sys::Object::new()).await
+}
+
+/// 真正发出去的那一步：成功时把结果反序列化为 `Res`。
+async fn send<Res>(command: &str, args: js_sys::Object) -> Result<Res, IpcError>
+where
+    Res: DeserializeOwned,
+{
+    let promise = tauri_invoke(command, args.into()).map_err(parse_error)?;
+    match JsFuture::from(promise).await {
+        Ok(value) => serde_wasm_bindgen::from_value(value).map_err(json_error),
+        Err(error) => Err(handle_rejection(error)),
+    }
+}
+
+/// 同上，但**忽略返回值**（见 [`invoke_void`] 的说明）。
+async fn send_void(command: &str, args: js_sys::Object) -> Result<(), IpcError> {
     let promise = tauri_invoke(command, args.into()).map_err(parse_error)?;
     match JsFuture::from(promise).await {
         Ok(_) => Ok(()),

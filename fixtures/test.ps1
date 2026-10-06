@@ -83,7 +83,7 @@ $Steps = [ordered]@{
     # `generate_context!()` 要嵌 `crates/tr-ui/dist`，而那份产物由 trunk 生成、不入库，
     # 少了它连 `cargo test` 都编译不过 —— 那是与测试无关的条件。
     # 命令注册表的那条守卫也在这里（`src-tauri/src/registry.rs`：注册表 == tr_domain::commands
-    # 清单），所以 `ipc` 分组也带上本步骤 —— 名字这件事的实现侧断言在 tr-ipc，注册侧断言在这儿。
+    # 的全表），所以 `ipc` 分组也带上本步骤 —— 名字这件事的实现侧断言在 tr-ipc，注册侧断言在这儿。
     'test-src-tauri'    = @{ Title='cargo test -p transactions（应用外壳）';          Kind='cargo'; Args=@('test','-p','transactions'); Needs='none' }
     'test-draw'         = @{ Title='cargo test -p tr-draw（图表 / 裁剪的纯算法）';    Kind='cargo'; Args=@('test','-p','tr-draw'); Needs='none' }
     # --all-targets 不能省：界面的 `#[cfg(test)]` 在 native 上跑不到（跑到了也是 0 个），
@@ -126,8 +126,8 @@ $Groups = [ordered]@{
     'domain'       = @('test-domain')
     'store'        = @('test-store', 'schema-diff')
     'service'      = @('test-service')
-    # 命令面：`test-ipc` 断言"本 crate 的命令实现 == tr_domain::commands 清单"，
-    # `test-src-tauri` 断言"外壳注册表 == 同一份清单"（守卫在 src-tauri/src/registry.rs）——
+    # 命令面：`test-ipc` 断言"本 crate 的实现 == 清单里业务那一段"，
+    # `test-src-tauri` 断言"外壳注册表 == 清单全表（112 条）"（守卫在 src-tauri/src/registry.rs）——
     # 两条合起来才等于"注册的每一条都真的存在、存在的每一条都真的注册了"。
     'ipc'          = @('test-ipc', 'test-src-tauri')
     'ui'           = @('check-ui-wasm', 'design-audit')

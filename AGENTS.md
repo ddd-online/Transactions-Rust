@@ -447,21 +447,22 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   字段名是硬契约，改动即破坏兼容。成功时 promise 直接 resolve
   为数据本身；失败时 reject 载荷为 `{"code":-1,"msg":"...","status":500}`。`msg` 是用户可见文案。
   * **字段名靠共享类型，名字靠共享清单**：请求 / 响应类型在 `tr-domain`（`wire` / `dto` / `models`），
-    命令名与事件名在 `tr-domain::commands` / `tr-domain::events`（事件名一共 6 条，应用里每一个都在那儿）。
-    界面侧**不再出现命令名字符串字面量**（`ipc::call(commands::LEDGER_LIST, req)`）—— 拼错名字是编译错误，
+    命令名与事件名在 `tr_domain::commands` / `tr_domain::events`（事件名 6 条，应用里每一个都在那儿）。
+    **每一条命令都在清单里**（112 条 = 外壳 22 + 更新 5 + 业务 85，清单按模块分成 `SHELL_COMMANDS` /
+    `UPDATE_COMMANDS` / `BUSINESS_COMMANDS` 三组），界面侧**不再出现命令名字符串字面量**：
+    `ipc::call(commands::LEDGER_LIST, req)`；没有 `req` 形参的写 `ipc::call_no_args(commands::CONFIG_GET)`，
+    连"无返回"也是条目的一部分（`Command<Req, ()>` 才交给 `call_void`）—— 拼错名字是编译错误，
     不是运行时的"命令不存在"。
-  * **"一致"由能跑的断言闭合**，不靠人读注释。名字这条链有三段，各有一段断言：
-    `tr-ipc` 的 `implementations_match_the_catalog` 断言"**实现 == 清单**"（扫本 crate 的
-    `#[tauri::command]` 函数名）；`src-tauri/src/registry.rs` 的 `catalog_matches_registration`
-    断言"**注册表 == 清单**"（注册清单与 `generate_handler![]` 从同一个 `app_commands![]` 调用处展开，
-    所以守卫读的就是真正注册的那份）。两处都带**负向断言**：tr-ipc 那条拿真实扫描结果去比一份
-    少一条的清单、外壳那条直接改坏**真实注册清单**（少一条 / 改名 / 重复 / 整段删掉），
-    比较函数 `tr_domain::commands::catalog_mismatch` 自己另有一组单测。
+  * **"一致"由能跑的断言闭合**，不靠人读注释。名字这条链有两段，各有一段断言：
+    `tr-ipc` 的 `implementations_match_the_catalog` 断言"**本 crate 的实现 == 清单里业务那一段**"
+    （扫本 crate 的 `#[tauri::command]` 函数名）；`src-tauri/src/registry.rs` 的
+    `catalog_matches_registration` 断言"**注册表 == 清单全表**"（注册清单与 `generate_handler![]`
+    从同一个 `app_commands![]` 调用处展开，所以守卫读的就是真正注册的那份）。
+    两处都带**负向断言**：注册侧直接改坏**真实注册清单**（少一条 / 改名 / 重复 / 整段删掉 /
+    混进一个不认的路径），实现侧拿真实扫描结果去比一份少一条的清单；比较函数
+    `tr_domain::commands::catalog_mismatch` 自己另有一组单测。
     前提"注册名 = 函数名"由 tr-ipc 的 `registration_name_is_the_function_name` 钉住
     （命令**不许**用 `rename` / `rename_all`）。
-  * **还没进清单的 27 条**：外壳 22 条 + 更新 5 条。它们的名字仍以字符串出现在
-    `crates/tr-ui/src/api/{desktop,update}.rs`，走 `ipc::call_by_name` 等内部入口；注册侧由
-    `REGISTERED_PATHS` 覆盖（`desktop_commands_are_still_registered` 防漏）。收进清单是 #28。
 - **JSON 字段命名不统一，但必须保持不变**：核心记账模型是 snake_case（`ledger.created_at`），事件/日记/股票模型
   是 camelCase（`ledgerId`、`createdAt`），DTO 里两种混用（`tr_query_result` 的 `page_size` 与 `trStatistics`
   并存）。数据库列名恒为 snake_case，列映射在 DAO 层显式书写，不依赖 serde。

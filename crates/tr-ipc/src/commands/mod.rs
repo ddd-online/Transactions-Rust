@@ -8,13 +8,13 @@
 //!
 //! ## 名字这条链由三处断言闭合
 //!
-//! 界面的命令名来自 `tr_domain::commands` 的清单；命令名在上线时有三处"必须一致"，
-//! 每处都有一条能跑的断言，不靠人读注释：
+//! 界面的命令名来自 `tr_domain::commands` 的清单（112 条：业务 85 + 外壳 22 + 更新 5）；
+//! 命令名在上线时有三处"必须一致"，每处都有一条能跑的断言，不靠人读注释：
 //!
 //! | 断言 | 位置 | 证明 |
 //! |---|---|---|
-//! | 实现 == 清单 | 本模块的 `implementations_match_the_catalog`（`-Unit ipc`） | 本 crate 里的 `#[tauri::command]` 函数名集合与清单逐名相同 |
-//! | 注册表 == 清单 | `src-tauri/src/registry.rs` 的 `catalog_matches_registration`（`-Unit ipc`／`shell`） | 注册清单（`generate_handler![]` 与它同源）与清单逐名相同 |
+//! | 实现 == 清单里业务那一段 | 本模块的 `implementations_match_the_catalog`（`-Unit ipc`） | 本 crate 里的 `#[tauri::command]` 函数名集合与 `BUSINESS_COMMANDS` 逐名相同 |
+//! | 注册表 == 清单全表 | `src-tauri/src/registry.rs` 的 `catalog_matches_registration`（`-Unit ipc`／`shell`） | 注册清单（`generate_handler![]` 与它同源）与两段清单逐名相同 |
 //!
 //! 传递起来就是"注册的每一条都真的存在、存在的每一条都真的注册了"。
 //! 另外 `registration_name_is_the_function_name` 钉住这条链依赖的前提：

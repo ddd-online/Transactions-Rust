@@ -417,32 +417,41 @@ try {
         if ($popButtons.Count -gt 0) {
             $confirmRect = $popButtons[$popButtons.Count - 1].Current.BoundingRectangle
             $shot = Join-Path $OutDir 'chart-popconfirm.png'
-            Save-Screenshot $shot
-            $bitmap = [System.Drawing.Bitmap]::FromFile($shot)
-            $painted = $false
-            $probe = @()
             # 主色三档：primary #3964fe / primary-light #5b7fff / primary-active #2b52e6
             $primaryAnchors = @(@(57, 100, 254), @(91, 127, 255), @(43, 82, 230))
-            foreach ($dx in 6, 12, 18) {
-                $px = [int]($confirmRect.X + $dx)
-                $py = [int]($confirmRect.Y + $confirmRect.Height / 2)
-                if ($px -ge $bitmap.Width -or $py -ge $bitmap.Height) {
-                    $probe += "$px,$py 超出截图"
-                    continue
-                }
-                $pixel = $bitmap.GetPixel($px, $py)
-                $probe += "$px,$py=($($pixel.R),$($pixel.G),$($pixel.B))"
-                foreach ($anchor in $primaryAnchors) {
-                    if ([Math]::Abs($pixel.R - $anchor[0]) -le 24 -and
-                        [Math]::Abs($pixel.G - $anchor[1]) -le 24 -and
-                        [Math]::Abs($pixel.B - $anchor[2]) -le 24) {
-                        $painted = $true
-                        break
+            # 反复取图，别只取一次：气泡有淡入动画，而 UIA 里元素**一进树就报得出来** ——
+            # 那一刻位图上可能只画了一半（实测取到过 #A7B9FD，主色与底色各一半，看着像
+            # "气泡没画出来"）。真被裁掉的话等多久都取不到主色；只是慢一帧的话下一次就成了。
+            $painted = $false
+            $probe = @()
+            $deadline = (Get-Date).AddSeconds(8)
+            do {
+                Save-Screenshot $shot
+                $bitmap = [System.Drawing.Bitmap]::FromFile($shot)
+                $probe = @()
+                foreach ($dx in 6, 12, 18) {
+                    $px = [int]($confirmRect.X + $dx)
+                    $py = [int]($confirmRect.Y + $confirmRect.Height / 2)
+                    if ($px -ge $bitmap.Width -or $py -ge $bitmap.Height) {
+                        $probe += "$px,$py 超出截图"
+                        continue
                     }
+                    $pixel = $bitmap.GetPixel($px, $py)
+                    $probe += "$px,$py=($($pixel.R),$($pixel.G),$($pixel.B))"
+                    foreach ($anchor in $primaryAnchors) {
+                        if ([Math]::Abs($pixel.R - $anchor[0]) -le 24 -and
+                            [Math]::Abs($pixel.G - $anchor[1]) -le 24 -and
+                            [Math]::Abs($pixel.B - $anchor[2]) -le 24) {
+                            $painted = $true
+                            break
+                        }
+                    }
+                    if ($painted) { break }
                 }
+                $bitmap.Dispose()
                 if ($painted) { break }
-            }
-            $bitmap.Dispose()
+                Start-Sleep -Milliseconds 400
+            } while ((Get-Date) -lt $deadline)
             $rect = "$([int]$confirmRect.X),$([int]$confirmRect.Y) $([int]$confirmRect.Width)x$([int]$confirmRect.Height)"
             Assert-True $painted "气泡的确认键真的画在屏幕上（按钮矩形 $rect；取样 $($probe -join ' / ')；截图 $shot）"
             Invoke-Element $popButtons[$popButtons.Count - 1] | Out-Null
