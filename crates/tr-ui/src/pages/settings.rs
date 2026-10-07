@@ -178,16 +178,19 @@ fn GeneralSetting() -> impl IntoView {
         icon_saving.set(true);
         leptos::task::spawn_local(async move {
             let stores = AppStores::global();
-            match api::desktop::workspace_icon_set(&data_url).await {
-                Ok(relative) => {
-                    stores.apply_workspace_icon(&relative);
-                    icon_crop_open.set(false);
-                    icon_source.set(String::new());
-                    Notifier::global().success("已更新软件图标", None);
-                }
-                Err(error) => notify_error("保存图标", &error),
+            // 在飞与失败面走 change::submit（判据见 #34）；成功后的落地动作留在调用点
+            let saved = crate::change::submit(
+                Some(icon_saving),
+                "保存图标",
+                api::desktop::workspace_icon_set(&data_url),
+            )
+            .await;
+            if let Some(relative) = saved {
+                stores.apply_workspace_icon(&relative);
+                icon_crop_open.set(false);
+                icon_source.set(String::new());
+                Notifier::global().success("已更新软件图标", None);
             }
-            icon_saving.set(false);
         });
     };
 
@@ -198,14 +201,16 @@ fn GeneralSetting() -> impl IntoView {
         icon_saving.set(true);
         leptos::task::spawn_local(async move {
             let stores = AppStores::global();
-            match api::desktop::workspace_icon_set("").await {
-                Ok(_) => {
-                    stores.apply_workspace_icon("");
-                    Notifier::global().success("已恢复默认图标", None);
-                }
-                Err(error) => notify_error("清除图标", &error),
+            let saved = crate::change::submit(
+                Some(icon_saving),
+                "清除图标",
+                api::desktop::workspace_icon_set(""),
+            )
+            .await;
+            if saved.is_some() {
+                stores.apply_workspace_icon("");
+                Notifier::global().success("已恢复默认图标", None);
             }
-            icon_saving.set(false);
         });
     };
 
@@ -284,18 +289,21 @@ fn GeneralSetting() -> impl IntoView {
     let submit_proxy = move |mode: String, url: String, rollback: bool| {
         leptos::task::spawn_local(async move {
             let setting = ProxySetting { mode, url };
-            match api::desktop::config_set_proxy(setting).await {
-                Ok(saved) => {
+            // 失败面走 change::submit（判据见 #34）；**回滚**留在调用点（它是有条件的，属于这一处的知识）
+            let result =
+                crate::change::submit(None, "设置代理", api::desktop::config_set_proxy(setting))
+                    .await;
+            match result {
+                Some(saved) => {
                     proxy_mode.set(saved.mode);
                     // 回填的是**后端归一化过**的地址（`127.0.0.1:7890` 会变成两段填好）
                     apply_proxy_url(&saved.url);
                     refresh_proxy_note();
                 }
-                Err(error) => {
+                None => {
                     if rollback {
                         reload_proxy();
                     }
-                    notify_error("设置代理", &error);
                 }
             }
         });
