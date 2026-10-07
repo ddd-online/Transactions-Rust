@@ -238,6 +238,83 @@ pub fn solid_dots(svg: String, hexes: &[String]) -> String {
     })
 }
 
+/// `<text …>` 的起始标记（charts-rs 的刻度文字都长这样）
+const SVG_TEXT_OPEN: &str = "<text";
+
+/// 文本节点的结束标记
+const SVG_TEXT_CLOSE: &str = "</text>";
+
+/// 给 **Y 轴负刻度**补上千分位分隔符。
+///
+/// charts-rs 的 `{t}` 只给正数分组：`charts/util.rs` 的 `thousands_format_float` 第一行是
+/// `if value < 1000.0 { return format_float(value) }`，**负数全落进这条分支**，于是跨零的图上
+/// 会同时出现 `50,000` 与 `-50000`（用户报的缺陷）。它只给了 `axis_formatter` 这个**模板字符串**
+/// 口子（`format_string` 只做 `{c}` / `{t}` 的字面替换，没有"自定义格式化函数"），所以照本模块的
+/// 惯例在它生成的 SVG 上做一次定点改写（同 [`anchor_fill_at_zero`] / [`solid_dots`]）。
+///
+/// 改写范围只有「负号 + ≥ 4 位数字（后面允许跟不含数字的后缀，如百分比轴的 `%`）」的**文本内容**：
+/// 正数、`-500` 这种本来就不该分组的、以及类目轴上的 `2026-01` 都原样保留；
+/// 文字写在两行里的形式（`<text …>\n-50000\n</text>`）也照改，前后换行与所有属性一个字节不动。
+///
+/// 轴宽不用跟着改：charts-rs 的预留宽度是按改写前的最长标签量的，而文字是**左边缘**定死在
+/// `x` 上的（`component.rs` 的 `x = left + width - text_width - name_gap`），多出来的那个逗号
+/// 往右长进 `name_gap` 那 8px 里，既不会被 SVG 边界裁掉、也不会压到绘图区
+/// （实测探针：`-100000` 的 `x = 4`，补一个逗号后右边缘距绘图区还有约 1px）。
+pub fn group_negative_tick_labels(svg: String) -> String {
+    let mut out = String::with_capacity(svg.len());
+    let mut rest = svg.as_str();
+    while let Some(start) = rest.find(SVG_TEXT_OPEN) {
+        let (head, tail) = rest.split_at(start);
+        out.push_str(head);
+        // 认不出成对的 `<text …>…</text>` 就整段照搬（宁可不动，也不改坏）
+        let Some(content_start) = tail.find('>').map(|end| end + 1) else {
+            out.push_str(tail);
+            return out;
+        };
+        let Some(close) = tail[content_start..].find(SVG_TEXT_CLOSE) else {
+            out.push_str(tail);
+            return out;
+        };
+        let content_end = content_start + close;
+        out.push_str(&tail[..content_start]);
+        let content = &tail[content_start..content_end];
+        out.push_str(&group_negative_number(content).unwrap_or_else(|| content.to_string()));
+        out.push_str(SVG_TEXT_CLOSE);
+        rest = &tail[content_end + SVG_TEXT_CLOSE.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 文本节点内容 → 补上千分位后的内容；不是「负号 + ≥ 4 位数字（+ 不含数字的后缀）」时返回 `None`。
+///
+/// 首尾空白（charts-rs 把文字写在标签的下一行）原样保留。
+fn group_negative_number(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    let digits_and_suffix = trimmed.strip_prefix('-')?;
+    let digits_end = digits_and_suffix
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(digits_and_suffix.len());
+    let (digits, suffix) = digits_and_suffix.split_at(digits_end);
+    // 后缀里出现数字就不是一个纯数值刻度（如类目 `-2026-01`），不乱改
+    if digits.len() < 4 || suffix.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let offset = digits.len() % 3;
+    let mut grouped = String::with_capacity(trimmed.len() + digits.len() / 3);
+    grouped.push('-');
+    for (index, digit) in digits.chars().enumerate() {
+        if index != 0 && index % 3 == offset {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped.push_str(suffix);
+    let leading = &content[..content.len() - content.trim_start().len()];
+    let trailing = &content[content.trim_end().len()..];
+    Some(format!("{leading}{grouped}{trailing}"))
+}
+
 /// 0 轴的 y 像素：由填充 path 的**收尾基线**（绘图区底边）与 Y 轴范围反推。
 ///
 /// 填充 path 的形状是"折线各点 + 三个收尾点"，倒数第三个点的 y 就是绘图区底边。
@@ -1378,5 +1455,84 @@ mod tests {
             ),
             PROBE_SVG.to_string()
         );
+    }
+
+    // ---------------------------------------------------------------- Y 轴负刻度的千分位
+
+    /// **charts-rs 1.0.0 的真实输出**（只留 8 个刻度文字节点，网格线与折线裁掉，其余原样）：
+    /// 配置照抄渲染侧的 `build_chart` 探针（900×320、Y 轴 `-100000..100000` 共 4 段、
+    /// `axis_formatter = "{t}"`、数据 -20000 / -5000 / 60000），下面每一条 `<text>` 的属性、
+    /// `x`/`y`、文字与它前后的换行都是从探针输出里原样搬过来的。两个要点：
+    ///
+    /// * 文字写在标签的**下一行**（内容首尾各一个换行）；
+    /// * `x` 是 charts-rs 按自己的字体度量算出的**文字左边缘**（`-100000` 落在 `x=4`），
+    ///   所以补一个逗号是往**右**长的，不会被 SVG 左边界裁掉。
+    const TICK_PROBE_SVG: &str = r##"<g>
+<text font-size="12" x="5" y="12" font-family="ui-monospace, Consolas, monospace" fill="#667085">
+100,000
+</text>
+<text font-size="12" x="12" y="81.5" font-family="ui-monospace, Consolas, monospace" fill="#667085">
+50,000
+</text>
+<text font-size="12" x="43" y="151" font-family="ui-monospace, Consolas, monospace" fill="#667085">
+0
+</text>
+<text font-size="12" x="11" y="220.5" font-family="ui-monospace, Consolas, monospace" fill="#667085">
+-50000
+</text>
+<text font-size="12" x="4" y="290" font-family="ui-monospace, Consolas, monospace" fill="#667085">
+-100000
+</text>
+<text font-size="12" x="169.3" y="306" font-family="ui-monospace, Consolas, monospace" fill="#667085">
+2026-01
+</text>
+<text font-size="12" x="435" y="306" font-family="ui-monospace, Consolas, monospace" fill="#667085">
+2026-02
+</text>
+<text font-size="12" x="702.2" y="306" font-family="ui-monospace, Consolas, monospace" fill="#667085">
+2026-03
+</text>
+</g>"##;
+
+    /// 真实刻度文字上：负数补千分位、正数与类目不动、其余字节一字不动。
+    #[test]
+    fn negative_tick_labels_get_thousands_separators() {
+        let out = group_negative_tick_labels(TICK_PROBE_SVG.to_string());
+        assert!(out.contains(">\n-50,000\n</text>"), "{out}");
+        assert!(out.contains(">\n-100,000\n</text>"), "{out}");
+        // 正数（charts-rs 自己就分好组了）、0、类目轴文字保持原样
+        assert!(out.contains(">\n100,000\n</text>"), "{out}");
+        assert!(out.contains(">\n50,000\n</text>"), "{out}");
+        assert!(out.contains(">\n0\n</text>"), "{out}");
+        assert!(out.contains(">\n2026-03\n</text>"), "{out}");
+        // 唯一的差别是**多了两个逗号**：属性、换行、其余文字都不许动
+        assert_eq!(out.replace(',', ""), TICK_PROBE_SVG.replace(',', ""));
+        assert_eq!(out.len(), TICK_PROBE_SVG.len() + 2);
+        // 幂等：已经分好组的不会再被改一次
+        assert_eq!(group_negative_tick_labels(out.clone()), out);
+    }
+
+    /// 分组只发生在"负号 + ≥ 4 位数字"上，别的一律不碰；没有可改的就整串照搬。
+    #[test]
+    fn tick_grouping_leaves_everything_else_alone() {
+        // 不到 4 位的负数本来就不该分组（`-500` 与 `500` 是同一个写法）
+        let short = "<text x=\"1\">\n-500\n</text>".to_string();
+        assert_eq!(group_negative_tick_labels(short.clone()), short);
+        // 百分比轴：后缀要保住
+        assert_eq!(
+            group_negative_tick_labels("<text x=\"1\">-50000%</text>".to_string()),
+            "<text x=\"1\">-50,000%</text>"
+        );
+        // 类目那种"负号打头的多段数字"不碰（后缀里出现数字就不认）
+        let category = "<text x=\"1\">-2026-01</text>".to_string();
+        assert_eq!(group_negative_tick_labels(category.clone()), category);
+        // 一个文字节点都没有 ⇒ 逐字节相同（探针 SVG 里只有路径与圆）
+        assert_eq!(
+            group_negative_tick_labels(PROBE_SVG.to_string()),
+            PROBE_SVG.to_string()
+        );
+        // 标签不成对 ⇒ 宁可不动
+        let broken = "<text x=\"1\">-50000".to_string();
+        assert_eq!(group_negative_tick_labels(broken.clone()), broken);
     }
 }

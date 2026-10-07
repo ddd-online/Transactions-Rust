@@ -29,10 +29,11 @@
 //! * charts-rs：网格、Y 轴刻度与轴线、X 轴类目标签、折线与面积填充、数据点；
 //! * HTML/SVG 叠层：悬停竖线、命中点、tooltip、参考线。
 //!
-//! 两处**在它生成的 SVG 上做定点改写**（它没暴露对应开关）：
+//! 三处**在它生成的 SVG 上做定点改写**（它没暴露对应开关）：
 //!
 //! * 数据点改实心（`tr_draw::chart::solid_dots`）；
-//! * 面积填充的基线挪到 0 轴（[`anchor_fill_at_zero`]，它只肯闭到绘图区底边）。
+//! * 面积填充的基线挪到 0 轴（[`anchor_fill_at_zero`]，它只肯闭到绘图区底边）；
+//! * Y 轴负刻度的千分位（`tr_draw::chart::group_negative_tick_labels`，它的 `{t}` 只给正数分组）。
 //!
 //! 叠层需要"每个类目的像素坐标"，而 charts-rs 不暴露布局 —— 但它会为每个数据点画
 //! `<circle>`（`Symbol::Circle`），所以渲染后**从 DOM 读回**这些圆心即可拿到精确几何。
@@ -68,9 +69,9 @@ use crate::store::AppStores;
 // 类型实体也搬过去了，这里 `pub use` 转发一次 —— 页面原来的
 // `use crate::components::ui::{ChartSeries, ChartValueKind}` 一个字都不用改。
 use tr_draw::chart::{
-    anchor_fill_at_zero, display_range, display_value, group_is_series, hit_index, nice_axis_range,
-    paint_by_sign, place_tooltip, thin_labels, ChartGeometry, MeasuredPoints, FALLBACK_WIDTH,
-    MARGIN, TICK_FONT_PX, TOOLTIP_FALLBACK_WIDTH, Y_SPLITS,
+    anchor_fill_at_zero, display_range, display_value, group_is_series, group_negative_tick_labels,
+    hit_index, nice_axis_range, paint_by_sign, place_tooltip, thin_labels, ChartGeometry,
+    MeasuredPoints, FALLBACK_WIDTH, MARGIN, TICK_FONT_PX, TOOLTIP_FALLBACK_WIDTH, Y_SPLITS,
 };
 pub use tr_draw::chart::{ChartSeries, ChartValueKind};
 
@@ -564,8 +565,9 @@ fn build_chart(
     //
     // ⚠ 它的 `{t}` 对**负数不分组**（`charts/util.rs::thousands_format_float` 开头
     // `if value < 1000.0 { return format_float(value) }` 把负数全挡进了这条分支），
-    // 所以同一根轴上会同时出现 `50,000` 与 `-50000`。已知、未修：改它得动上游
-    // （它只给了模板字符串这一个口子，没有"自定义格式化函数"）。
+    // 所以同一根轴上会同时出现 `50,000` 与 `-50000`。它只给了模板字符串这一个口子、没有
+    // "自定义格式化函数"，改不了上游 ⇒ 生成后在 SVG 上补一次
+    // （`tr_draw::chart::group_negative_tick_labels`，见 `let svg = chart.svg()` 那里）。
     if let Some(axis) = chart.y_axis_configs.first_mut() {
         axis.axis_split_number = Y_SPLITS;
         axis.axis_font_color = token_color("--transactions-color-text-secondary");
@@ -592,7 +594,8 @@ fn build_chart(
         }
     }
 
-    let svg = chart.svg().unwrap_or_default();
+    // Y 轴负刻度的千分位：它的 `{t}` 只给正数分组，生成后补一次（见该函数的注释）
+    let svg = group_negative_tick_labels(chart.svg().unwrap_or_default());
     match config.sign_colors.as_ref().filter(|_| series.len() == 1) {
         // 分色模式：填充 / 折线 / 数据点三处一起按 0 轴换色（`solid_dots` 由它代劳）
         Some((above, below)) => paint_by_sign(
