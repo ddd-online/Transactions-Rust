@@ -742,12 +742,21 @@ fn FeatureSetting() -> impl IntoView {
             saving.update(|list| list.push(key));
             let checked_signals = std::rc::Rc::clone(&checked_signals);
             leptos::task::spawn_local(async move {
-                match api::desktop::config_set_feature(key, enabled).await {
+                // 失败面走 `change::submit`（判据见 #34）。**在飞态刻意不走它**：这一处的在飞是
+                // "哪几个开关正在保存"的**集合**（`Vec<&'static str>`），而 `submit` 的 `running`
+                // 是布尔标记 —— 为这一个站点把签名泛化（`Option<impl Fn(bool)>`），代价是 40 多处
+                // 调用点都要把布尔包成闭包，deletion test 不过，所以泛化不做、这里自己 maintain。
+                let result = crate::change::submit(
+                    None,
+                    "设置功能开关",
+                    api::desktop::config_set_feature(key, enabled),
+                )
+                .await;
+                match result {
                     // 后端返回**落盘后的全部开关**，用它覆盖本地状态最权威
                     // （不用自己记"点之前是什么"，也就没有回滚写错值的可能）。
-                    Ok(features) => stores.set_enabled_features(features),
-                    Err(error) => {
-                        notify_error("设置功能开关", &error);
+                    Some(features) => stores.set_enabled_features(features),
+                    None => {
                         // 失败时把这一行的开关**拨回磁盘上的真实值**。全局集合没变，所以下面那个
                         // Effect 不会重跑（它只订阅全局集合），得在这里主动同步一次；
                         // 否则开关会停在用户点的那一侧 —— 看着像已经生效了。
