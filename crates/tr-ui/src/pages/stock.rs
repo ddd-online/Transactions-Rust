@@ -970,22 +970,25 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         let review = review_draft.get_untracked();
         review_saving.set(true);
         leptos::task::spawn_local(async move {
-            match api::stock::position_review(&ledger_id, &code, &review).await {
-                Ok(updated) => {
-                    positions.update(|items| {
-                        if let Some(existing) = items
-                            .iter_mut()
-                            .find(|item| item.stock_code == updated.stock_code)
-                        {
-                            existing.review = updated.review.clone();
-                        }
-                    });
-                    review_editing.set(false);
-                    Notifier::global().success("本轮复盘已保存".to_string(), None);
-                }
-                Err(error) => notify_error("保存本轮复盘失败", &error),
+            // 在飞与失败面走 change::submit（判据见 #34）；成功后的就地更新留在调用点
+            let saved = crate::change::submit(
+                Some(review_saving),
+                "保存本轮复盘失败",
+                api::stock::position_review(&ledger_id, &code, &review),
+            )
+            .await;
+            if let Some(updated) = saved {
+                positions.update(|items| {
+                    if let Some(existing) = items
+                        .iter_mut()
+                        .find(|item| item.stock_code == updated.stock_code)
+                    {
+                        existing.review = updated.review.clone();
+                    }
+                });
+                review_editing.set(false);
+                Notifier::global().success("本轮复盘已保存".to_string(), None);
             }
-            review_saving.set(false);
         });
     };
 
@@ -4111,23 +4114,24 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
 
         fee_saving.set(true);
         leptos::task::spawn_local(async move {
-            match api::stock::fee_settings_put(
-                &ledger_id,
-                commission / 10_000.0,
-                min_commission,
-                stamp_duty / 100.0,
-                transfer_fee / 100.0,
+            // 在飞与失败面走 change::submit（判据见 #34）
+            let saved = crate::change::submit(
+                Some(fee_saving),
+                "保存费用设置失败",
+                api::stock::fee_settings_put(
+                    &ledger_id,
+                    commission / 10_000.0,
+                    min_commission,
+                    stamp_duty / 100.0,
+                    transfer_fee / 100.0,
+                ),
             )
-            .await
-            {
-                Ok(setting) => {
-                    // 保存后以后端返回为准回填
-                    fill_fee_form(&setting);
-                    Notifier::global().success("费用设置已保存", None);
-                }
-                Err(error) => notify_error("保存费用设置失败", &error),
+            .await;
+            if let Some(setting) = saved {
+                // 保存后以后端返回为准回填
+                fill_fee_form(&setting);
+                Notifier::global().success("费用设置已保存", None);
             }
-            fee_saving.set(false);
         });
     };
 
@@ -4155,19 +4159,22 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
         }
         tags_saving.set(true);
         leptos::task::spawn_local(async move {
-            match api::stock::tag_settings_put(&ledger_id, next).await {
-                Ok(setting) => {
-                    // 保存后以后端返回的 tags 为准
-                    tags.set(setting.tags);
-                    default_tag.set(setting.default_tag);
-                    if let Some(text) = success {
-                        Notifier::global().success(text, None);
-                        new_tag.set(String::new());
-                    }
+            // 在飞与失败面走 change::submit（判据见 #34）；成功后的回填与可选提示留在调用点
+            let saved = crate::change::submit(
+                Some(tags_saving),
+                "保存交易标签失败",
+                api::stock::tag_settings_put(&ledger_id, next),
+            )
+            .await;
+            if let Some(setting) = saved {
+                // 保存后以后端返回的 tags 为准
+                tags.set(setting.tags);
+                default_tag.set(setting.default_tag);
+                if let Some(text) = success {
+                    Notifier::global().success(text, None);
+                    new_tag.set(String::new());
                 }
-                Err(error) => notify_error("保存交易标签失败", &error),
             }
-            tags_saving.set(false);
         });
     };
 
