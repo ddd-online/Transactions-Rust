@@ -2649,16 +2649,19 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
         let review = review_draft.get_untracked();
         review_saving.set(true);
         leptos::task::spawn_local(async move {
-            match api::stock::round_review(&ledger_id, &round_id, &review).await {
-                Ok(data) => {
-                    detail.set(Some(data));
-                    review_editing.set(String::new());
-                    review_draft.set(String::new());
-                    Notifier::global().success("交易复盘已保存".to_string(), None);
-                }
-                Err(error) => notify_error("保存交易复盘失败", &error),
+            // 在飞与失败面走 change::submit（判据见 #34）；成功后的界面更新留在调用点
+            let saved = crate::change::submit(
+                Some(review_saving),
+                "保存交易复盘失败",
+                api::stock::round_review(&ledger_id, &round_id, &review),
+            )
+            .await;
+            if let Some(data) = saved {
+                detail.set(Some(data));
+                review_editing.set(String::new());
+                review_draft.set(String::new());
+                Notifier::global().success("交易复盘已保存".to_string(), None);
             }
-            review_saving.set(false);
         });
     };
 
@@ -2669,14 +2672,16 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
         }
         tag_saving.set(true);
         leptos::task::spawn_local(async move {
-            match api::stock::round_tag(&ledger_id, &round_id, &tag).await {
-                Ok(data) => {
-                    detail.set(Some(data));
-                    Notifier::global().success("交易标签已保存".to_string(), None);
-                }
-                Err(error) => notify_error("保存交易标签失败", &error),
+            let saved = crate::change::submit(
+                Some(tag_saving),
+                "保存交易标签失败",
+                api::stock::round_tag(&ledger_id, &round_id, &tag),
+            )
+            .await;
+            if let Some(data) = saved {
+                detail.set(Some(data));
+                Notifier::global().success("交易标签已保存".to_string(), None);
             }
-            tag_saving.set(false);
         });
     };
 
