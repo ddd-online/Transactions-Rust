@@ -22,8 +22,9 @@
 //!    "先算委托级费用 → 再按各笔成交额比例分摊、末笔吃余数"的调用顺序。
 //! 2. **派生数据是重放的产物**：`write::rebuild_trades` 按成交时间升序重建持仓、
 //!    买卖资金记录、轮次挂接与已实现盈亏；轮次按「股票 + 轮次序号」继承 ID/标签/复盘，
-//!    因此**幂等**且不丢复盘。倒填日期的交易不会打乱现金链，因为 `write::recalculate_cash_chain`
-//!    复刻的是「取当时 (日期, 创建时间, ID) 最大一条的余额」这一既有规则，而不是按日期重排。
+//!    因此**幂等**且不丢复盘。现金链的余额同样是派生值：按 (日期 → 创建时间 → ID) 链序逐条累加
+//!    （`write::recalculate_cash_chain` → `tr_domain::fund::cash_chain`），
+//!    所以**倒填**的日期只是让那一行排到它该在的位置，金额不会被跳过（`#48`）。
 
 use std::collections::HashMap;
 
@@ -355,9 +356,6 @@ pub fn add_principal_at_date(
     if let Err(error) = workspace.transaction(|conn| {
         let account = get_or_create_account_in(conn, ledger_id)?;
 
-        // 追加前现金：末条记录余额，无记录则为本金
-        let prev_cash = cash_before_records(conn, ledger_id, account.principal)?;
-
         let new_principal = account.principal + amount;
         db(StockDao::update_account_principal(
             conn,
@@ -372,7 +370,8 @@ pub fn add_principal_at_date(
             event_type: consts::STOCK_EVENT_ADD_PRINCIPAL.to_string(),
             event_text: "追加本金".to_string(),
             amount_change: amount,
-            cash_balance: tr_domain::fund::cash_after(prev_cash, amount),
+            // 余额是派生值：插入后按链序复算（见 `write::recalculate_cash_chain`）
+            cash_balance: 0,
             net_pnl: None,
             remark: format!(
                 "本金 {} → {}",
@@ -382,6 +381,7 @@ pub fn add_principal_at_date(
             created_at: 0,
         };
         db(StockDao::create_fund_record(conn, &record))?;
+        write::recalculate_cash_chain(conn, ledger_id)?;
         log_operation(
             conn,
             ledger_id,
@@ -446,7 +446,6 @@ pub fn add_withdraw_at_date(
             );
         }
 
-        let after_cash = tr_domain::fund::cash_after(prev_cash, -amount);
         let record = StockFundRecord {
             id: tr_store::util::new_uuid(),
             ledger_id: ledger_id.to_string(),
@@ -454,16 +453,15 @@ pub fn add_withdraw_at_date(
             event_type: consts::STOCK_EVENT_WITHDRAW.to_string(),
             event_text: "支取".to_string(),
             amount_change: -amount,
-            cash_balance: after_cash,
+            // 余额是派生值：插入后按链序复算（见 `write::recalculate_cash_chain`）
+            cash_balance: 0,
             net_pnl: None,
-            remark: format!(
-                "现金 {} → {}",
-                tr_domain::money::cents_to_yuan(prev_cash),
-                tr_domain::money::cents_to_yuan(after_cash)
-            ),
+            // 备注只说这一笔是什么：余额那一列由链算出来，写在备注里的数字会随日期倒填失真（`#48`）
+            remark: format!("支取 {} 元", tr_domain::money::cents_to_yuan(amount)),
             created_at: 0,
         };
         db(StockDao::create_fund_record(conn, &record))?;
+        write::recalculate_cash_chain(conn, ledger_id)?;
         log_operation(
             conn,
             ledger_id,
@@ -514,12 +512,6 @@ pub fn add_interest_at_date(
     let record_date = normalize_stock_record_date(date)?;
 
     if let Err(error) = workspace.transaction(|conn| {
-        let account = get_or_create_account_in(conn, ledger_id)?;
-
-        // 当前现金：末条资金记录余额，无记录时为本金
-        let prev_cash = cash_before_records(conn, ledger_id, account.principal)?;
-
-        let after_cash = tr_domain::fund::cash_after(prev_cash, amount);
         let record = StockFundRecord {
             id: tr_store::util::new_uuid(),
             ledger_id: ledger_id.to_string(),
@@ -527,17 +519,15 @@ pub fn add_interest_at_date(
             event_type: consts::STOCK_EVENT_INTEREST_PRINCIPAL.to_string(),
             event_text: "利息归本".to_string(),
             amount_change: amount,
-            cash_balance: after_cash,
+            // 余额是派生值：插入后按链序复算（见 `write::recalculate_cash_chain`）
+            cash_balance: 0,
             net_pnl: None,
-            remark: format!(
-                "利息 {} 元，现金 {} → {}",
-                tr_domain::money::cents_to_yuan(amount),
-                tr_domain::money::cents_to_yuan(prev_cash),
-                tr_domain::money::cents_to_yuan(after_cash)
-            ),
+            // 备注只说这一笔是什么：余额那一列由链算出来，写在备注里的数字会随日期倒填失真（`#48`）
+            remark: format!("利息 {} 元", tr_domain::money::cents_to_yuan(amount)),
             created_at: 0,
         };
         db(StockDao::create_fund_record(conn, &record))?;
+        write::recalculate_cash_chain(conn, ledger_id)?;
         log_operation(
             conn,
             ledger_id,
@@ -3844,8 +3834,13 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **`#48` 的回归**：倒填（日期早于已有记录、录入更晚）的买卖记录照样进现金链。
+    ///
+    /// 修前：链按**录入顺序**结算，倒填那条够不着"前 i 条里 (日期, 创建时间, ID) 最大一条"的余额，
+    /// 它的金额被跳过 ⇒ `available_cash` 虚高一笔建仓的钱（用户真实数据上就是这个形状）。
+    /// 修后：链按 (日期 → 创建时间 → ID) 排，末条余额 = 本金 + Σ 非追加本金的变动，与录入先后无关。
     #[test]
-    fn rebuild_keeps_cash_chain_for_backdated_trade() {
+    fn backdated_trade_is_counted_in_the_cash_chain() {
         let (workspace, dir) = workspace("order-backdated");
 
         seed_principal(&workspace, 10_000_000);
@@ -3880,12 +3875,28 @@ mod tests {
                 .map(|item| item.cash_balance)
                 .unwrap_or_else(|| panic!("未找到 {event_type} 资金记录"))
         };
+        let available = || {
+            get_overview(&workspace, TEST_LEDGER_ID, &no_quotes())
+                .unwrap()
+                .available_cash
+        };
 
-        // 追加后现金 150000；买入 10 手 @10.00 = 1000000 + 佣金 500 + 过户费 10
-        assert_eq!(balance_of(consts::STOCK_EVENT_ADD_PRINCIPAL), 15_000_000);
-        assert_eq!(balance_of(consts::STOCK_EVENT_BUY), 15_000_000 - 1_000_510);
+        // 买入 10 手 @10.00 = 1000000 + 佣金 500 + 过户费 10 = 1000510
+        // 倒填的那笔排在最前：余额 = 起点（本金 10000000）− 1000510
+        assert_eq!(
+            balance_of(consts::STOCK_EVENT_BUY),
+            10_000_000 - 1_000_510,
+            "倒填的建仓接在初始本金之后"
+        );
+        // 追加本金那条日期最晚 ⇒ 它的余额 = 本金 + Σ 非追加本金的变动（正是可用现金）
+        assert_eq!(
+            balance_of(consts::STOCK_EVENT_ADD_PRINCIPAL),
+            15_000_000 - 1_000_510,
+            "追加本金的余额要把倒填的建仓一起算进去（修前是 15000000，虚高了一笔建仓的钱）"
+        );
+        assert_eq!(available(), 15_000_000 - 1_000_510, "可用现金不再虚高");
 
-        // 编辑成交（改为 11.00）后重放，追加本金的余额不能被改写
+        // 编辑成交（改为 11.00）后重放：整条链跟着走，可用现金仍是"本金 + Σ变动"
         update_trade_fill(
             &workspace,
             TEST_LEDGER_ID,
@@ -3895,19 +3906,84 @@ mod tests {
             1_700_000_000,
         )
         .unwrap();
+        // 1100000 + 佣金 500 + 过户费 11 = 1100511
+        assert_eq!(
+            balance_of(consts::STOCK_EVENT_BUY),
+            10_000_000 - 1_100_511,
+            "重放后倒填那笔仍是链上的第一条"
+        );
         assert_eq!(
             balance_of(consts::STOCK_EVENT_ADD_PRINCIPAL),
-            15_000_000,
-            "重放后追加本金余额应保持 15000000 分"
+            15_000_000 - 1_100_511,
+            "重放后追加本金的余额跟着新成交价走"
         );
-        // 1100000 + 佣金 500 + 过户费 11 = 1100511
-        assert_eq!(balance_of(consts::STOCK_EVENT_BUY), 15_000_000 - 1_100_511);
+        assert_eq!(available(), 15_000_000 - 1_100_511);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **`#48` 的另一半**：三个资金事件（追加本金 / 支取 / 利息归本）插入后也要按链序复算。
+    ///
+    /// 修前它们只在插入时算一次 `prev_cash + amount`：日期倒填时那条记录排不到链末
+    /// （可用现金读的是日期最大那条），于是**可用现金根本不减** —— 比买卖那条更糟。
+    #[test]
+    fn backdated_fund_events_are_counted_in_available_cash() {
+        let (workspace, dir) = workspace("backdated-fund-events");
+        seed_principal(&workspace, 10_000_000);
+        add_interest_at_date(&workspace, TEST_LEDGER_ID, 999, "2026-08-20", &no_quotes()).unwrap();
+        let available = || {
+            get_overview(&workspace, TEST_LEDGER_ID, &no_quotes())
+                .unwrap()
+                .available_cash
+        };
+        assert_eq!(available(), 10_000_999);
+
+        // 补录一笔 8-01（早于那条利息）的支取：可用现金当场就少
+        add_withdraw_at_date(
+            &workspace,
+            TEST_LEDGER_ID,
+            3_000_000,
+            "2026-08-01",
+            &no_quotes(),
+        )
+        .unwrap();
+        assert_eq!(
+            available(),
+            10_000_999 - 3_000_000,
+            "倒填的支取必须在可用现金里生效（修前它排在链末之前，根本不减）"
+        );
+
+        let page = list_fund_records(&workspace, TEST_LEDGER_ID, 1, 20).unwrap();
+        let record_of = |event_type: &str| {
+            page.items
+                .iter()
+                .find(|item| item.event_type == event_type)
+                .unwrap_or_else(|| panic!("未找到 {event_type} 资金记录"))
+        };
+        // 逐行余额按链序：支取（8-01）在前、利息（8-20）在后
+        assert_eq!(
+            record_of(consts::STOCK_EVENT_WITHDRAW).cash_balance,
+            7_000_000
+        );
+        assert_eq!(
+            record_of(consts::STOCK_EVENT_INTEREST_PRINCIPAL).cash_balance,
+            7_000_999,
+            "日期最晚那条的余额 = 本金 + Σ变动"
+        );
+        // 备注里不再写"录入时"的余额（日期倒填后那个数字与这一行的余额对不上）
+        assert_eq!(
+            record_of(consts::STOCK_EVENT_WITHDRAW).remark,
+            "支取 30000.00 元"
+        );
+        assert_eq!(
+            record_of(consts::STOCK_EVENT_INTEREST_PRINCIPAL).remark,
+            "利息 9.99 元"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
     // ---------- 日期口径与旧数据订正 ----------
-
     /// 本地时间串 → Unix 秒。用 SQLite 的 `'utc'` 修饰符（输入当本地时间、输出 UTC），
     /// 与界面 `new Date(y, m - 1, d)` 同一口径，且不受 chrono 的夏令时歧义影响。
     fn local_seconds(conn: &rusqlite::Connection, local: &str) -> i64 {
@@ -3925,7 +4001,7 @@ mod tests {
         event_type: &str,
     ) -> tr_domain::models::StockFundRecord {
         let conn = workspace.connection();
-        StockDao::list_fund_records_in_insert_order(&conn, TEST_LEDGER_ID)
+        StockDao::list_all_fund_records(&conn, TEST_LEDGER_ID)
             .unwrap()
             .into_iter()
             .find(|record| record.event_type == event_type)
@@ -3958,8 +4034,8 @@ mod tests {
     /// 旧版本写下的 UTC 日期要被订正：日期回到委托的本地日期，**现金链也重新连上**。
     ///
     /// 构造的是用户真实数据里那个形状：本金记在 8-20，建仓委托也是 8-20（旧版本把它的资金记录
-    /// 写成 8-19），随后 8-21 清仓——清仓插入时"最新一条"是 8-20 的本金记录，
-    /// 于是那条被倒填的建仓记录在链上被跳过，可用现金偏大一笔建仓的钱。
+    /// 写成 8-19），随后 8-21 清仓。修前那条被倒填的建仓在链上会被跳过、可用现金偏大一笔建仓的钱；
+    /// `#48` 之后总额本来就对，订正修的是**日期那一列**与**逐行余额的位置**（见下面的断言）。
     #[test]
     fn repair_legacy_trade_fund_dates_fixes_date_and_cash_chain() {
         let (workspace, dir) = workspace("repair-legacy-dates");
@@ -3998,7 +4074,7 @@ mod tests {
             )
             .unwrap();
 
-        // 清仓：余额从 8-20 的本金记录接上，**跳过** 8-19 的建仓 ⇒ 可用现金虚高
+        // 清仓：日期最晚 ⇒ 链末条就是它（可用现金读的就是这一条）
         let sell_time = local_seconds(&workspace.connection(), "2026-08-21 00:00:00");
         create_trade(
             &workspace,
@@ -4014,12 +4090,29 @@ mod tests {
         )
         .unwrap();
 
-        let principal = fund_record_of(&workspace, consts::STOCK_EVENT_ADD_PRINCIPAL);
-        let sell = fund_record_of(&workspace, consts::STOCK_EVENT_SELL);
+        // 订正前：日期错一天 ⇒ 建仓排在本金**之前**（它自己与本金那行的余额都按错位置算）。
+        // 但**总额不再虚高**（`#48` 起链按日期排、每条的金额都进链）——
+        // 老口径下这里清仓的余额会跳过建仓、可用现金多加一笔建仓的钱。
+        let principal_before = fund_record_of(&workspace, consts::STOCK_EVENT_ADD_PRINCIPAL);
+        let buy_before = fund_record_of(&workspace, consts::STOCK_EVENT_BUY);
+        let sell_before = fund_record_of(&workspace, consts::STOCK_EVENT_SELL);
+        assert_eq!(buy_before.record_date, "2026-08-19", "旧版本写成前一天");
         assert_eq!(
-            sell.cash_balance,
-            principal.cash_balance + sell.amount_change,
-            "订正前：清仓的余额跳过了被倒填的建仓（这正是可用现金虚高的原因）"
+            principal_before.cash_balance,
+            buy_before.cash_balance + principal_before.amount_change,
+            "订正前：建仓（8-19）排在本金（8-20）之前"
+        );
+        assert_eq!(
+            sell_before.cash_balance,
+            principal_before.cash_balance + sell_before.amount_change,
+            "订正前：清仓接在本金之后 = 本金 + Σ变动（已经不再虚高）"
+        );
+        let available_before = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes())
+            .unwrap()
+            .available_cash;
+        assert_eq!(
+            available_before, sell_before.cash_balance,
+            "可用现金取的正是链末条（清仓那条）"
         );
 
         assert_eq!(
@@ -4028,6 +4121,8 @@ mod tests {
             "应重放 1 个账本"
         );
 
+        // 订正后：日期回到委托的本地日期，链位置随之归位（同一天时本金记在成交之前）
+        let principal = fund_record_of(&workspace, consts::STOCK_EVENT_ADD_PRINCIPAL);
         let buy = fund_record_of(&workspace, consts::STOCK_EVENT_BUY);
         let sell = fund_record_of(&workspace, consts::STOCK_EVENT_SELL);
         assert_eq!(
@@ -4043,7 +4138,14 @@ mod tests {
         assert_eq!(
             sell.cash_balance,
             buy.cash_balance + sell.amount_change,
-            "订正后：清仓接在建仓之后（链不再跳过它）"
+            "订正后：清仓接在建仓之后"
+        );
+        let available_after = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes())
+            .unwrap()
+            .available_cash;
+        assert_eq!(
+            available_after, available_before,
+            "订正改的是日期与逐行余额，可用现金不变（它本来就等于本金 + Σ变动）"
         );
 
         // 幂等：日期已经等于委托的本地日期，不再满足"早一天"，所以不会重复重放

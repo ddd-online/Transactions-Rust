@@ -4,6 +4,53 @@
 
 ## [未发布]
 
+### 修复
+
+**图表 Y 轴负数的千分位（`#47`）**
+
+跨零的折线图（累计盈亏那类）Y 轴刻度以前同一根轴上两种写法并存：正数 `50,000`、负数 `-50000`。根因在
+charts-rs 的 `thousands_format_float`（第一行 `if value < 1000.0 { return format_float(value) }` 把负数全挡进了
+不分组那条分支），而它只给了 `axis_formatter` 这一个**模板字符串**口子（`{c}` / `{t}` 字面替换，没有自定义格式化
+函数）。照本模块既有的做法在生成的 SVG 上定点改写：`tr_draw::chart::group_negative_tick_labels` 只改"负号 +
+≥ 4 位数字（可带 `%` 这类后缀）"的文本节点 ⇒ `-50,000` / `-100,000`，正数、`-500`、类目轴上的 `2026-01`
+一个字节不动。
+
+判据：`cargo test -p tr-draw` **110 绿**（新增 2 条：一条用 charts-rs **真实输出**的 8 个刻度文字节点做的断言
+—— 属性、`x`/`y`、文字前后的换行都是原样搬过来的，另一条锁住"只认负号 + ≥ 4 位数字"与不成对标签宁可不动）。
+轴宽不用跟着改：charts-rs 的预留宽度按改写前的最长标签量，文字左边缘定死在 `x` 上，多出的逗号往右长进
+`name_gap` 那 8px 里（实证：`-100000` 的 `x = 4`，补逗号后距绘图区还有约 1px）。
+
+**股票现金链按日期复算，倒填的资金记录不再被跳过（`#48`）**
+
+修前 `recalculate_cash_chain` 按**录入顺序**结算（每条的前值取"前 i 条里 (日期, 创建时间, ID) 最大一条"的余额），
+**倒填**的记录（日期更早、录入更晚）够不着那条 ⇒ 它的金额进不了链，而可用现金读的正是链上日期最大那条的余额 ⇒
+**可用现金虚高**（用户真实数据上正好虚高了一笔建仓的钱）。三个资金事件（追加本金 / 支取 / 利息归本）更糟：它们
+只在插入时算一次 `prev + amount`、之后从不复算，倒填日期时可用现金**根本不减**。
+
+现在链的口径只有一处：`tr_domain::fund::cash_chain` 把记录按 **(日期 → 创建时间 → ID) 升序**逐条累加
+（起点 = 本金 − Σ追加本金），`stock::write::recalculate_cash_chain` 只是"取出来 → 算 → 写回去"，
+四个写入口（下单 / 追加本金 / 支取 / 利息归本）都在**同一事务**里复算，插入时不再自己算一次
+（`recalculate_cash_chain` 因此从模块私有改成 `pub(super)`）。于是"链末条（日期最大那条）的余额 =
+本金 + Σ 非追加本金的变动"恒成立，与录入先后无关 —— 可用现金不再虚高，逐行余额也按"资金变化发生的先后"排。
+顺带删掉两处不再有调用点的东西：`tr_domain::fund::cash_after` 与 `is_newer`（"谁更新"那个谓词），
+以及 `stock::write::fund_record_after`；`StockDao::list_fund_records_in_insert_order` 改名
+`list_all_fund_records`（它返回的顺序不再是链序，只要求"同一次调用里稳定"）。
+
+用户可见的两处小改动：资金记录的**备注**不再写"现金 A → B"（改成 `支取 500.00 元` / `利息 3.00 元`）——
+那两个数字是录入时的口径，日期倒填后与同一行的「余额」列对不上；「追加本金」的备注是**本金**口径
+（`本金 A → B`，与链无关），保留。
+
+判据：`cargo test -p tr-domain` **122 绿**（新增 5 条：链序与累加 / 倒填进链 / 同日比创建时间与 id / 空链与单条 /
+余额可以为负）、`cargo test -p tr-service` **158 绿**（新增 `backdated_fund_events_are_counted_in_available_cash`；
+两条钉住旧行为的断言按新口径改写 —— `rebuild_keeps_cash_chain_for_backdated_trade` 更名
+`backdated_trade_is_counted_in_the_cash_chain`，`repair_legacy_trade_fund_dates_fixes_date_and_cash_chain` 里
+"可用现金虚高"那段换成"日期错只影响逐行余额，总额本来就对"）；`fixtures/ui-stock.ps1` 的 `Assert-FundChain`
+改成按链序（(日期, 创建时间, ID)）取相邻两条，不再按录入顺序（否则它自己就钉着旧口径）。
+
+护栏：`fixtures/test.ps1 -All` **34/35 绿**（1338.5s，含重新构建的 release 产物）。唯一红的是 `ui-drag`——
+真实鼠标拖拽这一轮没生效（界面顺序与库都没变），单独复跑 `fixtures/ui-drag.ps1` 全绿；本次改动面里
+没有拖拽路径（`tr-draw` 只多了图表 SVG 文字的定点改写、`tr-service` 只有股票资金链），按偶发记录在此。
+
 ### 调整
 
 **把写路径的"在飞 + 失败面"铺到其余页面（候选 2 的延续，`#34`）**

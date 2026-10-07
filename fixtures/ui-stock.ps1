@@ -173,19 +173,24 @@ function Invoke-ModalButton { param($Window, [string]$Name)
 # （种子里有追加本金/支取/多轮买卖，`cash_balance = 本金 + Σ变动` 这种整体口径不成立——
 #   追加本金会同时改 principal 与记一条 add_principal，两边都算就重复了。）
 # 每次提交后断言两条：
-#   1. 链式：新记录.cash_balance == 上一条.cash_balance + 新记录.amount_change
+#   1. 链式：链末条.cash_balance == 它的前一条.cash_balance + 链末条.amount_change
 #   2. 金额：买入 = -(成交额 + 手续费)，卖出 = +(成交额 - 手续费)
 function Get-FundRecords { param([string]$LedgerId)
     return @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_fund_record' -OutDir $OutDir | Where-Object { $_.ledger_id -eq $LedgerId } |
         Sort-Object created_at)
 }
+
+# 链序 = (日期 → 创建时间 → ID)，**不是**录入顺序（#48 起倒填的记录也进链，排在它日期该在的位置；
+# 与 `tr-domain::fund::cash_chain` 同一口径）。倒填那条的回归在 native 上：
+# `cargo test -p tr-service backdated` 的两条。
 function Assert-FundChain { param([string]$LedgerId, [string]$Stage)
-    $records = Get-FundRecords -LedgerId $LedgerId
+    $records = @(Get-FundRecords -LedgerId $LedgerId |
+        Sort-Object @{Expression={[string]$_.record_date}}, @{Expression={[int64]$_.created_at}}, @{Expression={[string]$_.id}})
     if ($records.Count -lt 2) { Assert-True $false "$Stage：资金记录至少 2 条"; return }
-    $new = $records[$records.Count - 1]
+    $last = $records[$records.Count - 1]
     $previous = $records[$records.Count - 2]
-    Assert-True ([int64]$new.cash_balance -eq ([int64]$previous.cash_balance + [int64]$new.amount_change)) `
-        "$Stage：余额链一致（$($previous.cash_balance) + $($new.amount_change) = $($new.cash_balance)）"
+    Assert-True ([int64]$last.cash_balance -eq ([int64]$previous.cash_balance + [int64]$last.amount_change)) `
+        "$Stage：余额链一致（$($previous.record_date) $($previous.cash_balance) + $($last.amount_change) = $($last.cash_balance)）"
 }
 
 # 分 → `1234.56`（与界面 `format::amount` 的 `cents_to_yuan` 同口径：两位小数、不做千分位）。
@@ -692,9 +697,10 @@ try {
 
     # ---- 委托时间：选一个**不是今天**的日期 ----
     # 弹窗默认就是今天，选今天等于没测日期选择器。取**上个月的 24 号**：既与今天不同、
-    # 又必然要翻一次「上一月」（用户报的正是"选 8 月 24 日"这种跨月选择），而且晚于种子数据的
-    # 最晚一天（2026-04-20 —— 建仓日期若早于已有记录，那条记录会在现金链里被跳过，
-    # 那是另一个缺陷的形状，不该混进这一步）。
+    # 又必然要翻一次「上一月」（用户报的正是"选 8 月 24 日"这种跨月选择）。
+    # 曾经这里还要求它晚于种子数据的最晚一天（2026-04-20）——那时建仓日期若早于已有记录，
+    # 那条记录会在现金链里被跳过；`#48` 修掉了（倒填也进链，native 断言见 `cargo test -p tr-service backdated`），
+    # 所以这条约束没有了，日期照旧取上个月只是为了那次跨月点击。
     $today = (Get-Date).Date
     $tradeDate = [datetime]::new($today.Year, $today.Month, 24).AddMonths(-1)
     $wantDate = $tradeDate.ToString('yyyy-MM-dd')

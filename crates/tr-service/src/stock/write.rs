@@ -24,9 +24,10 @@
 //! | 回滚（资金类） | 删掉那条资金记录（追加本金还要把本金改回去）→ 复算现金链 |
 //! | 旧数据订正 | 触发条件可证明时整体重放（`repair_legacy_trade_fund_dates`） |
 //!
-//! `rebuild_trades`（整体重放）与 `recalculate_cash_chain`（现金链复算）只在**本 module 内**被调用；
-//! 它们与"逐笔拆开"的事务函数（`update_trade_fill_tx` / `delete_trade_order_tx`）一起是这里的
-//! 内部实现，不对外、也不给兄弟 module 用。
+//! `rebuild_trades`（整体重放）只在**本 module 内**被调用；`recalculate_cash_chain`（现金链复算）
+//! 另有 `stock.rs` 的三个资金事件要调（它们不重放，但余额同样是派生值，插入后必须复算 —— `#48`），
+//! 所以它是 `pub(super)`。它们与"逐笔拆开"的事务函数（`update_trade_fill_tx` / `delete_trade_order_tx`）
+//! 一起是这里的内部实现，不对外。
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -37,6 +38,7 @@ use tr_domain::dto::{
 };
 use tr_domain::error::AppError;
 use tr_domain::fee;
+use tr_domain::fund::CashChange;
 use tr_domain::models::{
     StockFundRecord, StockPosition, StockTrade, StockTradeHistory, StockTradeRound,
 };
@@ -226,14 +228,6 @@ pub fn create_trade_order(
         };
         position.stock_name = stock_name.to_string();
 
-        // 当前现金：末条资金记录余额，无记录则为本金
-        let account = get_or_create_account_in(conn, ledger_id)?;
-        let prev_cash = match StockDao::query_latest_fund_record(conn, ledger_id) {
-            Ok(latest) => latest.cash_balance,
-            Err(error) if is_not_found(&error) => account.principal,
-            Err(error) => return Err(ServiceError::Database(error)),
-        };
-
         // 卖出先按委托总量校验，避免逐笔结算中途才发现超卖
         if sell {
             let sold_shares: i64 = trades.iter().map(|trade| trade.shares).sum();
@@ -315,12 +309,14 @@ pub fn create_trade_order(
             event_type: event_type.to_string(),
             event_text,
             amount_change,
-            cash_balance: prev_cash + amount_change,
+            // 余额是派生值：插入时先留占位，紧接着按链序复算（**不**在这里自己算一次 —— `#48`）
+            cash_balance: 0,
             net_pnl,
             remark: trade_order_remark(stock_name, total_lots, total_amount, trades.len()),
             created_at: 0,
         };
         db(StockDao::create_fund_record(conn, &record))?;
+        recalculate_cash_chain(conn, ledger_id)?;
 
         for trade in &trades {
             db(StockDao::create_trade(conn, trade))?;
@@ -796,12 +792,11 @@ fn rebuild_trades(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult
     let mut cycle_indexes: HashMap<String, Vec<usize>> = HashMap::new();
     // 把当前保留记录（本金/追加/支取）的最大时间戳作为重放起点，让重放记录排在其后。
     // （`create_fund_record` 已在 DAO 层保证新记录时间戳严格递增，这里仅用于重放路径。）
-    let mut last_record_created_at: i64 =
-        db(StockDao::list_fund_records_in_insert_order(conn, ledger_id))?
-            .iter()
-            .map(|record| record.created_at)
-            .max()
-            .unwrap_or(0);
+    let mut last_record_created_at: i64 = db(StockDao::list_all_fund_records(conn, ledger_id))?
+        .iter()
+        .map(|record| record.created_at)
+        .max()
+        .unwrap_or(0);
 
     let mut current: Option<ReplayOrder> = None;
 
@@ -1114,59 +1109,47 @@ fn flush_replay_order(
     Ok(())
 }
 
-/// 重放后重算资金记录的现金余额，精确复刻既有的链条规则：
+/// 重算资金记录的现金余额：把该账本的记录交给 [`tr_domain::fund::cash_chain`]（链序 + 逐条累加），
+/// 再把值变了的行写回去。
 ///
-/// 按录入顺序逐条结算，每条的前值取「当前已存在记录里 (日期 → 创建时间 → ID) 最大一条」的余额
-/// （与 `QueryLatestFundRecord` 口径一致，且**只在前 i 条里找**）；
-/// 首条记录的起点 = 本金 − Σ追加本金。
+/// 起点 = 本金 − Σ追加本金：初始本金不进链，而"追加本金"既改本金又记一条变动，两者不能重复算。
 ///
-/// 该规则在补录历史日期交易时并非单纯按日期排序，因此这里同样逐条取最大值而不是重排序。
-///
-/// **私有**：与 [`rebuild_trades`] 同理，它是写入路径的一部分，不对外。
-fn recalculate_cash_chain(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult<()> {
+/// **`pub(super)`**：`stock.rs` 的三个资金事件（追加本金 / 支取 / 利息归本）插入记录后要在**同一事务**
+/// 里调它 —— 余额是派生值，不再由插入方自己算（`#48`）。只对 `stock` 可见，与 [`rebuild_trades`]
+/// 同理：它是写入路径的一部分，不对外。
+pub(super) fn recalculate_cash_chain(
+    conn: &rusqlite::Connection,
+    ledger_id: &str,
+) -> ServiceResult<()> {
     let account = get_or_create_account_in(conn, ledger_id)?;
-    let records = db(StockDao::list_fund_records_in_insert_order(conn, ledger_id))?;
-    let mut cash = account.principal;
+    let records = db(StockDao::list_all_fund_records(conn, ledger_id))?;
+    let mut base = account.principal;
     for record in &records {
         if record.event_type == consts::STOCK_EVENT_ADD_PRINCIPAL {
-            cash -= record.amount_change;
+            base -= record.amount_change;
         }
     }
-
-    let mut balances = vec![0_i64; records.len()];
-    for i in 0..records.len() {
-        if i > 0 {
-            let mut latest = 0_usize;
-            for j in 1..i {
-                if fund_record_after(&records[j], &records[latest]) {
-                    latest = j;
-                }
-            }
-            cash = balances[latest];
-        }
-        cash += records[i].amount_change;
-        balances[i] = cash;
-        if records[i].cash_balance == cash {
+    let entries: Vec<CashChange<'_>> = records
+        .iter()
+        .map(|record| CashChange {
+            record_date: &record.record_date,
+            created_at: record.created_at,
+            id: &record.id,
+            amount_change: record.amount_change,
+        })
+        .collect();
+    for (record, balance) in records
+        .iter()
+        .zip(tr_domain::fund::cash_chain(base, &entries))
+    {
+        if record.cash_balance == balance {
             continue;
         }
         db(StockDao::update_fund_record_cash_balance(
-            conn,
-            &records[i].id,
-            cash,
+            conn, &record.id, balance,
         ))?;
     }
     Ok(())
-}
-
-/// 判断 `a` 是否比 `b` 更「新」：(record_date, created_at, id) 三者依次比较。
-///
-/// 判据本身在 `tr_domain::fund::is_newer`（纯逻辑、native 真跑，并把"倒填记录会被跳过"这条现状
-/// 钉成了断言）—— 这里只是把模型字段取出来，避免第二份实现（#36）。
-fn fund_record_after(a: &StockFundRecord, b: &StockFundRecord) -> bool {
-    tr_domain::fund::is_newer(
-        (&a.record_date, a.created_at, &a.id),
-        (&b.record_date, b.created_at, &b.id),
-    )
 }
 
 // ==================================================================== 旧数据订正
@@ -1174,10 +1157,10 @@ fn fund_record_after(a: &StockFundRecord, b: &StockFundRecord) -> bool {
 /// 订正旧版本（≤ 0.6.0）写下的买卖资金记录日期，返回**被重放的账本数**。
 ///
 /// 旧版本的资金记录日期按 UTC 取（见 [`unix_to_date`] 的注释），而委托时间戳是本地 00:00：
-/// 东区（UTC+8）算出来比用户选的那天**早一天**。这个错位不止"日期显示错"——它还会让
-/// **下一笔**记录在现金链里认不到它：`recalculate_cash_chain` 取的是
-/// 「(日期, 创建时间, ID) 最大一条」的余额，被倒填日期的买/卖记录不是最大那条，
-/// 于是它的金额被跳过，可用现金偏大（用户真实数据上偏了一笔建仓的钱）。
+/// 东区（UTC+8）算出来比用户选的那天**早一天**。错的是用户看到的那一列
+/// （「8 月 24 日清仓，资金变化列表显示 8 月 22 日」）；同时链序按日期排，
+/// 日期错一天会让这条记录**排到错的日期位置上**（`#48` 之后它的金额不会再被跳过、
+/// 可用现金也不再虚高，但那一行与它后面几行的余额是按错日期算出来的）。
 ///
 /// 订正方式不是去改那一个日期字符串，而是**重放**：日期与现金链一起按当前口径重算。
 /// 触发条件是**可证明的**，不看宿主时区、也不看不认识的形状：
@@ -1211,7 +1194,7 @@ pub fn repair_legacy_trade_fund_dates(workspace: &Workspace) -> ServiceResult<us
 
 /// 该账本是否存在「日期比对应委托的本地日期早一天」的买卖资金记录。
 fn has_legacy_trade_fund_date(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult<bool> {
-    let records = db(StockDao::list_fund_records_in_insert_order(conn, ledger_id))?;
+    let records = db(StockDao::list_all_fund_records(conn, ledger_id))?;
     let has_trade_record = records.iter().any(|record| {
         record.event_type == consts::STOCK_EVENT_BUY
             || record.event_type == consts::STOCK_EVENT_SELL

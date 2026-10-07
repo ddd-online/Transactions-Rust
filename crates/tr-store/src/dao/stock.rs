@@ -376,10 +376,10 @@ impl StockDao {
 
     /// 按录入顺序（`created_at ASC, id ASC`）返回全部资金记录。
     ///
-    /// 重算现金链时**必须**用这个顺序，而不是按日期排序：链条规则是
-    /// 「每条记录的前值 = 已存在记录里 (日期 → 创建时间 → ID) 最大一条的余额」，
-    /// 补录历史日期的交易时两者结果不同（见 `recalculate_cash_chain`）。
-    pub fn list_fund_records_in_insert_order(
+    /// 这个顺序**不是**现金链的链序：链序是 (日期 → 创建时间 → ID)，由
+    /// `tr_domain::fund::cash_chain` 自己排（`#48` —— 从前"录入顺序"就是链序，于是倒填的记录
+    /// 被跳过、可用现金虚高）。这里只保证**同一次调用里顺序稳定**，好把算出的余额写回对应的行。
+    pub fn list_all_fund_records(
         conn: &Connection,
         ledger_id: &str,
     ) -> rusqlite::Result<Vec<StockFundRecord>> {
@@ -1410,7 +1410,7 @@ mod tests {
         )
         .unwrap();
 
-        let ordered = StockDao::list_fund_records_in_insert_order(&conn, "l1").unwrap();
+        let ordered = StockDao::list_all_fund_records(&conn, "l1").unwrap();
         assert_eq!(
             ordered.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
             vec!["f0", "f1", "f2"],
@@ -1437,7 +1437,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            StockDao::list_fund_records_in_insert_order(&conn, "l1")
+            StockDao::list_all_fund_records(&conn, "l1")
                 .unwrap()
                 .iter()
                 .find(|r| r.id == "replay")
@@ -1504,7 +1504,7 @@ mod tests {
         assert_eq!(page2.len(), 2);
 
         // 录入顺序：created_at ASC, id ASC
-        let ordered = StockDao::list_fund_records_in_insert_order(&conn, "l1").unwrap();
+        let ordered = StockDao::list_all_fund_records(&conn, "l1").unwrap();
         assert_eq!(
             ordered.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
             vec!["f1", "f2", "f3", "f4"]
@@ -1512,7 +1512,7 @@ mod tests {
 
         StockDao::update_fund_record_cash_balance(&conn, "f3", 999).unwrap();
         assert_eq!(
-            StockDao::list_fund_records_in_insert_order(&conn, "l1")
+            StockDao::list_all_fund_records(&conn, "l1")
                 .unwrap()
                 .iter()
                 .find(|r| r.id == "f3")

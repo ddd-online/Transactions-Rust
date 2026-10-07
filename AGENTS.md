@@ -357,8 +357,10 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   把步长往上取整（`36000 ÷ 4` → 9,500）⇒ 范围由 `nice_axis_range` 自己算（⚠ 自定义上界必须**严格**大于数据最大
   值，否则它静默退回自己的阶梯）；② 面积填充的基线它写死成绘图区底边（跨零时负的那段被填成"从折线一路铺到图底"
   的大色块）⇒ 在生成的 SVG 上定点改写（`anchor_fill_at_zero`；该公式假设**绘图区顶边 = `margin.top`**，所以本组件
-  始终把 charts-rs 的标题/副标题置空、自带图例关掉）；③ `{t}` 千分位**对负数不生效**（同一根轴上 `50,000` 与
-  `-50000` 并存），已知、未修。另：`tr-ui` 只编 wasm32，native 上 `cargo test -p tr-ui --lib` 是**绿的 0 个测试**
+  始终把 charts-rs 的标题/副标题置空、自带图例关掉）；③ `{t}` 千分位**对负数不生效**（它的 `thousands_format_float`
+  第一行 `if value < 1000.0` 把负数全挡进了不分组那条分支，于是同一根轴上 `50,000` 与 `-50000` 并存）⇒ 同样在
+  生成的 SVG 上定点改写（`group_negative_tick_labels`，只改"负号 + ≥ 4 位数字"的文本节点）。
+  另：`tr-ui` 只编 wasm32，native 上 `cargo test -p tr-ui --lib` 是**绿的 0 个测试**
   —— 留在那儿的 `#[cfg(test)]` 只当规格说明（渲染侧那几条），所以**能在 native 上断言的纯算法一律放 `tr-draw`**
   （刻度、填充基线、几何拼装、裁剪几何都在那儿，`cargo test -p tr-draw` 真跑，含用 charts-rs **真实输出**的
   SVG 做的定点断言）。见 `docs/adr/0001-pure-draw-crate.md`。
@@ -432,15 +434,18 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   * 股票域落在**本地 00:00**（`tr-ui::time::ymd_to_seconds`）→ 服务层必须按**宿主本地时区**取日期
     （`tr_service::stock::unix_to_date` 用 `chrono::Local`）。按 UTC 取会得到**前一天**：东八区的
     `2026-08-24 00:00` = UTC `08-23 16:00`，于是"8 月 24 日清仓"在资金变化列表里显示成 8 月 22 日（用户报的缺陷）。
-  * 连带坑：被写成**前一天**的资金记录会在现金链里被跳过 —— `recalculate_cash_chain` 取的是「(日期, 创建时间,
-    ID) 最大一条」的余额，倒填的那条不是最大那条，它的金额就不进链 ⇒ **可用现金虚高**（用户真实数据上正好虚高了
-    一笔建仓的钱）。这条规则对**任何**倒填的买卖记录都成立（例：先记今天的本金、再补录上月的历史成交，第三笔的
-    余额会跳过那笔建仓）——**已知、未修**：改它等于改资金链口径，要连 `recalculate_cash_chain` 的逐条规则与相关
-    断言一起动。旧数据由 `stock::repair_legacy_trade_fund_dates` 订正：外壳打开工作空间时跑一次，只有"记录日期
+  * 资金记录的余额是**派生值**，口径只有一处：`tr_domain::fund::cash_chain` 把记录按 **(日期 → 创建时间 → ID)**
+    升序逐条累加（起点 = `本金 − Σ追加本金`），`stock::write::recalculate_cash_chain` 只是"取出来 → 算 → 写回去"。
+    **链序是"资金变化发生的先后"，不是"录入的先后"** —— 倒填的记录排在它日期该在的位置上，金额不会被跳过
+    （`#48` 之前按录入顺序取"前 i 条里链序最大那条"的余额当起点，倒填那条够不着 ⇒ **可用现金虚高**，用户真实数据上
+    正好虚高了一笔建仓的钱）。于是"链末条（日期最大那条）的余额 = 本金 + Σ 非追加本金的变动"恒成立，
+    而可用现金取的就是它。四个写入口（下单、追加本金、支取、利息归本）都在**同一事务**里复算，插入时不再自己算一次。
+  * 旧数据由 `stock::repair_legacy_trade_fund_dates` 订正：外壳打开工作空间时跑一次，只有"记录日期
     恰好比对应委托的本地日期早一天"（按方向 + 股票名 + `created_at` 相差 ≤ 2 秒匹配委托，候选有歧义就跳过）才
     触发**重放**，日期与现金链一起重算；当前版本写的数据永不满足这个条件，所以幂等。回归：
-    `cargo test -p tr-service` 的 `unix_to_date_uses_the_host_local_day` 与
-    `repair_legacy_trade_fund_dates_fixes_date_and_cash_chain`、`fixtures/ui-stock.ps1` 第 1 步（日期选择器选
+    `cargo test -p tr-service` 的 `unix_to_date_uses_the_host_local_day`、
+    `repair_legacy_trade_fund_dates_fixes_date_and_cash_chain`、`backdated_trade_is_counted_in_the_cash_chain`、
+    `backdated_fund_events_are_counted_in_available_cash`，以及 `fixtures/ui-stock.ps1` 第 1 步（日期选择器选
     **上个月的 24 号**（必然翻一次「上一月」）→ 选择器文案 / `trade_time` 的本地日期 / 资金记录 `record_date` /
     账户页「资金变化记录 → 日期」列 四处一致）。
 - **数据库结构变更只走迁移引擎**：`transactions.db` 不存在时用 `fixtures/schema/fresh.sql` 建库（当前格式）；已

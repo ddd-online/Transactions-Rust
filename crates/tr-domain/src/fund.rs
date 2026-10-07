@@ -1,12 +1,16 @@
-//! 股票资金流水的**口径**：现金链上"谁更新"、余额怎么走、支取超限怎么说。
+//! 股票资金流水的**口径**：现金链怎么走、可用现金怎么取、支取超限怎么说。
 //!
 //! 这些都从 `tr-service` 里搬来（候选 3 / #36），因为从前它们是三份手写的加减加一句硬编码文案，
 //! 没有断言守着。搬进来的是**判据**；写入本身的组织归 `stock::write`（ADR-0002 的股票写入聚合，
 //! 现金链复算 `recalculate_cash_chain` 就在那里）。
 //!
-//! 本模块**只放被真正用到的东西**：一开始我还搬进来一个 `FundEntry` + `latest_index`（"链上哪条最新"），
-//! 后来发现 `stock::write::fund_record_after` 早就是这条规则的实现、而且真的在用 —— 那就是第二份实现，
-//! 于是删掉了自己那份，改成让那边**委托**到 [`is_newer`]。判据只有一处，才是这次搬家的目的。
+//! 本模块**只放被真正用到的东西**，而且同一件事只留一份实现：
+//!
+//! * `#36` 搬进来时我还写过一个 `FundEntry` + `latest_index`（"链上哪条最新"），发现
+//!   `stock::write::fund_record_after` 早就是同一条规则的实现 —— 那是第二份，删掉；
+//! * `#48` 把"链序 + 逐条累加"整条规则收进 [`cash_chain`]，于是那个"谁更新"的谓词、
+//!   以及调用方"插入时自己算一次余额"的写法（`cash_after`）一起没有调用点了 —— 一并删除。
+//!   现在链上每一条的余额只有 [`cash_chain`] 一个算法，且**按日期排**（见它的注释）。
 
 /// 支取超限时给用户看的整句（**用户可见文案，改动即影响界面/接口**）。
 pub fn withdraw_limit_message(available_cash: i64) -> String {
@@ -17,26 +21,54 @@ pub fn withdraw_limit_message(available_cash: i64) -> String {
 }
 
 /// 追加 / 支取前的可用现金：取现金链**末条**的余额；链还是空的（这个账本从没记过资金）才用当前本金。
+///
+/// "链末条"= 链序最大的那条（`StockDao::query_latest_fund_record` 的 `ORDER BY`），它的余额
+/// 就是 [`cash_chain`] 累加到底的结果 —— 与录入顺序无关。
 pub fn cash_before(latest_balance: Option<i64>, principal: i64) -> i64 {
     latest_balance.unwrap_or(principal)
 }
 
-/// 现金链上的一步：新余额 = 上一条余额 + 本次变动。
+/// 现金链上的一条：链序键 + 本次变动。
 ///
-/// 四种资金事件共用这一条：入库时 `amount_change` 已经带符号（追加本金与利息归本是 `+amount`、
-/// 支取是 `-amount`），所以余额算式不需要按事件分支。别在别处再写 `prev - amount` 这类分叉。
-pub fn cash_after(prev_cash: i64, amount_change: i64) -> i64 {
-    prev_cash + amount_change
+/// 借用记录自己的字段，不另造一份模型 —— 唯一的调用方 `stock::write` 拿的就是资金记录。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CashChange<'a> {
+    /// 资金变化的发生日期（`YYYY-MM-DD`，零填充，按**字典序**比）
+    pub record_date: &'a str,
+    /// 录入时间（Unix 秒；同一天的按它比）
+    pub created_at: i64,
+    /// 记录 id（uuid 字符串，字典序；同刻的按它兜底定序）
+    pub id: &'a str,
+    /// 带符号的变动额（分）：追加本金 / 利息归本是正、支取是负、买入是负、卖出是正
+    pub amount_change: i64,
 }
 
-/// 现金链的时序判据：`(记录日期, 创建时间, id)` 三者依次比较，`a` 是否比 `b` 更**新**。
+/// 现金链：从 `base` 起算，把各条按 **(日期, 创建时间, id) 升序**逐条累加，返回**与入参同序**的余额。
 ///
-/// 日期是零填充的 `YYYY-MM-DD`、id 是 uuid 字符串，两者都按**字典序**比（这就是既有行为）。这条规则决定"复算现金链时，某一条的
-/// 余额接在哪一条后面"—— 而它也是那个**已知坑**的来源：**倒填**的资金记录（日期更早、录入更晚）
-/// 不是"更新"的那条，于是它的金额进不了链，表现为可用现金虚高（AGENTS.md 有记，用户真实数据上
-/// 正好虚高过一笔建仓的钱）。修它等于改现金链口径，得单独一个提交。
-pub fn is_newer(a: (&str, i64, &str), b: (&str, i64, &str)) -> bool {
-    (a.0, a.1, a.2) > (b.0, b.1, b.2)
+/// 这是整条资金链唯一的算法（从前是 `stock::write` 里按**录入顺序**手写的两层循环）。两条要点：
+///
+/// * 链序是"资金变化**发生**的先后"，不是"**录入**的先后"。倒填的记录（日期更早、录入更晚）
+///   因此排到它该在的位置上，它的金额不会被跳过 —— 老口径把"前 i 条（录入序）里链序最大那条"的
+///   余额当起点，倒填那条够不着，于是它的金额进不了链，表现为**可用现金虚高**（`#48`）；
+/// * 于是链上最后一条（日期最大那条）的余额 = `base + Σ amount_change`，与录入顺序无关；
+///   而"可用现金"取的正是它，所以可用现金恒等于"本金 + Σ 非追加本金的变动"。
+///
+/// `base` 是"第一条记录之前的现金"，由调用方给（`principal − Σ追加本金`：初始本金不进链，
+/// 而"追加本金"既改本金又记一条变动，两者不能重复算）。
+pub fn cash_chain(base: i64, entries: &[CashChange<'_>]) -> Vec<i64> {
+    let mut order: Vec<usize> = (0..entries.len()).collect();
+    // 稳定排序：键只可能是"链序"这一个含义，同键的保持入参顺序
+    order.sort_by(|left, right| {
+        let (a, b) = (&entries[*left], &entries[*right]);
+        (a.record_date, a.created_at, a.id).cmp(&(b.record_date, b.created_at, b.id))
+    });
+    let mut balances = vec![base; entries.len()];
+    let mut cash = base;
+    for index in order {
+        cash += entries[index].amount_change;
+        balances[index] = cash;
+    }
+    balances
 }
 
 #[cfg(test)]
@@ -70,48 +102,91 @@ mod tests {
         assert_eq!(cash_before(None, 0), 0, "本金也为 0 时就是 0");
     }
 
-    /// `amount_change` 已带符号，所以"支取"就是"加一个负数"。
+    fn change<'a>(
+        record_date: &'a str,
+        created_at: i64,
+        id: &'a str,
+        amount: i64,
+    ) -> CashChange<'a> {
+        CashChange {
+            record_date,
+            created_at,
+            id,
+            amount_change: amount,
+        }
+    }
+
+    /// 正序：链上每条的余额就是逐条累加，末条 = base + 全部变动。
     #[test]
-    fn cash_after_adds_a_signed_change() {
-        assert_eq!(cash_after(10_000, 5_000), 15_000, "追加本金");
+    fn cash_chain_accumulates_in_date_order() {
+        let entries = [
+            change("2026-08-01", 100, "a", 10_000),
+            change("2026-08-02", 200, "b", -3_000),
+            change("2026-08-03", 300, "c", 500),
+        ];
+        assert_eq!(cash_chain(1_000, &entries), vec![11_000, 8_000, 8_500]);
+    }
+
+    /// **`#48` 的回归**：倒填的记录（日期更早、录入更晚）照样进链 ——
+    /// 老口径按录入顺序取"前 i 条里链序最大那条"的余额当起点，它的金额就被跳过了。
+    #[test]
+    fn a_back_dated_record_is_counted_in_the_chain() {
+        // 录入顺序与日期顺序**相反**：先录 8-24 的，再补录 7-24 的
+        let entries = [
+            change("2026-08-24", 1_000, "1", 100_000),
+            change("2026-07-24", 2_000, "2", -50_000),
+        ];
+        let balances = cash_chain(0, &entries);
         assert_eq!(
-            cash_after(10_000, -4_000),
-            6_000,
-            "支取（符号在 amount_change 里）"
+            balances,
+            vec![50_000, -50_000],
+            "补录那条排在前（它自己先扣成 -50000），8-24 那条的余额要包含它"
         );
-        assert_eq!(cash_after(10_000, 0), 10_000);
-        assert_eq!(cash_after(0, -500), -500);
-    }
 
-    #[test]
-    fn newer_is_by_date_then_created_at_then_id() {
-        assert!(
-            is_newer(("2026-08-03", 0, "a"), ("2026-08-01", 999, "z")),
-            "日期优先"
-        );
-        assert!(
-            is_newer(("2026-08-03", 300, "a"), ("2026-08-03", 100, "z")),
-            "同日比创建时间"
-        );
-        assert!(
-            is_newer(("2026-08-03", 100, "9"), ("2026-08-03", 100, "7")),
-            "同刻比 id"
-        );
-        assert!(
-            !is_newer(("2026-08-03", 100, "7"), ("2026-08-03", 100, "7")),
-            "相等不算更新"
+        // 三笔：8-24 建仓（录入最早）、7-24 的历史成交（补录）、8-25 清仓
+        let entries = [
+            change("2026-08-24", 1_000, "1", 100_000),
+            change("2026-07-24", 2_000, "2", -50_000),
+            change("2026-08-25", 3_000, "3", 20_000),
+        ];
+        assert_eq!(cash_chain(0, &entries), vec![50_000, -50_000, 70_000]);
+        // 链末条（= 可用现金读的那条）= base + Σ 全部变动，与录入顺序无关
+        assert_eq!(
+            cash_chain(0, &entries)[2],
+            100_000 - 50_000 + 20_000,
+            "链末条就是可用现金读的那条"
         );
     }
 
-    /// **把已知坑钉住**：补录的记录（日期更早、录入更晚）不是"更新"的那条，所以现金链会跳过它。
+    /// 同一天比录入时间，同刻比 id（与 `query_latest_fund_record` 的 `ORDER BY` 同序）。
     #[test]
-    fn a_back_dated_record_is_not_newer_even_though_it_was_entered_later() {
-        let today = ("2026-08-24", 1_000, "1");
-        let back_dated = ("2026-07-24", 2_000, "2");
-        assert!(is_newer(today, back_dated), "日期大的那条才算更新");
-        assert!(
-            !is_newer(back_dated, today),
-            "补录那条不是更新 —— 它的金额进不了链（现状）"
+    fn same_day_orders_by_created_at_then_id() {
+        let entries = [
+            change("2026-08-03", 300, "a", 1_000),
+            change("2026-08-03", 100, "z", 2_000),
+            change("2026-08-03", 100, "7", 4_000),
+        ];
+        assert_eq!(cash_chain(0, &entries), vec![7_000, 6_000, 4_000]);
+    }
+
+    /// 空链与单条：空链没有余额可言，单条就是 base + 它自己。
+    #[test]
+    fn empty_and_single_chains() {
+        assert!(cash_chain(12_345, &[]).is_empty());
+        assert_eq!(
+            cash_chain(12_345, &[change("2026-08-01", 1, "a", -500)]),
+            vec![11_845]
         );
+    }
+
+    /// 起点可以为负、累加也可以为负（倒填的交易排在"追加本金"之前时就会出现），
+    /// 不做钳制 —— 它只是链上的一格数字，不是"可用现金"。
+    #[test]
+    fn balances_may_be_negative() {
+        let entries = [
+            change("2026-07-01", 100, "a", -1_000_000),
+            change("2026-08-01", 200, "b", 1_500_000),
+        ];
+        assert_eq!(cash_chain(0, &entries), vec![-1_000_000, 500_000]);
     }
 }
