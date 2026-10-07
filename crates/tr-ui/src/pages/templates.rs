@@ -115,12 +115,13 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
     // ---- 删除 ----
     let delete_template = move |template_id: String| {
         leptos::task::spawn_local(async move {
-            match api::template::delete(&template_id).await {
-                Ok(()) => {
-                    Notifier::global().success("删除模板成功", None);
-                    templates.reload();
-                }
-                Err(error) => notify_error("删除模板失败", &error),
+            // 无在飞标记 → 只收失败面（判据见 #34）
+            if crate::change::submit(None, "删除模板失败", api::template::delete(&template_id))
+                .await
+                .is_some()
+            {
+                Notifier::global().success("删除模板成功", None);
+                templates.reload();
             }
         });
     };
@@ -219,16 +220,16 @@ pub fn TemplateSub(sub: RwSignal<SubFunction>) -> impl IntoView {
 
         creating.set(true);
         leptos::task::spawn_local(async move {
-            match api::template::create(dto).await {
-                Ok(_id) => {
-                    Notifier::global().success("保存模板成功", None);
-                    create_open.set(false);
-                    reset_form();
-                    templates.reload();
-                }
-                Err(error) => notify_error("保存模板失败", &error),
+            // 在飞与失败面走 change::submit（判据见 #34）；成功后的关弹窗/重置/重拉留在调用点
+            if crate::change::submit(Some(creating), "保存模板失败", api::template::create(dto))
+                .await
+                .is_some()
+            {
+                Notifier::global().success("保存模板成功", None);
+                create_open.set(false);
+                reset_form();
+                templates.reload();
             }
-            creating.set(false);
         });
     };
 
