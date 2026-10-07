@@ -429,20 +429,25 @@ pub fn DiaryPage() -> impl IntoView {
         }
         deleting.set(true);
         leptos::task::spawn_local(async move {
-            match api::diary::delete(&date, &ledger_id).await {
-                Ok(()) => {
-                    Notifier::global().success("日记已删除".to_string(), None);
-                    dates.update(|items| items.retain(|item| item.date != date));
-                    entry.set(None);
-                    draft.set(String::new());
-                    mood.set(String::new());
-                    save_status.set(SaveStatus::Idle);
-                    delete_open.set(false);
-                    selected_date.set(String::new());
-                }
-                Err(error) => notify_error("删除日记失败", &error),
+            // 在飞与失败面走 `change::submit`（判据与首例见候选 2 / #34）；
+            // 成功之后的界面动作（关弹窗、清草稿、重置状态机）留在调用点 —— 那是这一处独有的知识
+            if crate::change::submit(
+                Some(deleting),
+                "删除日记失败",
+                api::diary::delete(&date, &ledger_id),
+            )
+            .await
+            .is_some()
+            {
+                Notifier::global().success("日记已删除".to_string(), None);
+                dates.update(|items| items.retain(|item| item.date != date));
+                entry.set(None);
+                draft.set(String::new());
+                mood.set(String::new());
+                save_status.set(SaveStatus::Idle);
+                delete_open.set(false);
+                selected_date.set(String::new());
             }
-            deleting.set(false);
         });
     };
 
