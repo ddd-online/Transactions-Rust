@@ -282,43 +282,48 @@ pub fn KeyEventPage() -> impl IntoView {
             return;
         }
         leptos::task::spawn_local(async move {
-            match api::key_event::upsert(&ledger_id, &date, &title, &content, &color).await {
-                Ok(_) => {
-                    Notifier::global().success("事件已保存".to_string(), None);
-                    is_editing.set(false);
-                    // 就地同步列表与当前事件
-                    year_query.value.update(|list| {
-                        let items = &mut list.events;
-                        match items.iter_mut().find(|item| item.date == date) {
-                            Some(existing) => {
-                                existing.title = title.clone();
-                                existing.content = content.clone();
-                                existing.color = color.clone();
-                            }
-                            None => items.push(KeyEvent {
-                                date: date.clone(),
-                                title: title.clone(),
-                                content: content.clone(),
-                                color: color.clone(),
-                                ledger_id: ledger_id.clone(),
-                                ..KeyEvent::default()
-                            }),
+            // 无在飞标记 → 只收失败面（判据见 #34）
+            if crate::change::submit(
+                None,
+                "保存事件失败",
+                api::key_event::upsert(&ledger_id, &date, &title, &content, &color),
+            )
+            .await
+            .is_some()
+            {
+                Notifier::global().success("事件已保存".to_string(), None);
+                is_editing.set(false);
+                // 就地同步列表与当前事件
+                year_query.value.update(|list| {
+                    let items = &mut list.events;
+                    match items.iter_mut().find(|item| item.date == date) {
+                        Some(existing) => {
+                            existing.title = title.clone();
+                            existing.content = content.clone();
+                            existing.color = color.clone();
                         }
-                    });
-                    current_event.update(|slot| {
-                        if let Some(event) = slot.as_mut() {
-                            event.title = title.clone();
-                            event.content = content.clone();
-                            event.color = color.clone();
-                        }
-                    });
-                    year_query.value.update(|list| {
-                        list.dates.insert(date.clone());
-                    });
-                    // 标题变更会影响列表显示；只刷新列表，不动缓存
-                    year_query.reload();
-                }
-                Err(error) => notify_error("保存事件失败", &error),
+                        None => items.push(KeyEvent {
+                            date: date.clone(),
+                            title: title.clone(),
+                            content: content.clone(),
+                            color: color.clone(),
+                            ledger_id: ledger_id.clone(),
+                            ..KeyEvent::default()
+                        }),
+                    }
+                });
+                current_event.update(|slot| {
+                    if let Some(event) = slot.as_mut() {
+                        event.title = title.clone();
+                        event.content = content.clone();
+                        event.color = color.clone();
+                    }
+                });
+                year_query.value.update(|list| {
+                    list.dates.insert(date.clone());
+                });
+                // 标题变更会影响列表显示；只刷新列表，不动缓存
+                year_query.reload();
             }
         });
     };
@@ -335,34 +340,38 @@ pub fn KeyEventPage() -> impl IntoView {
             return;
         }
         leptos::task::spawn_local(async move {
-            match api::key_event::delete(&date, &ledger_id).await {
-                Ok(()) => {
-                    Notifier::global().success("事件已删除".to_string(), None);
-                    image_cache.update(|cache| {
-                        cache.remove(&date);
-                    });
-                    tr_cache.update(|cache| {
-                        cache.remove(&date);
-                    });
-                    if selected_date.get_untracked() == date {
-                        clear_selection(
-                            stores,
-                            selected_date,
-                            current_event,
-                            is_editing,
-                            images,
-                            selected_image_id,
-                            preview_open,
-                            linked,
-                            progress,
-                            pending,
-                        );
-                    }
-                    year_query.reload();
-                    // 确认弹窗到这一步才关：失败时它还在，用户能直接再点一次「删除」
-                    pending_delete.set(None);
+            if crate::change::submit(
+                None,
+                "删除事件失败",
+                api::key_event::delete(&date, &ledger_id),
+            )
+            .await
+            .is_some()
+            {
+                Notifier::global().success("事件已删除".to_string(), None);
+                image_cache.update(|cache| {
+                    cache.remove(&date);
+                });
+                tr_cache.update(|cache| {
+                    cache.remove(&date);
+                });
+                if selected_date.get_untracked() == date {
+                    clear_selection(
+                        stores,
+                        selected_date,
+                        current_event,
+                        is_editing,
+                        images,
+                        selected_image_id,
+                        preview_open,
+                        linked,
+                        progress,
+                        pending,
+                    );
                 }
-                Err(error) => notify_error("删除事件失败", &error),
+                year_query.reload();
+                // 确认弹窗到这一步才关：失败时它还在，用户能直接再点一次「删除」
+                pending_delete.set(None);
             }
         });
     };
@@ -373,20 +382,20 @@ pub fn KeyEventPage() -> impl IntoView {
             return;
         }
         leptos::task::spawn_local(async move {
-            match api::tr::unlink(&transaction_id).await {
-                Ok(_) => {
-                    Notifier::global().success("已解除关联".to_string(), None);
-                    linked.update(|items| {
-                        items.retain(|item| item.transaction_id != transaction_id);
-                    });
-                    let snapshot = linked.get_untracked();
-                    let date = selected_date.get_untracked();
-                    tr_cache.update(|cache| {
-                        cache.insert(date, snapshot.clone());
-                    });
-                    publish_statistics(stores, &snapshot);
-                }
-                Err(error) => notify_error("解除关联失败", &error),
+            if crate::change::submit(None, "解除关联失败", api::tr::unlink(&transaction_id))
+                .await
+                .is_some()
+            {
+                Notifier::global().success("已解除关联".to_string(), None);
+                linked.update(|items| {
+                    items.retain(|item| item.transaction_id != transaction_id);
+                });
+                let snapshot = linked.get_untracked();
+                let date = selected_date.get_untracked();
+                tr_cache.update(|cache| {
+                    cache.insert(date, snapshot.clone());
+                });
+                publish_statistics(stores, &snapshot);
             }
         });
     };
