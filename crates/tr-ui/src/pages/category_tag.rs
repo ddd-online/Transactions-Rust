@@ -306,15 +306,20 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         }
         let selected = name.clone();
         leptos::task::spawn_local(async move {
-            match api::category::create(&ledger_id, &name, &transaction_type).await {
-                Ok(()) => {
-                    Notifier::global().success(TEXT_CATEGORY_ADDED, None);
-                    open_category_modal.set(false);
-                    reload_categories();
-                    // 自动选中刚建的分类
-                    select_category(selected);
-                }
-                Err(error) => notify_error(ERR_CREATE_CATEGORY, &error),
+            // 无在飞标记 → 只收失败面（判据见 #34）
+            if crate::change::submit(
+                None,
+                ERR_CREATE_CATEGORY,
+                api::category::create(&ledger_id, &name, &transaction_type),
+            )
+            .await
+            .is_some()
+            {
+                Notifier::global().success(TEXT_CATEGORY_ADDED, None);
+                open_category_modal.set(false);
+                reload_categories();
+                // 自动选中刚建的分类
+                select_category(selected);
             }
         });
     };
@@ -355,14 +360,18 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         let category_transaction_type = format!("{category}:{transaction_type}");
         let selected = category.clone();
         leptos::task::spawn_local(async move {
-            match api::tag::create(&ledger_id, &name, &category_transaction_type).await {
-                Ok(()) => {
-                    Notifier::global().success(TEXT_TAG_ADDED, None);
-                    open_tag_modal.set(false);
-                    reload_categories();
-                    select_category(selected);
-                }
-                Err(error) => notify_error(ERR_CREATE_TAG, &error),
+            if crate::change::submit(
+                None,
+                ERR_CREATE_TAG,
+                api::tag::create(&ledger_id, &name, &category_transaction_type),
+            )
+            .await
+            .is_some()
+            {
+                Notifier::global().success(TEXT_TAG_ADDED, None);
+                open_tag_modal.set(false);
+                reload_categories();
+                select_category(selected);
             }
         });
     };
@@ -394,17 +403,21 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
             CtrDeleteKind::Category => {
                 let selected = selected_category.get_untracked();
                 leptos::task::spawn_local(async move {
-                    match api::category::delete(&target, &transaction_type, &ledger_id).await {
-                        Ok(()) => {
-                            Notifier::global().success(TEXT_CATEGORY_DELETED, None);
-                            open_delete_modal.set(false);
-                            let was_selected = selected == target;
-                            if was_selected {
-                                selected_category.set(String::new());
-                            }
-                            reload_categories();
+                    if crate::change::submit(
+                        None,
+                        ERR_DELETE_CATEGORY,
+                        api::category::delete(&target, &transaction_type, &ledger_id),
+                    )
+                    .await
+                    .is_some()
+                    {
+                        Notifier::global().success(TEXT_CATEGORY_DELETED, None);
+                        open_delete_modal.set(false);
+                        let was_selected = selected == target;
+                        if was_selected {
+                            selected_category.set(String::new());
                         }
-                        Err(error) => notify_error(ERR_DELETE_CATEGORY, &error),
+                        reload_categories();
                     }
                 });
             }
@@ -415,14 +428,18 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
                 }
                 let category_transaction_type = format!("{category}:{transaction_type}");
                 leptos::task::spawn_local(async move {
-                    match api::tag::delete(&target, &category_transaction_type, &ledger_id).await {
-                        Ok(()) => {
-                            Notifier::global().success(TEXT_TAG_DELETED, None);
-                            open_delete_modal.set(false);
-                            reload_categories();
-                            select_category(category);
-                        }
-                        Err(error) => notify_error(ERR_DELETE_TAG, &error),
+                    if crate::change::submit(
+                        None,
+                        ERR_DELETE_TAG,
+                        api::tag::delete(&target, &category_transaction_type, &ledger_id),
+                    )
+                    .await
+                    .is_some()
+                    {
+                        Notifier::global().success(TEXT_TAG_DELETED, None);
+                        open_delete_modal.set(false);
+                        reload_categories();
+                        select_category(category);
                     }
                 });
             }
