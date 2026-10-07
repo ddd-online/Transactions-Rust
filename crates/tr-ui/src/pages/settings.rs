@@ -377,15 +377,16 @@ fn GeneralSetting() -> impl IntoView {
     let change_appearance = move |mode: String| {
         let previous = stores.appearance.get_untracked();
         leptos::task::spawn_local(async move {
-            match api::desktop::config_set_appearance(&mode).await {
-                Ok(()) => {
+            // 失败面走 change::submit（判据见 #34）；**回滚**留在调用点 —— 它是这一处独有的知识
+            let saved =
+                crate::change::submit(None, "设置外观", api::desktop::config_set_appearance(&mode))
+                    .await;
+            match saved {
+                Some(()) => {
                     stores.appearance.set(mode);
                     stores.apply_appearance();
                 }
-                Err(error) => {
-                    appearance.set(previous);
-                    notify_error("设置外观", &error);
-                }
+                None => appearance.set(previous),
             }
         });
     };
@@ -394,12 +395,14 @@ fn GeneralSetting() -> impl IntoView {
     let change_close_behavior = move |mode: String| {
         let previous = close_behavior.get_untracked();
         leptos::task::spawn_local(async move {
-            match api::desktop::config_set_close_behavior(&mode).await {
-                Ok(()) => {}
-                Err(error) => {
-                    close_behavior.set(previous);
-                    notify_error("设置关闭行为", &error);
-                }
+            let saved = crate::change::submit(
+                None,
+                "设置关闭行为",
+                api::desktop::config_set_close_behavior(&mode),
+            )
+            .await;
+            if saved.is_none() {
+                close_behavior.set(previous);
             }
         });
     };
@@ -413,10 +416,13 @@ fn GeneralSetting() -> impl IntoView {
         }
         devtools_opening.set(true);
         leptos::task::spawn_local(async move {
-            if let Err(error) = api::desktop::devtools_toggle(true).await {
-                notify_error("打开开发者工具", &error);
-            }
-            devtools_opening.set(false);
+            // 在飞（防连点开两个窗口）与失败面都交给 change::submit（判据见 #34）
+            let _ = crate::change::submit(
+                Some(devtools_opening),
+                "打开开发者工具",
+                api::desktop::devtools_toggle(true),
+            )
+            .await;
         });
     };
 
