@@ -75,7 +75,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 | `design-audit` | `tokens.css` 之外的硬编码颜色、令牌是否已定义、深浅主题 + `prefers-color-scheme` 兜底覆盖同一组令牌 |
 | `smoke` / `window-bounds` / `close-behavior` | 首启动与已配置两种窗口形态；逻辑尺寸 ↔ 物理尺寸与关闭写回；`quit` / `tray` / 「关闭选项」三种关闭行为 |
 | `ui-smoke` / `ui-shots` | 6 顶级 + 11 子功能逐页渲染（`-WriteFlow` 走真实记账，`-Discover` 导出每页元素清单用来维护脚本顶部的页面标记表）；位图补 UIA 看不见的"被裁掉/没画出来" |
-| `ui-crud` / `ui-drag` | 分类/标签/图表/事件/模板的新增与删除；真实鼠标拖拽排序（含 `sort_order` 落库） |
+| `ui-crud` / `ui-drag` | 分类/标签/图表/事件/模板的新增与删除；真实鼠标拖拽排序（分类与图表的 `sort_order` 落库，含图表跨预设组） |
 | `ui-transactions` / `ui-sync-ledger` | 记一笔/编辑/排序/筛选/模板；同步到其他账本（复制而非移动 + 气泡收起） |
 | `ui-stock` | 建仓 → 编辑 → 减仓 → 清仓 → 费用设置 → 统计 → 回滚 → 重置的完整生命周期（含真实行情） |
 | `ui-todo` | 待办：建卡片 → 加事项（紧急/重要）→ 记进度 → 四象限图 → 完成进历史（带主题名 + 进度弹窗）→ 退回 → 删卡片（级联清三张表） |
@@ -466,7 +466,7 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   不再比 `msg` 文案）。`msg` 是用户可见文案。
   * **字段名靠共享类型，名字靠共享清单**：请求 / 响应类型在 `tr-domain`（`wire` / `dto` / `models`），
     命令名与事件名在 `tr_domain::commands` / `tr_domain::events`（事件名 6 条，应用里每一个都在那儿）。
-    **每一条命令都在清单里**（111 条 = 外壳 21 + 更新 5 + 业务 85；其中 `workspace_init` 已随候选 11 删除，
+    **每一条命令都在清单里**（112 条 = 外壳 21 + 更新 5 + 业务 86；其中 `workspace_init` 已随候选 11 删除，
     见下），清单按模块分成 `SHELL_COMMANDS` /
     `UPDATE_COMMANDS` / `BUSINESS_COMMANDS` 三组，界面侧**不再出现命令名字符串字面量**：
     `ipc::call(commands::LEDGER_LIST, req)`；没有 `req` 形参的写 `ipc::call_no_args(commands::CONFIG_GET)`，

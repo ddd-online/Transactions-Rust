@@ -5,6 +5,7 @@
 //! * `chart_delete { chartId }`（同时接受 `id`）
 //! * `chart_list { ledgerId }`
 //! * `chart_update`：`{ chartId, title, granularity, lines, chartType, sortOrder }`
+//! * `chart_update_sort`：`{ chartId, sortOrder }`（拖拽排序，只写序号）
 //!
 //! 错误文案：`missing ledgerId`、`missing chart id`（均 400）；
 //! `parse create chart request failed` / `parse update chart request failed` 是请求体绑定失败
@@ -12,7 +13,7 @@
 
 use tauri::State;
 
-use tr_domain::dto::{ChartDto, CreateChartRequest, UpdateChartRequest};
+use tr_domain::dto::{ChartDto, CreateChartRequest, UpdateChartRequest, UpdateChartSortRequest};
 use tr_domain::error::AppError;
 use tr_domain::wire::{ChartIdRequest, ChartListRequest};
 use tr_service::chart;
@@ -55,4 +56,16 @@ pub fn chart_list(state: State<'_, AppState>, req: ChartListRequest) -> ApiResul
 pub fn chart_update(state: State<'_, AppState>, req: UpdateChartRequest) -> ApiResult<ChartDto> {
     let workspace = state.workspace()?;
     Ok(chart::update(&workspace, &req)?)
+}
+
+/// 更新图表排序号（拖拽排序；只写 `sortOrder`，碰不到图表内容）。
+#[tauri::command]
+pub fn chart_update_sort(state: State<'_, AppState>, req: UpdateChartSortRequest) -> ApiResult<()> {
+    if req.chart_id.is_empty() {
+        return Err(ApiError::from(AppError::bad_request("missing chart id")));
+    }
+
+    let workspace = state.workspace()?;
+    chart::update_sort_order(&workspace, &req.chart_id, req.sort_order)?;
+    Ok(())
 }

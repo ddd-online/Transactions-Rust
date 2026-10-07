@@ -48,6 +48,20 @@
   color: var(--transactions-color-text-secondary);
 }
 
+/* 拖拽排序：外层 `.ui-drag-item`（`.da-list__row`）负责拖拽与落点指示线，
+ * 内层 `.da-list__item` 仍是原来那一行（role / 点击 / 删除气泡都在它上面）。
+ * 手柄复用 `ui.css` 的 `.ui-drag-handle` + `Icon::DragHandle`，不自画一套。 */
+.da-list__row {
+  min-width: 0;
+}
+
+/* 行 hover 时把手提亮一档（静止是 `text-disabled`，直接 hover 把手是主色）。
+ * ⚠ 用 `:where()` 把这条耦合规则的**权重降到 0**：否则它的 (0,3,0) 会压过
+ * `.ui-drag-handle:hover` 的 (0,2,0)，鼠标压在手把上反而不变主色（分类/标签踩过）。 */
+:where(.da-list__item:hover) .ui-drag-handle {
+  color: var(--transactions-color-text-secondary);
+}
+
 .da-list__item {
   position: relative;
   display: flex;

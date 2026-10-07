@@ -2,6 +2,31 @@
 
 本文件记录本仓库的版本变更。版本号以 `src-tauri/tauri.conf.json` 为唯一来源。
 
+## [未发布]
+
+### 新增
+
+**记账 · 分析：图表列表支持拖动排序（`chart_update_sort`）**
+
+左侧图表列表原来只能点选，现在可以拖拽换位 —— 与分类/标签、模板、待办卡片同一套 HTML5 `draggable`
+（`components/ui/drag_sort.rs`），手柄与落点指示线也共用既有那套（`.ui-drag-handle` + `Icon::DragHandle`）。
+拖动后本地顺序立即生效，落库只对 `sort_order` 与下标确实不一致的项发请求
+（纯算法 `tr_draw::list_order::reorder_with_changes`，native 上真跑）。
+
+写库走**新命令** `chart_update_sort`（`{ chartId, sortOrder }`）而不是复用 `chart_update`：排序是"只写序号"，
+不该有机会覆盖 `title` / `granularity` / `chart_lines`（与分类/标签/模板三条拖拽排序同形状）。命令清单因此
+111 → 112（外壳 21 + 更新 5 + 业务 86）。
+
+顺带收掉一条旧规则：图表 DAO 的读序从 `is_preset DESC, sort_order ASC, created_at DESC` 改成
+`sort_order ASC, created_at DESC` —— **预设图表不再固定在最前**，自定义图表可以拖到预设之前
+（`is_preset` 只继续决定面板里哪些项可编辑）。
+
+判据：`cargo test -p tr-domain`（`chart_update_sort` 的 camelCase 请求形状 + 清单计数）、
+`-p tr-store`（DAO 只写序号并刷新 `updated_at`；排序测试按新口径改写为"预设不再优先"）、
+`-p tr-service`（服务层只写序号、图表内容一字不动）、`-p transactions`（注册表 == 全表 112 条）；
+`fixtures/ui-drag.ps1` 第 3、4 步用真实鼠标把自定义图表拖到第一项预设之前 → 库里落成稠密 `0..N-1` →
+**切走再回来顺序仍与库一致**（DAO 里若还留着 `is_preset DESC`，这一条会红）。
+
 ## [0.15.2] - 2026-10-07
 
 ### 修复

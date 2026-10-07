@@ -4,7 +4,8 @@
 //! * `create` 自动填充 `created_at` / `updated_at`（均为秒级 Unix 秒）
 //! * `save` 是"按主键写回全部字段"，并刷新 `updated_at`，
 //!   因此这里整行回写（`ledger_id` / `created_at` 保持调用方传入的值）
-//! * 列表排序固定为：`ORDER BY is_preset DESC, sort_order ASC, created_at DESC`
+//! * 列表排序固定为：`ORDER BY sort_order ASC, created_at DESC`
+//!   （**预设图表不再优先**：列表可拖拽排序，`is_preset` 只决定面板里能不能编辑）
 //! * `is_preset` 列在基线 schema 里是 `numeric`，按整数 0/1 存储/读取
 
 use rusqlite::{params, Connection};
@@ -67,11 +68,11 @@ impl ChartDao {
         )
     }
 
-    /// 某账本的全部图表（预设图表优先，其次按排序号与创建时间）。
+    /// 某账本的全部图表（按排序号，其次按创建时间）。
     pub fn query_by_ledger_id(conn: &Connection, ledger_id: &str) -> rusqlite::Result<Vec<Chart>> {
         let mut statement = conn.prepare(&format!(
             "SELECT {COLUMNS} FROM tbl_billadm_chart WHERE ledger_id = ?1 \
-             ORDER BY is_preset DESC, sort_order ASC, created_at DESC"
+             ORDER BY sort_order ASC, created_at DESC"
         ))?;
         let rows = statement.query_map(params![ledger_id], from_row)?;
         rows.collect()
@@ -104,6 +105,18 @@ impl ChartDao {
                 chart.created_at,
                 crate::util::now_unix()
             ],
+        )?;
+        Ok(())
+    }
+
+    /// 只改排序号并刷新 `updated_at`（拖拽排序用；主键未命中则不改动任何行）。
+    ///
+    /// 与 [`Self::save`] 的分工：`save` 是"整行回写"（改名 / 改粒度 / 改曲线走它），
+    /// 这里是"只写序号" —— 排序不该有机会碰到图表内容。
+    pub fn update_sort(conn: &Connection, chart_id: &str, sort_order: i32) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE tbl_billadm_chart SET sort_order = ?2, updated_at = ?3 WHERE chart_id = ?1",
+            params![chart_id, sort_order, crate::util::now_unix()],
         )?;
         Ok(())
     }
@@ -182,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn query_orders_preset_first_then_sort_then_created_desc() {
+    fn query_orders_by_sort_then_created_desc() {
         let (workspace, dir) = crate::dao::test_workspace("chart-dao");
         let conn = workspace.connection();
 
@@ -201,7 +214,9 @@ mod tests {
 
         let charts = ChartDao::query_by_ledger_id(&conn, "l1").unwrap();
         let ids: Vec<&str> = charts.iter().map(|item| item.chart_id.as_str()).collect();
-        assert_eq!(ids, vec!["c", "b", "a"]);
+        // 预设不再优先：`a`（自定义、序号 0）排在 `b`（预设、序号 1）之前；
+        // 序号相同（a 与 c 都是 0）时按 created_at DESC。
+        assert_eq!(ids, vec!["c", "a", "b"]);
         assert_eq!(ChartDao::count_by_ledger_id(&conn, "l1").unwrap(), 3);
         assert_eq!(ChartDao::get_max_sort(&conn, "l1").unwrap(), 1);
         assert_eq!(ChartDao::get_max_sort(&conn, "l9").unwrap(), 0);
@@ -261,6 +276,43 @@ mod tests {
         assert_eq!(ChartDao::count_by_ledger_id(&conn, "l2").unwrap(), 1);
         // 删除不存在的记录视为成功
         ChartDao::delete_by_id(&conn, "absent").unwrap();
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn update_sort_touches_only_the_order() {
+        let (workspace, dir) = crate::dao::test_workspace("chart-dao");
+        let conn = workspace.connection();
+
+        ChartDao::create(&conn, &chart("c1", "l1", "甲", true, 0)).unwrap();
+        ChartDao::create(&conn, &chart("c2", "l1", "乙", false, 1)).unwrap();
+        let created = ChartDao::query_by_id(&conn, "c1").unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        ChartDao::update_sort(&conn, "c1", 3).unwrap();
+
+        let saved = ChartDao::query_by_id(&conn, "c1").unwrap();
+        assert_eq!(saved.sort_order, 3);
+        assert!(saved.updated_at > created.updated_at, "updated_at 必须刷新");
+        // 只写序号：内容与其它列的读回值一字不变
+        assert_eq!(saved.title, created.title);
+        assert_eq!(saved.granularity, created.granularity);
+        assert_eq!(saved.chart_lines, created.chart_lines);
+        assert_eq!(saved.chart_type, created.chart_type);
+        assert_eq!(saved.is_preset, created.is_preset, "预设标记不动");
+        assert_eq!(saved.created_at, created.created_at);
+
+        // 列表顺序跟着序号走（同一账本里 3 在 1 之后）
+        let ids: Vec<String> = ChartDao::query_by_ledger_id(&conn, "l1")
+            .unwrap()
+            .into_iter()
+            .map(|item| item.chart_id)
+            .collect();
+        assert_eq!(ids, vec!["c2".to_string(), "c1".to_string()]);
+
+        // 不存在的图表视为成功（0 行）
+        ChartDao::update_sort(&conn, "absent", 9).unwrap();
 
         std::fs::remove_dir_all(&dir).ok();
     }

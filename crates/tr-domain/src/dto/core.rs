@@ -235,6 +235,16 @@ pub struct UpdateChartRequest {
     pub sort_order: i32,
 }
 
+/// 图表拖拽排序后的落库参数（只带 id 与序号，碰不到图表内容）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateChartSortRequest {
+    #[serde(rename = "chartId")]
+    pub chart_id: String,
+    #[serde(rename = "sortOrder")]
+    pub sort_order: i32,
+}
+
 /// `chart_lines` 列 ↔ `Vec<ChartLine>` 的 JSON 互转。
 ///
 /// 放在这里而不是 `tr-service`：该 crate 没有 serde_json 依赖，而 JSON 文本与 DTO 的互转
@@ -662,6 +672,18 @@ mod tests {
         assert_eq!(dto.lines.len(), 1);
         assert_eq!(dto.lines[0].label, "支出");
         assert_eq!(dto.lines[0].transaction_type, "expense");
+    }
+
+    #[test]
+    fn chart_sort_request_uses_camel_case() {
+        let request = UpdateChartSortRequest {
+            chart_id: "c1".into(),
+            sort_order: 2,
+        };
+        assert_eq!(
+            serde_json::to_value(request).unwrap().to_string(),
+            r#"{"chartId":"c1","sortOrder":2}"#
+        );
     }
 
     #[test]

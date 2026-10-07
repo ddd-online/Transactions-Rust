@@ -211,6 +211,21 @@ pub fn update(workspace: &Workspace, req: &UpdateChartRequest) -> ServiceResult<
     to_dto(&chart)
 }
 
+/// 更新图表排序号（拖拽排序用；只写 `sort_order`，`updated_at` 由 DAO 刷新）。
+///
+/// 与 [`update`] 的分工：`update` 是"整行回写"（可能碰到曲线与标题），这里是"只写序号"。
+/// 排序不该有机会覆盖图表内容，所以拖拽走的是本函数而不是 `update`。
+pub fn update_sort_order(
+    workspace: &Workspace,
+    chart_id: &str,
+    sort_order: i32,
+) -> ServiceResult<()> {
+    ChartDao::update_sort(&workspace.connection(), chart_id, sort_order).map_err(|error| {
+        tracing::error!("更新图表排序失败: {}", error);
+        ServiceError::from(error)
+    })
+}
+
 /// 模型 → DTO；`chart_lines` 解析失败时报错（文案固定为
 /// `unmarshal chart lines failed: ...`）。
 fn to_dto(chart: &Chart) -> ServiceResult<ChartDto> {
@@ -274,7 +289,7 @@ mod tests {
         assert_eq!(charts.len(), 3, "预设图表数量");
 
         let titles: Vec<&str> = charts.iter().map(|chart| chart.title.as_str()).collect();
-        // is_preset DESC, sort_order ASC
+        // sort_order ASC, created_at DESC
         assert_eq!(titles, vec!["月度消费趋势", "年度消费趋势", "年度收入趋势"]);
         assert!(charts.iter().all(|chart| chart.is_preset));
         assert_eq!(
@@ -443,6 +458,63 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.to_string(), "get chart failed: record not found");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn update_sort_order_writes_only_the_order() {
+        let (workspace, dir) = workspace("sort");
+        let presets = list_by_ledger_id(&workspace, "l1").unwrap();
+        let custom = create(
+            &workspace,
+            &CreateChartRequest {
+                ledger_id: "l1".to_string(),
+                title: "自定义图表".to_string(),
+                granularity: "month".to_string(),
+                lines: vec![line_of("支出", "expense")],
+                chart_type: "line".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(custom.sort_order, 3, "预设占 0..2，新建取最大值 + 1");
+
+        // 只写序号：内容 / 预设标记 / created_at 都不动，updated_at 刷新
+        let before = ChartDao::query_by_id(&workspace.connection(), &custom.chart_id).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        update_sort_order(&workspace, &custom.chart_id, 0).unwrap();
+
+        let after = ChartDao::query_by_id(&workspace.connection(), &custom.chart_id).unwrap();
+        assert_eq!(after.sort_order, 0);
+        assert!(after.updated_at > before.updated_at, "updated_at 必须刷新");
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.granularity, before.granularity);
+        assert_eq!(after.chart_lines, before.chart_lines);
+        assert_eq!(after.chart_type, before.chart_type);
+        assert!(!after.is_preset, "只写序号不改预设标记");
+        assert_eq!(after.created_at, before.created_at);
+
+        // 与界面侧同形：被拖走的项之后，整段按新下标写回（稠密 0..N-1）
+        for (index, chart) in presets.iter().enumerate() {
+            update_sort_order(&workspace, &chart.chart_id, index as i32 + 1).unwrap();
+        }
+        let reordered = list_by_ledger_id(&workspace, "l1").unwrap();
+        let titles: Vec<&str> = reordered.iter().map(|chart| chart.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["自定义图表", "月度消费趋势", "年度消费趋势", "年度收入趋势"],
+            "自定义图表可以排到预设之前（排序只看 sort_order）"
+        );
+        assert_eq!(
+            reordered
+                .iter()
+                .map(|chart| chart.sort_order)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+
+        // 不存在的图表：不报错
+        update_sort_order(&workspace, "absent", 1).unwrap();
 
         std::fs::remove_dir_all(&dir).ok();
     }

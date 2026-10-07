@@ -21,7 +21,7 @@
 //!
 //! ## 覆盖范围
 //!
-//! 全部 112 条：22 条外壳命令 + 5 条更新命令 + 85 条业务命令，
+//! 全部 112 条：21 条外壳命令 + 5 条更新命令 + 86 条业务命令，
 //! 与 `tr_domain::commands` 的全表一一对应（分组的名字清单也在那边：
 //! `SHELL_COMMANDS` / `UPDATE_COMMANDS` / `BUSINESS_COMMANDS`）。
 
@@ -119,6 +119,7 @@ app_commands! {
     tr_ipc::commands::chart_delete,
     tr_ipc::commands::chart_list,
     tr_ipc::commands::chart_update,
+    tr_ipc::commands::chart_update_sort,
     tr_ipc::commands::key_event_list_by_year,
     tr_ipc::commands::key_event_dates_by_year,
     tr_ipc::commands::key_event_get,

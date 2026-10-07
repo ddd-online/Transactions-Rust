@@ -103,7 +103,7 @@ $Steps = [ordered]@{
     'ui-shots'          = @{ Title='逐页截图：非空白 + 浅/深色亮度对比';             Kind='pwsh';  Script='fixtures\ui-shots.ps1'; Needs='exe' }
     'ui-transactions'   = @{ Title='记账·记录：记一笔 / 编辑 / 排序 / 筛选 / 模板';  Kind='pwsh';  Script='fixtures\ui-transactions.ps1'; Needs='exe' }
     'ui-crud'           = @{ Title='分类 / 标签 / 图表 / 事件 / 模板的新增与删除';   Kind='pwsh';  Script='fixtures\ui-crud.ps1'; Needs='exe' }
-    'ui-drag'           = @{ Title='标签拖拽排序（真实鼠标按下→移动→抬起）';       Kind='pwsh';  Script='fixtures\ui-drag.ps1'; Needs='exe' }
+    'ui-drag'           = @{ Title='分类 / 图表拖拽排序（真实鼠标按下→移动→抬起）';   Kind='pwsh';  Script='fixtures\ui-drag.ps1'; Needs='exe' }
     'ui-key-event'      = @{ Title='事件页：非今天建事件 / upsert / 删除';          Kind='pwsh';  Script='fixtures\ui-key-event.ps1'; Needs='exe' }
     'ui-link-event'     = @{ Title='关联交易到事件：选日期 / 懒创建 / 解除关联';     Kind='pwsh';  Script='fixtures\ui-link-event.ps1'; Needs='exe' }
     'ui-diary-edit'     = @{ Title='日记：防抖自动保存 / 心情 / 预览 / 删除';       Kind='pwsh';  Script='fixtures\ui-diary-edit.ps1'; Needs='exe' }
@@ -136,7 +136,9 @@ $Groups = [ordered]@{
     # 记账 · 记录：记一笔 / 编辑 / 排序 / 筛选 / 模板，以及"同步到其他账本"（ui-sync-ledger 属于这条链路）
     'accounting'   = @('ui-transactions', 'ui-sync-ledger')
     'category-tag' = @('ui-crud', 'ui-drag')
-    'analysis'     = @('test-draw', 'ui-crud')
+    # 记账 · 分析：图表列表与它的读序（DAO 的 ORDER BY）都在这一组的影响面里 ——
+    # `ui-drag` 的第 3、4 步就是图表拖拽（跨预设组 + 重进页面），别漏。
+    'analysis'     = @('test-draw', 'ui-crud', 'ui-drag')
     'templates'    = @('ui-crud', 'ui-transactions')
     'key-event'    = @('ui-key-event', 'ui-link-event')
     'diary'        = @('ui-diary-edit', 'ui-diary-ledger', 'ui-diary-io')
@@ -178,6 +180,8 @@ $PathMap = @(
     @{ Re='^crates/tr-domain/src/dto/';                   Groups=@('domain', 'ipc') }
     @{ Re='^crates/tr-domain/';                           Groups=@('domain') }
     @{ Re='^crates/tr-store/src/(migrations|schema|workspace)\.rs$'; Groups=@('store', 'schema') }
+    # 图表 DAO 的列表读序（`ORDER BY sort_order`）就是分析页看到的顺序：改它要跑 analysis。
+    @{ Re='^crates/tr-store/src/dao/chart\.rs$';          Groups=@('store', 'analysis') }
     @{ Re='^crates/tr-store/';                            Groups=@('store') }
     @{ Re='^crates/tr-service/src/stock';                 Groups=@('stock', 'service') }
     @{ Re='^crates/tr-service/src/todo';                  Groups=@('todo', 'service') }

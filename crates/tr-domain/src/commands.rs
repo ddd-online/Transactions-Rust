@@ -45,7 +45,7 @@ use crate::dto::{
     StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
     StockTradeImpactDto, StockTradeTagSettingDto, TagDto, TodoCardDto, TodoHistoryDto, TodoItemDto,
     TodoProgressDto, TrQueryCondition, TrQueryResult, TransactionRecordDto, TransactionTemplateDto,
-    UpdateCategorySortRequest, UpdateChartRequest, UpdateTagSortRequest,
+    UpdateCategorySortRequest, UpdateChartRequest, UpdateChartSortRequest, UpdateTagSortRequest,
 };
 use crate::models::{DiaryDateItem, DiaryEntry, KeyEvent, KeyEventImage, StockFeeSetting};
 use crate::proxy::ProxySetting;
@@ -222,6 +222,7 @@ command_catalog! {
     CHART_DELETE = "chart_delete": ChartIdRequest => (),
     CHART_LIST = "chart_list": ChartListRequest => Vec<ChartDto>,
     CHART_UPDATE = "chart_update": UpdateChartRequest => ChartDto,
+    CHART_UPDATE_SORT = "chart_update_sort": UpdateChartSortRequest => (),
 
     // ---- 关键事件 ----
     KEY_EVENT_LIST_BY_YEAR = "key_event_list_by_year": YearRequest => Vec<KeyEvent>,
@@ -349,7 +350,7 @@ mod tests {
         }
     }
 
-    /// 分组与数量的口径：外壳 22 + 更新 5 在应用外壳 crate 里，业务 85 条在 `tr-ipc` 里。
+    /// 分组与数量的口径：外壳 21 + 更新 5 在应用外壳 crate 里，业务 86 条在 `tr-ipc` 里。
     ///
     /// 数量变了就顺手核一遍调用点：这里对不上说明清单被改过，而注册表 / 界面的
     /// 一致性守卫会紧接着告诉你哪里对不上。
@@ -357,14 +358,14 @@ mod tests {
     fn the_table_covers_every_command() {
         assert_eq!(SHELL_COMMANDS.len(), 21);
         assert_eq!(UPDATE_COMMANDS.len(), 5);
-        assert_eq!(BUSINESS_COMMANDS.len(), 85);
+        assert_eq!(BUSINESS_COMMANDS.len(), 86);
         assert_eq!(COMMAND_GROUPS.len(), 3);
         assert_eq!(
             COMMAND_GROUPS
                 .iter()
                 .map(|group| group.len())
                 .sum::<usize>(),
-            111
+            112
         );
     }
 

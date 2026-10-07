@@ -4,6 +4,11 @@
 # 实际上 **OS 级鼠标输入对 Chromium 就是真拖拽**（`mouse_event` 按下 → 分段移动 → 抬起），
 # 所以可以自动化；真正做不到的是"派发 JS 合成事件"。
 #
+# 覆盖两个列表（都在记账页里，都走同一套 `components/ui/drag_sort.rs`）：
+#   1. 「标签」子功能：消费分类（同组内换位）
+#   2. 「分析」子功能：图表列表（**跨预设组**换位 —— 分类/标签/模板是同质列表，只有图表这一条
+#      能钉住"DAO 的读序只看 sort_order、不再把预设钉在最前"）
+#
 # 这条脚本还锁住了一个**曾经的真实缺陷**：Tauri 默认 `dragDropEnabled: true`，
 # wry 会在 WebView2 宿主 HWND 上 `RegisterDragDrop` 并 `SetAllowExternalDrop(false)`；
 # 而 Chromium 在 Windows 上的**页内拖拽也走 OLE 拖放**，于是 `drop` 永远到不了页面 ——
@@ -102,15 +107,50 @@ function Read-Categories {
         Where-Object { $_.transaction_type -eq 'expense' } | Sort-Object sort_order)
 }
 
+# 图表列表：**不再按 is_preset 分组**，界面顺序就是 `sort_order` 的顺序
+function Read-Charts {
+    $dump = Join-Path $OutDir 'charts.json'
+    Push-Location $repo
+    & cargo -q xtask dump $ws --table tbl_billadm_chart *> $dump
+    $exit = $LASTEXITCODE
+    Pop-Location
+    if ($exit -ne 0) { throw "导出图表失败（exit=$exit）" }
+    return @((Get-Content $dump -Raw | ConvertFrom-Json).'tbl_billadm_chart' | Sort-Object sort_order)
+}
+
+# 按名字找**侧栏那一份**：图表标题在侧栏项与右侧面板标题各出现一次（同名），
+# `Find-First` 取的是 DOM 里靠前的那个 —— 通常对，但浮层/重渲染会让它不稳。
+# 侧栏在版心最左边，所以判据是"矩形有效 + 最靠左"（与共享库 `Invoke-SubFunction` 同一手法）。
+function Find-SidebarElement { param($Window, [string]$Name, [int]$TimeoutSec = 15)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $candidates = @(Find-All $Window $Name) |
+            Where-Object { Test-Rect $_.Current.BoundingRectangle }
+        $pick = $candidates | Sort-Object { $_.Current.BoundingRectangle.X } | Select-Object -First 1
+        if ($pick) { return $pick }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
+
 # 把某个列表项拖到另一个列表项的位置（真实鼠标：按下 → 分段移动 → 抬起）
 #
 # 起手点用**行文字的中心**而不是行左边缘：左边缘那条 24px 的抓取带是 `.ui-drag-handle`，
 # 实测从那里起手偶尔不会进入拖拽（整行本来就可拖，把手只是视觉暗示），从文字中心起手稳定。
 # 移动分段要够密（20 段 × 60ms）：Chromium 需要看到 pointer 连续移动才启动 HTML5 拖拽。
+#
+# `-Leftmost`：同名元素里取**最靠左**的那个（图表标题在侧栏与右侧面板标题各有一份，
+# 走侧栏那一份才拖得动）。
 function Invoke-DragTo {
-    param($Window, [string]$FromName, [string]$ToName)
-    $from = Wait-Element -Window $Window -Name $FromName
-    $to = Wait-Element -Window $Window -Name $ToName
+    param($Window, [string]$FromName, [string]$ToName, [switch]$Leftmost)
+    if ($Leftmost) {
+        $from = Find-SidebarElement -Window $Window -Name $FromName
+        $to = Find-SidebarElement -Window $Window -Name $ToName
+    }
+    else {
+        $from = Wait-Element -Window $Window -Name $FromName
+        $to = Wait-Element -Window $Window -Name $ToName
+    }
     if (-not $from) { throw "界面上找不到源项「$FromName」" }
     if (-not $to) { throw "界面上找不到目标项「$ToName」" }
     $fromRect = $from.Current.BoundingRectangle
@@ -183,7 +223,7 @@ try {
     [TrUia]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 500
 
-    Write-Host "`n[ui-drag] 1/2 打开「记账 → 标签」并读取初始顺序"
+    Write-Host "`n[ui-drag] 1/4 打开「记账 → 标签」并读取初始顺序"
     Assert-True (Invoke-SubFunction -Window $window -Name '标签') '切到记账页的「标签」子功能'
     Start-Sleep -Seconds 3
 
@@ -205,7 +245,7 @@ try {
         (@(0..($uiIndexes.Count - 2)) | ForEach-Object { $uiIndexes[$_] -lt $uiIndexes[$_ + 1] } | Where-Object { -not $_ }).Count -eq 0
     Assert-True $uiOrderMatchesDb '界面顺序与库里 sort_order 一致（起点对齐）'
 
-    Write-Host "`n[ui-drag] 2/2 把第 1 项拖到第 3 项"
+    Write-Host "`n[ui-drag] 2/4 把第 1 项拖到第 3 项"
     $source = $before[0].name
     $target = $before[2].name
     [TrUia]::SetForegroundWindow($hwnd) | Out-Null
@@ -246,7 +286,69 @@ try {
         (@(0..($reopenedIndexes.Count - 2)) | ForEach-Object { $reopenedIndexes[$_] -lt $reopenedIndexes[$_ + 1] } |
             Where-Object { -not $_ }).Count -eq 0)
     Assert-True $reopenedMatches '重新进入页面后顺序仍与库里一致（真的落库了，不是只改了本地）'
+
+    # ================= 记账 · 分析：图表列表（跨预设组换位）=================
+    Write-Host "`n[ui-drag] 3/4 打开「记账 → 分析」并读取图表初始顺序"
+    Assert-True (Invoke-SubFunction -Window $window -Name '分析') '切到记账页的「分析」子功能'
+    Start-Sleep -Seconds 3
+
+    $chartsBefore = Read-Charts
+    Assert-True ($chartsBefore.Count -ge 4) "图表至少 4 个（3 张预设 + 种子里的自定义图表；实际 $($chartsBefore.Count)）"
+    if ($chartsBefore.Count -lt 4) { throw '种子里的图表不足 4 个，无法验证跨预设组换位' }
+    Write-Host ("  初始顺序: " + (($chartsBefore | ForEach-Object { "$($_.sort_order)=$($_.title)" }) -join ' → '))
+    # 侧栏那一份必须找得到（标题在侧栏与右侧面板标题各出现一次）
+    Assert-True ([bool](Find-SidebarElement -Window $window -Name $chartsBefore[0].title)) `
+        "界面上找得到第一张图表「$($chartsBefore[0].title)」"
+
+    # 界面顺序（UIA 文本）必须与库里 sort_order 的顺序一致。
+    # 用 `IndexOf`（= 首次出现）：侧栏在 DOM 里排在右侧内容之前，那一次就是列表项。
+    $chartNamesInUi = @(Get-Elements $window | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
+    $chartIndexes = @($chartsBefore | ForEach-Object {
+        [array]::IndexOf($chartNamesInUi, $_.title)
+    })
+    $chartOrderMatches = ($chartIndexes -notcontains -1) -and
+        (@(0..($chartIndexes.Count - 2)) | ForEach-Object { $chartIndexes[$_] -lt $chartIndexes[$_ + 1] } |
+            Where-Object { -not $_ }).Count -eq 0
+    Assert-True $chartOrderMatches '图表界面顺序与库里 sort_order 一致（起点对齐）'
+
+    Write-Host "`n[ui-drag] 4/4 把最后一项（自定义图表）拖到第一项预设之前"
+    $chartSource = $chartsBefore[-1].title
+    $chartTarget = $chartsBefore[0].title
+    Write-Host "  源项: $chartSource（is_preset=$($chartsBefore[-1].is_preset)）→ 目标: $chartTarget"
+    [TrUia]::SetForegroundWindow($hwnd) | Out-Null
+    Start-Sleep -Milliseconds 300
+    Invoke-DragTo -Window $window -FromName $chartSource -ToName $chartTarget -Leftmost
+
+    $chartsAfter = Read-Charts
+    Write-Host ("  新顺序: " + (($chartsAfter | ForEach-Object { "$($_.sort_order)=$($_.title)" }) -join ' → '))
+    $chartExpected = @($chartSource) +
+        @($chartsBefore | Select-Object -SkipLast 1 | ForEach-Object { $_.title })
+    $chartActual = @($chartsAfter | ForEach-Object { $_.title })
+    Assert-True (($chartActual -join ',') -eq ($chartExpected -join ',')) `
+        "拖拽后顺序为 [预设…, 自定义] → [自定义, 预设…]（期望 $($chartExpected -join ',')）"
+
+    $chartSortOrders = @($chartsAfter | ForEach-Object { $_.sort_order })
+    $chartDense = ($chartSortOrders -join ',') -eq ((0..($chartSortOrders.Count - 1)) -join ',')
+    Assert-True $chartDense "图表 sort_order 落成 0..N-1（实际 $($chartSortOrders -join ',')）"
+
+    # 关键回归：切走再回来，界面顺序仍等于库里的顺序。SQL 里若还留着 `is_preset DESC`，
+    # 这里会被"预设重新回到最前"顶掉 —— 只看着拖完那一帧是发现不了的（本地顺序是自己写的）。
+    Assert-True (Invoke-SubFunction -Window $window -Name '记录') '切到「记录」子功能（离开分析页）'
+    Start-Sleep -Seconds 2
+    Assert-True (Invoke-SubFunction -Window $window -Name '分析') '切回「分析」子功能'
+    Start-Sleep -Seconds 3
+    $chartNamesReopened = @(Get-Elements $window | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
+    $chartReopenedIndexes = @($chartsAfter | ForEach-Object {
+        [array]::IndexOf($chartNamesReopened, $_.title)
+    })
+    $chartReopenedMatches = ($chartReopenedIndexes -notcontains -1) -and
+        (@(0..($chartReopenedIndexes.Count - 2)) | ForEach-Object { $chartReopenedIndexes[$_] -lt $chartReopenedIndexes[$_ + 1] } |
+            Where-Object { -not $_ }).Count -eq 0
+    Assert-True $chartReopenedMatches '重新进入分析页后图表顺序仍与库里一致'
+    Assert-True ([array]::IndexOf($chartNamesReopened, $chartSource) -lt
+        [array]::IndexOf($chartNamesReopened, $chartTarget)) `
+        "重进页面后「$chartSource」仍排在「$chartTarget」之前（自定义图表没有被预设顶回去）"
 }
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Show-TrSummary -Failures $failures -Tag 'ui-drag' -SuccessMessage "[ui-drag] 全部通过：真实鼠标拖拽 → 顺序变化 → sort_order 落库 → 界面同步"
+Show-TrSummary -Failures $failures -Tag 'ui-drag' -SuccessMessage "[ui-drag] 全部通过：真实鼠标拖拽 → 顺序变化 → sort_order 落库 → 界面同步（分类 + 图表跨预设组）"

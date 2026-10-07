@@ -6,8 +6,8 @@
 //!
 //! ## 组成
 //!
-//! * [`AnalysisSub`]：左侧 220px 图表列表 + 右侧图表视图编排
-//! * [`chart_list_panel`]：列表项（颜色点组 / 删除气泡 / 新增按钮）
+//! * [`AnalysisSub`]：左侧 220px 图表列表（**可拖拽排序**）+ 右侧图表视图编排
+//!   （列表项 = 拖拽手柄 + 标题 + 删除气泡，直接在 `AnalysisSub` 里渲染）
 //! * [`chart_panel`]：标题 + 粒度 + 曲线表 + 保存 + 图表 + 右侧求和面板
 //! * [`crate::components::ui::LineChart`]：自绘 SVG 折线图
 //! * [`add_line_modal`] + 曲线表（添加/删除曲线）
@@ -33,13 +33,15 @@ use tr_domain::dto::{
     CreateChartRequest, UpdateChartRequest,
 };
 use tr_domain::models::ChartLine;
+use tr_draw::list_order::reorder_with_changes;
 use tr_draw::section::{section_state, SectionState};
 
 use crate::api;
 use crate::components::ui::{
     Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, CheckboxGroup,
-    CheckboxOption, Divider, Empty, FeaturePage, IconButton, IconButtonVariant, Input, LineChart,
-    Modal, ModalSize, Popconfirm, Select, SelectOption, Spin, Tag, TagKind, TimeRangePicker,
+    CheckboxOption, Divider, DragSortItem, DragSortState, Empty, FeaturePage, IconButton,
+    IconButtonVariant, Input, LineChart, Modal, ModalSize, Popconfirm, Select, SelectOption, Spin,
+    Tag, TagKind, TimeRangePicker,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -103,6 +105,7 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
     );
     let selected = RwSignal::new(String::new());
     let data_cache = RwSignal::new(BTreeMap::<String, ChartQueryResponse>::new());
+    let drag = DragSortState::new();
     let create_open = RwSignal::new(false);
     let create_title = RwSignal::new(String::new());
     let create_granularity = RwSignal::new("year".to_string());
@@ -264,6 +267,31 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
         });
     };
 
+    // ---- 拖拽排序：重排数组 → 逐项比较新旧下标，只有下标变化的项才发 `chart_update_sort`
+    // （纯算法在 `tr_draw::list_order`，native 上真跑）→ 本地写回新顺序。
+    // 注意写入的是**只带序号的窄命令**：排序不该有机会碰到图表内容。
+    let reorder_charts = move |from: usize, to: usize| {
+        let Some((reordered, changed)) = reorder_with_changes(
+            &charts.value.get_untracked(),
+            from,
+            to,
+            |chart| chart.chart_id.clone(),
+            |chart| chart.sort_order,
+        ) else {
+            return;
+        };
+
+        charts.value.set(reordered);
+        leptos::task::spawn_local(async move {
+            for (index, chart_id) in changed {
+                // 逐条：失败只提示，不中断后续项
+                if let Err(error) = api::chart::update_sort(&chart_id, index as i32).await {
+                    notify_error("更新图表排序失败", &error);
+                }
+            }
+        });
+    };
+
     let save_chart = move |(chart, lines): (ChartDto, Vec<ChartLine>)| {
         leptos::task::spawn_local(async move {
             match api::chart::update(UpdateChartRequest {
@@ -392,7 +420,8 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
                         }
                         items
                             .into_iter()
-                            .map(|chart| {
+                            .enumerate()
+                            .map(|(index, chart)| {
                                 let id = chart.chart_id.clone();
                                 let is_active = id == selected.get();
                                 let click_id = id.clone();
@@ -404,51 +433,65 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
                                 let title_for_attr = title.clone();
                                 let title_for_label = title.clone();
                                 let confirm_title = format!("删除图表「{title}」？");
+                                let on_drop =
+                                    move |(from, to): (usize, usize)| reorder_charts(from, to);
                                 view! {
-                                    <div
-                                        class="da-list__item"
-                                        class:is-active=is_active
-                                        role="option"
-                                        tabindex="0"
-                                        aria-selected=is_active
-                                        on:click=move |_| selected.set(click_id.clone())
-                                        on:keydown=move |event: leptos::ev::KeyboardEvent| {
-                                            if event.key() == "Enter" || event.key() == " " {
-                                                event.prevent_default();
-                                                selected.set(id.clone());
-                                            }
-                                        }
+                                    // 外层 `.ui-drag-item` 只负责拖拽与落点指示线；`role` / 点击 /
+                                    // 键盘 / 删除气泡都留在内层那一行上（`DragSortItem` 不透传属性）。
+                                    <DragSortItem
+                                        index=index
+                                        state=drag
+                                        on_drop=on_drop
+                                        class="da-list__row"
                                     >
-                                        <span
-                                            class="da-list__title"
-                                            title=title_for_attr.clone()
-                                        >
-                                            {title_for_label.clone()}
-                                        </span>
-                                        <Popconfirm
-                                            title=confirm_title
-                                            ok_text="删除"
-                                            cancel_text="取消"
-                                            on_confirm=move || {
-                                                delete_chart(delete_chart_value.clone())
+                                        <div
+                                            class="da-list__item"
+                                            class:is-active=is_active
+                                            role="option"
+                                            tabindex="0"
+                                            aria-selected=is_active
+                                            on:click=move |_| selected.set(click_id.clone())
+                                            on:keydown=move |event: leptos::ev::KeyboardEvent| {
+                                                if event.key() == "Enter" || event.key() == " " {
+                                                    event.prevent_default();
+                                                    selected.set(id.clone());
+                                                }
                                             }
                                         >
-                                            <IconButton
-                                                variant=IconButtonVariant::Danger
-                                                compact=true
-                                                label="删除图表"
-                                                class="da-list__delete"
-                                                // 删除动作**只挂在 `on_confirm` 上**：这个按钮只负责
-                                                // "打开确认气泡"。曾经这里挂着 `on_click=<删除>`，
-                                                // 第一下点击就直接删掉了 —— 二次确认形同虚设。
-                                                // `stop_propagation` 让点删除不顺带选中整行；它**不影响**
-                                                // 气泡开关（`Popconfirm` 的触发在**捕获阶段**，先于冒泡）。
-                                                stop_propagation=true
+                                            <span class="ui-drag-handle" title="拖动排序">
+                                                {icons::icon(Icon::DragHandle)}
+                                            </span>
+                                            <span
+                                                class="da-list__title"
+                                                title=title_for_attr.clone()
                                             >
-                                                {icons::icon(Icon::Trash)}
-                                            </IconButton>
-                                        </Popconfirm>
-                                    </div>
+                                                {title_for_label.clone()}
+                                            </span>
+                                            <Popconfirm
+                                                title=confirm_title
+                                                ok_text="删除"
+                                                cancel_text="取消"
+                                                on_confirm=move || {
+                                                    delete_chart(delete_chart_value.clone())
+                                                }
+                                            >
+                                                <IconButton
+                                                    variant=IconButtonVariant::Danger
+                                                    compact=true
+                                                    label="删除图表"
+                                                    class="da-list__delete"
+                                                    // 删除动作**只挂在 `on_confirm` 上**：这个按钮只负责
+                                                    // "打开确认气泡"。曾经这里挂着 `on_click=<删除>`，
+                                                    // 第一下点击就直接删掉了 —— 二次确认形同虚设。
+                                                    // `stop_propagation` 让点删除不顺带选中整行；它**不影响**
+                                                    // 气泡开关（`Popconfirm` 的触发在**捕获阶段**，先于冒泡）。
+                                                    stop_propagation=true
+                                                >
+                                                    {icons::icon(Icon::Trash)}
+                                                </IconButton>
+                                            </Popconfirm>
+                                        </div>
+                                    </DragSortItem>
                                 }
                             })
                             .collect_view()
