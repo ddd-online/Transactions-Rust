@@ -309,23 +309,26 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
         }
         init_loading.set(true);
         leptos::task::spawn_local(async move {
-            match api::category::initialize(&ledger_id).await {
-                Ok(result) => {
-                    Notifier::global().success(
-                        format!(
-                            "已创建 {} 个默认分类和 {} 个标签",
-                            result.categories, result.tags
-                        ),
-                        None,
-                    );
-                    init_confirm_open.set(false);
-                    load_ledger_meta(ledger_id, has_any_records, has_any_categories);
-                    editing.set(None);
-                    record_open.set(true);
-                }
-                Err(error) => notify_error("初始化分类失败", &error),
+            // 在飞与失败面走 change::submit（判据见 #34）；成功后的界面动作留在调用点
+            let init_result = crate::change::submit(
+                Some(init_loading),
+                "初始化分类失败",
+                api::category::initialize(&ledger_id),
+            )
+            .await;
+            if let Some(result) = init_result {
+                Notifier::global().success(
+                    format!(
+                        "已创建 {} 个默认分类和 {} 个标签",
+                        result.categories, result.tags
+                    ),
+                    None,
+                );
+                init_confirm_open.set(false);
+                load_ledger_meta(ledger_id, has_any_records, has_any_categories);
+                editing.set(None);
+                record_open.set(true);
             }
-            init_loading.set(false);
         });
     };
 
@@ -385,9 +388,11 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
                 return;
             }
             leptos::task::spawn_local(async move {
-                match api::tr::delete(&id).await {
-                    Ok(()) => do_refresh(),
-                    Err(error) => notify_error("删除消费记录失败", &error),
+                if crate::change::submit(None, "删除消费记录失败", api::tr::delete(&id))
+                    .await
+                    .is_some()
+                {
+                    do_refresh();
                 }
             });
         }
@@ -403,14 +408,18 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
             return;
         }
         leptos::task::spawn_local(async move {
-            match api::tr::link(&record.transaction_id, &date).await {
-                Ok(_) => {
-                    Notifier::global().success("关联成功".to_string(), None);
-                    link_open.set(false);
-                    link_target.set(None);
-                    do_refresh();
-                }
-                Err(error) => notify_error("关联失败", &error),
+            if crate::change::submit(
+                None,
+                "关联失败",
+                api::tr::link(&record.transaction_id, &date),
+            )
+            .await
+            .is_some()
+            {
+                Notifier::global().success("关联成功".to_string(), None);
+                link_open.set(false);
+                link_target.set(None);
+                do_refresh();
             }
         });
     };
@@ -423,14 +432,18 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
             return;
         }
         leptos::task::spawn_local(async move {
-            match api::tr::unlink(&record.transaction_id).await {
-                Ok(_) => {
-                    Notifier::global().success("已解除关联".to_string(), None);
-                    link_open.set(false);
-                    link_target.set(None);
-                    do_refresh();
-                }
-                Err(error) => notify_error("解除关联失败", &error),
+            if crate::change::submit(
+                None,
+                "解除关联失败",
+                api::tr::unlink(&record.transaction_id),
+            )
+            .await
+            .is_some()
+            {
+                Notifier::global().success("已解除关联".to_string(), None);
+                link_open.set(false);
+                link_target.set(None);
+                do_refresh();
             }
         });
     };
@@ -1385,19 +1398,20 @@ fn record_modal(
             sort_order: 0,
         };
         leptos::task::spawn_local(async move {
-            match api::template::create(template).await {
-                Ok(_) => {
-                    Notifier::global().success("保存模板成功".to_string(), None);
-                    save_template_open.set(false);
-                    let ledger_id = stores.current_ledger_id.get_untracked();
-                    if !ledger_id.is_empty() {
-                        let list = api::template::list(&ledger_id).await.unwrap_or_default();
-                        if crate::change::current(&ledger_id) {
-                            templates.set(list);
-                        }
+            // 在飞与失败面走 change::submit（判据见 #34）；成功后的重拉与过期判定留在调用点
+            if crate::change::submit(None, "保存模板失败", api::template::create(template))
+                .await
+                .is_some()
+            {
+                Notifier::global().success("保存模板成功".to_string(), None);
+                save_template_open.set(false);
+                let ledger_id = stores.current_ledger_id.get_untracked();
+                if !ledger_id.is_empty() {
+                    let list = api::template::list(&ledger_id).await.unwrap_or_default();
+                    if crate::change::current(&ledger_id) {
+                        templates.set(list);
                     }
                 }
-                Err(error) => notify_error("保存模板失败", &error),
             }
         });
     };
