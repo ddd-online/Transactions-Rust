@@ -403,7 +403,8 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 8);
+        // 与 `migrations::MIGRATIONS` 的长度一致（新建库 = 全部迁移都已登记）
+        assert_eq!(count, crate::migrations::MIGRATIONS.len() as i64);
         let order_id_indexes: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' \

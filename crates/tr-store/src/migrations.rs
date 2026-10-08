@@ -86,6 +86,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20260929_todo_levels_snap",
         apply: todo_levels_snap,
     },
+    Migration {
+        id: "20261009_stock_trade_price_milli",
+        apply: stock_trade_price_milli,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -416,6 +420,26 @@ fn todo_levels_snap(conn: &Connection) -> MigrateResult {
             .map_err(stringify)?;
     }
     Ok(())
+}
+
+/// `20261009_stock_trade_price_milli` —— 股票成交价的单位从**分**改成**厘**（1/1000 元）。
+///
+/// 起因：场内基金（ETF / LOF / 封闭式基金 / REITs）的交易所报价单位是 0.001 元（实测
+/// `510300` = 4.389），按"分"存会把 4.389 变成 4.39 ⇒ 成交额、持仓成本、浮动盈亏全都偏。
+/// 改成厘之后价格精确落库，**成交额仍在分上**（`tr_domain::stock::amount_of` 折这一次）。
+///
+/// 这条迁移**只改值、不动结构**（列类型还是 `integer`，所以"当前格式"的结构定义不含单位）：
+/// 旧库里每一行 `price` 都是分 ⇒ `× 10` 就是厘。只有成交表有价格列（委托明细就是这张表的行），
+/// 别的表一个字段都不碰；`amount` / `fee` 这些**本来就是分**的列原样不动。
+///
+/// 幂等靠登记表（结构与数据都没法自证"是否已经乘过 10"）：`fixtures/schema/fresh.sql` 已把这条
+/// 登记为已应用 ⇒ 新建库不会跑它（它建出来就是厘）；引擎按登记表逐条应用 ⇒ 重复打开不会乘第二次。
+fn stock_trade_price_milli(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_stock_trade").map_err(stringify)? {
+        return Err("缺少数据表 tbl_billadm_stock_trade".to_string());
+    }
+    conn.execute_batch("UPDATE tbl_billadm_stock_trade SET price = price * 10;")
+        .map_err(stringify)
 }
 
 // ==================================================================== 小工具
@@ -913,6 +937,135 @@ mod tests {
             )
             .unwrap();
         assert_eq!(after, 3);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 成交价**分 → 厘**：旧库里每行 price 是分，升级后 ×10 变成厘；别的列一个字节不动。
+    ///
+    /// 降级方式与真实旧库一致：把价格除回 10、抹掉登记行（列类型本来就没变，所以没有结构可退）。
+    /// 再应用一次必须**不重复乘**（幂等靠登记表 —— 这条迁移只改值，数据本身自证不了）。
+    #[test]
+    fn stock_trade_price_migration_converts_cents_to_milli() {
+        let dir = temp_dir("price-milli");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        // 一笔场内基金（4.389 元/份）与一笔股票（100.00 元/股），库里存的是**厘**
+        for (id, code, name, price, lots, shares, amount, fee, kind) in [
+            (
+                "t1",
+                "510300",
+                "沪深300ETF",
+                4_389_i64,
+                3_i64,
+                300_i64,
+                131_670_i64,
+                500_i64,
+                "open",
+            ),
+            (
+                "t2",
+                "600519",
+                "贵州茅台",
+                100_000,
+                1,
+                100,
+                1_000_000,
+                530,
+                "open",
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO tbl_billadm_stock_trade \
+                 (id, ledger_id, stock_code, stock_name, trade_type, round_id, order_id, order_seq, \
+                  price, lots, shares, amount, fee, commission, stamp_duty, transfer_fee, \
+                  trade_time, remark, created_at) \
+                 VALUES (?1, 'l1', ?2, ?3, ?4, '', ?1, 1, ?5, ?6, ?7, ?8, ?9, ?9, 0, 0, 1, '', 1)",
+                params![id, code, name, kind, price, lots, shares, amount, fee],
+            )
+            .unwrap();
+        }
+        // 降级：价格除回 10（分），并抹掉登记行 —— 这就是"升级前"的库
+        conn.execute_batch(
+            "UPDATE tbl_billadm_stock_trade SET price = price / 10;
+             DELETE FROM tbl_billadm_schema_migration WHERE id = '20261009_stock_trade_price_milli';",
+        )
+        .unwrap();
+        let before: Vec<(String, i64, i64, i64)> = {
+            let mut statement = conn
+                .prepare("SELECT id, price, amount, fee FROM tbl_billadm_stock_trade ORDER BY id")
+                .unwrap();
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(
+            before,
+            vec![
+                ("t1".to_string(), 438, 131_670, 500),
+                ("t2".to_string(), 10_000, 1_000_000, 530),
+            ],
+            "降级后价格是分（438 分 = 4.38 元：那一厘本来就装不下）"
+        );
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(
+            applied,
+            vec!["20261009_stock_trade_price_milli".to_string()]
+        );
+
+        let after: Vec<(String, i64, i64, i64, String)> = {
+            let mut statement = conn
+                .prepare(
+                    "SELECT id, price, amount, fee, stock_code FROM tbl_billadm_stock_trade ORDER BY id",
+                )
+                .unwrap();
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(
+            after,
+            vec![
+                ("t1".to_string(), 4_380, 131_670, 500, "510300".to_string()),
+                (
+                    "t2".to_string(),
+                    100_000,
+                    1_000_000,
+                    530,
+                    "600519".to_string()
+                ),
+            ],
+            "价格 ×10 回到厘；成交额 / 费用 / 代码原样不动（它们本来就是分 / 文本）"
+        );
+        crate::schema::validate_current(&conn).unwrap();
+
+        // 幂等：登记行已在 ⇒ 没有任何待应用迁移，价格不会再乘一次
+        assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
+        let price: i64 = conn
+            .query_row(
+                "SELECT price FROM tbl_billadm_stock_trade WHERE id = 't2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(price, 100_000);
 
         std::fs::remove_dir_all(&dir).ok();
     }

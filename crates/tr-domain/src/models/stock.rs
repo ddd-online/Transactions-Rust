@@ -154,7 +154,7 @@ pub struct StockTrade {
     /// 委托内第几笔成交（从 1 起）
     #[serde(rename = "orderSeq")]
     pub order_seq: i64,
-    /// 成交价（分/股）
+    /// 成交价（**厘**/股，1/1000 元 —— 场内基金的 0.001 元报价靠它）
     #[serde(rename = "price")]
     pub price: i64,
     /// 手数

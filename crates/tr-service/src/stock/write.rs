@@ -90,9 +90,16 @@ fn day_after(date: &str) -> Option<String> {
 fn normalize_trade_fills(fills: &[TradeFill]) -> Vec<TradeFill> {
     fills
         .iter()
-        .filter(|fill| !(fill.price_cents <= 0 && fill.lots <= 0))
+        .filter(|fill| !(fill.price_milli <= 0 && fill.lots <= 0))
         .copied()
         .collect()
+}
+
+/// 品种判定（决定收哪些费）：老数据里可能存着不在支持范围的代码（例如北交所），
+/// 这种记录按**深市股票**处理（卖出收印花税、不收过户费）—— 与引入品种之前的默认行为一致，
+/// 不让一条历史记录把整轮重放 / 编辑打断。界面侧的下单校验会先挡住这类代码。
+fn instrument_of(stock_code: &str) -> fee::Instrument {
+    fee::Instrument::of(stock_code).unwrap_or(fee::Instrument::ShenzhenStock)
 }
 
 /// 生成资金记录备注：均价 + 笔数（单笔委托退化为「名称 N手 @ 价格」）。
@@ -103,20 +110,21 @@ fn trade_order_remark(
     count: usize,
 ) -> String {
     let shares = tr_domain::stock::shares_of(total_lots);
-    let avg_price = if shares > 0 {
-        (total_amount as f64 / shares as f64).round() as i64
+    // 均价从**分**回到**厘**：`total_amount / shares` 是分/股，价格口径是厘/股
+    let avg_price_milli = if shares > 0 {
+        (total_amount as f64 * 10.0 / shares as f64).round() as i64
     } else {
         0
     };
     if count <= 1 {
         format!(
             "{stock_name} {total_lots}手 @ {}",
-            tr_domain::money::cents_to_yuan(avg_price)
+            tr_domain::money::milli_to_yuan(avg_price_milli)
         )
     } else {
         format!(
             "{stock_name} {total_lots}手 @ {}（{count}笔成交）",
-            tr_domain::money::cents_to_yuan(avg_price)
+            tr_domain::money::milli_to_yuan(avg_price_milli)
         )
     }
 }
@@ -144,7 +152,7 @@ pub fn create_trade_order(
         return Err(AppError::bad_request("成交明细不能为空").into());
     }
     for fill in &fills {
-        if fill.price_cents <= 0 {
+        if fill.price_milli <= 0 {
             return Err(AppError::bad_request("成交价必须大于 0").into());
         }
         if fill.lots <= 0 {
@@ -169,8 +177,8 @@ pub fn create_trade_order(
         return Err(AppError::bad_request("无效的交易类型").into());
     }
 
-    // 沪市：60（主板）/ 68（科创板）开头
-    let is_sh = fee::is_shanghai_code(stock_code);
+    // 品种决定收哪些费：股票（沪市才有过户费、卖出有印花税）还是场内基金（只有佣金）
+    let instrument = instrument_of(stock_code);
     let order_id = tr_store::util::new_uuid();
 
     let mut trades: Vec<StockTrade> = Vec::with_capacity(fills.len());
@@ -179,7 +187,8 @@ pub fn create_trade_order(
     let mut total_lots = 0_i64;
     for (index, fill) in fills.iter().enumerate() {
         let shares = tr_domain::stock::shares_of(fill.lots);
-        let amount = fill.price_cents * shares;
+        // 价格是厘、成交额是分：折这一次（唯一的口径在 `tr_domain::stock::amount_of`）
+        let amount = tr_domain::stock::amount_of(fill.price_milli, shares);
         total_amount += amount;
         total_lots += fill.lots;
         amounts.push(amount);
@@ -191,7 +200,7 @@ pub fn create_trade_order(
             trade_type: trade_type.to_string(),
             order_id: order_id.clone(),
             order_seq: index as i64 + 1,
-            price: fill.price_cents,
+            price: fill.price_milli,
             lots: fill.lots,
             shares,
             amount,
@@ -208,8 +217,8 @@ pub fn create_trade_order(
         let fee_setting = get_or_create_fee_setting_in(conn, ledger_id)?;
         // 委托级一次计收（最低佣金按委托，不按笔）；印花税与过户费**逐笔**取整再相加，
         // 再按成交额把委托级费用分摊到各笔明细（两份口径一致，见 `tr_domain::fee`）
-        let order_fee = fee::compute_order_fee(&amounts, is_sh, &fee_setting, buy);
-        let allocated = fee::allocate_order_fee(order_fee, &amounts, is_sh, &fee_setting, buy);
+        let order_fee = fee::compute_order_fee(&amounts, instrument, &fee_setting, buy);
+        let allocated = fee::allocate_order_fee(order_fee, &amounts, instrument, &fee_setting, buy);
 
         let mut position = match StockDao::get_position(conn, ledger_id, stock_code) {
             Ok(position) => position,
@@ -354,7 +363,7 @@ pub fn create_trade(
     stock_code: &str,
     stock_name: &str,
     trade_type: &str,
-    price_cents: i64,
+    price_milli: i64,
     lots: i64,
     trade_time: i64,
     remark: &str,
@@ -366,7 +375,7 @@ pub fn create_trade(
         stock_code,
         stock_name,
         trade_type,
-        &[TradeFill { price_cents, lots }],
+        &[TradeFill { price_milli, lots }],
         trade_time,
         remark,
         tag,
@@ -458,14 +467,14 @@ pub fn update_trade_fill(
     workspace: &Workspace,
     ledger_id: &str,
     trade_id: &str,
-    price_cents: i64,
+    price_milli: i64,
     lots: i64,
     trade_time: i64,
 ) -> ServiceResult<StockTradeDto> {
     if trade_id.is_empty() {
         return Err(AppError::bad_request("trade_id is required").into());
     }
-    if price_cents <= 0 {
+    if price_milli <= 0 {
         return Err(AppError::bad_request("成交价必须大于 0").into());
     }
     if lots <= 0 {
@@ -474,7 +483,7 @@ pub fn update_trade_fill(
 
     let mut updated: Option<StockTrade> = None;
     if let Err(error) = workspace.transaction(|conn| {
-        update_trade_fill_tx(conn, ledger_id, trade_id, price_cents, lots, trade_time)?;
+        update_trade_fill_tx(conn, ledger_id, trade_id, price_milli, lots, trade_time)?;
         let trade = db(StockDao::get_trade(conn, trade_id))?;
         updated = Some(trade);
         Ok(())
@@ -526,7 +535,7 @@ pub fn preview_trade_change(
     action: &str,
     trade_id: &str,
     order_id: &str,
-    price_cents: i64,
+    price_milli: i64,
     lots: i64,
     trade_time: i64,
 ) -> ServiceResult<StockTradeImpactDto> {
@@ -536,7 +545,7 @@ pub fn preview_trade_change(
 
         let stock_code: String = match action {
             "update_trade" => {
-                update_trade_fill_tx(conn, ledger_id, trade_id, price_cents, lots, trade_time)?
+                update_trade_fill_tx(conn, ledger_id, trade_id, price_milli, lots, trade_time)?
             }
             "delete_order" => delete_trade_order_tx(conn, ledger_id, order_id)?,
             _ => {
@@ -634,7 +643,7 @@ fn update_trade_fill_tx(
     conn: &rusqlite::Connection,
     ledger_id: &str,
     trade_id: &str,
-    price_cents: i64,
+    price_milli: i64,
     lots: i64,
     trade_time: i64,
 ) -> ServiceResult<String> {
@@ -660,13 +669,13 @@ fn update_trade_fill_tx(
     }
 
     let fee_setting = get_or_create_fee_setting_in(conn, ledger_id)?;
-    let is_sh = fee::is_shanghai_code(&trade.stock_code);
+    let instrument = instrument_of(&trade.stock_code);
     let buy = is_buy(&trade.trade_type);
 
     let mut amounts: Vec<i64> = Vec::with_capacity(order_trades.len());
     for item in order_trades.iter_mut() {
         if item.id == trade_id {
-            item.price = price_cents;
+            item.price = price_milli;
             item.lots = lots;
             item.shares = tr_domain::stock::shares_of(lots);
         }
@@ -678,9 +687,9 @@ fn update_trade_fill_tx(
     }
 
     let allocated = fee::allocate_order_fee(
-        fee::compute_order_fee(&amounts, is_sh, &fee_setting, buy),
+        fee::compute_order_fee(&amounts, instrument, &fee_setting, buy),
         &amounts,
-        is_sh,
+        instrument,
         &fee_setting,
         buy,
     );

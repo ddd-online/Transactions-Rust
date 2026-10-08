@@ -27,12 +27,13 @@
 //!
 //! * **金额恒为分**（`i64`），展示一律走 [`crate::format`]（内部用 `tr_domain::money`）。
 //! * **价格入参按元**：`stock_trade_create` / `stock_trade_update` / `stock_trade_impact` 的
-//!   `price` 是元（`f64`），后端负责 ×100 四舍五入（见 `tr-ipc/src/commands/stock.rs`）。
+//!   `price` 是元（`f64`），后端负责 ×1000 四舍五入到**厘**（见 `tr-ipc/src/commands/stock.rs`）。
 //! * 请求字段 snake_case、响应字段 camelCase —— 逐字照抄命令面，不做归一化。
 //! * **A 股红涨绿跌**：本页作用域内的 `.amount-income` / `.amount-expense` 被 CSS 反向映射
 //!   （盈 → 红、亏 → 绿），与记账域语义相反（本页作用域的覆盖写在 `stock.css`）。
 //! * 「设置」子功能的费用设置与交易标签是**按账本**存的（不是应用级配置），
-//!   金额换算一律过 `tr_domain::money`（`cents_to_yuan` / `yuan_to_cents`），不自行 `/100`。
+//!   换算一律过 `tr_domain::money`，不自行 `/100`：**金额走分**（`cents_to_yuan` / `yuan_to_cents`），
+//!   **价格走厘**（`format::price` / `price_yuan_to_milli`）—— 场内基金的 0.001 元报价靠厘。
 //!
 //! ## 行情降级的硬要求
 //!
@@ -61,9 +62,10 @@ use tr_domain::dto::{
     StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
     StockTradeImpactDto, StockTradeRoundDto, StockTradeTagSettingDto,
 };
-use tr_domain::fee::{compute_order_fee, is_shanghai_code, is_valid_stock_code};
+use tr_domain::fee::{compute_order_fee, is_valid_stock_code, Instrument};
 use tr_domain::models::StockFeeSetting;
-use tr_domain::money::{cents_to_yuan, price_yuan_to_cents, yuan_to_cents};
+use tr_domain::money::{cents_to_yuan, milli_to_price_yuan, price_yuan_to_milli, yuan_to_cents};
+use tr_domain::stock::floating_pnl_rate;
 
 use crate::api;
 use crate::components::ui::{
@@ -159,9 +161,10 @@ struct FillRow {
 }
 
 impl FillRow {
+    /// 这一行的成交额（分）：价格是**厘**，折成分走 `tr_domain::stock::amount_of_lots`。
     fn amount_cents(self) -> i64 {
-        let price_cents = price_yuan_to_cents(self.price);
-        price_cents.saturating_mul(self.lots).saturating_mul(100)
+        let price_milli = price_yuan_to_milli(self.price);
+        tr_domain::stock::amount_of_lots(price_milli, self.lots)
     }
 }
 
@@ -185,6 +188,7 @@ impl FeeEstimate {
 ///
 /// 传的是**各笔成交额**而不是总额：印花税与过户费要逐笔取整再相加，
 /// 只看总额会少算一分（见 `tr_domain::fee` 模块头的对照表）。
+/// 品种由代码判定（[`Instrument::of`]）：场内基金（ETF / LOF / REITs）在这里就预估成"只有佣金"。
 ///
 /// 保留"没有有效成交"的守卫：域函数在金额为 0 时会取最低佣金，
 /// 而"还没填价格/手数"时预估应当是 0。
@@ -193,7 +197,9 @@ fn estimate_fee(fills: &[i64], is_buy: bool, code: &str, fee: &StockFeeSetting) 
     if fills.is_empty() || total <= 0 {
         return FeeEstimate::default();
     }
-    let breakdown = compute_order_fee(fills, is_shanghai_code(code), fee, is_buy);
+    // 老/未知代码按深市股票处理（与后端 `instrument_of` 同口径：不因一个陌生代码断了预估）
+    let instrument = Instrument::of(code).unwrap_or(Instrument::ShenzhenStock);
+    let breakdown = compute_order_fee(fills, instrument, fee, is_buy);
     FeeEstimate {
         commission: breakdown.commission,
         stamp_duty: breakdown.stamp_duty,
@@ -912,6 +918,16 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     let impact = RwSignal::new(Option::<ImpactPrompt>::None);
     let impact_running = RwSignal::new(false);
 
+    // 持仓与成交是**同一份写入的两面**：下单（建仓/加仓/减仓/清仓）、改成交、删委托都会同时改到
+    // 这两个读模型 —— 成交变了，本轮资金变动与持仓成本跟着变；持仓变了，本轮成交里就多/少一笔。
+    // 所以写成功后必须**两个一起**重拉：只拉一个就会留下半新半旧的界面
+    // （用户报的"加仓/减仓/清仓之后成交记录还是旧的"，以及它的镜像"改完成交价、持仓还是旧的"）。
+    // 注意 `reload()` 是**按 key 强制重发**（见 `crate::query`）：选中代码没变也一样拉得到新数据。
+    let refresh_trades_and_positions = move || {
+        positions_q.reload();
+        trades_q.reload();
+    };
+
     // 折叠展开的委托
     let collapsed_orders = RwSignal::new(BTreeSet::<String>::new());
     let current_position = move || {
@@ -1067,7 +1083,8 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         }
         if !is_valid_stock_code(&code) {
             Notifier::global().error(
-                "请输入有效的沪深股票代码（沪 60/68、深 00/30 开头）".to_string(),
+                "请输入有效的代码（股票：沪 60/68、深 00/30；场内基金：沪 50–58、深 15–18）"
+                    .to_string(),
                 None,
             );
             return;
@@ -1114,7 +1131,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                 Ok(_) => {
                     Notifier::global().success("委托已记录".to_string(), None);
                     trade_open.set(false);
-                    positions_q.reload();
+                    refresh_trades_and_positions();
                 }
                 Err(error) => notify_error("记录委托失败", &error),
             }
@@ -1124,7 +1141,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
 
     // ---- 编辑成交（含影响预演）----
     let open_edit = move |(trade, siblings): (StockTradeDto, Vec<StockTradeDto>)| {
-        edit_price.set(format::amount(trade.price));
+        edit_price.set(format::price(trade.price));
         edit_lots.set(trade.lots.to_string());
         edit_date.set(format_timestamp(trade.trade_time, "YYYY-MM-DD"));
         edit_target.set(Some(trade));
@@ -1184,7 +1201,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                             Ok(_) => {
                                 Notifier::global().success("成交已更新".to_string(), None);
                                 edit_target.set(None);
-                                trades_q.reload();
+                                refresh_trades_and_positions();
                             }
                             Err(error) => notify_error("保存成交失败", &error),
                         }
@@ -1195,7 +1212,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                             title: "确认修改这笔成交？".to_string(),
                             summary: impact_summary(&preview),
                             trade: Some(StockTradeDto {
-                                price: price_yuan_to_cents(price),
+                                price: price_yuan_to_milli(price),
                                 lots,
                                 trade_time,
                                 ..trade.clone()
@@ -1225,7 +1242,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                     impact_running.set(false);
                     return;
                 };
-                let price = trade.price as f64 / 100.0;
+                let price = milli_to_price_yuan(trade.price);
                 leptos::task::spawn_local(async move {
                     match api::stock::trade_update(
                         &ledger_id,
@@ -1240,7 +1257,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                             Notifier::global().success("成交已更新".to_string(), None);
                             impact.set(None);
                             edit_target.set(None);
-                            positions_q.reload();
+                            refresh_trades_and_positions();
                         }
                         Err(error) => notify_error("保存成交失败", &error),
                     }
@@ -1264,7 +1281,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                         Ok(_) => {
                             Notifier::global().success("委托已删除".to_string(), None);
                             impact.set(None);
-                            positions_q.reload();
+                            refresh_trades_and_positions();
                         }
                         Err(error) => notify_error("删除委托失败", &error),
                     }
@@ -1317,16 +1334,12 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                         };
                                         let float_pnl = match position.latest_price {
                                             Some(latest) if latest > 0 => {
-                                                Some(latest.saturating_mul(position.quantity).saturating_add(position.round_cash_flow))
+                                                Some(tr_domain::stock::amount_of(latest, position.quantity).saturating_add(position.round_cash_flow))
                                             }
                                             _ => None,
                                         };
                                         let float_rate = float_pnl.and_then(|pnl| {
-                                            if position.round_cost > 0 {
-                                                Some(pnl as f64 / position.round_cost as f64 * 100.0)
-                                            } else {
-                                                None
-                                            }
+                                            floating_pnl_rate(pnl, position.round_cash_flow)
                                         });
                                         let day_rate = day_change.and_then(|change| {
                                             position.prev_close.and_then(|prev| {
@@ -1365,7 +1378,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                                         <div class="stock-position-card__row">
                                                             <span class="stock-position-card__label">"现价"</span>
                                                             <span class="stock-position-card__value">
-                                                                {format!("¥{}", format::amount(position.latest_price.unwrap_or(0)))}
+                                                                {format!("¥{}", format::price(position.latest_price.unwrap_or(0)))}
                                                             </span>
                                                             <span class=format!("stock-position-card__rate {class}")>
                                                                 {format::optional_signed_percent(day_rate)}
@@ -1440,26 +1453,22 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                 }
                             })
                         });
+                        // 最新价是**厘**/股，持仓市值是**分**：折这一次（口径在 tr-domain::stock）
                         let market_value = match position.latest_price {
                             Some(latest) if latest > 0 => {
-                                latest.saturating_mul(position.quantity)
+                                tr_domain::stock::amount_of(latest, position.quantity)
                             }
                             _ => position.total_cost,
                         };
                         let float_pnl = match position.latest_price {
                             Some(latest) if latest > 0 => Some(
-                                latest
-                                    .saturating_mul(position.quantity)
+                                tr_domain::stock::amount_of(latest, position.quantity)
                                     .saturating_add(position.round_cash_flow),
                             ),
                             _ => None,
                         };
                         let float_rate = float_pnl.and_then(|pnl| {
-                            if position.round_cost > 0 {
-                                Some(pnl as f64 / position.round_cost as f64 * 100.0)
-                            } else {
-                                None
-                            }
+                            floating_pnl_rate(pnl, position.round_cash_flow)
                         });
                         let day_class = format::pnl_class(day_change.unwrap_or(0));
                         let float_class = format::pnl_class(float_pnl.unwrap_or(0));
@@ -1508,13 +1517,13 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                         <div class="stock-quote__cell">
                                             <span class="stock-quote__label">"现价"</span>
                                             <span class="stock-quote__value">
-                                                {format!("¥{}", format::amount(position.latest_price.unwrap_or(0)))}
+                                                {format!("¥{}", format::price(position.latest_price.unwrap_or(0)))}
                                             </span>
                                         </div>
                                         <div class="stock-quote__cell">
                                             <span class="stock-quote__label">"当日涨跌"</span>
                                             <span class=format!("stock-quote__value {day_class}")>
-                                                {format!("{} {}", format::signed_yuan(day_change.unwrap_or(0)), format::optional_signed_percent(day_rate))}
+                                                {format!("{} {}", format::signed_price(day_change.unwrap_or(0)), format::optional_signed_percent(day_rate))}
                                             </span>
                                         </div>
                                         <div class="stock-quote__cell">
@@ -1919,7 +1928,7 @@ fn edit_modal(
                                                 }}
                                             </span>
                                             <span class="stock-mono">
-                                                {format!("¥{}", format::amount(item.price))}
+                                                {format!("¥{}", format::price(item.price))}
                                             </span>
                                             <span>{format!("{}手", item.lots)}</span>
                                             <span class="stock-mono">
@@ -2157,13 +2166,13 @@ fn trade_modal(
                                 let lots_value: i64 =
                                     lots_signal.get().trim().parse().unwrap_or(0);
                                 if price_value > 0.0 && lots_value > 0 {
+                                    // 价格是厘、金额是分：折这一次的口径在 tr-domain::stock
                                     format!(
                                         "¥{}",
-                                        format::amount(
-                                            price_yuan_to_cents(price_value)
-                                                .saturating_mul(lots_value)
-                                                .saturating_mul(100),
-                                        ),
+                                        format::amount(tr_domain::stock::amount_of_lots(
+                                            price_yuan_to_milli(price_value),
+                                            lots_value,
+                                        )),
                                     )
                                 } else {
                                     "—".to_string()
@@ -2467,9 +2476,9 @@ fn trade_row_view(
             </td>
             <td class="is-right stock-mono">
                 {if is_group {
-                    format!("均价 {}", format::amount(row.price))
+                    format!("均价 {}", format::price(row.price))
                 } else {
-                    format::amount(row.price)
+                    format::price(row.price)
                 }}
             </td>
             <td class="is-right">
@@ -3049,7 +3058,7 @@ fn round_card(
                                                     if buy { "type-buy" } else { "type-sell" },
                                                 )>{format::trade_type_label(&trade.trade_type)}</span>
                                             </td>
-                                            <td class="is-right stock-mono">{format::amount(trade.price)}</td>
+                                            <td class="is-right stock-mono">{format::price(trade.price)}</td>
                                             <td class="is-right">{format!("{}手", trade.lots)}</td>
                                             <td class="is-right stock-mono">{format::amount(trade.amount)}</td>
                                             <td class="is-right stock-mono stock-fee-cell">
@@ -3895,9 +3904,11 @@ fn StatKpi(
 /// 交易费用说明（「交易费用设置」标题旁的说明浮层；与下单弹窗的预估同口径）。
 const FEE_TOOLTIP: &str = "佣金：委托成交总额 × 费率，不足最低佣金时按最低佣金收取（买卖双向）\n一笔委托分多笔成交时，费用按委托成交总额计算一次，再按各笔成交金额比例分摊\n买入实际成本 = 成交金额 + 佣金 + 过户费";
 /// 印花税说明（固定文案）。
-const STAMP_TOOLTIP: &str = "卖出时按成交金额 × 费率收取";
+const STAMP_TOOLTIP: &str =
+    "卖出时按成交金额 × 费率收取\n场内基金（ETF / LOF / REITs，沪 50–58、深 15–18）不收";
 /// 过户费说明（固定文案）。
-const TRANSFER_TOOLTIP: &str = "买卖双向收取，仅沪市（60/68 开头）适用";
+const TRANSFER_TOOLTIP: &str =
+    "买卖双向收取，仅沪市股票（60/68 开头）适用\n场内基金（ETF / LOF / REITs）不收";
 /// 交易标签最多保存数量（上限 20）。
 const MAX_STOCK_TAGS: usize = 20;
 

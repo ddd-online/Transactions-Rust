@@ -421,6 +421,23 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
   （用户报的就是这一分钱）。因此 `compute_order_fee` 收的是**各笔成交额**（`&[i64]`）而不是总额，
   `allocate_order_fee` 与它同口径，保证"每笔分摊之和 = 委托级合计"。回归：`cargo test -p tr-domain fee`（含用户
   那个例子的逐项断言）、`cargo test -p tr-service create_trade_order_charges_fee_once_per_order`。
+- **股票「浮动盈亏率」的分母是「本轮净投入」**（= `−`本轮资金变动合计，即「成交记录 → 资金变动」那一列的逐行和
+  取反）：减仓回款会冲抵本轮投入，所以**本轮买入总额不是分母** —— 拿它当分母会把亏损率摊薄（用户真实数据上
+  −21.18% 被显示成 −6.07%）。算法唯一入口 `tr_domain::stock::floating_pnl_rate`（native 真跑；净投入 ≤ 0 时
+  返回 `None`、界面显示 `—`），持仓卡片与详情区两处共用；买入总额只继续当**已结算轮次**盈亏率的分母
+  （`dto::round_pnl`），两个口径别互换。DTO 因此不再有 `roundCost`，界面用 `roundCashFlow` 推盈亏与率。
+  回归：`cargo test -p tr-domain floating_rate` 与 `fixtures/ui-stock.ps1` 第 2 步（卡片上的盈亏 ÷ 库里的净投入
+  = 卡片上的率）。
+- **价格走「厘」、金额走「分」**（两套单位，别混）：成交价 / 现价 / 昨收是整数**厘**（1/1000 元 —— 场内基金的
+  报价单位就是 0.001 元），其余（成交额/成本/费用/盈亏/市值）全是整数**分**。换算入口 `tr_domain::money`，
+  展示 `tr-draw::format::price`（`amount` 恒两位），**价格 × 股数 → 分**的唯一入口是
+  `tr_domain::stock::amount_of`。表 `tbl_billadm_stock_trade.price` 因此也是厘：旧库由迁移
+  `20261009_stock_trade_price_milli` 整列 ×10（只改值，幂等靠登记表）。
+- **场内基金（ETF / LOF / 封闭式基金 / REITs）只有佣金**：免印花税、免过户费（沪市基金也是 —— 过户费只对沪市
+  **股票**收）。品种与**代码校验**的唯一判据是 `tr_domain::fee::Instrument::of`（股票 沪 `60`/`68`、深 `00`/`30`；
+  场内基金 沪 `5[0-8]`xxxx、深 `1[5-8]`xxxx），它同时决定行情前缀；不认识的代码（老数据里的北交所）按深市股票
+  回落。回归：`cargo test -p tr-domain fee`、`-p tr-service a_fund_order_is_charged_commission_only`、
+  `fixtures/ui-stock.ps1` 第 11 步。
 - **SQL 只允许拼接常量**：列名/表名用 `const …_COLUMNS` 或常量数组（如 `STOCK_TABLES`），值一律走 `?` 占位符
   （`instr(description, ?)` 也是占位符）；`ORDER BY` 的字段必须过白名单 —— `build_sort_clause` 只认
   `transactionAt` / `transactionType` / `price` / `category` 这 4 项，多一项都不认，方向强制 `asc|desc`。

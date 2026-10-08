@@ -157,10 +157,29 @@ pub fn pnl_text(cents: i64) -> String {
     format!("{label} {}", compact_yuan(cents))
 }
 
+/// 价格（**厘**/股）文字：能整除分时两位小数、带厘位时三位（`100000 -> "100.00"`、`4389 -> "4.389"`）。
+///
+/// **价格与金额是两套单位**（价格走厘、金额走分）：成交价、现价、当日涨跌都用它，
+/// 金额、市值、费用、盈亏仍然用 [`amount`]。
+pub fn price(milli: i64) -> String {
+    tr_domain::money::milli_to_yuan(milli)
+}
+
+/// 带符号价格（当日涨跌这类差值）：`>0` 加 `+`、`<0` 自带 `-`、`0` 不加。
+pub fn signed_price(milli: i64) -> String {
+    if milli > 0 {
+        format!("+{}", price(milli))
+    } else if milli < 0 {
+        format!("-{}", price(milli.saturating_abs()))
+    } else {
+        price(0)
+    }
+}
+
 /// 现货价格文字：行情缺失（`None` 或 `<= 0`）→ `-`。
 pub fn quote_text(latest_price: Option<i64>) -> String {
     match latest_price {
-        Some(price) if price > 0 => format!("¥{}", amount(price)),
+        Some(price_milli) if price_milli > 0 => format!("¥{}", price(price_milli)),
         _ => "-".to_string(),
     }
 }
@@ -345,13 +364,42 @@ mod tests {
 
     #[test]
     fn quotes_need_a_positive_price() {
-        assert_eq!(quote_text(Some(12_345)), "¥123.45");
+        assert_eq!(
+            quote_text(Some(123_450)),
+            "¥123.45",
+            "整分的价格仍是两位小数"
+        );
+        assert_eq!(
+            quote_text(Some(4_389)),
+            "¥4.389",
+            "场内基金的 0.001 元要显示出来"
+        );
         assert_eq!(quote_text(Some(0)), "-");
         assert_eq!(quote_text(Some(-1)), "-");
         assert_eq!(quote_text(None), "-");
         assert!(has_quote(Some(1)));
         assert!(!has_quote(Some(0)));
         assert!(!has_quote(None));
+    }
+
+    /// 价格（厘）与金额（分）是两套单位：价格能带第三位小数，金额永远是两位。
+    #[test]
+    fn prices_keep_the_milli_digit_only_when_it_is_there() {
+        assert_eq!(price(0), "0.00");
+        assert_eq!(price(10_000), "10.00");
+        assert_eq!(price(100_000), "100.00");
+        assert_eq!(price(4_389), "4.389");
+        assert_eq!(price(4_390), "4.39", "厘位是 0 就退回两位");
+        // 与金额函数同名不同单位：`amount(4_389)` 是 43.89 元（分）—— 别互换
+        assert_eq!(amount(4_389), "43.89");
+    }
+
+    #[test]
+    fn signed_price_marks_direction() {
+        assert_eq!(signed_price(43), "+0.043");
+        assert_eq!(signed_price(-43), "-0.043");
+        assert_eq!(signed_price(0), "0.00");
+        assert_eq!(signed_price(100_000), "+100.00");
     }
 
     #[test]

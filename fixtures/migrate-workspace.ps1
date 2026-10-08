@@ -1,13 +1,16 @@
 # migrate-workspace.ps1 —— 工作空间**自动迁移**端到端（把旧格式库升级到当前格式）。
 #
 # 为什么需要它：迁移引擎会在打开工作空间时改写用户数据，这是全仓风险最高的一条路径。
-# 本脚本复制一份已播种的工作空间，把它**降级**成"日记还没有账本"的旧格式
-# （去掉 ledger_id、旧的全局唯一索引回来、抹掉登记行），再启动真实外壳，断言：
+# 本脚本复制一份已播种的工作空间，把它**降级**成旧格式，再启动真实外壳，断言：
 #   1. 应用正常打开（迁移成功，不是拒绝打开）；
 #   2. 库结构升级到位：日记有 ledger_id、复合唯一索引在、旧索引没了、登记行写上了；
 #   3. **老日记正文一字不差**，并归到最早创建的账本；
-#   4. 升级前**留了备份**，且备份文件里是升级前的样子；
-#   5. 再启动一次：不重复备份、不重复改（幂等）。
+#   4. 成交价从**分**升到**厘**（`price × 10`）且**只动价格那一列**（金额/费用/代码一字不变）；
+#   5. 升级前**留了备份**，且备份文件里是升级前的样子；
+#   6. 再启动一次：不重复备份、不重复改（幂等 —— 价格那条靠登记表，不会再乘一次）。
+#
+# 两条降级口径（都在应用启动前做完）：① 日记去掉 ledger_id、旧索引回来；② 成交价除回 10（分），
+# 并抹掉对应的登记行。它们合起来就是"上一版格式"的样子。
 #
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/migrate-workspace.ps1 [-Exe <exe>] [-OutDir <dir>]
@@ -66,7 +69,7 @@ if (Test-Path $ws) { Remove-Item $ws -Recurse -Force }
 Copy-Item $SourceWorkspace $ws -Recurse
 $db = Join-Path $ws 'transactions.db'
 
-# ---- 2. 把它降级成旧格式：老索引回来、ledger_id 去掉、登记行删掉 ----
+# ---- 2. 把它降级成旧格式：老索引回来、ledger_id 去掉、成交价除回 10（分）、登记行删掉 ----
 # 用系统 sqlite3（本机在 PATH；AGENTS 里记的 Miniconda 那份）。降级必须在**应用启动前**做完。
 $downgrade = @'
 PRAGMA foreign_keys = OFF;
@@ -75,6 +78,8 @@ DROP INDEX IF EXISTS idx_tbl_billadm_diary_entry_ledger_date;
 CREATE UNIQUE INDEX idx_tbl_billadm_diary_entry_date ON tbl_billadm_diary_entry(date);
 ALTER TABLE tbl_billadm_diary_entry DROP COLUMN ledger_id;
 DELETE FROM tbl_billadm_schema_migration WHERE id = '20260920_diary_ledger_scope';
+UPDATE tbl_billadm_stock_trade SET price = price / 10;
+DELETE FROM tbl_billadm_schema_migration WHERE id = '20261009_stock_trade_price_milli';
 COMMIT;
 '@
 $sqlFile = Join-Path $OutDir 'downgrade.sql'
@@ -99,6 +104,12 @@ $oldestLedger = & sqlite3 $db "SELECT id FROM tbl_billadm_ledger ORDER BY create
 Assert-True (-not [string]::IsNullOrWhiteSpace($oldestLedger)) '工作空间里至少有一个账本'
 Assert-True ($oldDiary.Count -ge 1) "升级前有老日记可供核对（实际 $($oldDiary.Count) 篇）"
 Write-Host "[migrate] 升级前：日记 $($oldDiary.Count) 篇，最早账本 $oldestLedger" -ForegroundColor Cyan
+
+# 记下升级前的成交（价格是**分**）：升级后价格必须 ×10，其余列一字不变
+$oldTrades = @((& sqlite3 -json $db "SELECT id, price, amount, fee, stock_code FROM tbl_billadm_stock_trade ORDER BY id;") -join "`n" | ConvertFrom-Json)
+Assert-True ($oldTrades.Count -ge 1) "升级前有成交流水可供核对（实际 $($oldTrades.Count) 笔）"
+$oldPriceSum = ($oldTrades | Measure-Object -Property price -Sum).Sum
+Write-Host "[migrate] 升级前：成交 $($oldTrades.Count) 笔，价格合计 $oldPriceSum 分" -ForegroundColor Cyan
 
 # 冒充"上一次升级留下的备份"：升级后它必须被清掉（同一工作空间只保留最近一份）
 $staleBackup = Join-Path $ws 'transactions.db.pre-migration-1.bak'
@@ -154,7 +165,25 @@ try {
         }
     }
 
-    # ---- 6. 升级前留了备份（且**只留这一份**），备份里是升级前的样子 ----
+    # ---- 6. 成交价从**分**升到**厘**：只有 price ×10，其余列一字不变 ----
+    $priceRegistered = & sqlite3 $db "SELECT id FROM tbl_billadm_schema_migration WHERE id='20261009_stock_trade_price_milli';"
+    Assert-True ($priceRegistered -eq '20261009_stock_trade_price_milli') '价格迁移写了登记行'
+    $newTrades = @((& sqlite3 -json $db "SELECT id, price, amount, fee, stock_code FROM tbl_billadm_stock_trade ORDER BY id;") -join "`n" | ConvertFrom-Json)
+    Assert-True ($newTrades.Count -eq $oldTrades.Count) "成交笔数不变（升级前 $($oldTrades.Count)，升级后 $($newTrades.Count)）"
+    foreach ($row in $oldTrades) {
+        $match = @($newTrades | Where-Object { $_.id -eq $row.id })
+        Assert-True ($match.Count -eq 1) "升级后仍有那一笔成交（$($row.id)）"
+        if ($match.Count -eq 1) {
+            Assert-True ([int64]$match[0].price -eq ([int64]$row.price * 10)) `
+                "价格 ×10 变成厘（$($row.price) 分 → $($match[0].price) 厘）"
+            Assert-True ([int64]$match[0].amount -eq [int64]$row.amount) `
+                "成交额（分）一字不变（$($match[0].amount)）"
+            Assert-True ([int64]$match[0].fee -eq [int64]$row.fee) "费用（分）一字不变（$($match[0].fee)）"
+            Assert-True ($match[0].stock_code -eq $row.stock_code) "代码一字不变（$($match[0].stock_code)）"
+        }
+    }
+
+    # ---- 7. 升级前留了备份（且**只留这一份**），备份里是升级前的样子 ----
     $backups = @(Get-ChildItem $ws -Filter 'transactions.db.pre-migration-*.bak')
     Assert-True ($backups.Count -eq 1) "只保留最近一份备份（实际 $($backups.Count) 份）"
     Assert-True (-not (Test-Path $staleBackup)) '上一次升级留下的旧备份已被清掉'
@@ -162,9 +191,12 @@ try {
     if ($backups.Count -ge 1) {
         $backupColumns = @(& sqlite3 $backups[0].FullName "SELECT name FROM pragma_table_info('tbl_billadm_diary_entry');")
         Assert-True (-not ($backupColumns -contains 'ledger_id')) '备份里是升级前的结构（没有 ledger_id）'
+        $backupPriceSum = & sqlite3 $backups[0].FullName "SELECT SUM(price) FROM tbl_billadm_stock_trade;"
+        Assert-True ([int64]$backupPriceSum -eq [int64]$oldPriceSum) `
+            "备份里的成交价还是升级前的分（合计 $backupPriceSum）"
     }
 
-    # ---- 7. 界面里能读到老日记：日期树里出现那一年的节点、且计到 1 篇 ----
+    # ---- 8. 界面里能读到老日记：日期树里出现那一年的节点、且计到 1 篇 ----
     # （当前账本 = 最早创建的账本，老日记全归它；页面默认选中"今天"，所以看树而不是编辑器）
     Write-Host "`n[migrate] 界面核对：日记页的日期树里有老日记" -ForegroundColor Cyan
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '日记')) '打开「日记」'
@@ -193,8 +225,9 @@ try {
 }
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-# ---- 8. 幂等：再启动一次，不重复备份、不重复改 ----
+# ---- 9. 幂等：再启动一次，不重复备份、不重复改 ----
 $backupCountBefore = @(Get-ChildItem $ws -Filter 'transactions.db.pre-migration-*.bak').Count
+$priceSumBefore = & sqlite3 $db "SELECT SUM(price) FROM tbl_billadm_stock_trade;"
 $process2 = $null
 try {
     $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME }
@@ -216,5 +249,9 @@ finally { Stop-TrApp -Process $process2 -Failures $failures -OutDir $OutDir }
 $backupCountAfter = @(Get-ChildItem $ws -Filter 'transactions.db.pre-migration-*.bak').Count
 Assert-True ($backupCountAfter -eq $backupCountBefore) `
     "已是当前格式时不再备份（第二次启动前后都是 $backupCountBefore 份）"
+# 价格那条迁移**只改值**：再打开一次绝不能又乘一次 10（幂等靠登记表）
+$priceSumAfter = & sqlite3 $db "SELECT SUM(price) FROM tbl_billadm_stock_trade;"
+Assert-True ([int64]$priceSumAfter -eq [int64]$priceSumBefore) `
+    "已是当前格式时价格不再变（前后合计都是 $priceSumBefore 厘）"
 
-Show-TrSummary -Failures $failures -Tag 'migrate' -SuccessMessage "[migrate] 全部通过：旧格式自动升级 + 数据一字不差 + 升级前备份 + 幂等"
+Show-TrSummary -Failures $failures -Tag 'migrate' -SuccessMessage "[migrate] 全部通过：旧格式自动升级（日记账本 + 成交价分→厘）+ 数据一字不差 + 升级前备份 + 幂等"

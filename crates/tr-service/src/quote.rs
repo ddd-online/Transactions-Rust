@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use tr_domain::dto::StockQuoteDto;
 use tr_domain::fee::{is_valid_stock_code, market_prefix};
-use tr_domain::money::price_yuan_to_cents;
+use tr_domain::money::price_yuan_to_milli;
 
 /// 腾讯行情字段分隔符。
 const FIELD_SEPARATOR: char = '~';
@@ -223,9 +223,9 @@ pub fn parse_tencent_quote_payload(payload: &str) -> HashMap<String, StockQuoteD
             code.to_string(),
             StockQuoteDto {
                 stock_code: code.to_string(),
-                // 价格由元换算为整数分：规则在 tr-domain::money（别在这儿再写一遍）
-                latest_price: price_yuan_to_cents(latest_yuan),
-                prev_close: price_yuan_to_cents(prev_close_yuan),
+                // 价格由元换算为整数**厘**：规则在 tr-domain::money（别在这儿再写一遍）
+                latest_price: price_yuan_to_milli(latest_yuan),
+                prev_close: price_yuan_to_milli(prev_close_yuan),
                 quote_time,
             },
         );
@@ -292,10 +292,20 @@ mod tests {
         assert_eq!(quotes.len(), 1, "应只解析 1 只股票: {quotes:?}");
 
         let quote = quotes.get("600000").expect("缺少 600000 行情");
-        assert_eq!(quote.latest_price, 1020);
-        assert_eq!(quote.prev_close, 1005);
+        assert_eq!(quote.latest_price, 10_200, "10.20 元 = 10200 厘");
+        assert_eq!(quote.prev_close, 10_050);
         assert!(quote.quote_time > 0, "行情时间缺失: {quote:?}");
         assert_eq!(quote.stock_code, "600000");
+    }
+
+    /// 场内基金的报价是 0.001 元：厘装得下它，别退回"分"（退回会把 4.389 变成 4.39）。
+    #[test]
+    fn parse_tencent_quote_payload_keeps_fund_milli_prices() {
+        let payload = line("510300", "4.389", "4.432", "20260904150000");
+        let quotes = parse_tencent_quote_payload(&payload);
+        let quote = quotes.get("510300").expect("应有沪深300ETF 行情");
+        assert_eq!(quote.latest_price, 4_389, "4.389 元 = 4389 厘");
+        assert_eq!(quote.prev_close, 4_432);
     }
 
     #[test]

@@ -19,14 +19,18 @@ pub fn shares_of(lots: i64) -> i64 {
     lots * SHARES_PER_LOT
 }
 
-/// 成交额（分）：单价（分/股）× 股数。
-pub fn amount_of(price: i64, shares: i64) -> i64 {
-    price * shares
+/// 成交额（分）：单价（**厘**/股）× 股数 → 分。
+///
+/// **价格是厘、金额是分**（见 [`crate::money`]）：`amount = round(price_milli × shares / 10)`。
+/// 整手（100 股）× 整数厘一定是整数分（`4389 × 100 = 438900 → 43890 分 = 438.90 元`），
+/// 只有零股才真的需要这一次四舍五入。价格恒为正，所以这里按 `+5` 做"四舍五入、远离零"。
+pub fn amount_of(price_milli: i64, shares: i64) -> i64 {
+    (price_milli.saturating_mul(shares) + 5) / 10
 }
 
-/// 成交额（分）：单价（分/股）× 手数（内部按 [`SHARES_PER_LOT`] 折股）。
-pub fn amount_of_lots(price: i64, lots: i64) -> i64 {
-    amount_of(price, shares_of(lots))
+/// 成交额（分）：单价（**厘**/股）× 手数（内部按 [`SHARES_PER_LOT`] 折股）。
+pub fn amount_of_lots(price_milli: i64, lots: i64) -> i64 {
+    amount_of(price_milli, shares_of(lots))
 }
 
 /// 从**按时间升序**的成交流里切出"当前在建轮次"（最近一次清仓之后的那几笔）。
@@ -116,6 +120,23 @@ pub fn round_flow(trades_asc: &[StockTrade]) -> RoundFlow {
         }
     }
     flow
+}
+
+/// 浮动盈亏率（%）= 浮动盈亏 ÷ **持仓成本** × 100。
+///
+/// 持仓成本 = 本轮净投入 = `−`[`RoundFlow::cash_flow`]：买入的钱出去、卖出的钱回来，
+/// "还压在这只股票上"的就是两者的净额。**不是**本轮买入总额（`buy_cost`，减仓的回款不冲抵它
+/// ⇒ 分母偏大、亏损率被摊薄）——用户真实数据上：市值 3790.00 + 本轮资金变动 −4808.28 = 浮动盈亏
+/// −1018.28，率是 −21.18%，而按买入总额 16776.16 算出来只有 −6.07%。
+///
+/// 净投入 ≤ 0（卖出回款已经超过买入支出）时没有可算的比率 ⇒ `None`（界面显示 `—`）。
+/// 买入总额仍是**已结算轮次**盈亏率的分母（[`crate::dto::round_pnl`]），两者口径不同、别互换。
+pub fn floating_pnl_rate(pnl: i64, cash_flow: i64) -> Option<f64> {
+    let cost = -cash_flow;
+    if cost <= 0 {
+        return None;
+    }
+    Some((pnl as f64 / cost as f64 * 10_000.0).round() / 100.0)
 }
 
 #[cfg(test)]
@@ -256,21 +277,34 @@ mod tests {
 
     #[test]
     fn the_amount_is_price_times_shares() {
-        // 贵州茅台 1700.00 元/股 = 170000 分/股，1 手 = 100 股 → 17,000,000 分 = 170,000.00 元
-        assert_eq!(amount_of(170_000, shares_of(1)), 17_000_000);
-        assert_eq!(amount_of(1_700, shares_of(10)), 1_700_000);
+        // 贵州茅台 1700.00 元/股 = 1,700,000 厘/股，1 手 = 100 股 → 17,000,000 分 = 170,000.00 元
+        assert_eq!(amount_of(1_700_000, shares_of(1)), 17_000_000);
+        assert_eq!(amount_of(1_700_000, shares_of(10)), 170_000_000);
         assert_eq!(amount_of(0, shares_of(5)), 0);
-        assert_eq!(amount_of(170_000, 0), 0);
+        assert_eq!(amount_of(1_700_000, 0), 0);
+    }
+
+    /// 场内基金的 0.001 元报价：厘装得下，成交额仍是整数分。
+    #[test]
+    fn a_fund_price_with_milli_digits_lands_on_whole_cents() {
+        // 沪深300ETF 4.389 元/份 = 4389 厘 → 1 手（100 份）= 438.90 元 = 43,890 分
+        assert_eq!(amount_of_lots(4_389, 1), 43_890);
+        assert_eq!(amount_of_lots(4_389, 3), 131_670);
+        // 零股要四舍五入到分：3.053 元/份 × 7 份 = 21.371 元 → 21.37 元
+        assert_eq!(amount_of(3_053, 7), 2_137);
+        // 恰好半数（…5 厘·股）向上进：0.0005 元 = 5 厘，1 份 → 0.5 分 → 1 分
+        assert_eq!(amount_of(5, 1), 1);
+        assert_eq!(amount_of(4, 1), 0);
     }
 
     /// 两个入口给同一个答案（`amount_of_lots` 就是"先折股再乘"的糖）。
     #[test]
     fn the_two_amount_entries_agree() {
-        for (price, lots) in [(170_000_i64, 1_i64), (1_700, 10), (36_61, 2), (0, 7)] {
+        for (price_milli, lots) in [(1_700_000_i64, 1_i64), (1_700_000, 10), (4_389, 3), (0, 7)] {
             assert_eq!(
-                amount_of_lots(price, lots),
-                amount_of(price, shares_of(lots)),
-                "price={price} lots={lots}"
+                amount_of_lots(price_milli, lots),
+                amount_of(price_milli, shares_of(lots)),
+                "price_milli={price_milli} lots={lots}"
             );
         }
     }
@@ -278,7 +312,39 @@ mod tests {
     /// 分到分的整数运算：不引入浮点（金额恒为整数分是硬契约）。
     #[test]
     fn the_arithmetic_stays_in_integer_cents() {
-        // 36.61 元/股 × 200 股 = 7322.00 元
-        assert_eq!(amount_of_lots(3_661, 2), 732_200);
+        // 36.61 元/股 = 36,610 厘 × 200 股 = 7322.00 元
+        assert_eq!(amount_of_lots(36_610, 2), 732_200);
+    }
+
+    /// 用户真实数据（博敏电子 603936，2026-10-08）：市值 3790.00 + 本轮资金变动 −4808.28
+    /// = 浮动盈亏 −1018.28，率按净投入算 −21.18%。
+    ///
+    /// 修前分母是**本轮买入总额** 16776.16（四次建仓/加仓的成交额 + 费用，减仓回款不冲抵），
+    /// 于是同一个 −1018.28 只显示成 −6.07% —— 亏损率被摊薄了三倍多（用户报的缺陷）。
+    #[test]
+    fn floating_rate_divides_by_the_net_invested_capital() {
+        assert_eq!(floating_pnl_rate(-101_828, -480_828), Some(-21.18));
+        // 老分母（本轮买入总额 16776.16 分，正数）算出来只有 −6.07%：同一个 −1018.28，
+        // 亏损率被摊薄三倍多 —— 两个分母给出的数必须不是一个量级，这条顺手钉住"改的不是无关紧要的位"。
+        let buy_cost = 1_677_616_f64;
+        assert_eq!(
+            ((-101_828_f64 / buy_cost * 10_000.0).round() / 100.0),
+            -6.07
+        );
+    }
+
+    #[test]
+    fn floating_rate_keeps_the_sign_of_a_profit() {
+        // 净投入 500.00，浮动盈亏 +100.00 → +20%
+        assert_eq!(floating_pnl_rate(10_000, -50_000), Some(20.0));
+        // 四舍五入到两位小数（与 round_pnl 的盈亏率同一口径）
+        assert!(matches!(floating_pnl_rate(1, -3), Some(rate) if (rate - 33.33).abs() < 1e-9));
+    }
+
+    /// 卖出回款已超过买入支出（净投入 ≤ 0）时没有可算的比率：界面显示 `—`，不显示一个"负分母"的率。
+    #[test]
+    fn floating_rate_is_none_when_the_round_took_out_more_than_it_put_in() {
+        assert_eq!(floating_pnl_rate(10_000, 0), None);
+        assert_eq!(floating_pnl_rate(10_000, 50_000), None);
     }
 }

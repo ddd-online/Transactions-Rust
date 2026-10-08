@@ -8,9 +8,10 @@
 //! 实际口径是：字段缺失 / 空串 / **非数字串**都按"没传"处理（宽松）；只有数字 `<= 0` 才报
 //! `recent 必须为正整数` —— 注释从前写的是"非正整数报错"，与实现对不上（/code-review 的 Spec 轴点名）。
 //!
-//! **价格**：元 → 分走 `money::price_yuan_to_cents`（浮点那条）—— 别改用
-//! `money::yuan_to_cents`（字符串那条）：两者在"第三位小数恰好进位"的边界上口径不同，
-//! 换过去会改变行为。规则本体与断言在 `tr-domain`，这里只调用。
+//! **价格**：元 → **厘**（1/1000 元）走 `money::price_yuan_to_milli`（浮点那条）—— 别改用
+//! `money::yuan_to_cents`（那是**金额**的字符串入口，单位不同、进位边界也不同）。
+//! 价格走厘是为了场内基金（ETF / LOF / REITs）的 0.001 元报价，规则本体与断言在 `tr-domain`，
+//! 这里只调用。
 
 use tauri::State;
 
@@ -22,7 +23,7 @@ use tr_domain::dto::{
 };
 use tr_domain::error::AppError;
 use tr_domain::models::StockFeeSetting;
-use tr_domain::money::price_yuan_to_cents;
+use tr_domain::money::price_yuan_to_milli;
 use tr_domain::wire::{
     LedgerIdRequest, QueryNumber, StockAmountDateRequest, StockArchiveRequest,
     StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
@@ -284,13 +285,13 @@ fn parse_trade_fills(req: &StockTradeCreateRequest) -> Result<Vec<TradeFill>, Ap
             .fills
             .iter()
             .map(|fill| TradeFill {
-                price_cents: price_yuan_to_cents(fill.price),
+                price_milli: price_yuan_to_milli(fill.price),
                 lots: fill.lots as i64,
             })
             .collect());
     }
     Ok(vec![TradeFill {
-        price_cents: price_yuan_to_cents(req.price),
+        price_milli: price_yuan_to_milli(req.price),
         lots: req.lots as i64,
     }])
 }
@@ -331,7 +332,7 @@ pub fn stock_trade_update(
         &workspace,
         &req.ledger_id,
         &req.id,
-        price_yuan_to_cents(req.price),
+        price_yuan_to_milli(req.price),
         req.lots as i64,
         req.trade_time as i64,
     )?)
@@ -363,7 +364,7 @@ pub fn stock_trade_impact(
         &req.action,
         &req.trade_id,
         &req.order_id,
-        price_yuan_to_cents(req.price),
+        price_yuan_to_milli(req.price),
         req.lots as i64,
         req.trade_time as i64,
     )?)
@@ -610,10 +611,20 @@ mod tests {
         assert_eq!(body.ledger_id, "l1");
         assert_eq!(body.fills.len(), 1);
         assert_eq!(body.fills[0].price, 38.06);
-        // 价格（元）→ 分：四舍五入到整数分
+        // 价格（元）→ 厘：四舍五入到整数厘
         let fills = parse_trade_fills(&body).unwrap();
-        assert_eq!(fills[0].price_cents, 3806);
+        assert_eq!(fills[0].price_milli, 38_060);
         assert_eq!(fills[0].lots, 2);
+
+        // 场内基金的 0.001 元报价一位都不能丢（ETF 是本仓库支持价格厘的起因）
+        let fund: StockTradeCreateRequest = serde_json::from_str(
+            r#"{"ledger_id":"l1","stock_code":"510300","stock_name":"沪深300ETF",
+                 "trade_type":"open","trade_time":1700000000,
+                 "fills":[{"price":4.389,"lots":3}]}"#,
+        )
+        .unwrap();
+        let fund_fills = parse_trade_fills(&fund).unwrap();
+        assert_eq!(fund_fills[0].price_milli, 4_389, "4.389 元 = 4389 厘");
 
         // 兼容旧调用：没有 fills 时回退到单笔 price / lots
         let legacy: StockTradeCreateRequest = serde_json::from_str(
@@ -623,7 +634,10 @@ mod tests {
         .unwrap();
         let fills = parse_trade_fills(&legacy).unwrap();
         assert_eq!(fills.len(), 1);
-        assert_eq!(fills[0].price_cents, 1001, "10.005 元四舍五入到 1001 分");
+        assert_eq!(
+            fills[0].price_milli, 10_005,
+            "10.005 元四舍五入到 10005 厘（厘装得下它）"
+        );
         assert_eq!(fills[0].lots, 10);
 
         // 缺参等价于零值

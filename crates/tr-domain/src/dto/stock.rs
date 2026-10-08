@@ -122,10 +122,11 @@ pub struct StockPositionDto {
     /// 持仓总成本（分，含买入手续费）
     #[serde(rename = "totalCost")]
     pub total_cost: i64,
-    /// 本轮（最近一次清仓之后）建仓 / 加仓的合计成本（分，含手续费）；浮动盈亏率的分母
-    #[serde(rename = "roundCost")]
-    pub round_cost: i64,
-    /// 本轮资金变动合计（分）：买入为负、卖出为正
+    /// 本轮（最近一次清仓之后）资金变动合计（分）：买入为负、卖出为正。
+    ///
+    /// 它是浮动盈亏与浮动盈亏率的唯一口径：浮动盈亏 = 最新价 × 股数 + 本轮资金变动，
+    /// 浮动盈亏率 = 浮动盈亏 ÷ **本轮净投入**（= 本轮资金变动取反，
+    /// 见 [`crate::stock::floating_pnl_rate`]）。
     #[serde(rename = "roundCashFlow")]
     pub round_cash_flow: i64,
     /// 该股累计已实现盈亏（分）
@@ -133,10 +134,10 @@ pub struct StockPositionDto {
     pub realized_pnl: i64,
     /// 本轮复盘
     pub review: String,
-    /// 最新价（分/股），行情获取失败时省略
+    /// 最新价（**厘**/股），行情获取失败时省略
     #[serde(rename = "latestPrice", skip_serializing_if = "Option::is_none")]
     pub latest_price: Option<i64>,
-    /// 昨收价（分/股）
+    /// 昨收价（**厘**/股）
     #[serde(rename = "prevClose", skip_serializing_if = "Option::is_none")]
     pub prev_close: Option<i64>,
     /// 行情时间（Unix 秒）
@@ -153,7 +154,6 @@ impl From<&StockPosition> for StockPositionDto {
             stock_name: position.stock_name.clone(),
             quantity: position.quantity,
             total_cost: position.total_cost,
-            round_cost: 0,
             round_cash_flow: 0,
             realized_pnl: position.realized_pnl,
             review: position.review.clone(),
@@ -180,10 +180,10 @@ pub struct StockNameDto {
 pub struct StockQuoteDto {
     #[serde(rename = "stockCode")]
     pub stock_code: String,
-    /// 最新价（分/股）
+    /// 最新价（**厘**/股）
     #[serde(rename = "latestPrice")]
     pub latest_price: i64,
-    /// 昨收价（分/股）
+    /// 昨收价（**厘**/股）
     #[serde(rename = "prevClose")]
     pub prev_close: i64,
     /// 行情时间（Unix 秒）
@@ -599,8 +599,10 @@ mod tests {
     #[test]
     fn position_dto_uses_camel_case_round_keys() {
         let value = serde_json::to_value(StockPositionDto::default()).unwrap();
-        assert_eq!(value["roundCost"], 0);
         assert_eq!(value["roundCashFlow"], 0);
+        // 浮动盈亏率的分母是「本轮净投入」（由 roundCashFlow 取反算出来），
+        // 不再有 `roundCost` 这个字段 —— 它是修前那个被摊薄的分母（见 `tr_domain::stock::floating_pnl_rate`）。
+        assert!(value.get("roundCost").is_none());
     }
 
     #[test]

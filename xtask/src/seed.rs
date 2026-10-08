@@ -67,8 +67,8 @@ const PRINCIPAL_CENTS: i64 = 15_000_000;
 const WITHDRAW_CENTS: i64 = 1_000_000;
 /// 阶段 2 追加本金：50 万元 = 50,000,000 分。
 const ADD_PRINCIPAL_CENTS: i64 = 50_000_000;
-/// 阶段 2 重新建仓的成交价：16.80 元 = 1680 分。
-const REOPEN_PRICE_CENTS: i64 = 1_680;
+/// 阶段 2 重新建仓的成交价：16.80 元 = 16,800 厘（价格口径是**厘**，1/1000 元）。
+const REOPEN_PRICE_MILLI: i64 = 16_800;
 
 /// 阶段 2 新增的分类 / 标签 / 图表 / 模板名称（每次播种必须逐字一致）。
 const PHASE2_CATEGORY: &str = "阶段二分类";
@@ -320,11 +320,11 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "open",
         &[
             stock::TradeFill {
-                price_cents: 170_000,
+                price_milli: 1_700_000,
                 lots: 1,
             },
             stock::TradeFill {
-                price_cents: 170_150,
+                price_milli: 1_701_500,
                 lots: 1,
             },
         ],
@@ -339,7 +339,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "add",
         &[stock::TradeFill {
-            price_cents: 169_500,
+            price_milli: 1_695_000,
             lots: 1,
         }],
         TRADE_TIME_ADD,
@@ -353,7 +353,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "close",
         &[stock::TradeFill {
-            price_cents: 175_000,
+            price_milli: 1_750_000,
             lots: 3,
         }],
         TRADE_TIME_CLOSE,
@@ -752,7 +752,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "open",
         &[stock::TradeFill {
-            price_cents: REOPEN_PRICE_CENTS,
+            price_milli: REOPEN_PRICE_MILLI,
             lots: 1,
         }],
         TRADE_TIME_REOPEN,
@@ -844,7 +844,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "open",
         &[stock::TradeFill {
-            price_cents: 198_000,
+            price_milli: 1_980_000,
             lots: 3,
         }],
         TRADE_TIME_R2_OPEN,
@@ -858,7 +858,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "reduce",
         &[stock::TradeFill {
-            price_cents: 199_000,
+            price_milli: 1_990_000,
             lots: 1,
         }],
         TRADE_TIME_R2_REDUCE1,
@@ -872,7 +872,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "reduce",
         &[stock::TradeFill {
-            price_cents: 197_500,
+            price_milli: 1_975_000,
             lots: 1,
         }],
         TRADE_TIME_R2_REDUCE2,
@@ -886,7 +886,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "add",
         &[stock::TradeFill {
-            price_cents: 201_000,
+            price_milli: 2_010_000,
             lots: 1,
         }],
         TRADE_TIME_R2_ADD,
@@ -900,7 +900,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "close",
         &[stock::TradeFill {
-            price_cents: 200_000,
+            price_milli: 2_000_000,
             lots: 2,
         }],
         TRADE_TIME_R2_CLOSE,
@@ -941,7 +941,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "open",
         &[stock::TradeFill {
-            price_cents: 190_000,
+            price_milli: 1_900_000,
             lots: 1,
         }],
         TRADE_TIME_R3_OPEN,
@@ -960,7 +960,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         "贵州茅台",
         "close",
         &[stock::TradeFill {
-            price_cents: 195_000,
+            price_milli: 1_950_000,
             lots: 1,
         }],
         TRADE_TIME_R3_CLOSE,
@@ -1057,7 +1057,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         workspace,
         &phase3_ledger,
         &round3_open_id,
-        192_000,
+        1_920_000,
         1,
         TRADE_TIME_R3_OPEN,
     )?;
@@ -1106,7 +1106,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         PHASE3_STOCK_NAME,
         "open",
         &[stock::TradeFill {
-            price_cents: 112_000,
+            price_milli: 1_120_000,
             lots: 1,
         }],
         TRADE_TIME_R4_OPEN,
@@ -1125,7 +1125,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         PHASE3_STOCK_NAME,
         "close",
         &[stock::TradeFill {
-            price_cents: 118_000,
+            price_milli: 1_180_000,
             lots: 1,
         }],
         TRADE_TIME_R4_CLOSE,
@@ -1147,7 +1147,7 @@ pub fn seed(workspace: &Workspace) -> Result<String, ServiceError> {
         workspace,
         &phase3_ledger,
         &round4_open_id,
-        113_000,
+        1_130_000,
         1,
         TRADE_TIME_R4_OPEN,
     )?;

@@ -60,10 +60,10 @@ pub use write::{
 /// 哨兵文案（`trade impact preview rollback`）只在内部流转，不对外暴露。
 pub const ERR_PREVIEW_ROLLBACK: &str = "trade impact preview rollback";
 
-/// 委托内的一笔成交（价格单位：分/股）。
+/// 委托内的一笔成交（价格单位：**厘**/股，1/1000 元 —— 场内基金的 0.001 元报价靠它）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TradeFill {
-    pub price_cents: i64,
+    pub price_milli: i64,
     pub lots: i64,
 }
 
@@ -812,7 +812,6 @@ pub fn list_positions(
         .map(|position| {
             let mut item = StockPositionDto::from(position);
             let flow = flow_of(&flows, position);
-            item.round_cost = flow.buy_cost;
             item.round_cash_flow = flow.cash_flow;
             if let Some(quote) = quotes.get(&position.stock_code) {
                 if quote.latest_price > 0 {
@@ -927,7 +926,10 @@ fn compute_held_market_value(
         }
         let flow = flow_of(flows, position);
         let value = match quotes.get(&position.stock_code) {
-            Some(quote) if quote.latest_price > 0 => quote.latest_price * position.quantity,
+            // 最新价是**厘**/股，市值是**分**：折这一次的口径在 `tr_domain::stock::amount_of`
+            Some(quote) if quote.latest_price > 0 => {
+                tr_domain::stock::amount_of(quote.latest_price, position.quantity)
+            }
             _ => {
                 quote_failed_count += 1;
                 position.total_cost
@@ -1567,6 +1569,9 @@ mod tests {
     const TEST_NAME_B: &str = "平安银行";
     const TEST_ORDER_CODE: &str = "605258";
     const TEST_ORDER_NAME: &str = "协和电子";
+    /// 场内基金（沪深300ETF）：沪市 51 开头，价格带厘位、免印花税与过户费。
+    const TEST_FUND_CODE: &str = "510300";
+    const TEST_FUND_NAME: &str = "沪深300ETF";
 
     /// 测试用行情源：只返回预设代码，模拟部分/全部获取失败。
     struct StubQuoteFetcher {
@@ -1632,13 +1637,13 @@ mod tests {
         set_principal_amount(workspace, amount).unwrap();
     }
 
-    /// 建仓后立即清仓，产生一条已归档轮次。
+    /// 建仓后立即清仓，产生一条已归档轮次（价格单位：**厘**/股）。
     fn close_round_helper(
         workspace: &Workspace,
         code: &str,
         name: &str,
-        open_cents: i64,
-        close_cents: i64,
+        open_milli: i64,
+        close_milli: i64,
     ) {
         create_trade(
             workspace,
@@ -1646,7 +1651,7 @@ mod tests {
             code,
             name,
             consts::STOCK_TRADE_OPEN,
-            open_cents,
+            open_milli,
             10,
             1_700_005_000,
             "",
@@ -1659,7 +1664,7 @@ mod tests {
             code,
             name,
             consts::STOCK_TRADE_CLOSE,
-            close_cents,
+            close_milli,
             10,
             1_700_005_100,
             "",
@@ -1673,8 +1678,8 @@ mod tests {
         workspace: &Workspace,
         code: &str,
         name: &str,
-        open_price: i64,
-        close_price: i64,
+        open_milli: i64,
+        close_milli: i64,
         lots: i64,
         close_at: i64,
     ) {
@@ -1682,10 +1687,10 @@ mod tests {
         for (trade_type, price, at) in [
             (
                 consts::STOCK_TRADE_OPEN,
-                open_price,
+                open_milli,
                 close_at - if close_at > 60 { 60 } else { 0 },
             ),
-            (consts::STOCK_TRADE_CLOSE, close_price, close_at),
+            (consts::STOCK_TRADE_CLOSE, close_milli, close_at),
         ] {
             let trade = StockTrade {
                 id: tr_store::util::new_uuid(),
@@ -1709,8 +1714,8 @@ mod tests {
         workspace: &Workspace,
         code: &str,
         name: &str,
-        open_price: i64,
-        close_price: i64,
+        open_milli: i64,
+        close_milli: i64,
         lots: i64,
         close_at: &str,
     ) {
@@ -1719,8 +1724,8 @@ mod tests {
             workspace,
             code,
             name,
-            open_price,
-            close_price,
+            open_milli,
+            close_milli,
             lots,
             timestamp,
         );
@@ -1754,11 +1759,11 @@ mod tests {
             consts::STOCK_TRADE_OPEN,
             &[
                 TradeFill {
-                    price_cents: 3806,
+                    price_milli: 38_060,
                     lots: 1,
                 },
                 TradeFill {
-                    price_cents: 3806,
+                    price_milli: 38_060,
                     lots: 2,
                 },
             ],
@@ -1783,7 +1788,7 @@ mod tests {
             TEST_NAME_B,
             consts::STOCK_TRADE_OPEN,
             &[TradeFill {
-                price_cents: 1000,
+                price_milli: 10_000,
                 lots: 1,
             }],
             1_700_000_100,
@@ -1817,11 +1822,11 @@ mod tests {
             consts::STOCK_TRADE_OPEN,
             &[
                 TradeFill {
-                    price_cents: 3806,
+                    price_milli: 38_060,
                     lots: 1,
                 },
                 TradeFill {
-                    price_cents: 3806,
+                    price_milli: 38_060,
                     lots: 1,
                 },
             ],
@@ -1837,7 +1842,7 @@ mod tests {
             &workspace,
             TEST_LEDGER_ID,
             &opens[1].id,
-            3810,
+            38_100,
             1,
             1_700_000_000,
         )
@@ -1851,7 +1856,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_REDUCE,
             &[TradeFill {
-                price_cents: 3900,
+                price_milli: 39_000,
                 lots: 1,
             }],
             1_700_000_600,
@@ -1909,11 +1914,11 @@ mod tests {
             consts::STOCK_TRADE_OPEN,
             &[
                 TradeFill {
-                    price_cents: 170_000,
+                    price_milli: 1_700_000,
                     lots: 1,
                 },
                 TradeFill {
-                    price_cents: 170_150,
+                    price_milli: 1_701_500,
                     lots: 1,
                 },
             ],
@@ -1929,7 +1934,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_ADD,
             &[TradeFill {
-                price_cents: 169_500,
+                price_milli: 1_695_000,
                 lots: 1,
             }],
             1_768_867_200,
@@ -1944,7 +1949,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
             &[TradeFill {
-                price_cents: 175_000,
+                price_milli: 1_750_000,
                 lots: 3,
             }],
             1_773_100_800,
@@ -1958,7 +1963,7 @@ mod tests {
             &workspace,
             TEST_LEDGER_ID,
             &opens[1].id,
-            170_200,
+            1_702_000,
             1,
             1_767_657_600,
         )
@@ -1972,7 +1977,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
             &[TradeFill {
-                price_cents: 168_000,
+                price_milli: 1_680_000,
                 lots: 1,
             }],
             1_775_779_200,
@@ -1995,7 +2000,7 @@ mod tests {
             "平安银行",
             consts::STOCK_TRADE_OPEN,
             &[TradeFill {
-                price_cents: 112_000,
+                price_milli: 1_120_000,
                 lots: 3,
             }],
             1_779_408_000,
@@ -2010,7 +2015,7 @@ mod tests {
             "平安银行",
             consts::STOCK_TRADE_REDUCE,
             &[TradeFill {
-                price_cents: 115_000,
+                price_milli: 1_150_000,
                 lots: 1,
             }],
             1_779_494_400,
@@ -2025,7 +2030,7 @@ mod tests {
             "平安银行",
             consts::STOCK_TRADE_REDUCE,
             &[TradeFill {
-                price_cents: 108_000,
+                price_milli: 1_080_000,
                 lots: 1,
             }],
             1_779_580_800,
@@ -2040,7 +2045,7 @@ mod tests {
             "平安银行",
             consts::STOCK_TRADE_ADD,
             &[TradeFill {
-                price_cents: 120_000,
+                price_milli: 1_200_000,
                 lots: 1,
             }],
             1_779_667_200,
@@ -2055,7 +2060,7 @@ mod tests {
             "平安银行",
             consts::STOCK_TRADE_CLOSE,
             &[TradeFill {
-                price_cents: 118_000,
+                price_milli: 1_180_000,
                 lots: 2,
             }],
             1_779_753_600,
@@ -2123,11 +2128,11 @@ mod tests {
             consts::STOCK_TRADE_OPEN,
             &[
                 TradeFill {
-                    price_cents: 170_000,
+                    price_milli: 1_700_000,
                     lots: 1,
                 },
                 TradeFill {
-                    price_cents: 170_150,
+                    price_milli: 1_701_500,
                     lots: 1,
                 },
             ],
@@ -2143,7 +2148,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_ADD,
             &[TradeFill {
-                price_cents: 169_500,
+                price_milli: 1_695_000,
                 lots: 1,
             }],
             1_768_867_200,
@@ -2158,7 +2163,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
             &[TradeFill {
-                price_cents: 175_000,
+                price_milli: 1_750_000,
                 lots: 3,
             }],
             1_773_100_800,
@@ -2180,7 +2185,7 @@ mod tests {
             &workspace,
             TEST_LEDGER_ID,
             &second_open,
-            170_200,
+            1_702_000,
             1,
             1_767_657_600,
         )
@@ -2192,7 +2197,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
             &[TradeFill {
-                price_cents: 168_000,
+                price_milli: 1_680_000,
                 lots: 1,
             }],
             1_775_779_200,
@@ -2210,7 +2215,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
             &[TradeFill {
-                price_cents: 198_000,
+                price_milli: 1_980_000,
                 lots: 3,
             }],
             1_778_198_400,
@@ -2229,7 +2234,7 @@ mod tests {
                 TEST_NAME,
                 consts::STOCK_TRADE_REDUCE,
                 &[TradeFill {
-                    price_cents: price,
+                    price_milli: price,
                     lots: 1,
                 }],
                 at,
@@ -2245,7 +2250,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_ADD,
             &[TradeFill {
-                price_cents: 201_000,
+                price_milli: 2_010_000,
                 lots: 1,
             }],
             1_778_457_600,
@@ -2260,7 +2265,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
             &[TradeFill {
-                price_cents: 200_000,
+                price_milli: 2_000_000,
                 lots: 2,
             }],
             1_778_544_000,
@@ -2277,7 +2282,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
             &[TradeFill {
-                price_cents: 190_000,
+                price_milli: 1_900_000,
                 lots: 1,
             }],
             1_778_716_800,
@@ -2292,7 +2297,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
             &[TradeFill {
-                price_cents: 195_000,
+                price_milli: 1_950_000,
                 lots: 1,
             }],
             1_778_803_200,
@@ -2338,7 +2343,7 @@ mod tests {
             "平安银行",
             consts::STOCK_TRADE_OPEN,
             &[TradeFill {
-                price_cents: 112_000,
+                price_milli: 1_120_000,
                 lots: 1,
             }],
             1_778_976_000,
@@ -2353,7 +2358,7 @@ mod tests {
             "平安银行",
             consts::STOCK_TRADE_CLOSE,
             &[TradeFill {
-                price_cents: 118_000,
+                price_milli: 1_180_000,
                 lots: 1,
             }],
             1_779_062_400,
@@ -2376,7 +2381,7 @@ mod tests {
             &workspace,
             TEST_LEDGER_ID,
             &fourth_open_id,
-            113_000,
+            1_130_000,
             1,
             1_778_976_000,
         )
@@ -2391,7 +2396,7 @@ mod tests {
             &workspace,
             TEST_LEDGER_ID,
             &r3[0].id,
-            190_000,
+            1_900_000,
             3,
             1_778_716_800,
         )
@@ -2433,11 +2438,11 @@ mod tests {
             consts::STOCK_TRADE_OPEN,
             &[
                 TradeFill {
-                    price_cents: 3806,
+                    price_milli: 38_060,
                     lots: 1,
                 },
                 TradeFill {
-                    price_cents: 3806,
+                    price_milli: 38_060,
                     lots: 1,
                 },
             ],
@@ -2453,7 +2458,7 @@ mod tests {
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
             &[TradeFill {
-                price_cents: 3900,
+                price_milli: 39_000,
                 lots: 2,
             }],
             1_700_100_000,
@@ -2553,7 +2558,7 @@ mod tests {
             TEST_ORDER_NAME,
             consts::STOCK_TRADE_OPEN,
             &[TradeFill {
-                price_cents: 3806,
+                price_milli: 38_060,
                 lots: 2,
             }],
             1_700_000_000,
@@ -2569,11 +2574,11 @@ mod tests {
             consts::STOCK_TRADE_CLOSE,
             &[
                 TradeFill {
-                    price_cents: 3667,
+                    price_milli: 36_670,
                     lots: 1,
                 },
                 TradeFill {
-                    price_cents: 3661,
+                    price_milli: 36_610,
                     lots: 1,
                 },
             ],
@@ -2597,7 +2602,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_003_000,
             "",
@@ -2610,7 +2615,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1200,
+            12_000,
             10,
             1_700_003_100,
             "",
@@ -2811,7 +2816,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_004_000,
             "",
@@ -2836,7 +2841,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1100,
+            11_000,
             10,
             1_700_004_100,
             "",
@@ -3031,8 +3036,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1100,
+            10_000,
+            11_000,
             10,
             1_700_000_000,
         );
@@ -3040,8 +3045,8 @@ mod tests {
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            800,
-            850,
+            8000,
+            8500,
             10,
             1_700_001_000,
         );
@@ -3129,7 +3134,7 @@ mod tests {
 
         seed_principal(&workspace, 10_000_000);
         // 建仓 → 清仓：一笔已归档轮次 + 资金记录 + 操作记录（归档前的账本"有东西"）
-        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 1_000, 1_100);
+        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 10_000, 11_000);
         // 费用设置与标签都改成非默认值：归档后必须原样留在原账本
         save_fee_settings(&workspace, TEST_LEDGER_ID, 0.0001, 0, 0.001, 0.00002).unwrap();
         save_trade_tags(
@@ -3226,7 +3231,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1_000,
+            10_000,
             10,
             1_700_005_000,
             "",
@@ -3270,9 +3275,12 @@ mod tests {
     fn list_positions_attaches_quotes() {
         let (workspace, dir) = workspace("quotes-positions");
         let fetcher = StubQuoteFetcher::with(
-            [(TEST_CODE.to_string(), quote(TEST_CODE, 1100, 1050, 12345))]
-                .into_iter()
-                .collect(),
+            [(
+                TEST_CODE.to_string(),
+                quote(TEST_CODE, 11_000, 10_500, 12345),
+            )]
+            .into_iter()
+            .collect(),
         );
 
         seed_principal(&workspace, 10_000_000);
@@ -3282,7 +3290,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_004_000,
             "",
@@ -3292,8 +3300,8 @@ mod tests {
 
         let items = list_positions(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].latest_price, Some(1100));
-        assert_eq!(items[0].prev_close, Some(1050));
+        assert_eq!(items[0].latest_price, Some(11_000));
+        assert_eq!(items[0].prev_close, Some(10_500));
         assert_eq!(items[0].quote_time, Some(12345));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -3303,9 +3311,12 @@ mod tests {
     fn get_overview_includes_market_value_and_unrealized() {
         let (workspace, dir) = workspace("quotes-overview");
         let fetcher = StubQuoteFetcher::with(
-            [(TEST_CODE.to_string(), quote(TEST_CODE, 1100, 1050, 12345))]
-                .into_iter()
-                .collect(),
+            [(
+                TEST_CODE.to_string(),
+                quote(TEST_CODE, 11_000, 10_500, 12345),
+            )]
+            .into_iter()
+            .collect(),
         );
 
         seed_principal(&workspace, 10_000_000);
@@ -3316,7 +3327,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_004_000,
             "",
@@ -3326,8 +3337,10 @@ mod tests {
 
         let overview = get_overview(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(overview.available_cash, 10_000_000 - 1_000_510);
-        assert_eq!(overview.position_market_value, 1100 * 1000);
-        assert_eq!(overview.unrealized_pnl, 1100 * 1000 - 1_000_510);
+        // 市值 = 最新价（厘）× 股数，落到分：`tr_domain::stock::amount_of_lots`
+        let market_value = tr_domain::stock::amount_of_lots(11_000, 10);
+        assert_eq!(overview.position_market_value, market_value);
+        assert_eq!(overview.unrealized_pnl, market_value - 1_000_510);
         assert_eq!(
             overview.total_assets,
             overview.available_cash + overview.position_market_value
@@ -3349,7 +3362,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_004_000,
             "",
@@ -3373,9 +3386,12 @@ mod tests {
     fn get_overview_partial_quote_failure() {
         let (workspace, dir) = workspace("quotes-partial");
         let fetcher = StubQuoteFetcher::with(
-            [(TEST_CODE.to_string(), quote(TEST_CODE, 1100, 1050, 12345))]
-                .into_iter()
-                .collect(),
+            [(
+                TEST_CODE.to_string(),
+                quote(TEST_CODE, 11_000, 10_500, 12345),
+            )]
+            .into_iter()
+            .collect(),
         );
 
         seed_principal(&workspace, 10_000_000);
@@ -3385,7 +3401,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_004_000,
             "",
@@ -3398,7 +3414,7 @@ mod tests {
             TEST_CODE_B,
             TEST_NAME_B,
             consts::STOCK_TRADE_OPEN,
-            2000,
+            20_000,
             5,
             1_700_004_000,
             "",
@@ -3409,11 +3425,9 @@ mod tests {
         let positions = list_positions(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         let mut cost600 = 0;
         let mut cost000 = 0;
-        let mut qty600 = 0;
         for position in &positions {
             if position.stock_code == TEST_CODE {
                 cost600 = position.total_cost;
-                qty600 = position.quantity;
             } else {
                 cost000 = position.total_cost;
             }
@@ -3421,8 +3435,10 @@ mod tests {
 
         let overview = get_overview(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(overview.quote_failed_count, 1);
-        assert_eq!(overview.position_market_value, 1100 * qty600 + cost000);
-        assert_eq!(overview.unrealized_pnl, 1100 * qty600 - cost600);
+        // 有行情的那只按最新价（厘）计价、缺行情的按成本计入
+        let market_value = tr_domain::stock::amount_of_lots(11_000, 10);
+        assert_eq!(overview.position_market_value, market_value + cost000);
+        assert_eq!(overview.unrealized_pnl, market_value - cost600);
         assert_eq!(
             overview.total_assets,
             overview.available_cash + overview.position_market_value
@@ -3440,16 +3456,19 @@ mod tests {
     fn unrealized_pnl_counts_current_round_cash_flow() {
         let (workspace, dir) = workspace("round-cash-flow");
         let fetcher = StubQuoteFetcher::with(
-            [(TEST_CODE.to_string(), quote(TEST_CODE, 1100, 1050, 12345))]
-                .into_iter()
-                .collect(),
+            [(
+                TEST_CODE.to_string(),
+                quote(TEST_CODE, 11_000, 10_500, 12345),
+            )]
+            .into_iter()
+            .collect(),
         );
         seed_principal(&workspace, 10_000_000);
 
         // 上一轮：建仓 2 手 → 清仓 2 手（已归档，不计入本轮口径）
         for (trade_type, price, at) in [
-            (consts::STOCK_TRADE_OPEN, 1000, 1_700_000_000),
-            (consts::STOCK_TRADE_CLOSE, 2000, 1_700_000_100),
+            (consts::STOCK_TRADE_OPEN, 10_000, 1_700_000_000),
+            (consts::STOCK_TRADE_CLOSE, 20_000, 1_700_000_100),
         ] {
             create_trade(
                 &workspace,
@@ -3467,9 +3486,9 @@ mod tests {
         }
         // 本轮：建仓 2 手 → 加仓 2 手 → 减仓 2 手（未清仓）
         for (trade_type, price, at) in [
-            (consts::STOCK_TRADE_OPEN, 1000, 1_700_000_200),
-            (consts::STOCK_TRADE_ADD, 1200, 1_700_000_300),
-            (consts::STOCK_TRADE_REDUCE, 1300, 1_700_000_400),
+            (consts::STOCK_TRADE_OPEN, 10_000, 1_700_000_200),
+            (consts::STOCK_TRADE_ADD, 12_000, 1_700_000_300),
+            (consts::STOCK_TRADE_REDUCE, 13_000, 1_700_000_400),
         ] {
             create_trade(
                 &workspace,
@@ -3517,20 +3536,35 @@ mod tests {
         assert_eq!(position.quantity, 200);
         assert_eq!(
             position.round_cash_flow, want_flow,
-            "持仓的本轮资金变动合计"
+            "持仓的本轮资金变动合计（浮动盈亏与浮动盈亏率都从它推出来）"
         );
-        assert_eq!(position.round_cost, want_cost, "持仓的本轮建仓成本合计");
+        // 浮动盈亏率的分母是**本轮净投入**（= −资金变动），不是本轮买入总额：减仓回款会冲抵投入，
+        // 于是两个分母给出的率差得远（用户真实数据上正是 −21.18% 与 −6.07%）。
+        // 这条钉的是"服务层往外送的就是净投入口径"——若 `round_cash_flow` 送成买入总额（或忘了取负），
+        // 下面的 `Some(...)` 会因分母 ≤ 0 变成 `None`，直接红。
+        let market_value = tr_domain::stock::amount_of_lots(11_000, 2); // 2 手 = 200 股
+        let pnl = market_value + want_flow;
+        let net_invested = -want_flow;
+        assert_ne!(
+            net_invested, want_cost,
+            "本轮减过仓，净投入必须小于买入总额"
+        );
+        assert_eq!(
+            tr_domain::stock::floating_pnl_rate(pnl, position.round_cash_flow),
+            Some((pnl as f64 / net_invested as f64 * 10_000.0).round() / 100.0),
+            "率的分母 = 本轮净投入 {net_invested}（买入总额 {want_cost} 是修前的错分母）"
+        );
 
         let overview = get_overview(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
-        assert_eq!(overview.position_market_value, 1100 * 200);
+        assert_eq!(overview.position_market_value, market_value);
         assert_eq!(
             overview.unrealized_pnl,
-            1100 * 200 + want_flow,
+            market_value + want_flow,
             "浮动盈亏 = 持仓市值 + 本轮资金变动"
         );
         assert_ne!(
             overview.unrealized_pnl,
-            1100 * 200 - position.total_cost,
+            market_value - position.total_cost,
             "不能再是「市值 − 剩余持仓成本」的老口径（那会把本轮减仓的盈亏漏掉）"
         );
 
@@ -3543,14 +3577,14 @@ mod tests {
         let fetcher = StubQuoteFetcher::with(
             [(
                 TEST_CODE.to_string(),
-                quote(TEST_CODE, 1234, 1200, 1_700_000_000),
+                quote(TEST_CODE, 12_340, 12_000, 1_700_000_000),
             )]
             .into_iter()
             .collect(),
         );
 
-        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 1000, 1100); // 600000 有行情
-        close_round_helper(&workspace, TEST_CODE_B, TEST_NAME_B, 2000, 1900); // 000001 行情缺失
+        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 10_000, 11_000); // 600000 有行情
+        close_round_helper(&workspace, TEST_CODE_B, TEST_NAME_B, 20_000, 19_000); // 000001 行情缺失
 
         let items = list_trade_histories(&workspace, TEST_LEDGER_ID, &fetcher).unwrap();
         assert_eq!(items.len(), 2);
@@ -3558,7 +3592,7 @@ mod tests {
             .iter()
             .map(|item| (item.stock_code.as_str(), item))
             .collect();
-        assert_eq!(by_code[TEST_CODE].latest_price, Some(1234));
+        assert_eq!(by_code[TEST_CODE].latest_price, Some(12_340));
         assert_eq!(
             by_code[TEST_CODE_B].latest_price, None,
             "行情缺失时最新价应为空（前端显示占位符）"
@@ -3581,7 +3615,7 @@ mod tests {
             "同一委托应共用 orderId"
         );
         assert_eq!((items[0].order_seq, items[1].order_seq), (1, 2));
-        assert_eq!((items[0].price, items[1].price), (3667, 3661));
+        assert_eq!((items[0].price, items[1].price), (36_670, 36_610));
 
         let mut commission = 0;
         let mut stamp_duty = 0;
@@ -3618,6 +3652,90 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 场内基金（ETF / LOF / REITs）**只有佣金**：免印花税、免过户费，买卖都一样。
+    ///
+    /// 沪市基金最容易写错 —— 它"在沪市"，但过户费只对沪市**股票**收。价格还带厘位（4.389 元），
+    /// 顺带钉住"价格按厘存、成交额仍按分算"。
+    #[test]
+    fn a_fund_order_is_charged_commission_only() {
+        let (workspace, dir) = workspace("fund-fee");
+        seed_principal(&workspace, 10_000_000);
+
+        // 建仓 3 手 @ 4.389（沪深300ETF）：成交额 = 4389 厘 × 300 股 / 10 = 131,670 分
+        let open = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_FUND_CODE,
+            TEST_FUND_NAME,
+            consts::STOCK_TRADE_OPEN,
+            4_389,
+            3,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(open.price, 4_389, "价格按厘存（4.389 元一位不丢）");
+        assert_eq!(open.amount, 131_670, "成交额仍按分算");
+        assert_eq!(open.commission, 500, "佣金照收（小额走最低佣金 5.00 元）");
+        assert_eq!(open.stamp_duty, 0, "建仓无印花税");
+        assert_eq!(open.transfer_fee, 0, "沪市场内基金不收过户费");
+        assert_eq!(open.fee, open.commission, "费用明细里只有佣金");
+
+        // 清仓 3 手 @ 4.400：卖出也只有佣金（同一笔若是股票，这里会有印花税 + 过户费）
+        let close = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_FUND_CODE,
+            TEST_FUND_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            4_400,
+            3,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(close.amount, 132_000);
+        assert_eq!(close.stamp_duty, 0, "卖出也免印花税");
+        assert_eq!(close.transfer_fee, 0, "卖出也免过户费");
+        assert_eq!(close.fee, close.commission, "卖出同样只有佣金");
+
+        // 对照：同样金额的一笔**沪市股票**（建仓后清仓），印花税与过户费都在 ——
+        // 证明上面那几个 0 是"基金免收"，不是"两边都没算"
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            4_389,
+            3,
+            1_700_000_200,
+            "",
+            "",
+        )
+        .unwrap();
+        let stock_sell = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            4_400,
+            3,
+            1_700_000_300,
+            "",
+            "",
+        )
+        .unwrap();
+        assert!(stock_sell.stamp_duty > 0, "沪市股票卖出收印花税");
+        assert!(stock_sell.transfer_fee > 0, "沪市股票收过户费");
+        assert!(stock_sell.fee > stock_sell.commission);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn create_trade_single_fill_unchanged() {
         let (workspace, dir) = workspace("order-single-fill");
@@ -3629,7 +3747,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_000_000,
             "",
@@ -3656,12 +3774,12 @@ mod tests {
             &workspace,
             TEST_LEDGER_ID,
             &items[1].id,
-            3691,
+            36_910,
             1,
             1_700_000_100,
         )
         .unwrap();
-        assert_eq!(updated.price, 3691);
+        assert_eq!(updated.price, 36_910);
 
         let trades = list_trades(&workspace, TEST_LEDGER_ID, TEST_ORDER_CODE).unwrap();
         let mut amount = 0;
@@ -3821,7 +3939,7 @@ mod tests {
             &workspace,
             TEST_LEDGER_ID,
             &items[1].id,
-            3661,
+            36_610,
             1,
             1_700_000_100,
         )
@@ -3859,7 +3977,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_000_000,
             "",
@@ -3901,7 +4019,7 @@ mod tests {
             &workspace,
             TEST_LEDGER_ID,
             &trade.id,
-            1100,
+            11_000,
             10,
             1_700_000_000,
         )
@@ -4055,7 +4173,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             buy_time,
             "",
@@ -4082,7 +4200,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1100,
+            11_000,
             10,
             sell_time,
             "",
@@ -4166,10 +4284,10 @@ mod tests {
 
         // 建仓 100 手 → 加仓 100 手 → 减仓 100 手 → 清仓 100 手
         for (trade_type, price, at) in [
-            (consts::STOCK_TRADE_OPEN, 1000, 1_700_000_000),
-            (consts::STOCK_TRADE_ADD, 1100, 1_700_000_100),
-            (consts::STOCK_TRADE_REDUCE, 1200, 1_700_000_200),
-            (consts::STOCK_TRADE_CLOSE, 1250, 1_700_000_300),
+            (consts::STOCK_TRADE_OPEN, 10_000, 1_700_000_000),
+            (consts::STOCK_TRADE_ADD, 11_000, 1_700_000_100),
+            (consts::STOCK_TRADE_REDUCE, 12_000, 1_700_000_200),
+            (consts::STOCK_TRADE_CLOSE, 12_500, 1_700_000_300),
         ] {
             create_trade(
                 &workspace,
@@ -4238,7 +4356,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_001_000,
             "",
@@ -4251,7 +4369,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1100,
+            11_000,
             10,
             1_700_001_100,
             "",
@@ -4265,7 +4383,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            2000,
+            20_000,
             10,
             1_700_001_200,
             "",
@@ -4278,7 +4396,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1900,
+            19_000,
             10,
             1_700_001_300,
             "",
@@ -4314,10 +4432,10 @@ mod tests {
         // 模拟功能上线前的存量交易：两轮完整轮次，round_id 均为空
         let conn = workspace.connection();
         for (trade_type, price, at, fee) in [
-            (consts::STOCK_TRADE_OPEN, 1000, 1_690_000_000, 500),
-            (consts::STOCK_TRADE_CLOSE, 1200, 1_690_000_100, 600),
-            (consts::STOCK_TRADE_OPEN, 900, 1_690_000_200, 500),
-            (consts::STOCK_TRADE_CLOSE, 800, 1_690_000_300, 600),
+            (consts::STOCK_TRADE_OPEN, 10_000, 1_690_000_000, 500),
+            (consts::STOCK_TRADE_CLOSE, 12_000, 1_690_000_100, 600),
+            (consts::STOCK_TRADE_OPEN, 9000, 1_690_000_200, 500),
+            (consts::STOCK_TRADE_CLOSE, 8000, 1_690_000_300, 600),
         ] {
             let trade = StockTrade {
                 id: tr_store::util::new_uuid(),
@@ -4328,7 +4446,7 @@ mod tests {
                 price,
                 lots: 10,
                 shares: 1000,
-                amount: price * 1000,
+                amount: tr_domain::stock::amount_of(price, 1000),
                 fee,
                 trade_time: at,
                 ..StockTrade::default()
@@ -4369,7 +4487,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_690_000_000,
             "",
@@ -4382,7 +4500,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_ADD,
-            1100,
+            11_000,
             10,
             1_690_000_100,
             "",
@@ -4400,7 +4518,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1200,
+            12_000,
             20,
             1_690_000_200,
             "",
@@ -4421,11 +4539,11 @@ mod tests {
 
         // 第一轮：建仓 → 清仓（历史轮次）
         for (trade_type, price, at) in [
-            (consts::STOCK_TRADE_OPEN, 1000, 1_690_001_000),
-            (consts::STOCK_TRADE_CLOSE, 1200, 1_690_001_100),
+            (consts::STOCK_TRADE_OPEN, 10_000, 1_690_001_000),
+            (consts::STOCK_TRADE_CLOSE, 12_000, 1_690_001_100),
             // 第二轮：再次建仓 + 加仓（当前持仓）
-            (consts::STOCK_TRADE_OPEN, 1100, 1_690_001_200),
-            (consts::STOCK_TRADE_ADD, 1150, 1_690_001_300),
+            (consts::STOCK_TRADE_OPEN, 11_000, 1_690_001_200),
+            (consts::STOCK_TRADE_ADD, 11_500, 1_690_001_300),
         ] {
             create_trade(
                 &workspace,
@@ -4458,7 +4576,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1300,
+            13_000,
             20,
             1_690_001_400,
             "",
@@ -4477,10 +4595,10 @@ mod tests {
 
         // 股票 A：第一轮盈利，第二轮亏损
         for (trade_type, price, at) in [
-            (consts::STOCK_TRADE_OPEN, 1000, 1_690_002_000),
-            (consts::STOCK_TRADE_CLOSE, 1200, 1_690_002_100),
-            (consts::STOCK_TRADE_OPEN, 2000, 1_690_002_200),
-            (consts::STOCK_TRADE_CLOSE, 1800, 1_690_002_300),
+            (consts::STOCK_TRADE_OPEN, 10_000, 1_690_002_000),
+            (consts::STOCK_TRADE_CLOSE, 12_000, 1_690_002_100),
+            (consts::STOCK_TRADE_OPEN, 20_000, 1_690_002_200),
+            (consts::STOCK_TRADE_CLOSE, 18_000, 1_690_002_300),
         ] {
             create_trade(
                 &workspace,
@@ -4498,8 +4616,8 @@ mod tests {
         }
         // 股票 B：一轮盈利
         for (trade_type, price, at) in [
-            (consts::STOCK_TRADE_OPEN, 500, 1_690_002_400),
-            (consts::STOCK_TRADE_CLOSE, 550, 1_690_002_500),
+            (consts::STOCK_TRADE_OPEN, 5000, 1_690_002_400),
+            (consts::STOCK_TRADE_CLOSE, 5500, 1_690_002_500),
         ] {
             create_trade(
                 &workspace,
@@ -4545,7 +4663,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_000_000,
             "",
@@ -4558,7 +4676,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1200,
+            12_000,
             10,
             1_700_000_100,
             "",
@@ -4611,7 +4729,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_000_000,
             "",
@@ -4624,7 +4742,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1200,
+            12_000,
             10,
             1_700_000_100,
             "",
@@ -4676,7 +4794,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_002_000,
             "",
@@ -4690,7 +4808,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1200,
+            12_000,
             10,
             1_700_002_100,
             "",
@@ -4707,7 +4825,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_002_200,
             "",
@@ -4730,7 +4848,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1100,
+            11_000,
             10,
             1_700_002_300,
             "",
@@ -4760,7 +4878,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_006_000,
             "",
@@ -4793,7 +4911,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_CLOSE,
-            1200,
+            12_000,
             10,
             1_700_006_100,
             "",
@@ -4827,8 +4945,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1100,
+            10_000,
+            11_000,
             10,
             1_690_000_000,
         );
@@ -4836,8 +4954,8 @@ mod tests {
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            800,
-            850,
+            8000,
+            8500,
             10,
             1_690_001_000,
         );
@@ -4845,8 +4963,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            2000,
-            1920,
+            20_000,
+            19_200,
             10,
             1_690_002_000,
         );
@@ -4903,8 +5021,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1100,
+            10_000,
+            11_000,
             10,
             1_690_000_000,
         );
@@ -4912,8 +5030,8 @@ mod tests {
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            1000,
-            1000,
+            10_000,
+            10_000,
             10,
             1_690_001_000,
         );
@@ -4921,8 +5039,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            940,
+            10_000,
+            9400,
             10,
             1_690_002_000,
         );
@@ -4961,8 +5079,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            920,
+            10_000,
+            9200,
             10,
             1_690_000_000,
         );
@@ -4980,8 +5098,8 @@ mod tests {
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            1000,
-            900,
+            10_000,
+            9000,
             10,
             1_690_200_000,
         );
@@ -5018,8 +5136,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1100,
+            10_000,
+            11_000,
             10,
             1_690_000_000,
         );
@@ -5043,8 +5161,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1100,
+            10_000,
+            11_000,
             10,
             "2023-07-22 12:00:00",
         );
@@ -5071,8 +5189,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            2000,
-            1800,
+            20_000,
+            18_000,
             10,
             "2023-07-28 12:00:00",
         );
@@ -5098,8 +5216,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1300,
+            10_000,
+            13_000,
             10,
             "2023-08-01 12:00:00",
         );
@@ -5142,8 +5260,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1100,
+            10_000,
+            11_000,
             10,
             "2023-07-22 12:00:00",
         );
@@ -5151,8 +5269,8 @@ mod tests {
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            1000,
-            920,
+            10_000,
+            9200,
             10,
             "2023-07-25 12:00:00",
         );
@@ -5160,8 +5278,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1050,
+            10_000,
+            10_500,
             10,
             "2023-08-01 12:00:00",
         );
@@ -5231,8 +5349,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1100,
+            10_000,
+            11_000,
             10,
             "2023-07-22 12:00:00",
         ); // +100000
@@ -5240,8 +5358,8 @@ mod tests {
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            1000,
-            920,
+            10_000,
+            9200,
             10,
             "2023-07-25 12:00:00",
         ); // -80000
@@ -5249,8 +5367,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1050,
+            10_000,
+            10_500,
             10,
             "2023-08-01 12:00:00",
         ); // +50000
@@ -5299,8 +5417,8 @@ mod tests {
             &workspace,
             TEST_CODE,
             TEST_NAME,
-            2000,
-            1800,
+            20_000,
+            18_000,
             10,
             "2023-01-05 12:00:00",
         );
@@ -5325,8 +5443,8 @@ mod tests {
             &workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            2000,
-            1700,
+            20_000,
+            17_000,
             10,
             "2023-01-20 12:00:00",
         );
@@ -5407,8 +5525,8 @@ mod tests {
             workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1100,
+            10_000,
+            11_000,
             10,
             "2023-07-01 12:00:00",
         );
@@ -5416,8 +5534,8 @@ mod tests {
             workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            800,
-            850,
+            8000,
+            8500,
             10,
             "2023-07-02 12:00:00",
         );
@@ -5425,8 +5543,8 @@ mod tests {
             workspace,
             TEST_CODE,
             TEST_NAME,
-            2000,
-            1920,
+            20_000,
+            19_200,
             10,
             "2023-07-03 12:00:00",
         );
@@ -5434,8 +5552,8 @@ mod tests {
             workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            800,
-            850,
+            8000,
+            8500,
             10,
             "2023-08-01 12:00:00",
         );
@@ -5443,8 +5561,8 @@ mod tests {
             workspace,
             TEST_CODE,
             TEST_NAME,
-            1000,
-            1050,
+            10_000,
+            10_500,
             10,
             "2023-08-02 12:00:00",
         );
@@ -5452,8 +5570,8 @@ mod tests {
             workspace,
             TEST_CODE_B,
             TEST_NAME_B,
-            2000,
-            1920,
+            20_000,
+            19_200,
             10,
             "2023-08-05 12:00:00",
         );
@@ -5653,7 +5771,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_000_000,
             "",
@@ -5679,7 +5797,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            1000,
+            10_000,
             10,
             1_700_000_000,
             "",
@@ -5926,7 +6044,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            10_000,
+            100_000,
             3,
             1_700_000_000,
             "",
@@ -5974,7 +6092,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            10_000,
+            100_000,
             3,
             1_700_000_000,
             "",
@@ -5987,7 +6105,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_REDUCE,
-            12_000,
+            120_000,
             1,
             1_700_000_100,
             "",
@@ -6080,7 +6198,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            10_000,
+            100_000,
             3,
             1_700_000_000,
             "",
@@ -6111,7 +6229,7 @@ mod tests {
     fn rollback_preview_lists_lost_rounds_and_never_writes() {
         let (workspace, dir) = workspace("op-preview");
         seed_principal(&workspace, 10_000_000);
-        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 10_000, 12_000);
+        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 100_000, 120_000);
         let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
         let round_id = detail.rounds[0].id.clone();
         update_round_review(&workspace, TEST_LEDGER_ID, &round_id, "本轮复盘原文").unwrap();
@@ -6150,7 +6268,7 @@ mod tests {
             TEST_CODE,
             TEST_NAME,
             consts::STOCK_TRADE_OPEN,
-            10_000,
+            100_000,
             1,
             1_700_000_000,
             "",
@@ -6185,7 +6303,7 @@ mod tests {
     fn rollback_of_close_removes_the_round_and_its_review() {
         let (workspace, dir) = workspace("op-rollback-close");
         seed_principal(&workspace, 10_000_000);
-        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 10_000, 12_000);
+        close_round_helper(&workspace, TEST_CODE, TEST_NAME, 100_000, 120_000);
         let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
         let round_id = detail.rounds[0].id.clone();
         update_round_review(&workspace, TEST_LEDGER_ID, &round_id, "本轮复盘原文").unwrap();

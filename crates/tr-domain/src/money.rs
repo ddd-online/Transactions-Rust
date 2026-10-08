@@ -2,11 +2,16 @@
 //!
 //! 这几个函数是"金额恒为整数分"纪律的守门人，行为是硬契约（含负号、`.5` 这类输入）。
 //!
-//! 两条"元 → 分"的分工要看清，**别互相替换、也别在别处再手写一遍**：
-//! * [`yuan_to_cents`]：走**字符串**（界面输入框里的文本）；
-//! * [`price_yuan_to_cents`]：走**浮点**（wire 上的价格是 `f64`）。
+//! **价格是另一套单位：整数厘（1/1000 元）**。ETF / LOF / REITs 这些场内基金的交易所报价单位就是
+//! 0.001 元（实测 `510300` = 4.389），按"分"存会把 `4.389` 变成 `4.39`，成交额、成本、浮盈跟着偏。
+//! 所以：**金额走分、价格走厘**，两者只在算成交额时相遇（[`crate::stock::amount_of`] 折那一次）。
 //!
-//! 两者在"第三位小数恰好进位"的边界上可能给出不同结果，各自都有测试钉着。
+//! 两条"元 → 分"的分工要看清，**别互相替换、也别在别处再手写一遍**：
+//! * [`yuan_to_cents`]：走**字符串**（界面输入框里的金额文本）；
+//! * [`price_yuan_to_milli`]：走**浮点**（wire 上的价格是 `f64` 元，落库为厘）。
+//!
+//! 两者在"第三位小数恰好进位"的边界上可能给出不同结果，各自都有测试钉着（而且单位本就不同：
+//! 一个是分、一个是厘，不存在互相替换的余地）。
 
 use std::fmt;
 
@@ -87,16 +92,33 @@ fn is_ascii_digits(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// 价格（元，浮点）→ 分，四舍五入到整数分。
+/// 厘 → 元字符串：能整除分时固定两位小数（`100000 -> "100.00"`），
+/// 带厘位时三位小数（`4389 -> "4.389"`）。价格展示**照实显示存下来的精度**，不按品种分叉。
+pub fn milli_to_yuan(milli: i64) -> String {
+    if milli % 10 == 0 {
+        return cents_to_yuan(milli / 10);
+    }
+    let abs = milli.unsigned_abs();
+    let body = format!("{}.{:03}", abs / 1000, abs % 1000);
+    if milli < 0 {
+        format!("-{body}")
+    } else {
+        body
+    }
+}
+
+/// 价格（元，浮点）→ 厘（1/1000 元），四舍五入到整数厘。
 ///
-/// wire 上的价格是 `f64` 元（见 `tr-ipc` 的股票命令），四分五入到分这件事
-/// 早先被抄在三处（`tr-ipc` 一个私有包装 + `tr-ui` 的股票页两处），
-/// 现在只有这一份 —— 抄写时的口径差异是真金白银，别退回各自的 `(x * 100.0).round()`。
-///
-/// 与 [`yuan_to_cents`] 的差别在**输入形态**（浮点 vs 字符串）与边界进位规则，
-/// 两者都保留：界面输入框给的是字符串，不能为了统一而先过一遍 `f64`（会引入浮点误差）。
-pub fn price_yuan_to_cents(price_yuan: f64) -> i64 {
-    (price_yuan * 100.0).round() as i64
+/// wire 上的价格是 `f64` 元（见 `tr-ipc` 的股票命令），落库要折成整数厘 ——
+/// 这是**价格**的唯一入口（金额走 [`yuan_to_cents`]，别混）。
+/// 场内基金的报价单位是 0.001 元，厘刚好装得下；第四位小数按四舍五入进到厘。
+pub fn price_yuan_to_milli(price_yuan: f64) -> i64 {
+    (price_yuan * 1000.0).round() as i64
+}
+
+/// 厘 → 价格（元，浮点）：[`price_yuan_to_milli`] 的逆，给"要把价格再送回 wire"的地方用。
+pub fn milli_to_price_yuan(milli: i64) -> f64 {
+    milli as f64 / 1000.0
 }
 
 #[cfg(test)]
@@ -149,18 +171,34 @@ mod tests {
     }
 
     #[test]
-    fn price_yuan_to_cents_rounds_floats_to_cents() {
-        assert_eq!(price_yuan_to_cents(10.0), 1000);
-        assert_eq!(price_yuan_to_cents(38.06), 3806);
-        assert_eq!(price_yuan_to_cents(36.61), 3661);
-        assert_eq!(price_yuan_to_cents(0.0), 0);
-        // 浮点边界：10.005 在 f64 里略小于 10.005，乘 100 后四舍五入仍是 1001 分。
-        // 这条与 `yuan_to_cents("10.005")` 同值但路径不同（那条按字符串第 3 位进位），
-        // 两边都有断言钉着 —— 改任何一边都会被这两条测试看见。
-        assert_eq!(price_yuan_to_cents(10.005), 1001);
-        assert_eq!(price_yuan_to_cents(0.005), 1);
+    fn price_yuan_to_milli_rounds_floats_to_milli() {
+        // 股票（整分）：10.00 元 / 38.06 元
+        assert_eq!(price_yuan_to_milli(10.0), 10_000);
+        assert_eq!(price_yuan_to_milli(38.06), 38_060);
+        assert_eq!(price_yuan_to_milli(0.0), 0);
+        // 场内基金的报价单位就是 0.001 元：4.389 / 1.537 / 0.528 一位不丢
+        assert_eq!(price_yuan_to_milli(4.389), 4_389);
+        assert_eq!(price_yuan_to_milli(1.537), 1_537);
+        assert_eq!(price_yuan_to_milli(0.528), 528);
+        // 第四位小数四舍五入进到厘（价格里不该出现，口径仍要写全）
+        assert_eq!(price_yuan_to_milli(4.3894), 4_389);
+        assert_eq!(price_yuan_to_milli(4.3896), 4_390);
         // 负数（价格不应出现，但口径要写全）：四舍五入远离 0
-        assert_eq!(price_yuan_to_cents(-12.34), -1234);
+        assert_eq!(price_yuan_to_milli(-12.345), -12_345);
+    }
+
+    /// 厘 → 元：能整除分时两位小数，带厘位时三位 —— 展示**照实反映存下来的精度**。
+    #[test]
+    fn milli_to_yuan_keeps_the_sub_cent_digit_only_when_present() {
+        assert_eq!(milli_to_yuan(0), "0.00");
+        assert_eq!(milli_to_yuan(10_000), "10.00");
+        assert_eq!(milli_to_yuan(10_050), "10.05");
+        assert_eq!(milli_to_yuan(100_000), "100.00");
+        assert_eq!(milli_to_yuan(4_389), "4.389");
+        assert_eq!(milli_to_yuan(1_537), "1.537");
+        assert_eq!(milli_to_yuan(528), "0.528");
+        assert_eq!(milli_to_yuan(-4_389), "-4.389");
+        assert_eq!(milli_to_yuan(-10_000), "-10.00");
     }
 
     #[test]

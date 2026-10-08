@@ -9,6 +9,16 @@
 #   * 删除整笔委托：回放掉这笔委托的全部成交与派生资金记录，持仓归零
 #   * 减仓/清仓：`cost_basis = round(total_cost × 本次股数 / 持仓股数)`，
 #     `realized_pnl = amount - fee - cost_basis`，数量与成本按比例结转；清空时成本归零并归档本轮
+#   * 浮动盈亏率：持有时 = 浮动盈亏 ÷ **本轮净投入**（= −Σ 本轮资金变动，减仓回款冲抵投入）；
+#     老口径拿「本轮买入总额」当分母会把亏损率摊薄（用户数据上 −21.18% 显示成 −6.07%）。现价是
+#     真实行情、数字不能写死，所以断言的是"卡片上的浮动盈亏 ÷ 库里的净投入 = 卡片上的率"；
+#     判别点在**减仓之后**（那时净投入 < 买入总额，两个分母不同值），建仓那一步只顺带核一次。
+#   * 写入后实时刷新：下单（建仓/加仓/减仓/清仓）、改成交、删委托都是"写入"，而持仓列表与本轮成交记录
+#     是同一份写入的两面 —— 提交完两边都必须重拉。判据是"提交前界面上没有的那个成交价，提交后必须出现"
+#     （用户报的是"加仓/减仓/清仓之后成交记录还是旧的"；镜像的那半由"改成交后卡片浮盈率要跟上"守着）。
+#   * 场内基金（ETF / LOF / REITs）：**价格按厘存**（1/1000 元，`4.389` 一位不丢，成交额仍按分算），
+#     费用**只有佣金** —— 免印花税、免过户费（沪市基金也一样：过户费只对沪市**股票**收）。
+#     重置之后独立走一遍 510300 的建仓 → 清仓，逐字段核这两条。
 #   * 费用设置：佣金费率（UI 单位**万分之**）/最低佣金（元）/印花税/过户费（%）→ 保存后
 #     **新委托立刻按新费率计费**（买入 = 佣金 + 过户费；卖出 = 佣金 + 印花税 + 过户费），逐项断言到分
 #   * 账户：工具栏三个资金操作按「支取 / 利息归本 / 追加本金」排列；「利息归本」落库为
@@ -199,6 +209,16 @@ function Format-Cents { param([int64]$Cents)
     $value = $Cents
     if ($value -lt 0) { $sign = '-'; $value = -$value }
     return ('{0}{1}.{2:d2}' -f $sign, [Math]::Floor([double]$value / 100), ($value % 100))
+}
+
+# 厘 → `4.389` / `120.00`（与界面 `format::price` 的 `milli_to_yuan` 同口径：
+# 能整除分就两位小数，带厘位才三位）。**价格走厘、金额走分**，两个格式化函数别混用。
+function Format-Price { param([int64]$Milli)
+    if ($Milli % 10 -eq 0) { return (Format-Cents ($Milli / 10)) }
+    $sign = ''
+    $value = $Milli
+    if ($value -lt 0) { $sign = '-'; $value = -$value }
+    return ('{0}{1}.{2:d3}' -f $sign, [Math]::Floor([double]$value / 1000), ($value % 1000))
 }
 
 # 按服务层口径从**库**里算账户指标：可用现金 = 本金 + 累计利息归本 + 已实现盈亏 − 累计支取 − 持仓成本。
@@ -508,6 +528,99 @@ function Get-NewestTrade { param([string]$LedgerId, [string]$Code, [string]$Trad
     if ($rows.Count -eq 0) { return $null }
     return $rows[$rows.Count - 1]
 }
+# 本轮（最近一次清仓之后）的资金口径 —— 与服务层 `tr_domain::stock::round_flow` 同一套算法：
+# 买入 −(成交额 + 费用)、卖出 成交额 − 费用；清仓（股数减到 0 的那一笔）把轮次收尾，它自己也不留在结果里。
+#   * `CashFlow` = Σ「资金变动」（界面成交记录那一列逐行加起来就是它）→ **浮动盈亏率的分母取它的反**；
+#   * `BuyCost`  = 本轮买入总额（建仓/加仓的成交额 + 费用，减仓回款**不**冲抵）→ 修前那个被摊薄的分母。
+# 两者只有在"本轮没减过仓"时才相等，所以判别新旧口径的断言必须挑一个减过仓的时刻。
+function Get-RoundFlow { param([string]$LedgerId, [string]$Code)
+    $rows = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $LedgerId -and $_.stock_code -eq $Code } |
+        Sort-Object @{Expression={[int64]$_.trade_time}}, @{Expression={[int64]$_.created_at}},
+            @{Expression={[int64]$_.order_seq}}, @{Expression={[string]$_.id}})
+    $flow = [int64]0
+    $buyCost = [int64]0
+    $shares = [int64]0
+    foreach ($row in $rows) {
+        $type = [string]$row.trade_type
+        if ($type -eq 'open' -or $type -eq 'add') {
+            $shares += [int64]$row.shares
+            $flow -= ([int64]$row.amount + [int64]$row.fee)
+            $buyCost += ([int64]$row.amount + [int64]$row.fee)
+        }
+        elseif ($type -eq 'reduce' -or $type -eq 'close') {
+            $shares -= [int64]$row.shares
+            if ($shares -gt 0) { $flow += ([int64]$row.amount - [int64]$row.fee) }
+            else { $shares = [int64]0; $flow = [int64]0; $buyCost = [int64]0 }
+        }
+    }
+    return [pscustomobject]@{ CashFlow = $flow; BuyCost = $buyCost }
+}
+
+# 卡片上的浮动盈亏率必须等于「卡片上的浮动盈亏 ÷ 本轮净投入（= −CashFlow）」。
+#
+# 分子取**卡片上自己显示的**盈亏：现价是真实行情、数字不能写死，这样这条断言只盯分母。
+# 页面是**异步重拉**的（写入成功后要重新查一遍持仓），所以这里**轮询到一致**为止 ——
+# 刚提交完那一瞬间卡片可能还是上一版（旧盈亏 ÷ 新净投入，必然对不上），
+# 而"一直对不上"才是缺陷（写入之后没重拉）。`-Lots` 一并核对，免得拿旧卡片蒙对。
+# 行情缺失时卡片显示「—」，20 秒后判红（本步骤要真实行情，离线用 -SkipNetwork 跳过整个 ui-stock）。
+# `-ExpectDiscriminating` 用在"本轮已经减过仓"的时刻：那时净投入 < 本轮买入总额，两个分母必须给出
+# 不同的率，否则这条断言区分不出新旧口径（修前拿买入总额当分母）。
+function Assert-CardFloatRate {
+    param($Window, [string]$Code, [string]$Name, [string]$LedgerId, [int]$Lots, [string]$Stage,
+        [switch]$ExpectDiscriminating)
+    $flow = Get-RoundFlow -LedgerId $LedgerId -Code $Code
+    Assert-True ($flow.CashFlow -lt 0) "$Stage：本轮净投入为正（Σ 资金变动 = $($flow.CashFlow)）"
+    if ($flow.CashFlow -ge 0) { return }
+    $netInvested = (-$flow.CashFlow) / 100.0
+    if ($ExpectDiscriminating) {
+        Assert-True ($netInvested -lt ($flow.BuyCost / 100.0)) `
+            "$Stage：本轮减过仓，净投入 $netInvested 必须小于买入总额 $($flow.BuyCost / 100.0)（否则新旧口径同值，这条断言等于没断）"
+    }
+    $deadline = (Get-Date).AddSeconds(20)
+    $last = '(卡片上没有「浮动盈亏 金额 率」)'
+    do {
+        $text = Get-Elements $Window | ForEach-Object { $_.Current.Name } |
+            Where-Object { $_ -and $_.Contains($Code) -and $_.Contains($Name) } | Select-Object -First 1
+        if ($text -and $text -match "持仓\s*$Lots\s*手") {
+            # 金额两侧都要认正负号：正数 `+`、负数 `-`、0 不加号（`format::signed_yuan`）。
+            $match = [regex]::Match($text, '浮动盈亏\s*([+-]?\d+\.\d\d)\s*([+-]?\d+\.\d\d)%')
+            if ($match.Success) {
+                $pnl = [double]$match.Groups[1].Value
+                $rate = [double]$match.Groups[2].Value
+                # 与 Rust 的 `f64::round` 对齐：0.005 这类中点上**远离 0** 进位（`[Math]::Round` 默认"取偶"）。
+                $wantRate = [Math]::Round($pnl / $netInvested * 100.0, 2, [System.MidpointRounding]::AwayFromZero)
+                $last = "$text ⇒ 期望率 $wantRate%"
+                if ([Math]::Abs($rate - $wantRate) -lt 0.011) {
+                    Assert-True $true "$Stage：浮动盈亏率 = 浮动盈亏 $pnl ÷ 本轮净投入 $netInvested = $wantRate%（卡片显示 $rate%）"
+                    return
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    Assert-True $false `
+        "$Stage：卡片（持仓 $Lots 手）的浮动盈亏率始终对不上「卡片上的浮动盈亏 ÷ 本轮净投入 $netInvested」——最后看到：$last"
+}
+
+# 界面上有没有包含 $Text 的可访问名（成交记录表在 UIA 里是**逐格文本**，`120.00` 这样的价格就是其中一格）。
+function Find-TextLike { param($Window, [string]$Text)
+    foreach ($name in @(Get-Elements $Window | ForEach-Object { [string]$_.Current.Name })) {
+        if ($name -and $name.Contains($Text)) { return $name }
+    }
+    return $null
+}
+
+# 轮询等这个文本出现（写入之后"成交记录真的重拉了"的抓手：判据用的那个价格在提交前并不存在）。
+function Wait-TextLike { param($Window, [string]$Text, [int]$TimeoutSec = 20)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $hit = Find-TextLike -Window $Window -Text $Text
+        if ($hit) { return $hit }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
 # 弹窗里的输入框：预填之后可访问名就是**值**（不是占位符），按 Y 序取才稳。
 function Get-ModalEdits { param($Window, [string]$ModalTitle)
     $title = Find-First $Window $ModalTitle
@@ -720,7 +833,7 @@ try {
     if ($openTrade) { $ledgerId = $openTrade.ledger_id }
     Assert-True ([bool]$ledgerId) "从建仓成交反推当前账本（$ledgerId）"
     if ($openTrade) {
-        Assert-True ($openTrade.price -eq 10000) "成交价按分存（100 元 → 10000，实际 $($openTrade.price)）"
+        Assert-True ($openTrade.price -eq 100000) "成交价按厘存（100 元 → 100000 厘，实际 $($openTrade.price)）"
         Assert-True ($openTrade.lots -eq 3) "手数 3（实际 $($openTrade.lots)）"
         Assert-True ($openTrade.shares -eq 300) "股数 = 手数 × 100（实际 $($openTrade.shares)）"
         Assert-True ($openTrade.amount -eq 3000000) "成交额 = 100 元 × 300 股 = 3,000,000 分（实际 $($openTrade.amount)）"
@@ -770,6 +883,8 @@ try {
     Assert-True ([bool]$cardText) "持仓卡片显示「$name $code」（$cardText）"
     if ($cardText) {
         Assert-True ($cardText -match '持仓\s*3\s*手') "卡片上写着持仓 3 手（$cardText）"
+        # 浮动盈亏率的分母 = 本轮净投入（Σ 资金变动取反），不是本轮买入总额 —— 判据在 Assert-CardFloatRate。
+        Assert-CardFloatRate -Window $window -Code $code -Name $name -LedgerId $ledgerId -Lots 3 -Stage '建仓后'
     }
 
     Assert-True (Switch-StockSub -Window $window -Name '记录') '切到「记录」子功能'
@@ -795,7 +910,7 @@ try {
     $orderTrade = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
     Assert-True ([bool]$orderTrade) '编辑前能认到我们的建仓成交（该类型最新一笔）'
     if ($orderTrade) {
-        Assert-True (([int64]$orderTrade.price) -eq 10000) "编辑前成交价 100.00 元（$($orderTrade.price) 分）"
+        Assert-True (([int64]$orderTrade.price) -eq 100000) "编辑前成交价 100.00 元（$($orderTrade.price) 厘）"
         Assert-True ($orderTrade.lots -eq 3) "编辑前手数 3（$($orderTrade.lots)）"
     }
 
@@ -832,7 +947,7 @@ try {
     $editedTrade = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
     Assert-True ([bool]$editedTrade) '编辑后仍能认到那笔建仓成交'
     if ($editedTrade) {
-        Assert-True (([int64]$editedTrade.price) -eq 10100) "成交价改成 101.00 元（实际 $($editedTrade.price) 分）"
+        Assert-True (([int64]$editedTrade.price) -eq 101000) "成交价改成 101.00 元（实际 $($editedTrade.price) 厘）"
         Assert-True (([int64]$editedTrade.amount) -eq 3030000) "成交额按新价重算 = 101×300 股 = 3,030,000 分（实际 $($editedTrade.amount)）"
         # 手续费：**不能断言"一定变了"** —— 100 → 101 时两笔成交额都落在佣金最低 5 元以下
         # （实测 3,000,000 与 3,030,000 分都是 530 分），这里断言的是字段自洽性。
@@ -854,6 +969,9 @@ try {
         $ourFundsAfterEdit = @(Get-FundRecords -LedgerId $ledgerId | Where-Object { ([int64]$_.amount_change) -eq $expectedChange })
         Assert-True ($ourFundsAfterEdit.Count -ge 1) `
             "编辑后资金记录按新价重放（存在变动 = $expectedChange 的记录，实际 $($ourFundsAfterEdit.Count) 条）"
+        # 改成交也是"写入"：持仓那一侧同样要重拉（本轮资金变动变了 → 卡片上的浮动盈亏/率跟着变）。
+        # 只重拉成交、忘了重拉持仓时，卡片会一直用旧盈亏配新净投入 —— 这里会等到超时。
+        Assert-CardFloatRate -Window $window -Code $code -Name $name -LedgerId $ledgerId -Lots 3 -Stage '编辑成交后'
     }
 
     # ================= 4/10 删除委托（整笔回放）→ 重新建仓 =================
@@ -884,8 +1002,8 @@ try {
     }
 
     $tradeAfterDelete = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
-    Assert-True (-not $tradeAfterDelete -or ([int64]$tradeAfterDelete.price -ne 10100)) `
-        "删除后那笔 101.00 元的建仓成交没了（最新一笔：$(if ($tradeAfterDelete) { "$($tradeAfterDelete.price) 分" } else { '无' })）"
+    Assert-True (-not $tradeAfterDelete -or ([int64]$tradeAfterDelete.price -ne 101000)) `
+        "删除后那笔 101.00 元的建仓成交没了（最新一笔：$(if ($tradeAfterDelete) { "$($tradeAfterDelete.price) 厘" } else { '无' })）"
     $posAfterDelete = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     if ($posAfterDelete) {
@@ -921,6 +1039,13 @@ try {
 
     # ---- 减仓 1 手 ----
     $reduceLots = '1'
+    # 写入后「成交记录」必须**实时刷新**（用户报的缺陷：加仓/减仓/清仓之后这张表还是旧的）。
+    # 判据用减仓价那一格：提交前本轮只有那笔建仓（100.00），这个价格在界面上不存在 ——
+    # 它出现 = 表格按新数据重拉了；只重拉持仓、忘了重拉成交时会空等到超时。
+    $reducePriceText = Format-Price ([int64]$reducePrice * 1000)
+    $priceBefore = Find-TextLike -Window $window -Text $reducePriceText
+    Assert-True (-not [bool]$priceBefore) `
+        "减仓前界面上没有 $reducePriceText 这个价（本轮只有 100.00 那笔建仓；实际命中：$priceBefore）"
     Assert-True (Submit-Trade -Window $window -OpenButton '减仓' -ModalTitle '委托减仓' -Price $reducePrice -Lots $reduceLots) `
         '「减仓」弹窗走完（填价/手数 → 提交）'
     Start-Sleep -Seconds 2
@@ -932,7 +1057,7 @@ try {
     if ($reduceTrade -and $posBefore) {
         $expectedBasis = [int64][Math]::Round([double]$posBefore.total_cost * 100.0 / [double]$posBefore.quantity)
         $expectedRealized = [int64]$reduceTrade.amount - [int64]$reduceTrade.fee - $expectedBasis
-        Assert-True ($reduceTrade.price -eq 12000) "减仓价按分存（$reducePrice 元 → 12000，实际 $($reduceTrade.price)）"
+        Assert-True ($reduceTrade.price -eq 120000) "减仓价按厘存（$reducePrice 元 → 120000，实际 $($reduceTrade.price)）"
         Assert-True ($reduceTrade.lots -eq 1) "减仓手数 1（实际 $($reduceTrade.lots)）"
         Assert-True ($reduceTrade.shares -eq 100) "减仓股数 100（实际 $($reduceTrade.shares)）"
         Assert-True ($reduceTrade.amount -eq 1200000) "减仓成交额 1,200,000 分（实际 $($reduceTrade.amount)）"
@@ -952,6 +1077,15 @@ try {
         Assert-True ([string]::IsNullOrEmpty($reduceTrade.round_id)) '减仓成交同样尚未挂接轮次'
     }
     Assert-FundChain -LedgerId $ledgerId -Stage '减仓后'
+
+    # 本轮已经装进一笔减仓 → 净投入 < 本轮买入总额，**这里是新旧口径的判别点**：
+    # 修前的分母（买入总额）会算出一个明显偏小的率，新口径（净投入）才对得上卡片上的数。
+    Assert-CardFloatRate -Window $window -Code $code -Name $name -LedgerId $ledgerId -Lots 2 `
+        -Stage '减仓后' -ExpectDiscriminating
+
+    # 「成交记录」实时刷新（用户报的缺陷）：那一格 120.00 是刚提交的减仓价，提交前界面上没有它。
+    $priceHit = Wait-TextLike -Window $window -Text $reducePriceText
+    Assert-True ([bool]$priceHit) "减仓后「成交记录」实时刷新（表里出现 $reducePriceText 那一行，命中：$priceHit）"
 
     # ---- 清仓：可用手数应预填 2 手（清仓时预填全仓手数）----
     $closeButton = Wait-VisibleButton -Window $window -Name '清仓' -TimeoutSec 15
@@ -1430,6 +1564,65 @@ try {
     # 账本本身也还在（重置只清股票侧，不删账本）
     $ledgerStill = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_ledger' -OutDir $OutDir | Where-Object { $_.id -eq $ledgerId })
     Assert-True ($ledgerStill.Count -eq 1) '账本行仍在（重置不删账本）'
+
+    # ================= 11/11 场内基金（ETF）：价格按厘存、只收佣金 =================
+    # 重置之后账本正好是干净的，ETF 这一段独立验，不干扰前面那些"绝对状态"断言。
+    Write-Host "`n[stock] 11/11 场内基金 510300：3 位小数价 + 免印花税 / 免过户费"
+    Assert-True (Switch-StockSub -Window $window -Name '持仓') '切到「持仓」子功能'
+    Start-Sleep -Seconds 2
+    $fundCode = '510300'
+    $fundName = '沪深300ETF'
+    # 建仓 3 手 @ 4.389（沪市 ETF）：代码校验必须放行 51 开头，价格必须原样落库
+    Assert-True (Add-Position -Window $window -Code $fundCode -Name $fundName -Price '4.389' -Lots '3' -Tag $roundTag) `
+        "建仓 3 手 @ 4.389（场内基金，价格带厘位）"
+    Start-Sleep -Seconds 3
+
+    $fundOpen = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $fundCode -and $_.trade_type -eq 'open' }) |
+        Select-Object -First 1
+    Assert-True ([bool]$fundOpen) "库里出现场内基金建仓成交（$fundCode）"
+    if ($fundOpen) {
+        Assert-True ([int64]$fundOpen.price -eq 4389) `
+            "成交价按**厘**存（4.389 元 → 4389 厘，实际 $($fundOpen.price)）"
+        Assert-True ([int64]$fundOpen.shares -eq 300) "股数 = 手数 × 100（实际 $($fundOpen.shares)）"
+        Assert-True ([int64]$fundOpen.amount -eq 131670) `
+            "成交额仍按分算 = 4.389 × 300 = 1316.70 元（实际 $($fundOpen.amount) 分）"
+        Assert-True ([int64]$fundOpen.transfer_fee -eq 0) '沪市场内基金**不收过户费**（沪市股票才收）'
+        Assert-True ([int64]$fundOpen.stamp_duty -eq 0) '建仓本来就没有印花税'
+        Assert-True ([int64]$fundOpen.commission -gt 0) "佣金照收（$($fundOpen.commission) 分）"
+        Assert-True ([int64]$fundOpen.fee -eq [int64]$fundOpen.commission) '费用明细里只有佣金'
+    }
+
+    # 界面：卡片按「名称 + 代码」显示出这一只（说明 51 开头的代码在录入链路里被放行了）
+    $fundCard = $null
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        $fundCard = Get-Elements $window | ForEach-Object { $_.Current.Name } |
+            Where-Object { $_ -and $_.Contains($fundCode) -and $_.Contains($fundName) } | Select-Object -First 1
+        if (-not $fundCard) { Start-Sleep -Milliseconds 500 }
+    } while (-not $fundCard -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$fundCard) "持仓卡片显示「$fundName $fundCode」（$fundCard）"
+
+    # 清仓 3 手 @ 4.400：**卖出也只有佣金**（同一笔若是股票，这里会有印花税 + 过户费）
+    Assert-True (Submit-Trade -Window $window -OpenButton '清仓' -ModalTitle '委托清仓' -Price '4.400' -Lots '3') `
+        '「清仓」弹窗走完（填价/手数 → 提交）'
+    Start-Sleep -Seconds 3
+    $fundClose = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $fundCode -and $_.trade_type -eq 'close' }) |
+        Select-Object -First 1
+    Assert-True ([bool]$fundClose) "库里出现场内基金清仓成交（$fundCode）"
+    if ($fundClose) {
+        Assert-True ([int64]$fundClose.price -eq 4400) "清仓价按厘存（4.400 元 → 4400 厘，实际 $($fundClose.price)）"
+        Assert-True ([int64]$fundClose.amount -eq 132000) "清仓成交额 = 1320.00 元（实际 $($fundClose.amount) 分）"
+        Assert-True ([int64]$fundClose.stamp_duty -eq 0) '**卖出也免印花税**（场内基金）'
+        Assert-True ([int64]$fundClose.transfer_fee -eq 0) '卖出也免过户费'
+        Assert-True ([int64]$fundClose.fee -eq [int64]$fundClose.commission) '卖出同样只有佣金'
+    }
+    Assert-FundChain -LedgerId $ledgerId -Stage '基金清仓后'
+    # 与股票同一套轮次口径：清仓归档出一个轮次
+    $fundRounds = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade_round' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $fundCode })
+    Assert-True ($fundRounds.Count -eq 1) "场内基金清仓也归档一个轮次（实际 $($fundRounds.Count)）"
 }
 
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
