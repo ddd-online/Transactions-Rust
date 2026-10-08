@@ -51,6 +51,28 @@ pub fn section_state(
     SectionState::Ready
 }
 
+/// 同 [`section_state`]，但**重拉时不把手上已有的内容换成加载态**。
+///
+/// 差别只有一条：**手上有内容且没有失败文案 ⇒ `Ready`**（哪怕 `loading` 是 true）。
+///
+/// 为什么需要它（真实缺陷）：页面在写入成功后习惯"整表重拉"，而重拉会让 `loading` 置位 ——
+/// 若按 [`section_state`] 判成 `Loading`，整块列表会被换成"正在加载…"，列表所在的那一屏
+/// **高度瞬间塌成一行**；浏览器此时会把滚动位置夹回顶部（而且不会自动恢复），展开着的
+/// 面板/浮层也一起消失，用户看到的就是"页面像是刷新了"（待办页写进度即复现）。
+/// 首帧（`!loaded`）与"手上没有内容"仍按原规则显示加载态；失败仍显示失败态 ——
+/// **失败既不当成空，也不拿旧内容掩盖**。
+pub fn section_state_keeping_content(
+    items_empty: bool,
+    loading: bool,
+    loaded: bool,
+    failed: Option<&str>,
+) -> SectionState {
+    if !items_empty && failed.is_none() {
+        return SectionState::Ready;
+    }
+    section_state(items_empty, loading, loaded, failed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +128,48 @@ mod tests {
         assert_eq!(
             section_state(false, true, true, None),
             SectionState::Loading
+        );
+    }
+
+    /// 「重拉不塌内容」：手上有内容时不显示加载态，其余三态与 [`section_state`] 完全一致。
+    #[test]
+    fn keeping_content_only_overrides_the_loading_branch() {
+        // 重拉中（手上有内容）⇒ Ready：这是这条规则存在的唯一理由
+        assert_eq!(
+            section_state_keeping_content(false, true, true, None),
+            SectionState::Ready
+        );
+        // 首帧（还没跑完一次、手上也没有内容）⇒ 仍然是 Loading
+        assert_eq!(
+            section_state_keeping_content(true, false, false, None),
+            SectionState::Loading
+        );
+        // 手上**有**内容（`Query::keep` 的缓存那一类）⇒ 哪怕还没跑完一次也先显示它
+        assert_eq!(
+            section_state_keeping_content(false, false, false, None),
+            SectionState::Ready
+        );
+        // 手上没有内容时与 section_state 逐字一致（重拉 / 跑完为空 / 失败）
+        for items_empty in [true, false] {
+            for loading in [false, true] {
+                for failed in [None, Some("查询失败")] {
+                    for loaded in [false, true] {
+                        if !items_empty {
+                            continue; // 有内容那一侧由上面两条断言覆盖
+                        }
+                        assert_eq!(
+                            section_state_keeping_content(items_empty, loading, loaded, failed),
+                            section_state(items_empty, loading, loaded, failed),
+                            "items_empty={items_empty} loading={loading} loaded={loaded} failed={failed:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // 失败优先：有内容但这次取数失败了 ⇒ Failed（不拿旧内容掩盖失败）
+        assert_eq!(
+            section_state_keeping_content(false, false, true, Some("查询待办失败")),
+            SectionState::Failed
         );
     }
 

@@ -24,7 +24,7 @@ use tr_domain::consts;
 use tr_domain::dto::{TodoCardDto, TodoHistoryDto, TodoItemDto, TodoProgressDto};
 use tr_draw::calendar::days_between;
 use tr_draw::quadrant::{rows as quadrant_rows, Quadrant, QuadrantItem as QuadrantEntry};
-use tr_draw::section::{section_state, SectionState};
+use tr_draw::section::{section_state, section_state_keeping_content, SectionState};
 
 use crate::api;
 use crate::components::ui::{
@@ -193,6 +193,9 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
     Effect::new(move |_: Option<()>| {
         stores.current_ledger_id.get();
         expanded.set(String::new());
+        // 手上这份列表属于**上一个账本** ⇒ 先清掉：下面的四态判定在"手上有内容"时会继续显示它，
+        // 不清就会让切换账本的瞬间露出别的账本的卡片（从前靠 Loading 态遮住）。
+        cards.value.set(Vec::new());
     });
 
     let open_card_modal = move || {
@@ -487,7 +490,11 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
             <TabPane active=tab key=TAB_BOARD class="todo-pane">
                 <AsyncSection
                     state=Signal::derive(move || {
-                        section_state(
+                        // ⚠ 用 `keeping_content` 而不是 `section_state`：每次写入成功后都整表重拉，
+                        // 而 `section_state` 会把"重拉中"判成 Loading ⇒ 整块列表被换成「正在加载…」
+                        // ⇒ 列表所在的那一屏高度塌成一行 ⇒ 浏览器把滚动位置夹回顶部、展开着的进度
+                        // 面板一起消失（用户报的"像是刷新了"）。判据见 fixtures/ui-todo.ps1 第 8 步。
+                        section_state_keeping_content(
                             cards.value.get().is_empty(),
                             cards.loading.get(),
                             cards.loaded.get(),
@@ -555,7 +562,8 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
                 // 于是"还没加载完"会显示成「还没有进行中的事项」）
                 <AsyncSection
                     state=Signal::derive(move || {
-                        section_state(
+                        // 同「待办视图」那一处：重拉期间继续显示手上这份（否则整块图会闪成加载态）
+                        section_state_keeping_content(
                             cards.value.get().is_empty(),
                             cards.loading.get(),
                             cards.loaded.get(),
@@ -1555,6 +1563,8 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
                     <div class="todo-history">
                         {head}
                         {move || {
+                            // 这一段只在"手上确实没有内容"时才走到（上面判过 `list.is_empty()`），
+                            // 所以照原规则判四态即可 —— 有内容时列表在另一个分支里渲染，不受重拉影响。
                             match section_state(
                                 true,
                                 rows.loading.get(),
