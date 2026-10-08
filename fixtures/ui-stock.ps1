@@ -518,6 +518,13 @@ function Submit-Trade {
 }
 
 # 建仓（无断言版）：供"删除委托后重建现场"复用。
+#
+# ⚠ 「本轮费用设置」那 4 个输入框在弹窗的**最底部**（在「委托时间」下面），这不是随意的：
+# `DatePicker` 的下拉面板是 `position: absolute; top: 100%`，**向下展开、不翻转、也不 portal**
+# （`components/ui/date_picker.rs` + `ui.css` 的 `.ui-date-picker__dropdown`）。把费率块放到日期行上面，
+# 触发器会被压到窗口底部，面板最后一两行伸到窗口外 —— UIA 照样能查到那格的矩形，但点下去落在窗口外
+# （实测 150% 缩放下「上个月的 24 号」正好在窗口外 ⇒ 第 1 步的日期断言整段变红）。
+# 真要动弹窗里的顺序，先跑一遍第 1 步（选上个月 24 号）。
 # 认"我们的那笔成交"：这个账本里还有**种子数据**的同代码成交（界面只显示当前轮次那笔，
 # 数据库查询会把它们一起捞出来；而且种子的记录与我们的是同一秒，按 created_at 过滤并不可靠），
 # 所以用与 1/5 相同的口径：同类型（open/reduce/close）里 created_at 最新的那一笔。
@@ -639,7 +646,7 @@ function Get-ModalEdits { param($Window, [string]$ModalTitle)
 }
 function Add-Position {
     param($Window, [string]$Code, [string]$Name, [string]$Price, [string]$Lots, [datetime]$Date,
-        [string]$Tag)
+        [string]$Tag, [hashtable]$RoundFee)
     $opened = $false
     for ($attempt = 1; $attempt -le 3 -and -not $opened; $attempt++) {
         Invoke-Element (Wait-Element -Root $Window -Name '建仓') | Out-Null
@@ -672,6 +679,21 @@ function Add-Position {
     if ($Tag) {
         Assert-True (Select-TradeTag -Window $Window -Value $Tag) "建仓弹窗里把交易标签选成「$Tag」"
     }
+    # 「本轮费用设置」：只有建仓能改（加仓 / 减仓 / 清仓是只读的一行）。
+    # 4 个输入框都是预填值 + 占位符 ⇒ 可访问名是**占位符**，且四个互不为前缀，按名字定位很稳。
+    if ($RoundFee) {
+        $feeCommission = Wait-EditLike -Root $Window -Pattern '如 0.5'
+        $feeMin = Wait-EditLike -Root $Window -Pattern '如 5'
+        $feeStamp = Wait-EditLike -Root $Window -Pattern '如 0.05'
+        $feeTransfer = Wait-EditLike -Root $Window -Pattern '如 0.001'
+        Assert-True ([bool]($feeCommission -and $feeMin -and $feeStamp -and $feeTransfer)) `
+            '建仓弹窗里有「本轮费用设置」的 4 个输入框'
+        if ($feeCommission) { Set-Value $feeCommission ([string]$RoundFee.Commission) | Out-Null }
+        if ($feeMin) { Set-Value $feeMin ([string]$RoundFee.Min) | Out-Null }
+        if ($feeStamp) { Set-Value $feeStamp ([string]$RoundFee.Stamp) | Out-Null }
+        if ($feeTransfer) { Set-Value $feeTransfer ([string]$RoundFee.Transfer) | Out-Null }
+        Start-Sleep -Milliseconds 500
+    }
     Start-Sleep -Milliseconds 800
     $buttons = Find-All $Window '建仓'
     if ($buttons.Count -gt 0) { Invoke-Element $buttons[$buttons.Count - 1] | Out-Null }
@@ -679,7 +701,32 @@ function Add-Position {
     return $true
 }
 
-# ---- 播种 ----
+# 改「系统费用设置」（股票 → 设置），改完切回持仓。
+# 注意语义：这些值是**建仓时**取用的默认值 —— 改它只影响之后新建仓的轮次，
+# 进行中的轮次按它建仓时定下的那份算（本轮费用设置的回归在第 12 步）。
+function Set-SystemFeeSetting {
+    param($Window, [string]$Commission, [string]$Min, [string]$Stamp, [string]$Transfer)
+    Assert-True (Switch-StockSub -Window $Window -Name '设置') '切到「设置」子功能（改费用设置）'
+    Start-Sleep -Seconds 2
+    Assert-True ([bool](Wait-Element -Root $Window -Name '佣金费率' -TimeoutSec 15)) '设置子功能出现费用表单'
+    $edits = @(Get-FeeFormEdits -Window $Window)
+    Assert-True ($edits.Count -ge 4) "费用表单有 4 个输入框（实际 $($edits.Count)）"
+    if ($edits.Count -lt 4) { return $false }
+    Set-Value $edits[0] $Commission | Out-Null
+    Set-Value $edits[1] $Min | Out-Null
+    Set-Value $edits[2] $Stamp | Out-Null
+    Set-Value $edits[3] $Transfer | Out-Null
+    Start-Sleep -Milliseconds 500
+    $save = Wait-VisibleButton -Window $Window -Name '保存' -TimeoutSec 10
+    Assert-True ([bool]$save) '找到费用表单的「保存」'
+    if ($save) { Invoke-Element $save | Out-Null }
+    Start-Sleep -Seconds 3
+    Assert-True (Switch-StockSub -Window $Window -Name '持仓') '从「设置」切回「持仓」'
+    Start-Sleep -Seconds 2
+    return $true
+}
+
+# 播种
 # **默认每次重新播种**：本脚本断言的是"持仓数量/成本"这种**绝对状态**，复用旧工作空间必然失真
 # （实测踩过：上一轮留下的 300 股让这一轮变成 600 股，后面全崩）。
 # 判据要在**默认值赋值之前**取好，否则 `$Workspace` 已被填成默认路径、`-not $Workspace` 恒为 false。
@@ -739,8 +786,8 @@ try {
     $ledgerId = ''
     $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 5
 
-    # ================= 1/10 建仓 =================
-    Write-Host "`n[stock] 1/10 建仓 $code × $buyLots 手 @ $buyPrice"
+    # ================= 1/12 建仓 =================
+    Write-Host "`n[stock] 1/12 建仓 $code × $buyLots 手 @ $buyPrice"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票')) '打开「股票」页'
     Start-Sleep -Seconds 3
     Assert-True (Switch-StockSub -Window $window -Name '持仓') '切到「持仓」子功能（建仓按钮在工具栏）'
@@ -871,8 +918,8 @@ try {
     Assert-True (Switch-StockSub -Window $window -Name '持仓') '切回「持仓」继续'
     Start-Sleep -Seconds 2
 
-    # ================= 2/10 界面展示（建仓之后）=================
-    Write-Host "`n[stock] 2/10 界面展示：持仓卡片与成交记录"
+    # ================= 2/12 界面展示（建仓之后）=================
+    Write-Host "`n[stock] 2/12 界面展示：持仓卡片与成交记录"
     $cardText = $null
     $deadline = (Get-Date).AddSeconds(20)
     do {
@@ -901,12 +948,12 @@ try {
     Assert-True (Switch-StockSub -Window $window -Name '持仓') '切回「持仓」（减仓/清仓按钮在详情区）'
     Start-Sleep -Seconds 3
 
-    # ================= 3/10 编辑成交（改成交价 → 费用/成本/资金链重算）=================
+    # ================= 3/12 编辑成交（改成交价 → 费用/成本/资金链重算）=================
     # 成交记录表每行的「编辑」按钮（在持仓详情区，所以这时必须还有持仓）。
     # ⚠ 两个坑：① 这个账本里**还有种子数据**的同代码成交（界面只显示当前轮次那笔，数据库查询会一起捞出来），
     # 所以"我们的成交"用与 1/5 相同的口径认：同类型里 created_at 最新的那一笔；
     # ② 编辑弹窗的输入框**预填后名字就是值**（不是占位符），必须按 Y 序取 Edit，不能按名字找。
-    Write-Host "`n[stock] 3/10 编辑成交：把建仓价从 $buyPrice 改成 101"
+    Write-Host "`n[stock] 3/12 编辑成交：把建仓价从 $buyPrice 改成 101"
     $orderTrade = Get-NewestTrade -LedgerId $ledgerId -Code $code -TradeType 'open'
     Assert-True ([bool]$orderTrade) '编辑前能认到我们的建仓成交（该类型最新一笔）'
     if ($orderTrade) {
@@ -974,8 +1021,8 @@ try {
         Assert-CardFloatRate -Window $window -Code $code -Name $name -LedgerId $ledgerId -Lots 3 -Stage '编辑成交后'
     }
 
-    # ================= 4/10 删除委托（整笔回放）→ 重新建仓 =================
-    Write-Host "`n[stock] 4/10 删除整笔委托 → 再建仓（好继续验减仓/清仓）"
+    # ================= 4/12 删除委托（整笔回放）→ 重新建仓 =================
+    Write-Host "`n[stock] 4/12 删除整笔委托 → 再建仓（好继续验减仓/清仓）"
     $ourBuyFundIds = @(if ($editedTrade) {
             $expected = -(([int64]$editedTrade.amount) + ([int64]$editedTrade.fee))
             Get-FundRecords -LedgerId $ledgerId | Where-Object { ([int64]$_.amount_change) -eq $expected } |
@@ -1022,7 +1069,7 @@ try {
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     Assert-True ([bool]$posRebuilt -and $posRebuilt.quantity -eq 300) "重建仓后持仓回到 300 股（实际 $(if ($posRebuilt) { $posRebuilt.quantity } else { 'n/a' })）"
 
-    # ================= 5/10 减仓 → 清仓 =================
+    # ================= 5/12 减仓 → 清仓 =================
     # 详情区的「减仓/清仓」现在真的能点开了（见文件顶部那条缺陷说明）。
     Write-Host "`n[stock] 3/3 减仓 1 手 @ $reducePrice → 清仓 2 手 @ $closePrice"
 
@@ -1170,7 +1217,9 @@ try {
             }
         }
     }
-    # ================= 6/10 交易费用设置：改完费率，**新委托立刻按新费率计费** =================
+    # ================= 6/12 交易费用设置：改完费率，**之后建仓的轮次按新费率计费** =================
+    # ⚠ 费率随**轮次**走（见第 12 步）：改系统配置只影响之后新建仓的轮次，进行中的轮次按它建仓时的
+    # 那一份算。这一段是"空仓改设置 → 新建仓"，所以新费率立即生效。
     # ⚠ 费用设置的编辑入口**在股票页的「设置」子功能**（原来在「应用设置 → 股票」分栏，
     # 已随股票设置整体迁进股票页；股票页的其他子功能只读取它来估费，不渲染表单）。
     # 费用设置的 UI 单位：佣金费率是**万分之**（÷10000 落库）、最低佣金是**元**（转分）、
@@ -1178,7 +1227,7 @@ try {
     #   佣金 = max(round(委托总额×费率), 最低佣金)（**整笔委托只收一次**）；
     #   买入 = 佣金 + 过户费(沪市)；卖出 = 佣金 + 印花税 + 过户费(沪市)（印花税只卖出收）；
     #   多笔成交时印花税/过户费**逐笔取整再相加**（各笔自己进整到分），下面这几笔都是单笔成交。
-    Write-Host "`n[stock] 6/10 费用设置（股票 → 设置）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
+    Write-Host "`n[stock] 6/12 费用设置（股票 → 设置）：佣金 1/10000、最低 0、印花税 0.1%、过户费 0.002%"
     Assert-True (Switch-StockSub -Window $window -Name '设置') '切到「设置」子功能（费用设置在这里）'
     Start-Sleep -Seconds 2
     Assert-True ([bool](Wait-Element -Root $window -Name '佣金费率' -TimeoutSec 15)) '设置子功能出现费用表单'
@@ -1242,12 +1291,12 @@ try {
         Assert-True (([int64]$feeSellTrade.fee) -eq 1344) `
             "卖出费用 = 120 + 1200 + 24 = 1344 分（实际 $($feeSellTrade.fee)）"
     }
-    # ================= 7/10 统计：分栏页签（统计 / 明细）+ 逐笔结算明细的页脚 =================
+    # ================= 7/12 统计：分栏页签（统计 / 明细）+ 逐笔结算明细的页脚 =================
     # 这一页原来把「结算统计 + 曲线 + 逐笔明细」竖向摞在一屏里（整页滚动）；
     # 现在拆成两个**各自填满内容区**的分栏，明细走分页。锁两条链路：
     #   ① 工具栏左侧的页签是 TabItem，切到「明细」要渲染出明细表（按 Button 找会静默失败）；
     #   ② 页脚要有「共 N 条」与分页控件 —— 并且切回「统计」时曲线面板还在。
-    Write-Host "`n[stock] 7/10 统计：分栏页签（统计 / 明细）+ 逐笔结算明细"
+    Write-Host "`n[stock] 7/12 统计：分栏页签（统计 / 明细）+ 逐笔结算明细"
     Assert-True (Switch-StockSub -Window $window -Name '统计') '切到「统计」子功能'
     Start-Sleep -Seconds 3
     Assert-True ([bool](Wait-Element -Root $window -Name '结算统计' -TimeoutSec 20)) `
@@ -1268,12 +1317,12 @@ try {
     Assert-True ([bool](Wait-Element -Root $window -Name '统计曲线' -TimeoutSec 15)) `
         '「统计」分栏出现「统计曲线」'
 
-    # ================= 8/10 账户：利息归本（支取 / 利息归本 / 追加本金）+ 资金记录翻页 =================
+    # ================= 8/12 账户：利息归本（支取 / 利息归本 / 追加本金）+ 资金记录翻页 =================
     # 两条要求都落在这里：
     #   ① 「利息归本」按钮在「支取」与「追加本金」**中间**，金额要显示在账户页指标区；
     #   ② 可用现金要加上利息归本（本金口径不变）；
     #   ③ 资金记录分页的上下页必须真的换一批数据（修的是"页码动了、表格不动"）。
-    Write-Host "`n[stock] 8/10 账户：利息归本 + 资金记录翻页"
+    Write-Host "`n[stock] 8/12 账户：利息归本 + 资金记录翻页"
     Assert-True (Switch-StockSub -Window $window -Name '账户') '切到「账户」子功能'
     Start-Sleep -Seconds 3
 
@@ -1386,13 +1435,13 @@ try {
     } while (-not $restored -and (Get-Date) -lt $deadline)
     Assert-True $restored "「上一页」回到第 1 页的同一批数据（实际 $($backDates.Count) 行）"
 
-    # ================= 9/10 操作记录与回滚 =================
+    # ================= 9/12 操作记录与回滚 =================
     # 三条要求都锁在这里：
     #   ① 每次正向操作记一条（本步用它验「追加本金」这一种形状）；
     #   ② 「查看记录」弹窗列出这些记录；
     #   ③ 「回滚」**先预演再确认**，确认后才落库，并把那条记录弹掉。
     # 这一步**净效果为零**（刚追加的本金又被回滚掉），所以后面的「重置」断言照旧。
-    Write-Host "`n[stock] 9/10 操作记录与回滚（股票 → 设置 → 查看记录 / 回滚）"
+    Write-Host "`n[stock] 9/12 操作记录与回滚（股票 → 设置 → 查看记录 / 回滚）"
     $accountBeforeRollback = Get-ExpectedAccount -LedgerId $ledgerId
     $fundsBeforeRollback = @(Get-FundRecords -LedgerId $ledgerId)
     $rollbackCents = 100000 # 1000 元
@@ -1500,8 +1549,8 @@ try {
         Assert-True ($leftover.Count -eq 0) '被回滚的那条记录已不在库里'
     }
 
-    # ================= 10/10 重置股票数据：清空股票侧、**不动记账数据** =================
-    Write-Host "`n[stock] 10/10 重置股票数据（股票 → 设置 → 重置）"
+    # ================= 10/12 重置股票数据：清空股票侧、**不动记账数据** =================
+    Write-Host "`n[stock] 10/12 重置股票数据（股票 → 设置 → 重置）"
     $recordsBeforeReset = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_transaction_record' -OutDir $OutDir)
     $stockTables = @(
         'tbl_billadm_stock_account', 'tbl_billadm_stock_position', 'tbl_billadm_stock_trade',
@@ -1565,9 +1614,9 @@ try {
     $ledgerStill = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_ledger' -OutDir $OutDir | Where-Object { $_.id -eq $ledgerId })
     Assert-True ($ledgerStill.Count -eq 1) '账本行仍在（重置不删账本）'
 
-    # ================= 11/11 场内基金（ETF）：价格按厘存、只收佣金 =================
+    # ================= 11/12 场内基金（ETF）：价格按厘存、只收佣金 =================
     # 重置之后账本正好是干净的，ETF 这一段独立验，不干扰前面那些"绝对状态"断言。
-    Write-Host "`n[stock] 11/11 场内基金 510300：3 位小数价 + 免印花税 / 免过户费"
+    Write-Host "`n[stock] 11/12 场内基金 510300：3 位小数价 + 免印花税 / 免过户费"
     Assert-True (Switch-StockSub -Window $window -Name '持仓') '切到「持仓」子功能'
     Start-Sleep -Seconds 2
     $fundCode = '510300'
@@ -1623,6 +1672,127 @@ try {
     $fundRounds = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade_round' -OutDir $OutDir |
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $fundCode })
     Assert-True ($fundRounds.Count -eq 1) "场内基金清仓也归档一个轮次（实际 $($fundRounds.Count)）"
+
+    # ================= 12/12 本轮费用设置：建仓时定，本轮内不可改 =================
+    # 真实账户对股票与场内基金是两套费率（如东方财富"超级ETF"万0.5 免最低）——
+    # 所以费率随**轮次**走：建仓时把 4 项快照落到这一轮的每一笔成交行
+    # （`tbl_billadm_stock_trade.round_*`），之后的加仓 / 减仓 / 清仓与改成交一律用它。
+    # 这一段独立走一遍，判据全部落在库上（成交行的 4 个 round_* 列 + 费用）。
+    Write-Host "`n[stock] 12/12 本轮费用设置：建仓万0.5 免最低 → 改系统配置 → 加仓仍按本轮那份 → 新轮次按系统配置"
+    Assert-True (Switch-StockSub -Window $window -Name '持仓') '切到「持仓」子功能'
+    Start-Sleep -Seconds 2
+    $roundFeeCode = '600941'
+    $roundFeeName = '中国移动'
+
+    # ---- 建仓 1 手 @ 100.00，本轮费用：万0.5 / 最低 0 / 印花税 0 / 过户费 0 ----
+    # 成交额 100.00 × 100 = 10,000 元 = 1,000,000 分 ⇒ 佣金 = round(1,000,000 × 万0.5) = 50 分。
+    # 判别力：若按系统配置（万2.354 / 最低 5 元）会是 500 分。
+    Assert-True (Add-Position -Window $window -Code $roundFeeCode -Name $roundFeeName -Price '100' -Lots '1' `
+            -RoundFee @{ Commission = '0.5'; Min = '0'; Stamp = '0'; Transfer = '0' }) `
+        '建仓并按「本轮费用设置」填 万0.5 / 最低 0 / 印花税 0 / 过户费 0'
+    Start-Sleep -Seconds 3
+    $roundOpen = Get-NewestTrade -LedgerId $ledgerId -Code $roundFeeCode -TradeType 'open'
+    Assert-True ([bool]$roundOpen) "本轮建仓成交落库（$roundFeeCode）"
+    if ($roundOpen) {
+        Assert-True ([Math]::Abs([double]$roundOpen.round_commission_rate - 0.00005) -lt 1e-12) `
+            "建仓行记下本轮佣金费率 0.00005（实际 $($roundOpen.round_commission_rate)）"
+        Assert-True ([int64]$roundOpen.round_min_commission -eq 0) `
+            "建仓行记下本轮最低佣金 0 分（实际 $($roundOpen.round_min_commission)）"
+        Assert-True ([Math]::Abs([double]$roundOpen.round_stamp_duty_rate) -lt 1e-12) `
+            "建仓行记下本轮印花税 0（实际 $($roundOpen.round_stamp_duty_rate)）"
+        Assert-True ([Math]::Abs([double]$roundOpen.round_transfer_fee_rate) -lt 1e-12) `
+            "建仓行记下本轮过户费 0（实际 $($roundOpen.round_transfer_fee_rate)）"
+        Assert-True ([int64]$roundOpen.amount -eq 1000000) "成交额 = 10,000 元（实际 $($roundOpen.amount) 分）"
+        Assert-True ([int64]$roundOpen.commission -eq 50) `
+            "佣金按**本轮费率**算 = 50 分（不是系统配置的最低佣金 500，实际 $($roundOpen.commission)）"
+        Assert-True ([int64]$roundOpen.stamp_duty -eq 0) '本轮印花税填 0 ⇒ 买入不收（本来也不收）'
+        Assert-True ([int64]$roundOpen.transfer_fee -eq 0) '本轮过户费填 0 ⇒ 沪市股票也不收'
+        Assert-True ([int64]$roundOpen.fee -eq 50) "费用合计 = 佣金 50 分（实际 $($roundOpen.fee)）"
+    }
+    # 详情区把"本轮正在用的费率"写出来（信息区那一行）
+    Assert-True ([bool](Wait-TextLike -Window $window -Text '佣金 万0.5')) `
+        '持仓详情区显示「本轮费率：佣金 万0.5 …」'
+
+    # ---- 把系统配置改成 万3 / 最低 5 元（判别用：本轮不该受影响）----
+    Assert-True (Set-SystemFeeSetting -Window $window -Commission '3' -Min '5' -Stamp '0.05' -Transfer '0.001') `
+        '系统费用设置改成 万3 / 最低 5 元 / 0.05% / 0.001%'
+    $feeRow12 = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_fee_setting' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $ledgerId }) | Select-Object -First 1
+    if ($feeRow12) {
+        Assert-True ([Math]::Abs([double]$feeRow12.commission_rate - 0.0003) -lt 1e-12) `
+            "系统配置落库 0.0003（实际 $($feeRow12.commission_rate)）"
+    }
+
+    # ---- 加仓 1 手 @ 100：弹窗只读显示本轮费率，费用仍按本轮那份 ----
+    $openedAdd = $false
+    for ($attempt = 1; $attempt -le 3 -and -not $openedAdd; $attempt++) {
+        $addButton = Wait-VisibleButton -Window $window -Name '加仓' -TimeoutSec 10
+        if ($addButton) {
+            $rect = $addButton.Current.BoundingRectangle
+            [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+            Start-Sleep -Milliseconds 200
+            [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        }
+        Start-Sleep -Seconds 1
+        $openedAdd = [bool](Wait-Element -Root $window -Name '委托加仓' -TimeoutSec 6)
+    }
+    Assert-True $openedAdd '加仓弹窗已打开'
+    if ($openedAdd) {
+        Assert-True ([bool](Wait-TextLike -Window $window -Text '本轮建仓时确定')) `
+            '加仓弹窗里本轮费率是只读的（提示「本轮建仓时确定，不可更改」）'
+        Assert-True (Set-Value (Wait-Element -Root $window -Name '成交价（元/股）') '100') '加仓填入成交价 100'
+        $addLots = Wait-EditLike -Root $window -Pattern '手数'
+        if ($addLots) { Set-Value $addLots '1' | Out-Null }
+        Start-Sleep -Milliseconds 800
+        # 预估费用必须按**本轮**的万0.5（佣金 0.50 元），不是新系统配置的 5.00 元
+        Assert-True ([bool](Wait-TextLike -Window $window -Text '= ¥0.50')) `
+            '加仓弹窗的预估费用按本轮费率（合计 ¥0.50）'
+        $confirmAdd = Wait-VisibleButton -Window $window -Name '加仓' -TimeoutSec 10 -Last
+        if ($confirmAdd) { Invoke-Element $confirmAdd | Out-Null }
+        Start-Sleep -Seconds 4
+    }
+    $roundAdd = Get-NewestTrade -LedgerId $ledgerId -Code $roundFeeCode -TradeType 'add'
+    Assert-True ([bool]$roundAdd) '加仓成交落库'
+    if ($roundAdd) {
+        Assert-True ([Math]::Abs([double]$roundAdd.round_commission_rate - 0.00005) -lt 1e-12) `
+            "加仓沿用**本轮**费率 0.00005（不是新系统配置的 0.0003，实际 $($roundAdd.round_commission_rate)）"
+        Assert-True ([int64]$roundAdd.commission -eq 50) `
+            "加仓佣金仍按本轮费率 = 50 分（实际 $($roundAdd.commission)）"
+    }
+
+    # ---- 清仓 2 手：本轮那份照旧，并把这一轮归档 ----
+    Assert-True (Submit-Trade -Window $window -OpenButton '清仓' -ModalTitle '委托清仓' -Price '100' -Lots '2') `
+        '清仓 2 手'
+    Start-Sleep -Seconds 3
+    $roundClose = Get-NewestTrade -LedgerId $ledgerId -Code $roundFeeCode -TradeType 'close'
+    Assert-True ([bool]$roundClose) '清仓成交落库'
+    if ($roundClose) {
+        Assert-True ([Math]::Abs([double]$roundClose.round_commission_rate - 0.00005) -lt 1e-12) `
+            '清仓也是本轮那一份费率'
+    }
+    $roundFeeRounds = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade_round' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $roundFeeCode })
+    Assert-True ($roundFeeRounds.Count -eq 1) "这一轮已归档（实际 $($roundFeeRounds.Count) 个轮次）"
+
+    # ---- 新的一轮：同一代码再建仓 → 取**当前系统配置**（万3 / 最低 5 元 ⇒ 佣金 500 分）----
+    Start-Sleep -Seconds 2
+    Assert-True (Add-Position -Window $window -Code $roundFeeCode -Name $roundFeeName -Price '100' -Lots '1') `
+        '清仓后重新建仓（不带本轮自定义 ⇒ 预填系统配置）'
+    Start-Sleep -Seconds 3
+    $roundOpenAgain = Get-NewestTrade -LedgerId $ledgerId -Code $roundFeeCode -TradeType 'open'
+    Assert-True ([bool]$roundOpenAgain) '第二轮的建仓成交落库'
+    if ($roundOpenAgain) {
+        Assert-True ([Math]::Abs([double]$roundOpenAgain.round_commission_rate - 0.0003) -lt 1e-12) `
+            "新轮次的快照 = 当前系统配置 0.0003（实际 $($roundOpenAgain.round_commission_rate)）"
+        Assert-True ([int64]$roundOpenAgain.round_min_commission -eq 500) `
+            "新轮次的最低佣金 = 500 分（实际 $($roundOpenAgain.round_min_commission)）"
+        Assert-True ([int64]$roundOpenAgain.commission -eq 500) `
+            "新轮次佣金按万3 且走最低佣金 500 分（实际 $($roundOpenAgain.commission)）"
+    }
+
+    # ---- 收尾：系统费用设置恢复默认（与第 10 步重置后的口径一致，重跑也干净）----
+    Assert-True (Set-SystemFeeSetting -Window $window -Commission '2.354' -Min '5' -Stamp '0.05' -Transfer '0.001') `
+        '系统费用设置恢复默认（万2.354 / 最低 5 元 / 0.05% / 0.001%）'
 }
 
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }

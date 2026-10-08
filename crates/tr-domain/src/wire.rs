@@ -451,6 +451,21 @@ impl TradeFillRequest {
     }
 }
 
+/// 一轮（建仓时）定下来的费用设置 —— 只有**建仓**会带上它。
+///
+/// 四项与费用算法同口径：佣金费率是小数（万0.5 → `0.00005`），`min_commission` 是**分**
+/// （与 [`StockFeeSettingsRequest`] 一致），印花税 / 过户费填 0 表示本轮不收。
+/// 场内基金（ETF / LOF / REITs）无论这里填什么，都只收佣金（品种规则优先）。
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RoundFeeRequest {
+    pub commission_rate: f64,
+    /// 最低佣金（**分**）
+    pub min_commission: f64,
+    pub stamp_duty_rate: f64,
+    pub transfer_fee_rate: f64,
+}
+
 /// 一笔委托（可含多笔成交明细），返回成交明细数组。
 ///
 /// `fills` 为空时回退到单笔 `price` / `lots`（兼容旧调用）。
@@ -468,6 +483,9 @@ pub struct StockTradeCreateRequest {
     /// 兼容旧调用的单笔价格（**元**）
     pub price: f64,
     pub lots: f64,
+    /// **建仓**时指定本轮的费用设置；不填 = 用账本系统配置。加仓 / 减仓 / 清仓带上它会报错
+    /// （本轮费率在建仓时确定）
+    pub round_fee: Option<RoundFeeRequest>,
 }
 
 /// 编辑一笔成交（按当前费用设置重算整笔委托）。
@@ -939,7 +957,25 @@ mod tests {
                 fills: vec![TradeFillRequest::new(1500.0, 1)],
                 ..Default::default()
             }),
-            r#"{"ledger_id":"l1","stock_code":"600519","stock_name":"贵州茅台","trade_type":"open","trade_time":1767657600.0,"remark":"","tag":"分析","fills":[{"price":1500.0,"lots":1.0}],"price":0.0,"lots":0.0}"#
+            r#"{"ledger_id":"l1","stock_code":"600519","stock_name":"贵州茅台","trade_type":"open","trade_time":1767657600.0,"remark":"","tag":"分析","fills":[{"price":1500.0,"lots":1.0}],"price":0.0,"lots":0.0,"round_fee":null}"#
+        );
+        // 建仓带上本轮费用设置（snake_case 键 + `min_commission` 是分）
+        assert_eq!(
+            json(&StockTradeCreateRequest {
+                ledger_id: "l1".into(),
+                stock_code: "510300".into(),
+                trade_type: "open".into(),
+                tag: "分析".into(),
+                fills: vec![TradeFillRequest::new(4.389, 3)],
+                round_fee: Some(RoundFeeRequest {
+                    commission_rate: 0.00005,
+                    min_commission: 0.0,
+                    stamp_duty_rate: 0.0,
+                    transfer_fee_rate: 0.0,
+                }),
+                ..Default::default()
+            }),
+            r#"{"ledger_id":"l1","stock_code":"510300","stock_name":"","trade_type":"open","trade_time":0.0,"remark":"","tag":"分析","fills":[{"price":4.389,"lots":3.0}],"price":0.0,"lots":0.0,"round_fee":{"commission_rate":0.00005,"min_commission":0.0,"stamp_duty_rate":0.0,"transfer_fee_rate":0.0}}"#
         );
     }
 

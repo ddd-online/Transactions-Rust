@@ -22,7 +22,7 @@ use tr_domain::dto::{
     StockTradeImpactDto, StockTradeTagSettingDto,
 };
 use tr_domain::error::AppError;
-use tr_domain::models::StockFeeSetting;
+use tr_domain::models::{RoundFee, StockFeeSetting};
 use tr_domain::money::price_yuan_to_milli;
 use tr_domain::wire::{
     LedgerIdRequest, QueryNumber, StockAmountDateRequest, StockArchiveRequest,
@@ -306,8 +306,15 @@ pub fn stock_trade_create(
         return Err(AppError::bad_request("stock_code is required").into());
     }
     let fills = parse_trade_fills(&req)?;
+    // 建仓可以带本轮的费用设置（四项，`min_commission` 是分）；其余委托带了会被服务层拒掉
+    let round_fee = req.round_fee.map(|fee| RoundFee {
+        commission_rate: fee.commission_rate,
+        min_commission: fee.min_commission as i64,
+        stamp_duty_rate: fee.stamp_duty_rate,
+        transfer_fee_rate: fee.transfer_fee_rate,
+    });
     let workspace = state.workspace()?;
-    Ok(stock::create_trade_order(
+    Ok(stock::create_trade_order_with_round_fee(
         &workspace,
         &req.ledger_id,
         &req.stock_code,
@@ -317,6 +324,7 @@ pub fn stock_trade_create(
         req.trade_time as i64,
         &req.remark,
         &req.tag,
+        round_fee,
     )?)
 }
 

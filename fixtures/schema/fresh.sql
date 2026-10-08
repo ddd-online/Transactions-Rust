@@ -36,7 +36,7 @@ CREATE TABLE `tbl_billadm_stock_fund_record` (`id` text,`ledger_id` varchar(36) 
 CREATE INDEX `idx_stock_fund_ledger_date` ON `tbl_billadm_stock_fund_record`(`ledger_id`,`record_date`);
 CREATE TABLE `tbl_billadm_stock_position` (`id` text,`ledger_id` varchar(36) DEFAULT "",`stock_code` varchar(16) NOT NULL,`stock_name` varchar(64) NOT NULL DEFAULT "",`quantity` integer NOT NULL DEFAULT 0,`total_cost` integer NOT NULL DEFAULT 0,`realized_pnl` integer NOT NULL DEFAULT 0,`review` varchar(2000) NOT NULL DEFAULT "",`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
 CREATE UNIQUE INDEX `idx_stock_position_ledger_code` ON `tbl_billadm_stock_position`(`ledger_id`,`stock_code`);
-CREATE TABLE `tbl_billadm_stock_trade` (`id` text,`ledger_id` varchar(36) DEFAULT "",`stock_code` varchar(16) NOT NULL,`stock_name` varchar(64) NOT NULL DEFAULT "",`trade_type` varchar(16) NOT NULL DEFAULT "",`round_id` varchar(36) DEFAULT "",`order_id` varchar(36) DEFAULT "",`order_seq` integer NOT NULL DEFAULT 1,`price` integer NOT NULL DEFAULT 0,`lots` integer NOT NULL DEFAULT 0,`shares` integer NOT NULL DEFAULT 0,`amount` integer NOT NULL DEFAULT 0,`fee` integer NOT NULL DEFAULT 0,`commission` integer NOT NULL DEFAULT 0,`stamp_duty` integer NOT NULL DEFAULT 0,`transfer_fee` integer NOT NULL DEFAULT 0,`realized_pnl` integer,`trade_time` integer NOT NULL DEFAULT 0,`remark` varchar(500) NOT NULL DEFAULT "",`created_at` integer NOT NULL,PRIMARY KEY (`id`));
+CREATE TABLE `tbl_billadm_stock_trade` (`id` text,`ledger_id` varchar(36) DEFAULT "",`stock_code` varchar(16) NOT NULL,`stock_name` varchar(64) NOT NULL DEFAULT "",`trade_type` varchar(16) NOT NULL DEFAULT "",`round_id` varchar(36) DEFAULT "",`order_id` varchar(36) DEFAULT "",`order_seq` integer NOT NULL DEFAULT 1,`price` integer NOT NULL DEFAULT 0,`lots` integer NOT NULL DEFAULT 0,`shares` integer NOT NULL DEFAULT 0,`amount` integer NOT NULL DEFAULT 0,`fee` integer NOT NULL DEFAULT 0,`commission` integer NOT NULL DEFAULT 0,`stamp_duty` integer NOT NULL DEFAULT 0,`transfer_fee` integer NOT NULL DEFAULT 0,`realized_pnl` integer,`trade_time` integer NOT NULL DEFAULT 0,`remark` varchar(500) NOT NULL DEFAULT "",`created_at` integer NOT NULL,`round_commission_rate` real,`round_min_commission` integer,`round_stamp_duty_rate` real,`round_transfer_fee_rate` real,PRIMARY KEY (`id`));
 CREATE INDEX `idx_stock_trade_ledger_order` ON `tbl_billadm_stock_trade`(`order_id`);
 CREATE INDEX `idx_stock_trade_round` ON `tbl_billadm_stock_trade`(`round_id`);
 CREATE INDEX `idx_stock_trade_ledger_code` ON `tbl_billadm_stock_trade`(`ledger_id`,`stock_code`);
@@ -58,7 +58,7 @@ CREATE TABLE `tbl_billadm_todo_progress` (`id` text,`ledger_id` varchar(36) DEFA
 CREATE INDEX `idx_tbl_billadm_todo_progress_item` ON `tbl_billadm_todo_progress`(`ledger_id`,`item_id`,`created_at`);
 CREATE TABLE `tbl_billadm_schema_migration` (`id` text,`applied_at` integer,PRIMARY KEY (`id`));
 
--- 以下 9 条记录是迁移登记（这些迁移对**空库**都是空操作）。
+-- 以下 10 条记录是迁移登记（这些迁移对**空库**都是空操作）。
 -- 本仓库只复刻建库后的最终状态；迁移的执行逻辑在 `tr-store` 的 `migrations` 模块里
 -- （打开既有工作空间时按登记表逐个应用），新建库与升级后的库结构一致。
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260101_key_event_ledger_date_composite_unique', CAST(strftime('%s','now') AS INTEGER));
@@ -70,3 +70,4 @@ INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260928_todo
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260929_todo_card_sort_progress_done', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260929_todo_levels_snap', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261009_stock_trade_price_milli', CAST(strftime('%s','now') AS INTEGER));
+INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261009_stock_trade_round_fee', CAST(strftime('%s','now') AS INTEGER));

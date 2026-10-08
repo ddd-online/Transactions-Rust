@@ -67,6 +67,62 @@ impl Default for StockFeeSetting {
     }
 }
 
+/// 一轮（**建仓时**）定下来的四项费用参数 —— 本轮之后的加仓 / 减仓 / 清仓都用它，
+/// 不再看账本级的系统配置。
+///
+/// 存在 `tbl_billadm_stock_trade` 的 4 个**可空**列上（`round_commission_rate` /
+/// `round_min_commission` / `round_stamp_duty_rate` / `round_transfer_fee_rate`）：
+/// 四项都为空 = 老数据（升级前写的成交），按系统配置 [`StockFeeSetting`] 处理。
+/// 「这一轮」的判定与 `round_id` 为空的那批成交一致（`tr_domain::stock::current_round_trades`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RoundFee {
+    /// 佣金费率（万2.354 → 0.0002354）
+    #[serde(rename = "commissionRate")]
+    pub commission_rate: f64,
+    /// 最低佣金（**分**/笔）
+    #[serde(rename = "minCommission")]
+    pub min_commission: i64,
+    /// 印花税率（0 = 本轮不收）
+    #[serde(rename = "stampDutyRate")]
+    pub stamp_duty_rate: f64,
+    /// 过户费率（0 = 本轮不收）
+    #[serde(rename = "transferFeeRate")]
+    pub transfer_fee_rate: f64,
+}
+
+/// 与 [`StockFeeSetting::default`] 同值：没填过本轮设置时，"默认值"就是系统配置的默认值。
+impl Default for RoundFee {
+    fn default() -> Self {
+        let setting = StockFeeSetting::default();
+        Self::from(&setting)
+    }
+}
+
+impl From<&StockFeeSetting> for RoundFee {
+    fn from(setting: &StockFeeSetting) -> Self {
+        Self {
+            commission_rate: setting.commission_rate,
+            min_commission: setting.min_commission,
+            stamp_duty_rate: setting.stamp_duty_rate,
+            transfer_fee_rate: setting.transfer_fee_rate,
+        }
+    }
+}
+
+impl RoundFee {
+    /// 折成费用算法要的形态（[`crate::fee`] 只读这四项；`id` / `ledger_id` 留空）。
+    pub fn to_setting(&self) -> StockFeeSetting {
+        StockFeeSetting {
+            commission_rate: self.commission_rate,
+            min_commission: self.min_commission,
+            stamp_duty_rate: self.stamp_duty_rate,
+            transfer_fee_rate: self.transfer_fee_rate,
+            ..StockFeeSetting::default()
+        }
+    }
+}
+
 /// 资金变化记录：现金余额链条的来源，当前现金 = 末条记录余额。
 /// 表 `tbl_billadm_stock_fund_record`。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -181,6 +237,11 @@ pub struct StockTrade {
     /// 成交时间（Unix 秒）
     #[serde(rename = "tradeTime")]
     pub trade_time: i64,
+    /// 这一笔所在的**本轮**费用设置（建仓时定下、本轮内不可改）。
+    ///
+    /// 四项都为 `Some` 才算记录在案；`None` = 老数据（升级前的成交），按账本系统配置处理。
+    #[serde(rename = "roundFee", skip_serializing_if = "Option::is_none")]
+    pub round_fee: Option<RoundFee>,
     #[serde(rename = "remark")]
     pub remark: String,
     #[serde(rename = "createdAt")]
@@ -291,6 +352,51 @@ mod tests {
         assert_eq!(setting.min_commission, 500);
         assert_eq!(setting.stamp_duty_rate, 0.0005);
         assert_eq!(setting.transfer_fee_rate, 0.00001);
+    }
+
+    /// 本轮快照与系统配置同口径：默认值必须一致，互转不丢项。
+    #[test]
+    fn round_fee_mirrors_the_system_setting() {
+        let defaults = RoundFee::default();
+        assert_eq!(defaults, RoundFee::from(&StockFeeSetting::default()));
+        assert_eq!(defaults.commission_rate, 0.0002354);
+        assert_eq!(defaults.min_commission, 500);
+
+        let round = RoundFee {
+            commission_rate: 0.00005,
+            min_commission: 0,
+            stamp_duty_rate: 0.0,
+            transfer_fee_rate: 0.0,
+        };
+        // 折给算法的那份只带四项（id / ledger 留空）
+        let setting = round.to_setting();
+        assert_eq!(setting.commission_rate, 0.00005);
+        assert_eq!(setting.min_commission, 0);
+        assert_eq!(setting.stamp_duty_rate, 0.0);
+        assert_eq!(setting.transfer_fee_rate, 0.0);
+        assert!(setting.id.is_empty() && setting.ledger_id.is_empty());
+        // 往返（to_setting → from）后四项不变
+        assert_eq!(RoundFee::from(&setting), round);
+    }
+
+    /// 没有快照的成交不序列化 `roundFee`（老数据的载荷保持原样）。
+    #[test]
+    fn trade_json_omits_round_fee_when_absent() {
+        let legacy = serde_json::to_value(StockTrade::default()).unwrap();
+        assert!(legacy.get("roundFee").is_none());
+
+        let with_fee = serde_json::to_value(StockTrade {
+            round_fee: Some(RoundFee {
+                commission_rate: 0.00005,
+                min_commission: 0,
+                stamp_duty_rate: 0.0,
+                transfer_fee_rate: 0.0,
+            }),
+            ..StockTrade::default()
+        })
+        .unwrap();
+        assert_eq!(with_fee["roundFee"]["commissionRate"], 0.00005);
+        assert_eq!(with_fee["roundFee"]["minCommission"], 0);
     }
 
     #[test]

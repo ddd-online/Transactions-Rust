@@ -588,6 +588,16 @@
   gap: var(--transactions-space-2xs);
 }
 
+/* 「本轮费率」那一格文案长（佣金 / 最低 / 印花税 / 过户费四项），给它多点宽度与小一号字 */
+.stock-quote__cell--wide {
+  grid-column: span 2;
+  min-width: 0;
+}
+
+.stock-quote__value--small {
+  font-size: var(--transactions-size-text-body-sm);
+}
+
 .stock-quote__label {
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-secondary);
@@ -730,6 +740,42 @@
   display: flex;
   flex-direction: column;
   gap: var(--transactions-space-xs);
+}
+
+/* 本轮费用设置（建仓可改 / 加仓减仓清仓只读） */
+.stock-trade-form__fee {
+  border-top: 1px solid var(--transactions-color-divider);
+  padding-top: var(--transactions-space-sm);
+  margin-bottom: var(--transactions-space-md);
+}
+
+.stock-trade-form__fee-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--transactions-space-sm);
+  margin-bottom: var(--transactions-space-xs);
+}
+
+.stock-trade-form__fee-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--transactions-space-sm) var(--transactions-space-md);
+}
+
+.stock-trade-form__fee-hint {
+  margin: var(--transactions-space-xs) 0 0;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-trade-form__fee-readonly {
+  margin: 0;
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-body-sm);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount);
+  color: var(--transactions-color-text-major);
 }
 
 .stock-summary-row {

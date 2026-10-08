@@ -213,6 +213,10 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
             "trade_time",
             "remark",
             "created_at",
+            "round_commission_rate",
+            "round_min_commission",
+            "round_stamp_duty_rate",
+            "round_transfer_fee_rate",
         ],
     ),
     (

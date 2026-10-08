@@ -6,11 +6,12 @@
 #   2. 库结构升级到位：日记有 ledger_id、复合唯一索引在、旧索引没了、登记行写上了；
 #   3. **老日记正文一字不差**，并归到最早创建的账本；
 #   4. 成交价从**分**升到**厘**（`price × 10`）且**只动价格那一列**（金额/费用/代码一字不变）；
-#   5. 升级前**留了备份**，且备份文件里是升级前的样子；
-#   6. 再启动一次：不重复备份、不重复改（幂等 —— 价格那条靠登记表，不会再乘一次）。
+#   5. 成交表补上「本轮费用设置」的 4 个可空列，**老行全 NULL**（沿用系统配置，费用一分不动）；
+#   6. 升级前**留了备份**，且备份文件里是升级前的样子；
+#   7. 再启动一次：不重复备份、不重复改（幂等 —— 价格那条靠登记表，不会再乘一次）。
 #
-# 两条降级口径（都在应用启动前做完）：① 日记去掉 ledger_id、旧索引回来；② 成交价除回 10（分），
-# 并抹掉对应的登记行。它们合起来就是"上一版格式"的样子。
+# 两条降级口径（都在应用启动前做完）：① 日记去掉 ledger_id、旧索引回来；② 成交价除回 10（分）、
+# 本轮费用设置那 4 列删掉，并抹掉对应的登记行。它们合起来就是"上一版格式"的样子。
 #
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/migrate-workspace.ps1 [-Exe <exe>] [-OutDir <dir>]
@@ -69,7 +70,8 @@ if (Test-Path $ws) { Remove-Item $ws -Recurse -Force }
 Copy-Item $SourceWorkspace $ws -Recurse
 $db = Join-Path $ws 'transactions.db'
 
-# ---- 2. 把它降级成旧格式：老索引回来、ledger_id 去掉、成交价除回 10（分）、登记行删掉 ----
+# ---- 2. 把它降级成旧格式：老索引回来、ledger_id 去掉、成交价除回 10（分）、
+#        本轮费用设置那 4 列删掉、登记行删掉 ----
 # 用系统 sqlite3（本机在 PATH；AGENTS 里记的 Miniconda 那份）。降级必须在**应用启动前**做完。
 $downgrade = @'
 PRAGMA foreign_keys = OFF;
@@ -80,6 +82,11 @@ ALTER TABLE tbl_billadm_diary_entry DROP COLUMN ledger_id;
 DELETE FROM tbl_billadm_schema_migration WHERE id = '20260920_diary_ledger_scope';
 UPDATE tbl_billadm_stock_trade SET price = price / 10;
 DELETE FROM tbl_billadm_schema_migration WHERE id = '20261009_stock_trade_price_milli';
+ALTER TABLE tbl_billadm_stock_trade DROP COLUMN round_commission_rate;
+ALTER TABLE tbl_billadm_stock_trade DROP COLUMN round_min_commission;
+ALTER TABLE tbl_billadm_stock_trade DROP COLUMN round_stamp_duty_rate;
+ALTER TABLE tbl_billadm_stock_trade DROP COLUMN round_transfer_fee_rate;
+DELETE FROM tbl_billadm_schema_migration WHERE id = '20261009_stock_trade_round_fee';
 COMMIT;
 '@
 $sqlFile = Join-Path $OutDir 'downgrade.sql'
@@ -182,6 +189,21 @@ try {
             Assert-True ($match[0].stock_code -eq $row.stock_code) "代码一字不变（$($match[0].stock_code)）"
         }
     }
+
+    # ---- 6b. 本轮费用设置：成交表补 4 个可空列，老行全 NULL（沿用系统配置），费用一分不动 ----
+    $roundFeeRegistered = & sqlite3 $db "SELECT id FROM tbl_billadm_schema_migration WHERE id='20261009_stock_trade_round_fee';"
+    Assert-True ($roundFeeRegistered -eq '20261009_stock_trade_round_fee') '本轮费用设置迁移写了登记行'
+    $tradeColumns = @(& sqlite3 $db "SELECT name FROM pragma_table_info('tbl_billadm_stock_trade');")
+    foreach ($column in @('round_commission_rate', 'round_min_commission', 'round_stamp_duty_rate',
+            'round_transfer_fee_rate')) {
+        Assert-True ($tradeColumns -contains $column) "升级后成交表有 $column 列"
+    }
+    $nullCounts = & sqlite3 $db "SELECT COUNT(*) FROM tbl_billadm_stock_trade WHERE round_commission_rate IS NOT NULL OR round_min_commission IS NOT NULL OR round_stamp_duty_rate IS NOT NULL OR round_transfer_fee_rate IS NOT NULL;"
+    Assert-True ([int64]$nullCounts -eq 0) "老成交行 4 列全 NULL（不改写历史：沿用系统配置，实际有值的行 $nullCounts）"
+    $feeSumAfter = & sqlite3 $db "SELECT SUM(fee) FROM tbl_billadm_stock_trade;"
+    $feeSumBefore = ($oldTrades | Measure-Object -Property fee -Sum).Sum
+    Assert-True ([int64]$feeSumAfter -eq [int64]$feeSumBefore) `
+        "费用合计一分不动（升级前 $feeSumBefore，升级后 $feeSumAfter）"
 
     # ---- 7. 升级前留了备份（且**只留这一份**），备份里是升级前的样子 ----
     $backups = @(Get-ChildItem $ws -Filter 'transactions.db.pre-migration-*.bak')

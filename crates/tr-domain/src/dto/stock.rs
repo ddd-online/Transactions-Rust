@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::consts;
-use crate::models::{StockFundRecord, StockPosition, StockTrade};
+use crate::models::{RoundFee, StockFundRecord, StockPosition, StockTrade};
 
 /// 股票账户总览。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -134,6 +134,9 @@ pub struct StockPositionDto {
     pub realized_pnl: i64,
     /// 本轮复盘
     pub review: String,
+    /// **本轮**的费用设置（建仓时定下、本轮内不可改）；省略 = 沿用账本系统配置（老数据 / 空仓）
+    #[serde(rename = "roundFee", skip_serializing_if = "Option::is_none")]
+    pub round_fee: Option<RoundFee>,
     /// 最新价（**厘**/股），行情获取失败时省略
     #[serde(rename = "latestPrice", skip_serializing_if = "Option::is_none")]
     pub latest_price: Option<i64>,
@@ -157,6 +160,7 @@ impl From<&StockPosition> for StockPositionDto {
             round_cash_flow: 0,
             realized_pnl: position.realized_pnl,
             review: position.review.clone(),
+            round_fee: None,
             latest_price: None,
             prev_close: None,
             quote_time: None,
@@ -223,6 +227,9 @@ pub struct StockTradeDto {
     /// 非卖出为 null（该字段不省略）
     #[serde(rename = "realizedPnl")]
     pub realized_pnl: Option<i64>,
+    /// 这一笔所用的**本轮**费用设置；省略 = 老数据，按账本系统配置
+    #[serde(rename = "roundFee", skip_serializing_if = "Option::is_none")]
+    pub round_fee: Option<RoundFee>,
     #[serde(rename = "tradeTime")]
     pub trade_time: i64,
     pub remark: String,
@@ -248,6 +255,7 @@ impl From<&StockTrade> for StockTradeDto {
             stamp_duty: trade.stamp_duty,
             transfer_fee: trade.transfer_fee,
             realized_pnl: trade.realized_pnl,
+            round_fee: trade.round_fee.clone(),
             trade_time: trade.trade_time,
             remark: trade.remark.clone(),
         }

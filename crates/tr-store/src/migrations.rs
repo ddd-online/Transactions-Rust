@@ -90,6 +90,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20261009_stock_trade_price_milli",
         apply: stock_trade_price_milli,
     },
+    Migration {
+        id: "20261009_stock_trade_round_fee",
+        apply: stock_trade_round_fee,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -440,6 +444,40 @@ fn stock_trade_price_milli(conn: &Connection) -> MigrateResult {
     }
     conn.execute_batch("UPDATE tbl_billadm_stock_trade SET price = price * 10;")
         .map_err(stringify)
+}
+
+/// `20261009_stock_trade_round_fee` —— 成交表补 4 个**可空**列：一轮（建仓时）定下来的费用设置
+/// （佣金费率 / 最低佣金 / 印花税率 / 过户费率）。
+///
+/// 起因：费用原来只有账本级一套系统配置，而真实账户对场内基金（ETF，如东方财富"超级ETF"
+/// 万0.5 免最低）与股票是两套费率 —— 一轮之内混用会把费用算错。现在**建仓时把 4 项快照写进
+/// 这一轮的每一笔成交行**，本轮之后的加仓 / 减仓 / 清仓与改成交一律用快照。
+///
+/// 4 列都可空**且没有默认值**：老数据（升级前写的成交）保持 NULL，语义是"没记录过本轮设置"
+/// ⇒ 服务层按账本系统配置处理，与升级前的算法完全一致；历史费用一分不动（不回溯、不回填）。
+///
+/// ⚠ 列定义的文本必须与 `fixtures/schema/fresh.sql` 里成交表那 4 列一致：
+/// `ADD COLUMN` 追加到列尾，所以基线里它们也写在 `created_at` 之后、`PRIMARY KEY` 之前。
+/// 幂等：逐列先查 `PRAGMA table_info`（结构已在就跳过）。
+fn stock_trade_round_fee(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_stock_trade").map_err(stringify)? {
+        return Err("缺少数据表 tbl_billadm_stock_trade".to_string());
+    }
+    for (column, ty) in [
+        ("round_commission_rate", "real"),
+        ("round_min_commission", "integer"),
+        ("round_stamp_duty_rate", "real"),
+        ("round_transfer_fee_rate", "real"),
+    ] {
+        if column_exists(conn, "tbl_billadm_stock_trade", column).map_err(stringify)? {
+            continue;
+        }
+        conn.execute_batch(&format!(
+            "ALTER TABLE tbl_billadm_stock_trade ADD COLUMN {column} {ty}"
+        ))
+        .map_err(stringify)?;
+    }
+    Ok(())
 }
 
 // ==================================================================== 小工具
@@ -1066,6 +1104,108 @@ mod tests {
             )
             .unwrap();
         assert_eq!(price, 100_000);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `20261009_stock_trade_round_fee`：给成交表补 4 个可空列，**不动任何值**，
+    /// 老行保持 NULL（= 没记录过本轮设置 ⇒ 服务层按系统配置处理）。
+    #[test]
+    fn stock_trade_round_fee_migration_adds_nullable_columns() {
+        let dir = temp_dir("round-fee");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        for (id, code, price, amount, fee) in [
+            ("t1", "510300", 4_389_i64, 131_670_i64, 500_i64),
+            ("t2", "600519", 100_000, 1_000_000, 530),
+        ] {
+            conn.execute(
+                "INSERT INTO tbl_billadm_stock_trade \
+                 (id, ledger_id, stock_code, stock_name, trade_type, round_id, order_id, order_seq, \
+                  price, lots, shares, amount, fee, commission, stamp_duty, transfer_fee, \
+                  trade_time, remark, created_at) \
+                 VALUES (?1, 'l1', ?2, '', 'open', '', ?1, 1, ?3, 1, 100, ?4, ?5, ?5, 0, 0, 1, '', 1)",
+                params![id, code, price, amount, fee],
+            )
+            .unwrap();
+        }
+        // 升级前：这 4 列还不存在（一条条删，模拟更早格式）
+        for column in [
+            "round_commission_rate",
+            "round_min_commission",
+            "round_stamp_duty_rate",
+            "round_transfer_fee_rate",
+        ] {
+            conn.execute_batch(&format!(
+                "ALTER TABLE tbl_billadm_stock_trade DROP COLUMN {column};"
+            ))
+            .unwrap();
+        }
+        conn.execute_batch(
+            "DELETE FROM tbl_billadm_schema_migration WHERE id = '20261009_stock_trade_round_fee';",
+        )
+        .unwrap();
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(applied, vec!["20261009_stock_trade_round_fee".to_string()]);
+
+        for column in [
+            "round_commission_rate",
+            "round_min_commission",
+            "round_stamp_duty_rate",
+            "round_transfer_fee_rate",
+        ] {
+            assert!(
+                column_exists(&conn, "tbl_billadm_stock_trade", column).unwrap(),
+                "升级后应有 {column} 列"
+            );
+        }
+        // 老行 4 列全 NULL（没有任何回填），其余列一字不变
+        type RoundFeeRow = (String, i64, i64, i64, Option<f64>, Option<i64>);
+        let after: Vec<RoundFeeRow> = {
+            let mut statement = conn
+                .prepare(
+                    "SELECT id, price, amount, fee, round_commission_rate, round_min_commission \
+                     FROM tbl_billadm_stock_trade ORDER BY id",
+                )
+                .unwrap();
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(
+            after,
+            vec![
+                ("t1".to_string(), 4_389, 131_670, 500, None, None),
+                ("t2".to_string(), 100_000, 1_000_000, 530, None, None),
+            ],
+            "只加列：价格 / 成交额 / 费用原样，4 列留空（沿用系统配置）"
+        );
+        crate::schema::validate_current(&conn).unwrap();
+
+        // 幂等：登记行已在 ⇒ 没有待应用迁移，列也不会被再加一遍
+        assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
+        let columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tbl_billadm_stock_trade') \
+                 WHERE name = 'round_commission_rate'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 1);
 
         std::fs::remove_dir_all(&dir).ok();
     }

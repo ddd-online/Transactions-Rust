@@ -63,7 +63,7 @@ use tr_domain::dto::{
     StockTradeImpactDto, StockTradeRoundDto, StockTradeTagSettingDto,
 };
 use tr_domain::fee::{compute_order_fee, is_valid_stock_code, Instrument};
-use tr_domain::models::StockFeeSetting;
+use tr_domain::models::{RoundFee, StockFeeSetting};
 use tr_domain::money::{cents_to_yuan, milli_to_price_yuan, price_yuan_to_milli, yuan_to_cents};
 use tr_domain::stock::floating_pnl_rate;
 
@@ -205,6 +205,90 @@ fn estimate_fee(fills: &[i64], is_buy: bool, code: &str, fee: &StockFeeSetting) 
         stamp_duty: breakdown.stamp_duty,
         transfer_fee: breakdown.transfer_fee,
     }
+}
+
+/// 解析建仓弹窗里的「本轮费用设置」四项（单位与设置页一致）：
+/// 佣金费率是**万分之**、最低佣金是**元**、印花税与过户费是**%**。
+///
+/// 返回（佣金费率小数、最低佣金**分**、印花税小数、过户费小数）。校验文案与设置页逐字相同。
+fn parse_round_fee(
+    commission: &str,
+    min_commission: &str,
+    stamp_duty: &str,
+    transfer_fee: &str,
+) -> Result<(f64, i64, f64, f64), String> {
+    let Some(commission_rate) = parse_rate(commission) else {
+        return Err("请输入大于 0 的佣金费率".to_string());
+    };
+    if commission_rate <= 0.0 {
+        return Err("请输入大于 0 的佣金费率".to_string());
+    }
+    let Some(min_yuan) = parse_rate(min_commission) else {
+        return Err("请输入不小于 0 的最低佣金".to_string());
+    };
+    if min_yuan < 0.0 {
+        return Err("请输入不小于 0 的最低佣金".to_string());
+    }
+    // 元 → 分必须走 `tr_domain::money`
+    let min_commission_cents =
+        yuan_to_cents(min_commission).map_err(|_| "请输入不小于 0 的最低佣金".to_string())?;
+    let Some(stamp_duty_rate) = parse_rate(stamp_duty) else {
+        return Err("印花税与过户费需不小于 0".to_string());
+    };
+    let Some(transfer_fee_rate) = parse_rate(transfer_fee) else {
+        return Err("印花税与过户费需不小于 0".to_string());
+    };
+    if stamp_duty_rate < 0.0 || transfer_fee_rate < 0.0 {
+        return Err("印花税与过户费需不小于 0".to_string());
+    }
+    Ok((
+        commission_rate / 10_000.0,
+        min_commission_cents,
+        stamp_duty_rate / 100.0,
+        transfer_fee_rate / 100.0,
+    ))
+}
+
+/// 建仓弹窗里的本轮费用设置（给"预估费用"用）：四个框都读得出来才有值，
+/// 读不出来（正在输入/为空）返回 `None` ⇒ 费用显示 `—`。
+fn round_fee_preview(
+    commission: &str,
+    min_commission: &str,
+    stamp_duty: &str,
+    transfer_fee: &str,
+) -> Option<StockFeeSetting> {
+    parse_round_fee(commission, min_commission, stamp_duty, transfer_fee)
+        .ok()
+        .map(
+            |(commission_rate, min_commission, stamp_duty_rate, transfer_fee_rate)| {
+                StockFeeSetting {
+                    commission_rate,
+                    min_commission,
+                    stamp_duty_rate,
+                    transfer_fee_rate,
+                    ..StockFeeSetting::default()
+                }
+            },
+        )
+}
+
+/// 某个代码**本轮正在用的**费用设置（建仓时定下的那份；没有记录 = `None` ⇒ 沿用系统配置）。
+///
+/// 读的是模块级持仓快照（与"可用手数"同一处），因此弹窗里不必再发一次查询。
+fn position_round_fee_raw(code: &str) -> Option<RoundFee> {
+    POSITION_SNAPSHOT.with(|slot| {
+        slot.borrow().as_ref().and_then(|positions| {
+            positions
+                .iter()
+                .find(|item| item.stock_code == code)
+                .and_then(|item| item.round_fee.clone())
+        })
+    })
+}
+
+/// 同 [`position_round_fee_raw`]，折成费用算法要的形态（给"预估费用"用）。
+fn position_round_fee(code: &str) -> Option<StockFeeSetting> {
+    position_round_fee_raw(code).map(|fee| fee.to_setting())
 }
 
 /// 影响预演弹窗里要展示的信息。
@@ -806,6 +890,7 @@ fn amount_modal(
                 <p class="modal-form-label">"发生日期"</p>
                 <DatePicker value=date />
             </div>
+
         </Modal>
     }
     .into_any()
@@ -907,6 +992,13 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     let trade_mutating = RwSignal::new(false);
     // 名称是"按代码自动查来的"还是用户手打的：只有换过代码才允许被覆盖（见查询回调）
     let trade_queried_code = RwSignal::new(String::new());
+    // **本轮**费用设置（只有建仓能改）：4 个输入框的信号建在**页面 owner** 下
+    // （不在 `Effect` 体内创建 —— 那会在每次重跑时把信号 dispose 掉，见 AGENTS.md），
+    // 打开建仓弹窗时用系统配置回填（`open_trade` 里）。
+    let round_fee_commission = RwSignal::new(String::new());
+    let round_fee_min = RwSignal::new(String::new());
+    let round_fee_stamp = RwSignal::new(String::new());
+    let round_fee_transfer = RwSignal::new(String::new());
 
     // 编辑 / 删除
     let edit_target = RwSignal::new(Option::<StockTradeDto>::None);
@@ -1066,6 +1158,15 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         if next_type == "open" || trade_tag.get_untracked().is_empty() {
             trade_tag.set(default_tag.get_untracked());
         }
+        // 「本轮费用设置」也一样：**建仓**才回填（用系统配置），其它委托就着本轮那份（只读）。
+        // 不回填就等于沿用上次的编辑结果 —— 那会让"建仓时定费率"变成"上次改过什么就是什么"。
+        if next_type == "open" {
+            let setting = fee_settings.get_untracked().unwrap_or_default();
+            round_fee_commission.set(format::scaled_text(setting.commission_rate, 10_000.0, 4));
+            round_fee_min.set(cents_to_yuan(setting.min_commission));
+            round_fee_stamp.set(format::scaled_text(setting.stamp_duty_rate, 100.0, 3));
+            round_fee_transfer.set(format::scaled_text(setting.transfer_fee_rate, 100.0, 3));
+        }
         trade_open.set(true);
     };
 
@@ -1108,6 +1209,30 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         // 四种委托都带上当前选中的标签：非清仓时它只用于"带到这一轮的下一次委托"
         // （服务层只把它写进轮次，见 `close_round`），清仓时它落成轮次标签。
         let tag = trade_tag.get_untracked();
+        // 只有建仓带「本轮费用设置」：本轮已开始时后端会拒绝（费率在建仓时定）
+        let round_fee = if submit_type == "open" {
+            match parse_round_fee(
+                &round_fee_commission.get_untracked(),
+                &round_fee_min.get_untracked(),
+                &round_fee_stamp.get_untracked(),
+                &round_fee_transfer.get_untracked(),
+            ) {
+                Ok((commission_rate, min_commission, stamp_duty_rate, transfer_fee_rate)) => {
+                    Some(api::stock::RoundFeeRequest {
+                        commission_rate,
+                        min_commission: min_commission as f64,
+                        stamp_duty_rate,
+                        transfer_fee_rate,
+                    })
+                }
+                Err(message) => {
+                    Notifier::global().error(message, None);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let trade_time = crate::time::ymd_to_seconds(&trade_date.get_untracked())
             .unwrap_or_else(crate::time::now_seconds);
         trade_mutating.set(true);
@@ -1125,6 +1250,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                 trade_time,
                 &tag,
                 inputs,
+                round_fee,
             )
             .await
             {
@@ -1538,6 +1664,12 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                                 {format!("{} {}", format::signed_yuan(float_pnl.unwrap_or(0)), format::optional_signed_percent(float_rate))}
                                             </span>
                                         </div>
+                                        <div class="stock-quote__cell stock-quote__cell--wide">
+                                            <span class="stock-quote__label">"本轮费率"</span>
+                                            <span class="stock-quote__value stock-quote__value--small">
+                                                {format::round_fee_text(position.round_fee.as_ref())}
+                                            </span>
+                                        </div>
                                     </div>
                                 }
                                     .into_any()
@@ -1696,6 +1828,20 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                 trade_tag,
                 tags,
                 fee_settings,
+                round_fee_commission,
+                round_fee_min,
+                round_fee_stamp,
+                round_fee_transfer,
+                UnsyncCallback::new(move |()| {
+                    // 「恢复系统配置」：把 4 个框回到当前系统配置（默认值）
+                    let setting = fee_settings.get_untracked().unwrap_or_default();
+                    round_fee_commission
+                        .set(format::scaled_text(setting.commission_rate, 10_000.0, 4));
+                    round_fee_min.set(cents_to_yuan(setting.min_commission));
+                    round_fee_stamp.set(format::scaled_text(setting.stamp_duty_rate, 100.0, 3));
+                    round_fee_transfer
+                        .set(format::scaled_text(setting.transfer_fee_rate, 100.0, 3));
+                }),
                 trade_mutating,
                 UnsyncCallback::new(move |code: String| {
                     let ledger_id = stores.current_ledger_id.get_untracked();
@@ -2073,6 +2219,11 @@ fn trade_modal(
     tag: RwSignal<String>,
     tags: Signal<Vec<String>>,
     fee_settings: RwSignal<Option<StockFeeSetting>>,
+    round_fee_commission: RwSignal<String>,
+    round_fee_min: RwSignal<String>,
+    round_fee_stamp: RwSignal<String>,
+    round_fee_transfer: RwSignal<String>,
+    on_restore_fee: UnsyncCallback<()>,
     mutating: RwSignal<bool>,
     on_code_blur: UnsyncCallback<String>,
     on_ok: UnsyncCallback<()>,
@@ -2081,7 +2232,8 @@ fn trade_modal(
         <Modal
             open=Signal::derive(move || open.get())
             title=move || { let label = format::trade_type_label(&trade_type.get()); format!("委托{label}") }
-            size=ModalSize::Medium
+            // 多字段表单（股票 / 成交明细 / 本轮费用设置 / 时间与标签）⇒ Large，见 DESIGN.md
+            size=ModalSize::Large
             ok_text=move || format::trade_type_label(&trade_type.get())
             cancel_text="取消"
             ok_loading=Signal::derive(move || mutating.get())
@@ -2221,9 +2373,20 @@ fn trade_modal(
                         valid.iter().map(|fill| fill.amount_cents()).collect();
                     let total_amount: i64 = fill_amounts.iter().sum();
                     let is_buy = format::is_buy(&trade_type.get());
-                    let estimate = match fee_settings.get() {
-                        Some(fee) if total_amount > 0 => {
-                            estimate_fee(&fill_amounts, is_buy, &code.get(), &fee)
+                    // 本轮**实际生效**的费用设置：建仓 = 4 个输入框（即时），其余 = 本轮建仓时那份
+                    let effective_fee = if trade_type.get() == "open" {
+                        round_fee_preview(
+                            &round_fee_commission.get(),
+                            &round_fee_min.get(),
+                            &round_fee_stamp.get(),
+                            &round_fee_transfer.get(),
+                        )
+                    } else {
+                        position_round_fee(&code.get()).or_else(|| fee_settings.get())
+                    };
+                    let estimate = match effective_fee {
+                        Some(ref fee) if total_amount > 0 => {
+                            estimate_fee(&fill_amounts, is_buy, &code.get(), fee)
                         }
                         _ => FeeEstimate::default(),
                     };
@@ -2233,7 +2396,7 @@ fn trade_modal(
                     } else {
                         total_amount.saturating_sub(fee_total)
                     };
-                    let fee_text = if total_amount <= 0 || fee_settings.get().is_none() {
+                    let fee_text = if total_amount <= 0 || effective_fee.is_none() {
                         "—".to_string()
                     } else if is_buy {
                         format!(
@@ -2311,6 +2474,84 @@ fn trade_modal(
                     />
                 </div>
             </div>
+            // 本轮费用设置放在**最后**：日期选择器的面板向下展开、不翻转（见 `date_picker.rs` 与
+            // AGENTS.md 的「几何」那条），放在「委托时间」上面会把触发器压到窗口底部、
+            // 面板伸出窗口外点不到（实测 150% 缩放下第 24 天那格正好在窗口外）。
+            <div class="stock-trade-form__fee">
+                <div class="stock-trade-form__fee-head">
+                    <span class="modal-form-label">"本轮费用设置"</span>
+                    <Show when=move || trade_type.get() == "open">
+                        <button
+                            type="button"
+                            class="ui-btn ui-btn--link ui-btn--sm"
+                            on:click=move |_| on_restore_fee.run(())
+                        >
+                            "恢复系统配置"
+                        </button>
+                    </Show>
+                </div>
+                {move || {
+                    let is_open = trade_type.get() == "open";
+                    let code_text = code.get();
+                    // 场内基金免印花税 / 过户费（品种规则那一份在 tr_domain::fee，这里只做提示）
+                    let is_fund = Instrument::of(&code_text).map(|item| item.is_fund()).unwrap_or(false);
+                    if is_open {
+                        view! {
+                            <div class="stock-trade-form__fee-grid">
+                                <div class="modal-form-item">
+                                    <p class="modal-form-label">"佣金费率（万分之）"</p>
+                                    <Input value=round_fee_commission placeholder="如 0.5" />
+                                </div>
+                                <div class="modal-form-item">
+                                    <p class="modal-form-label">"最低佣金（元/委托）"</p>
+                                    <Input value=round_fee_min placeholder="如 5" />
+                                </div>
+                                <div class="modal-form-item">
+                                    <p class="modal-form-label">"印花税（%）"</p>
+                                    <Input
+                                        value=round_fee_stamp
+                                        placeholder="如 0.05"
+                                        disabled=Signal::derive(move || is_fund)
+                                    />
+                                </div>
+                                <div class="modal-form-item">
+                                    <p class="modal-form-label">"过户费（%）"</p>
+                                    <Input
+                                        value=round_fee_transfer
+                                        placeholder="如 0.001"
+                                        disabled=Signal::derive(move || is_fund)
+                                    />
+                                </div>
+                            </div>
+                            <p class="stock-trade-form__fee-hint">
+                                {if is_fund {
+                                    "场内基金只有佣金（免印花税 / 过户费）；填 0 表示本轮不收"
+                                } else {
+                                    "默认是系统配置；填 0 表示本轮不收"
+                                }}
+                                "。建仓这一刻定下来，本轮的加仓 / 减仓 / 清仓都按它算。"
+                            </p>
+                        }
+                            .into_any()
+                    } else {
+                        let fee = position_round_fee_raw(&code_text);
+                        view! {
+                            <p class="stock-trade-form__fee-readonly">
+                                {format::round_fee_text(fee.as_ref())}
+                            </p>
+                            <p class="stock-trade-form__fee-hint">
+                                {if fee.is_some() {
+                                    "本轮建仓时确定，不可更改"
+                                } else {
+                                    "本轮没有记录（老数据）：按系统配置算"
+                                }}
+                            </p>
+                        }
+                            .into_any()
+                    }
+                }}
+            </div>
+
         </Modal>
     }
     .into_any()
@@ -4513,6 +4754,10 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                             </div>
                         </FormItem>
                     </Form>
+
+                    <p class="page-hint">
+                        "这些是默认值：建仓时按它预填（可在建仓弹窗里改），建仓那一刻起本轮的费率就固定了 —— 改这里不影响进行中的轮次，只对之后新建仓的轮次生效。"
+                    </p>
 
                     <Show when=move || no_ledger()>
                         <p class="page-hint">"请先选择工作空间"</p>

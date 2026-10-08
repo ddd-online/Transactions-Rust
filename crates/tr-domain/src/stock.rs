@@ -9,7 +9,7 @@
 //! 这里只放"手 → 股 → 金额"与"当前轮次的切法"这类能在 native 上断言的算法，让调用点都走同一份。
 
 use crate::consts;
-use crate::models::StockTrade;
+use crate::models::{RoundFee, StockTrade};
 
 /// 每手股数（A 股口径）。
 pub const SHARES_PER_LOT: i64 = 100;
@@ -122,6 +122,18 @@ pub fn round_flow(trades_asc: &[StockTrade]) -> RoundFlow {
     flow
 }
 
+/// 当前轮次（最近一次清仓之后）**建仓时定下的费用设置**；没记录（老数据）返回 `None`
+/// ⇒ 调用方按账本系统配置处理。
+///
+/// 「本轮的第一笔」由 [`current_round_trades`] 的切分规则给出（清仓那笔本身不属于之后的部分），
+/// 所以清仓之后这里不会再把上一轮的快照带出来。同一轮内每笔成交都写着同一份快照
+/// （建仓时写入，加仓 / 减仓 / 清仓原样带上），因此取首笔即可。
+pub fn current_round_fee(trades_asc: &[StockTrade]) -> Option<RoundFee> {
+    current_round_trades(trades_asc)
+        .first()
+        .and_then(|trade| trade.round_fee.clone())
+}
+
 /// 浮动盈亏率（%）= 浮动盈亏 ÷ **持仓成本** × 100。
 ///
 /// 持仓成本 = 本轮净投入 = `−`[`RoundFlow::cash_flow`]：买入的钱出去、卖出的钱回来，
@@ -193,6 +205,55 @@ mod tests {
     #[test]
     fn an_empty_round_has_a_zero_flow() {
         assert_eq!(round_flow(&[]), RoundFlow::default());
+    }
+
+    /// 本轮的费用设置 = 本轮第一笔（建仓单）上的快照。
+    #[test]
+    fn the_round_fee_comes_from_the_opening_trade() {
+        let snapshot = RoundFee {
+            commission_rate: 0.00005,
+            min_commission: 0,
+            stamp_duty_rate: 0.0,
+            transfer_fee_rate: 0.0,
+        };
+        let opening = StockTrade {
+            round_fee: Some(snapshot.clone()),
+            ..trade(consts::STOCK_TRADE_OPEN, 100)
+        };
+        // 加仓那一笔也写着同一份（服务层写入时原样带上），取首笔即可
+        let adding = StockTrade {
+            round_fee: Some(snapshot.clone()),
+            ..trade(consts::STOCK_TRADE_ADD, 100)
+        };
+        assert_eq!(
+            current_round_fee(&[opening.clone(), adding]),
+            Some(snapshot.clone())
+        );
+        // 没有记录（老数据）→ None，调用方按系统配置处理
+        assert_eq!(
+            current_round_fee(&[trade(consts::STOCK_TRADE_OPEN, 100)]),
+            None
+        );
+        assert_eq!(current_round_fee(&[]), None);
+    }
+
+    /// 清仓之后，上一轮的快照不能再当"本轮"用。
+    #[test]
+    fn a_closed_round_does_not_leak_its_fee() {
+        let snapshot = RoundFee {
+            commission_rate: 0.0003,
+            min_commission: 500,
+            stamp_duty_rate: 0.0005,
+            transfer_fee_rate: 0.00001,
+        };
+        let closed = vec![
+            StockTrade {
+                round_fee: Some(snapshot),
+                ..trade(consts::STOCK_TRADE_OPEN, 100)
+            },
+            trade(consts::STOCK_TRADE_CLOSE, 100),
+        ];
+        assert_eq!(current_round_fee(&closed), None, "清仓后本轮为空");
     }
 
     #[test]

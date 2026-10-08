@@ -5,6 +5,7 @@
 //! |---|---|
 //! | `stock_fee_settings_get` | `{ ledger_id }` |
 //! | `stock_fee_settings_put` | `{ ledger_id, commission_rate, min_commission, stamp_duty_rate, transfer_fee_rate }` |
+//! | `stock_trade_create` | `{ ledger_id, stock_code, stock_name, trade_type, trade_time, tag, fills, round_fee? }` |
 //! | `stock_tag_settings_get` | `{ ledger_id }` |
 //! | `stock_tag_settings_put` | `{ ledger_id, tags }`（同时接受 `ledgerId`） |
 //! | `stock_reset` | `{ ledger_id }` |
@@ -44,6 +45,9 @@ use tr_domain::wire::{
 
 /// 一笔委托内的一笔成交明细（价格单位：**元**，后端负责 ×100）。
 pub use tr_domain::wire::TradeFillRequest;
+
+/// **建仓**时指定本轮费用设置的请求体（`min_commission` 是**分**）。
+pub use tr_domain::wire::RoundFeeRequest;
 
 use crate::ipc::{self, IpcError};
 
@@ -254,6 +258,8 @@ pub async fn trades(ledger_id: &str, stock_code: &str) -> Result<Vec<StockTradeD
 }
 
 /// 记录一笔委托（可含多笔成交明细），返回成交明细数组。
+///
+/// `round_fee` 只在**建仓**时给：它就是本轮的费用设置（`None` = 用账本系统配置）。
 pub async fn trade_create(
     ledger_id: &str,
     stock_code: &str,
@@ -262,6 +268,7 @@ pub async fn trade_create(
     trade_time: i64,
     tag: &str,
     fills: Vec<TradeFillRequest>,
+    round_fee: Option<RoundFeeRequest>,
 ) -> Result<Vec<StockTradeDto>, IpcError> {
     ipc::call(
         commands::STOCK_TRADE_CREATE,
@@ -278,6 +285,7 @@ pub async fn trade_create(
             // 旧调用的单笔价格/手数：发 `fills` 时后端不看它们
             price: 0.0,
             lots: 0.0,
+            round_fee,
         },
     )
     .await

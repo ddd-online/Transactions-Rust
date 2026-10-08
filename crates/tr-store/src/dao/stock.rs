@@ -19,8 +19,8 @@ use rusqlite::{params, params_from_iter, Connection};
 
 use tr_domain::consts;
 use tr_domain::models::{
-    StockAccount, StockFeeSetting, StockFundRecord, StockOperation, StockPosition, StockTrade,
-    StockTradeHistory, StockTradeRound, StockTradeTagSetting,
+    RoundFee, StockAccount, StockFeeSetting, StockFundRecord, StockOperation, StockPosition,
+    StockTrade, StockTradeHistory, StockTradeRound, StockTradeTagSetting,
 };
 
 pub struct StockDao;
@@ -36,7 +36,8 @@ const POSITION_COLUMNS: &str = "id, ledger_id, stock_code, stock_name, quantity,
 const TRADE_COLUMNS: &str =
     "id, ledger_id, stock_code, stock_name, trade_type, round_id, order_id, \
      order_seq, price, lots, shares, amount, fee, commission, stamp_duty, transfer_fee, \
-     realized_pnl, trade_time, remark, created_at";
+     realized_pnl, trade_time, remark, created_at, \
+     round_commission_rate, round_min_commission, round_stamp_duty_rate, round_transfer_fee_rate";
 const HISTORY_COLUMNS: &str = "id, ledger_id, stock_code, stock_name, created_at, updated_at";
 const ROUND_COLUMNS: &str =
     "id, ledger_id, stock_code, history_id, round_no, opened_at, closed_at, \
@@ -514,13 +515,25 @@ impl StockDao {
     pub fn create_trade(conn: &Connection, trade: &StockTrade) -> rusqlite::Result<()> {
         // 只 INSERT 非零值字段：零值列退回 SQL 默认值，
         // 非空 `remark` 会照写；空备注写 '' 与列默认值等价。
+        // 本轮费用快照（`round_*`）是可空列：没有快照就写 NULL（老数据/未记录的口径）。
+        let (commission_rate, min_commission, stamp_duty_rate, transfer_fee_rate) =
+            match &trade.round_fee {
+                Some(fee) => (
+                    Some(fee.commission_rate),
+                    Some(fee.min_commission),
+                    Some(fee.stamp_duty_rate),
+                    Some(fee.transfer_fee_rate),
+                ),
+                None => (None, None, None, None),
+            };
         conn.execute(
             "INSERT INTO tbl_billadm_stock_trade \
              (id, ledger_id, stock_code, stock_name, trade_type, round_id, order_id, order_seq, \
               price, lots, shares, amount, fee, commission, stamp_duty, transfer_fee, realized_pnl, \
-              trade_time, remark, created_at) \
+              trade_time, remark, created_at, \
+              round_commission_rate, round_min_commission, round_stamp_duty_rate, round_transfer_fee_rate) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
-              ?18, ?19, ?20)",
+              ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             params![
                 trade.id,
                 trade.ledger_id,
@@ -542,6 +555,10 @@ impl StockDao {
                 trade.trade_time,
                 trade.remark,
                 crate::util::now_unix(),
+                commission_rate,
+                min_commission,
+                stamp_duty_rate,
+                transfer_fee_rate,
             ],
         )?;
         Ok(())
@@ -917,6 +934,28 @@ impl StockDao {
         Ok(trades)
     }
 
+    /// 某股尚未挂接轮次的**第一笔**成交（= 本轮建仓单）；没有未挂接成交时返回 `None`。
+    ///
+    /// 排序口径与资金链一致：**(成交时间 → 录入时间 → 委托内序号 → ID)** —— 倒填的委托
+    /// 排在它时间该在的位置上（`created_at` 是同一秒内的次序，`id` 兜底定序）。
+    /// 本轮的费用设置就从这一行读（见 `RoundFee`）。
+    pub fn first_unattached_trade(
+        conn: &Connection,
+        ledger_id: &str,
+        stock_code: &str,
+    ) -> rusqlite::Result<Option<StockTrade>> {
+        let mut statement = conn.prepare(&format!(
+            "SELECT {TRADE_COLUMNS} FROM tbl_billadm_stock_trade \
+             WHERE ledger_id = ?1 AND stock_code = ?2 AND {UNATTACHED_ROUND_SQL} \
+             ORDER BY trade_time ASC, created_at ASC, order_seq ASC, id ASC LIMIT 1"
+        ))?;
+        let mut rows = statement.query_map(params![ledger_id, stock_code], trade_from_row)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     /// 某股尚未挂接轮次的最小成交时间；全部已挂接时返回 0。
     pub fn min_unattached_trade_time(
         conn: &Connection,
@@ -1210,7 +1249,37 @@ fn trade_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockTrade> {
         trade_time: row.get(17)?,
         remark: row.get::<_, Option<String>>(18)?.unwrap_or_default(),
         created_at: row.get(19)?,
+        // 本轮费用快照：4 列齐备才算记录在案（NULL = 老数据，按账本系统配置处理）
+        round_fee: round_fee_from_row(row, 20)?,
     })
+}
+
+/// 读 4 个可空列（起始下标 `start`）拼成本轮费用快照；**四项都有**才返回 `Some`。
+///
+/// 三缺一（理论上不该出现）按"没有快照"处理，调用方退回系统配置 —— 免得半份设置参与算费。
+fn round_fee_from_row(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<Option<RoundFee>> {
+    let commission_rate: Option<f64> = row.get(start)?;
+    let min_commission: Option<i64> = row.get(start + 1)?;
+    let stamp_duty_rate: Option<f64> = row.get(start + 2)?;
+    let transfer_fee_rate: Option<f64> = row.get(start + 3)?;
+    Ok(
+        match (
+            commission_rate,
+            min_commission,
+            stamp_duty_rate,
+            transfer_fee_rate,
+        ) {
+            (Some(commission_rate), Some(min_commission), Some(stamp), Some(transfer)) => {
+                Some(RoundFee {
+                    commission_rate,
+                    min_commission,
+                    stamp_duty_rate: stamp,
+                    transfer_fee_rate: transfer,
+                })
+            }
+            _ => None,
+        },
+    )
 }
 
 fn history_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockTradeHistory> {
@@ -1311,6 +1380,89 @@ mod tests {
         blank.remark = String::new();
         StockDao::create_trade(&conn, &blank).unwrap();
         assert_eq!(StockDao::get_trade(&conn, "t2").unwrap().remark, "");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 本轮费用快照：4 列一起写、一起读；没快照就留 NULL（老数据的口径）。
+    #[test]
+    fn trade_round_fee_round_trips_and_stays_null_when_absent() {
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-round-fee");
+        let conn = workspace.connection();
+
+        // 没有快照：4 列都是 NULL，读回来是 None
+        StockDao::create_trade(&conn, &trade("t1", "o1", 1, 100)).unwrap();
+        assert_eq!(StockDao::get_trade(&conn, "t1").unwrap().round_fee, None);
+
+        // 有快照：四项原样往返（场内基金 万0.5 免最低、免印花税/过户费）
+        let snapshot = RoundFee {
+            commission_rate: 0.00005,
+            min_commission: 0,
+            stamp_duty_rate: 0.0,
+            transfer_fee_rate: 0.0,
+        };
+        let mut with_fee = trade("t2", "o2", 1, 200);
+        with_fee.round_fee = Some(snapshot.clone());
+        StockDao::create_trade(&conn, &with_fee).unwrap();
+        assert_eq!(
+            StockDao::get_trade(&conn, "t2").unwrap().round_fee,
+            Some(snapshot)
+        );
+        // 列表读法也带上（`TRADE_COLUMNS` 与 `trade_from_row` 的下标一致）
+        let listed = StockDao::list_all_trades_asc(&conn, "l1").unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].round_fee, None);
+        assert!(listed[1].round_fee.is_some());
+
+        // 三缺一（理论上不会出现）按"没有快照"处理，免得半份设置参与算费
+        conn.execute(
+            "UPDATE tbl_billadm_stock_trade SET round_stamp_duty_rate = NULL WHERE id = 't2'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(StockDao::get_trade(&conn, "t2").unwrap().round_fee, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 「本轮第一笔」= 未挂接成交里最早的那笔（建仓单）；清仓挂接之后就没有了。
+    #[test]
+    fn first_unattached_trade_is_the_opening_order() {
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-first-unattached");
+        let conn = workspace.connection();
+
+        assert_eq!(
+            StockDao::first_unattached_trade(&conn, "l1", "600000").unwrap(),
+            None
+        );
+
+        let snapshot = RoundFee {
+            commission_rate: 0.00005,
+            min_commission: 0,
+            stamp_duty_rate: 0.0,
+            transfer_fee_rate: 0.0,
+        };
+        // 建仓（t2 时间更早）+ 加仓（t1 时间更晚）：取 t2，与录入顺序无关
+        let mut opening = trade("t2", "o2", 1, 100);
+        opening.round_fee = Some(snapshot.clone());
+        StockDao::create_trade(&conn, &opening).unwrap();
+        let mut adding = trade("t1", "o1", 1, 300);
+        adding.round_fee = Some(snapshot);
+        StockDao::create_trade(&conn, &adding).unwrap();
+        assert_eq!(
+            StockDao::first_unattached_trade(&conn, "l1", "600000")
+                .unwrap()
+                .unwrap()
+                .id,
+            "t2"
+        );
+
+        // 清仓收尾（挂接轮次）之后，本轮不再有未挂接成交
+        StockDao::attach_unattached_trades(&conn, "l1", "600000", "r1").unwrap();
+        assert_eq!(
+            StockDao::first_unattached_trade(&conn, "l1", "600000").unwrap(),
+            None
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -40,7 +40,8 @@ use tr_domain::error::AppError;
 use tr_domain::fee;
 use tr_domain::fund::CashChange;
 use tr_domain::models::{
-    StockFundRecord, StockPosition, StockTrade, StockTradeHistory, StockTradeRound,
+    RoundFee, StockFeeSetting, StockFundRecord, StockPosition, StockTrade, StockTradeHistory,
+    StockTradeRound,
 };
 use tr_store::dao::is_not_found;
 use tr_store::dao::stock::StockDao;
@@ -49,7 +50,8 @@ use tr_store::Workspace;
 use super::{
     amount_detail, contains_tag, ensure_stock_history_backfill, get_or_create_account_in,
     get_or_create_fee_setting_in, get_trade_tags, is_buy, is_sell, log_operation,
-    parse_strict_date, trade_operation_label, unix_to_date, TradeFill, ERR_PREVIEW_ROLLBACK,
+    parse_strict_date, trade_operation_label, unix_to_date, validate_fee_setting, TradeFill,
+    ERR_PREVIEW_ROLLBACK,
 };
 use crate::error::db;
 use crate::{ServiceError, ServiceResult};
@@ -102,6 +104,47 @@ fn instrument_of(stock_code: &str) -> fee::Instrument {
     fee::Instrument::of(stock_code).unwrap_or(fee::Instrument::ShenzhenStock)
 }
 
+/// 本轮的费用设置（建仓时定下、本轮之内不可改）。返回（喂算法的形态，要落库的快照）。
+///
+/// 三条规则，都是能被断言的：
+/// * **建仓**（本轮第一笔买入：当前没有持仓、也没有未挂接成交）⇒ 用请求带来的那份，
+///   没带就用账本系统配置。无论哪种都会写进这一轮的每一笔成交行；
+/// * **本轮已开始**（加仓 / 减仓 / 清仓）⇒ 一律用本轮建仓单上记的那份；请求里还带值就是调用方的错
+///   （界面在非建仓委托里根本不发这个字段）；
+/// * **老数据**（本轮建仓单上 4 列全 NULL）⇒ 退回账本系统配置，与升级前的算法逐字一致。
+fn resolve_round_fee(
+    conn: &rusqlite::Connection,
+    ledger_id: &str,
+    stock_code: &str,
+    buy: bool,
+    position: &StockPosition,
+    requested: Option<RoundFee>,
+) -> ServiceResult<(StockFeeSetting, RoundFee)> {
+    let first = db(StockDao::first_unattached_trade(
+        conn, ledger_id, stock_code,
+    ))?;
+    let is_opening = buy && position.quantity == 0 && first.is_none();
+
+    if is_opening {
+        let round = match requested {
+            Some(round) => {
+                validate_fee_setting(&round)?;
+                round
+            }
+            None => RoundFee::from(&get_or_create_fee_setting_in(conn, ledger_id)?),
+        };
+        return Ok((round.to_setting(), round));
+    }
+    if requested.is_some() {
+        return Err(AppError::bad_request("本轮的费用设置在建仓时确定，不可更改").into());
+    }
+    let ledger = get_or_create_fee_setting_in(conn, ledger_id)?;
+    let round = first
+        .and_then(|trade| trade.round_fee)
+        .unwrap_or_else(|| RoundFee::from(&ledger));
+    Ok((round.to_setting(), round))
+}
+
 /// 生成资金记录备注：均价 + 笔数（单笔委托退化为「名称 N手 @ 价格」）。
 fn trade_order_remark(
     stock_name: &str,
@@ -129,12 +172,7 @@ fn trade_order_remark(
     }
 }
 
-/// 记录一笔委托：可包含多笔成交明细，费用按委托成交总额计算一次后分摊到各笔。
-///
-/// 买入（建仓/加仓）：现金减少 Σ成交金额+费用；卖出（减仓/清仓）：现金增加 Σ成交金额-费用，
-/// 并按平均成本逐笔结转已实现盈亏；全部成交后持仓归零则归档本轮轮次。
-///
-/// 参数多是有意的：与命令面的字段一一对应，便于逐条比对。
+/// 记录一笔委托（不指定本轮费用设置：建仓时取账本系统配置）。
 #[allow(clippy::too_many_arguments)]
 pub fn create_trade_order(
     workspace: &Workspace,
@@ -146,6 +184,34 @@ pub fn create_trade_order(
     trade_time: i64,
     remark: &str,
     tag: &str,
+) -> ServiceResult<Vec<StockTradeDto>> {
+    create_trade_order_with_round_fee(
+        workspace, ledger_id, stock_code, stock_name, trade_type, fills, trade_time, remark, tag,
+        None,
+    )
+}
+
+/// 记录一笔委托，可包含多笔成交明细，费用按委托成交总额计算一次后分摊到各笔。
+///
+/// 买入（建仓/加仓）：现金减少 Σ成交金额+费用；卖出（减仓/清仓）：现金增加 Σ成交金额-费用，
+/// 并按平均成本逐笔结转已实现盈亏；全部成交后持仓归零则归档本轮轮次。
+///
+/// `round_fee` 只在**建仓**（本轮第一笔买入）时被接受：它就是本轮的费用设置，缺失时取账本系统配置；
+/// 本轮已经开始的加仓 / 减仓 / 清仓必须沿用本轮建仓单上的那份（传进来就报错，见 [`resolve_round_fee`]）。
+///
+/// 参数多是有意的：与命令面的字段一一对应，便于逐条比对。
+#[allow(clippy::too_many_arguments)]
+pub fn create_trade_order_with_round_fee(
+    workspace: &Workspace,
+    ledger_id: &str,
+    stock_code: &str,
+    stock_name: &str,
+    trade_type: &str,
+    fills: &[TradeFill],
+    trade_time: i64,
+    remark: &str,
+    tag: &str,
+    round_fee: Option<RoundFee>,
 ) -> ServiceResult<Vec<StockTradeDto>> {
     let fills = normalize_trade_fills(fills);
     if fills.is_empty() {
@@ -214,12 +280,6 @@ pub fn create_trade_order(
     let record_date = unix_to_date(trade_time);
 
     if let Err(error) = workspace.transaction(|conn| {
-        let fee_setting = get_or_create_fee_setting_in(conn, ledger_id)?;
-        // 委托级一次计收（最低佣金按委托，不按笔）；印花税与过户费**逐笔**取整再相加，
-        // 再按成交额把委托级费用分摊到各笔明细（两份口径一致，见 `tr_domain::fee`）
-        let order_fee = fee::compute_order_fee(&amounts, instrument, &fee_setting, buy);
-        let allocated = fee::allocate_order_fee(order_fee, &amounts, instrument, &fee_setting, buy);
-
         let mut position = match StockDao::get_position(conn, ledger_id, stock_code) {
             Ok(position) => position,
             Err(error) if is_not_found(&error) => {
@@ -236,6 +296,25 @@ pub fn create_trade_order(
             Err(error) => return Err(ServiceError::Database(error)),
         };
         position.stock_name = stock_name.to_string();
+
+        // 本轮的费用设置：建仓时定下（请求里的，否则账本系统配置），本轮之内一律沿用
+        let (fee_setting, round_fee) = resolve_round_fee(
+            conn,
+            ledger_id,
+            stock_code,
+            buy,
+            &position,
+            round_fee.clone(),
+        )?;
+        // 委托级一次计收（最低佣金按委托，不按笔）；印花税与过户费**逐笔**取整再相加，
+        // 再按成交额把委托级费用分摊到各笔明细（两份口径一致，见 `tr_domain::fee`）
+        let order_fee = fee::compute_order_fee(&amounts, instrument, &fee_setting, buy);
+        let allocated = fee::allocate_order_fee(order_fee, &amounts, instrument, &fee_setting, buy);
+
+        for trade in trades.iter_mut() {
+            // 每一笔都写上本轮快照（本轮内自证口径；老数据留 NULL 表示"沿用系统配置"）
+            trade.round_fee = Some(round_fee.clone());
+        }
 
         // 卖出先按委托总量校验，避免逐笔结算中途才发现超卖
         if sell {
@@ -369,7 +448,37 @@ pub fn create_trade(
     remark: &str,
     tag: &str,
 ) -> ServiceResult<StockTradeDto> {
-    let items = create_trade_order(
+    create_trade_with_round_fee(
+        workspace,
+        ledger_id,
+        stock_code,
+        stock_name,
+        trade_type,
+        price_milli,
+        lots,
+        trade_time,
+        remark,
+        tag,
+        None,
+    )
+}
+
+/// 记录单笔成交，并指定本轮的费用设置（只有建仓会用到，见 [`create_trade_order_with_round_fee`]）。
+#[allow(clippy::too_many_arguments)]
+pub fn create_trade_with_round_fee(
+    workspace: &Workspace,
+    ledger_id: &str,
+    stock_code: &str,
+    stock_name: &str,
+    trade_type: &str,
+    price_milli: i64,
+    lots: i64,
+    trade_time: i64,
+    remark: &str,
+    tag: &str,
+    round_fee: Option<RoundFee>,
+) -> ServiceResult<StockTradeDto> {
+    let items = create_trade_order_with_round_fee(
         workspace,
         ledger_id,
         stock_code,
@@ -379,6 +488,7 @@ pub fn create_trade(
         trade_time,
         remark,
         tag,
+        round_fee,
     )?;
     items
         .into_iter()
@@ -659,20 +769,29 @@ fn update_trade_fill_tx(
     }
 
     let order_id = order_key_of(&trade);
-    let mut order_trades = db(StockDao::list_trades_by_order(conn, ledger_id, &order_id))?;
-    if order_trades.is_empty() {
-        // 兼容未回填委托的历史数据：该成交本身就是一笔独立委托
-        let mut single = trade.clone();
-        single.order_id = order_id;
-        single.order_seq = 1;
-        order_trades = vec![single];
-    }
+    let order_trades = {
+        let mut order_trades = db(StockDao::list_trades_by_order(conn, ledger_id, &order_id))?;
+        if order_trades.is_empty() {
+            // 兼容未回填委托的历史数据：该成交本身就是一笔独立委托
+            let mut single = trade.clone();
+            single.order_id = order_id;
+            single.order_seq = 1;
+            order_trades = vec![single];
+        }
+        order_trades
+    };
 
-    let fee_setting = get_or_create_fee_setting_in(conn, ledger_id)?;
+    // 用**这一笔自己的本轮快照**重算（本轮内费率不可改）；老数据（NULL）退回账本系统配置 ——
+    // 与它当初被算出来时的口径一致。
+    let fee_setting = match trade.round_fee.clone() {
+        Some(round) => round.to_setting(),
+        None => get_or_create_fee_setting_in(conn, ledger_id)?,
+    };
     let instrument = instrument_of(&trade.stock_code);
     let buy = is_buy(&trade.trade_type);
 
     let mut amounts: Vec<i64> = Vec::with_capacity(order_trades.len());
+    let mut order_trades = order_trades;
     for item in order_trades.iter_mut() {
         if item.id == trade_id {
             item.price = price_milli;

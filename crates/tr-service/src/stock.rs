@@ -37,8 +37,8 @@ use tr_domain::dto::{
 };
 use tr_domain::error::AppError;
 use tr_domain::models::{
-    Ledger, StockAccount, StockFeeSetting, StockFundRecord, StockOperation, StockPosition,
-    StockTrade, StockTradeHistory, StockTradeRound, StockTradeTagSetting,
+    Ledger, RoundFee, StockAccount, StockFeeSetting, StockFundRecord, StockOperation,
+    StockPosition, StockTrade, StockTradeHistory, StockTradeRound, StockTradeTagSetting,
 };
 use tr_store::dao::is_not_found;
 use tr_store::dao::ledger::LedgerDao;
@@ -52,7 +52,8 @@ use crate::{ServiceError, ServiceResult};
 /// 股票写入聚合（意图 + 事务 + 派生数据对齐），见 `crates/tr-service/src/stock/write.rs`。
 mod write;
 pub use write::{
-    create_trade, create_trade_order, delete_trade_order, preview_rollback, preview_trade_change,
+    create_trade, create_trade_order, create_trade_order_with_round_fee,
+    create_trade_with_round_fee, delete_trade_order, preview_rollback, preview_trade_change,
     repair_legacy_trade_fund_dates, rollback_latest, update_trade_fill,
 };
 
@@ -632,6 +633,19 @@ fn get_trade_tags_in(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceRes
     }
 }
 
+/// 四项费用参数的合法性（系统配置与本轮快照**同一套判据**）：佣金费率必须为正，
+/// 最低佣金、印花税、过户费允许为 0（不收取），但不能为负。
+pub fn validate_fee_setting(setting: &RoundFee) -> ServiceResult<()> {
+    if setting.commission_rate <= 0.0
+        || setting.min_commission < 0
+        || setting.stamp_duty_rate < 0.0
+        || setting.transfer_fee_rate < 0.0
+    {
+        return Err(AppError::bad_request("佣金费率必须大于 0，最低佣金与费率不能为负").into());
+    }
+    Ok(())
+}
+
 /// 保存费用设置。
 pub fn save_fee_settings(
     workspace: &Workspace,
@@ -641,14 +655,12 @@ pub fn save_fee_settings(
     stamp_duty_rate: f64,
     transfer_fee_rate: f64,
 ) -> ServiceResult<StockFeeSetting> {
-    // 佣金费率必须为正；最低佣金、印花税、过户费允许为 0（不收取），但不能为负
-    if commission_rate <= 0.0
-        || min_commission < 0
-        || stamp_duty_rate < 0.0
-        || transfer_fee_rate < 0.0
-    {
-        return Err(AppError::bad_request("佣金费率必须大于 0，最低佣金与费率不能为负").into());
-    }
+    validate_fee_setting(&RoundFee {
+        commission_rate,
+        min_commission,
+        stamp_duty_rate,
+        transfer_fee_rate,
+    })?;
 
     let mut setting = get_or_create_fee_setting(workspace, ledger_id)?;
     setting.commission_rate = commission_rate;
@@ -805,7 +817,9 @@ pub fn list_positions(
         .filter(|position| position.quantity > 0)
         .collect();
     let quotes = fetch_held_quotes(fetcher, &held);
-    let flows = round_flows(&conn, ledger_id)?;
+    let by_code = trades_by_code(&conn, ledger_id)?;
+    let flows = round_flows_of(by_code.clone());
+    let round_fees = round_fees_of(&by_code);
 
     Ok(held
         .iter()
@@ -813,6 +827,8 @@ pub fn list_positions(
             let mut item = StockPositionDto::from(position);
             let flow = flow_of(&flows, position);
             item.round_cash_flow = flow.cash_flow;
+            // 本轮建仓时定下的费用设置；没有记录（老数据）⇒ 省略 = 沿用系统配置
+            item.round_fee = round_fees.get(&position.stock_code).cloned().flatten();
             if let Some(quote) = quotes.get(&position.stock_code) {
                 if quote.latest_price > 0 {
                     item.latest_price = Some(quote.latest_price);
@@ -950,11 +966,12 @@ fn round_flow(trades_asc: &[StockTrade]) -> RoundFlow {
     tr_domain::stock::round_flow(trades_asc)
 }
 
-/// 整个账本按股票切出本轮资金口径（一次查询，避免逐股查库）。
-fn round_flows(
+/// 整个账本按股票分组的成交（时间升序）—— 本轮资金与本轮费率的**共同输入**
+/// （一次查询，避免逐股查库，也免得两处各切一次轮次）。
+fn trades_by_code(
     conn: &rusqlite::Connection,
     ledger_id: &str,
-) -> ServiceResult<HashMap<String, RoundFlow>> {
+) -> ServiceResult<HashMap<String, Vec<StockTrade>>> {
     let trades = db(StockDao::list_all_trades_asc(conn, ledger_id))?;
     let mut by_code: HashMap<String, Vec<StockTrade>> = HashMap::new();
     for trade in trades {
@@ -963,10 +980,31 @@ fn round_flows(
             .or_default()
             .push(trade);
     }
-    Ok(by_code
+    Ok(by_code)
+}
+
+/// 从分组结果折出本轮资金口径。
+fn round_flows_of(by_code: HashMap<String, Vec<StockTrade>>) -> HashMap<String, RoundFlow> {
+    by_code
         .into_iter()
         .map(|(code, trades)| (code, round_flow(&trades)))
-        .collect())
+        .collect()
+}
+
+/// 从分组结果折出**本轮的费用设置**（建仓时定下的那份；没记录 = `None` ⇒ 沿用系统配置）。
+fn round_fees_of(by_code: &HashMap<String, Vec<StockTrade>>) -> HashMap<String, Option<RoundFee>> {
+    by_code
+        .iter()
+        .map(|(code, trades)| (code.clone(), tr_domain::stock::current_round_fee(trades)))
+        .collect()
+}
+
+/// 整个账本按股票切出本轮资金口径。
+fn round_flows(
+    conn: &rusqlite::Connection,
+    ledger_id: &str,
+) -> ServiceResult<HashMap<String, RoundFlow>> {
+    Ok(round_flows_of(trades_by_code(conn, ledger_id)?))
 }
 
 /// 某持仓的本轮资金口径；查不到成交（异常数据）时退回剩余成本，
@@ -3732,6 +3770,364 @@ mod tests {
         assert!(stock_sell.stamp_duty > 0, "沪市股票卖出收印花税");
         assert!(stock_sell.transfer_fee > 0, "沪市股票收过户费");
         assert!(stock_sell.fee > stock_sell.commission);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---------- 本轮费用设置（建仓时定，本轮内不可改） ----------
+
+    /// 场内基金的一套参数（东方财富"超级ETF"那种）：万0.5、免最低、免印花税与过户费。
+    fn etf_round_fee() -> RoundFee {
+        RoundFee {
+            commission_rate: 0.00005,
+            min_commission: 0,
+            stamp_duty_rate: 0.0,
+            transfer_fee_rate: 0.0,
+        }
+    }
+
+    /// 建仓时指定的那一套会写进**这一轮的每一笔**成交行，并一直用到清仓；
+    /// 系统配置中途改动只影响**之后新建仓的轮次**。
+    #[test]
+    fn a_round_fee_is_snapshotted_at_open_and_kept_for_the_round() {
+        let (workspace, dir) = workspace("round-fee-snapshot");
+        seed_principal(&workspace, 10_000_000);
+
+        // 建仓 1 手 @ 100.00（成交额 1,000,000 分 = 10,000 元），本轮费率万0.5 免最低
+        let open = create_trade_with_round_fee(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            1,
+            1_700_000_000,
+            "",
+            "",
+            Some(etf_round_fee()),
+        )
+        .unwrap();
+        assert_eq!(open.amount, 1_000_000);
+        assert_eq!(
+            open.commission, 50,
+            "万0.5 × 10,000 元 = 0.50 元（不是系统配置的最低佣金 5.00）"
+        );
+        assert_eq!(
+            (open.stamp_duty, open.transfer_fee),
+            (0, 0),
+            "本轮也不收这两项"
+        );
+        assert_eq!(open.round_fee, Some(etf_round_fee()), "建仓单带着本轮快照");
+
+        // 系统配置改成"万3 / 最低 5 元"——本轮已经开始了，不受影响
+        save_fee_settings(&workspace, TEST_LEDGER_ID, 0.0003, 500, 0.0005, 0.00001).unwrap();
+
+        let add = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_ADD,
+            100_000,
+            1,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(add.commission, 50, "加仓沿用本轮建仓时的万0.5，不是新的万3");
+        assert_eq!(
+            add.round_fee,
+            Some(etf_round_fee()),
+            "加仓那笔也带着同一份快照"
+        );
+
+        let close = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            100_000,
+            2,
+            1_700_000_200,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(close.round_fee, Some(etf_round_fee()), "清仓也是本轮那一份");
+
+        // 持仓 DTO 把"本轮正在用的费率"给界面（信息区那一行）
+        let reopen = create_trade_with_round_fee(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE_B,
+            TEST_NAME_B,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            1,
+            1_700_000_300,
+            "",
+            "",
+            Some(etf_round_fee()),
+        )
+        .unwrap();
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        let held = positions
+            .iter()
+            .find(|item| item.stock_code == TEST_CODE_B)
+            .unwrap();
+        assert_eq!(held.round_fee, reopen.round_fee);
+
+        // 清仓之后重新建仓（新的一轮）⇒ 取**当前**系统配置（万3 / 最低 5 元）
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE_B,
+            TEST_NAME_B,
+            consts::STOCK_TRADE_CLOSE,
+            100_000,
+            1,
+            1_700_000_400,
+            "",
+            "",
+        )
+        .unwrap();
+        let second_round = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE_B,
+            TEST_NAME_B,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            1,
+            1_700_000_500,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            second_round.commission, 500,
+            "新轮次用当前系统配置的最低佣金"
+        );
+        assert_eq!(
+            second_round.round_fee,
+            Some(RoundFee {
+                commission_rate: 0.0003,
+                min_commission: 500,
+                stamp_duty_rate: 0.0005,
+                transfer_fee_rate: 0.00001,
+            }),
+            "新轮次的快照 = 当前系统配置"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 本轮已经开始（有持仓）时再传本轮费率 = 调用方的错，直接报错。
+    #[test]
+    fn a_round_fee_is_rejected_once_the_round_has_started() {
+        let (workspace, dir) = workspace("round-fee-immutable");
+        seed_principal(&workspace, 10_000_000);
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            1,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+
+        let error = create_trade_with_round_fee(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_ADD,
+            100_000,
+            1,
+            1_700_000_100,
+            "",
+            "",
+            Some(etf_round_fee()),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("本轮的费用设置在建仓时确定"),
+            "实际: {error}"
+        );
+
+        // 费率非法（佣金为 0）在建仓时也挡下来
+        let error = create_trade_with_round_fee(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE_B,
+            TEST_NAME_B,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            1,
+            1_700_000_200,
+            "",
+            "",
+            Some(RoundFee {
+                commission_rate: 0.0,
+                ..etf_round_fee()
+            }),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("佣金费率必须大于 0"),
+            "实际: {error}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 老数据（4 列全 NULL，升级前写的成交）继续按系统配置算 —— 与升级前逐字一致。
+    #[test]
+    fn legacy_trades_without_a_snapshot_follow_the_system_setting() {
+        let (workspace, dir) = workspace("round-fee-legacy");
+        seed_principal(&workspace, 10_000_000);
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            1,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+        // 把本轮那笔的 4 列抹成 NULL：模拟"升级前写下的、没有快照的成交"
+        workspace
+            .connection()
+            .execute_batch(
+                "UPDATE tbl_billadm_stock_trade SET round_commission_rate = NULL, \
+                 round_min_commission = NULL, round_stamp_duty_rate = NULL, \
+                 round_transfer_fee_rate = NULL",
+            )
+            .unwrap();
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        assert_eq!(
+            positions[0].round_fee, None,
+            "没有快照 ⇒ 界面按系统配置显示"
+        );
+
+        // 加仓：按当前系统配置（默认 万2.354 / 最低 5 元 ⇒ 这单走最低佣金）
+        let add = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_ADD,
+            100_000,
+            1,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(add.commission, 500, "老轮次沿用系统配置的最低佣金");
+        assert_eq!(add.round_fee, Some(RoundFee::default()), "这一笔起才记快照");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 改成交用**这一笔自己的快照**重算：系统配置改过也不影响已有轮次。
+    #[test]
+    fn editing_a_fill_recalculates_with_its_own_round_fee() {
+        let (workspace, dir) = workspace("round-fee-edit");
+        seed_principal(&workspace, 10_000_000);
+        let open = create_trade_with_round_fee(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            1,
+            1_700_000_000,
+            "",
+            "",
+            Some(etf_round_fee()),
+        )
+        .unwrap();
+        assert_eq!(open.commission, 50);
+
+        // 系统配置改成万3 / 最低 5 元之后改手数：仍按本轮的万0.5 重算
+        save_fee_settings(&workspace, TEST_LEDGER_ID, 0.0003, 500, 0.0005, 0.00001).unwrap();
+        let updated = update_trade_fill(
+            &workspace,
+            TEST_LEDGER_ID,
+            &open.id,
+            100_000,
+            2,
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(updated.amount, 2_000_000, "两手的成交额翻倍");
+        assert_eq!(updated.commission, 100, "万0.5 × 20,000 元 = 1.00 元");
+        assert_eq!(
+            updated.round_fee,
+            Some(etf_round_fee()),
+            "改成交不动本轮快照"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 场内基金即便本轮填了印花税 / 过户费，仍然只收佣金（品种规则优先）。
+    #[test]
+    fn a_fund_round_fee_cannot_turn_on_stamp_duty() {
+        let (workspace, dir) = workspace("round-fee-fund");
+        seed_principal(&workspace, 10_000_000);
+        let open = create_trade_with_round_fee(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_FUND_CODE,
+            TEST_FUND_NAME,
+            consts::STOCK_TRADE_OPEN,
+            4_389,
+            3,
+            1_700_000_000,
+            "",
+            "",
+            Some(RoundFee {
+                commission_rate: 0.00005,
+                min_commission: 0,
+                stamp_duty_rate: 0.0005,
+                transfer_fee_rate: 0.00001,
+            }),
+        )
+        .unwrap();
+        assert_eq!(open.commission, 7, "131,670 分 × 万0.5 = 6.58 → 7 分");
+        assert_eq!(open.stamp_duty, 0, "场内基金免印花税");
+        assert_eq!(open.transfer_fee, 0, "场内基金免过户费");
+
+        let close = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_FUND_CODE,
+            TEST_FUND_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            4_400,
+            3,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(close.stamp_duty, 0, "卖出也免印花税（本轮的印花税率无效）");
+        assert_eq!(close.transfer_fee, 0, "卖出也免过户费");
 
         std::fs::remove_dir_all(&dir).ok();
     }

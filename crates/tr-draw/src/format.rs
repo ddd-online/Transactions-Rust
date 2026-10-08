@@ -203,6 +203,36 @@ pub fn scaled_text(value: f64, scale: f64, digits: i32) -> String {
     format!("{rounded}")
 }
 
+/// **一轮（建仓时）的费用设置**只读摘要：`佣金 万0.5 · 最低 ¥0 · 印花税 0% · 过户费 0%`。
+///
+/// 费率按**万分之**、最低佣金按元、印花税与过户费按**百分比**显示（与设置页的输入单位一致）；
+/// `None` = 这一轮没有快照（老数据）⇒ 界面据此显示"沿用系统配置"。
+pub fn round_fee_text(fee: Option<&tr_domain::models::RoundFee>) -> String {
+    let Some(fee) = fee else {
+        return "沿用系统配置（本轮没有记录）".to_string();
+    };
+    format!(
+        "佣金 万{} · 最低 ¥{} · 印花税 {}% · 过户费 {}%",
+        trim_zeros(scaled_text(fee.commission_rate, 10_000.0, 4)),
+        amount(fee.min_commission),
+        trim_zeros(scaled_text(fee.stamp_duty_rate, 100.0, 4)),
+        trim_zeros(scaled_text(fee.transfer_fee_rate, 100.0, 4)),
+    )
+}
+
+/// 去掉小数末尾多余的 0（`"0.5000"` → `"0.5"`、`"0.0000"` → `"0"`）。
+fn trim_zeros(text: String) -> String {
+    if !text.contains('.') {
+        return text;
+    }
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// 股票类型 → 中文标签（未知值回落到原始字符串）。
 pub fn trade_type_label(trade_type: &str) -> String {
     match trade_type {
@@ -293,6 +323,35 @@ mod tests {
             signed_yuan(i64::MIN),
             "-92233720368547758.07",
             "saturating_abs：不许溢出成 --"
+        );
+    }
+
+    /// 本轮费率的只读摘要：费率按万分之、最低佣金按元、印花 / 过户按百分比，且去掉多余的 0。
+    #[test]
+    fn round_fee_text_reads_like_the_settings_page() {
+        use tr_domain::models::RoundFee;
+        assert_eq!(
+            round_fee_text(Some(&RoundFee {
+                commission_rate: 0.00005,
+                min_commission: 0,
+                stamp_duty_rate: 0.0,
+                transfer_fee_rate: 0.0,
+            })),
+            "佣金 万0.5 · 最低 ¥0.00 · 印花税 0% · 过户费 0%"
+        );
+        assert_eq!(
+            round_fee_text(Some(&RoundFee {
+                commission_rate: 0.0002354,
+                min_commission: 500,
+                stamp_duty_rate: 0.0005,
+                transfer_fee_rate: 0.00001,
+            })),
+            "佣金 万2.354 · 最低 ¥5.00 · 印花税 0.05% · 过户费 0.001%"
+        );
+        assert_eq!(
+            round_fee_text(None),
+            "沿用系统配置（本轮没有记录）",
+            "老数据没有快照 ⇒ 界面说明用的是系统配置"
         );
     }
 

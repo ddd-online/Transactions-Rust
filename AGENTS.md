@@ -431,13 +431,16 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 - **价格走「厘」、金额走「分」**（两套单位，别混）：成交价 / 现价 / 昨收是整数**厘**（1/1000 元 —— 场内基金的
   报价单位就是 0.001 元），其余（成交额/成本/费用/盈亏/市值）全是整数**分**。换算入口 `tr_domain::money`，
   展示 `tr-draw::format::price`（`amount` 恒两位），**价格 × 股数 → 分**的唯一入口是
-  `tr_domain::stock::amount_of`。表 `tbl_billadm_stock_trade.price` 因此也是厘：旧库由迁移
-  `20261009_stock_trade_price_milli` 整列 ×10（只改值，幂等靠登记表）。
+  `tr_domain::stock::amount_of`。表 `tbl_billadm_stock_trade.price` 因此也是厘（迁移
+  `20261009_stock_trade_price_milli` 整列 ×10）。
 - **场内基金（ETF / LOF / 封闭式基金 / REITs）只有佣金**：免印花税、免过户费（沪市基金也是 —— 过户费只对沪市
   **股票**收）。品种与**代码校验**的唯一判据是 `tr_domain::fee::Instrument::of`（股票 沪 `60`/`68`、深 `00`/`30`；
   场内基金 沪 `5[0-8]`xxxx、深 `1[5-8]`xxxx），它同时决定行情前缀；不认识的代码（老数据里的北交所）按深市股票
-  回落。回归：`cargo test -p tr-domain fee`、`-p tr-service a_fund_order_is_charged_commission_only`、
-  `fixtures/ui-stock.ps1` 第 11 步。
+  回落。回归：`fixtures/ui-stock.ps1` 第 11 步。
+- **费率随「本轮」走（建仓时快照，本轮内不可改）**：建仓把四项写进这一轮**每一笔**成交行的 4 个可空列
+  （`tbl_billadm_stock_trade.round_*`），本轮内的加仓 / 减仓 / 清仓与改成交都走它（唯一入口
+  `resolve_round_fee`）；**4 列全 NULL = 老数据 ⇒ 沿用系统配置（不回填、不回溯）**。回归：
+  `fixtures/ui-stock.ps1` 第 12 步。
 - **SQL 只允许拼接常量**：列名/表名用 `const …_COLUMNS` 或常量数组（如 `STOCK_TABLES`），值一律走 `?` 占位符
   （`instr(description, ?)` 也是占位符）；`ORDER BY` 的字段必须过白名单 —— `build_sort_clause` 只认
   `transactionAt` / `transactionType` / `price` / `category` 这 4 项，多一项都不认，方向强制 `asc|desc`。
