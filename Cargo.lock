@@ -5287,7 +5287,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tr-domain"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5295,7 +5295,7 @@ dependencies = [
 
 [[package]]
 name = "tr-draw"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "heic-rs",
  "png 0.17.16",
@@ -5304,7 +5304,7 @@ dependencies = [
 
 [[package]]
 name = "tr-ipc"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5317,7 +5317,7 @@ dependencies = [
 
 [[package]]
 name = "tr-service"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5334,7 +5334,7 @@ dependencies = [
 
 [[package]]
 name = "tr-store"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "r2d2",
  "r2d2_sqlite",
@@ -5347,7 +5347,7 @@ dependencies = [
 
 [[package]]
 name = "tr-ui"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "charts-rs",
  "console_error_panic_hook",
@@ -5426,7 +5426,7 @@ dependencies = [
 
 [[package]]
 name = "transactions"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -6502,7 +6502,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "rusqlite",
  "serde_json",
