@@ -47,7 +47,7 @@
 
 列是纯追加（可空、无默认值）⇒ 旧版本打开新库照旧能读能写，只是不认识这 4 列。
 
-判据：`cargo test -p tr-domain` **135** / `-p tr-draw` **113** / `-p tr-store` **81** / `-p tr-service` **166** /
+判据：`cargo test -p tr-domain` **135** / `-p tr-draw` **114** / `-p tr-store` **81** / `-p tr-service` **166** /
 `-p tr-ipc` **12** / `-p transactions` **48** 全绿（新增：快照往返与"三缺一本轮快照按没记录处理"、
 建仓后本轮内沿用的判别、清仓后新轮次取系统配置、老数据回落、改成交用自己那份快照、
 基金本轮填了印花税也无效）。端到端 `fixtures/ui-stock.ps1` 新增第 12 步：建仓时自定义
