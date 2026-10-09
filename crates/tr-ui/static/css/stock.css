@@ -769,6 +769,13 @@
   color: var(--transactions-color-text-secondary);
 }
 
+/* 成交明细那一段的提示（清仓时"本轮已无持仓、确认即归档"） */
+.stock-trade-form__hint {
+  margin: var(--transactions-space-xs) 0 0;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
 .stock-trade-form__fee-readonly {
   margin: 0;
   font-family: var(--transactions-font-mono);

@@ -35,33 +35,25 @@ pub fn amount_of_lots(price_milli: i64, lots: i64) -> i64 {
 
 /// 从**按时间升序**的成交流里切出"当前在建轮次"（最近一次清仓之后的那几笔）。
 ///
-/// 从 `tr-service/src/stock.rs` 搬来（候选 7 / #37）。规则三条，都是能被断言的：
+/// 从 `tr-service/src/stock.rs` 搬来（候选 7 / #37）。规则都是能被断言的：
 ///
-/// * 建仓 / 加仓：股数累加，这笔属于当前轮；
-/// * 减仓：股数减少；**没减到 0 就仍算这一轮**的成交；
-/// * 清仓（或减到 0）：那一笔**不属于**它结束的那一轮之后的部分 —— 实现上是"清空已收集的成交"，
+/// * 建仓 / 加仓：这笔属于当前轮；
+/// * 减仓：**也属于当前轮** —— 减到 0 手（甚至超量减）都**不**结束这一轮：那一轮还挂在持仓列表上
+///   （0 手、成本 0），之后买的算本轮加仓。想结束这一轮只有清仓（用户口径：清仓才归档到历史）；
+/// * 清仓：那一笔**不属于**它结束的那一轮之后的部分 —— 实现上是"清空已收集的成交"，
 ///   所以清仓那笔本身也不留在结果里；
 /// * 其它成交类型忽略。
 ///
-/// 用途：详情区显示的"当前轮次"与按轮次聚合的统计都读它。
+/// 用途：详情区显示的"当前轮次"、`round_cash_flow`（浮动盈亏率的分母）与"这只票还在不在持仓列表"
+/// 都读它。
 pub fn current_round_trades(trades: &[StockTrade]) -> Vec<StockTrade> {
     let mut result: Vec<StockTrade> = Vec::new();
-    let mut shares = 0_i64;
     for trade in trades {
         match trade.trade_type.as_str() {
-            consts::STOCK_TRADE_OPEN | consts::STOCK_TRADE_ADD => {
-                shares += trade.shares;
-                result.push(trade.clone());
+            consts::STOCK_TRADE_OPEN | consts::STOCK_TRADE_ADD | consts::STOCK_TRADE_REDUCE => {
+                result.push(trade.clone())
             }
-            consts::STOCK_TRADE_REDUCE | consts::STOCK_TRADE_CLOSE => {
-                shares -= trade.shares;
-                if shares > 0 {
-                    result.push(trade.clone());
-                } else {
-                    shares = 0;
-                    result.clear();
-                }
-            }
+            consts::STOCK_TRADE_CLOSE => result.clear(),
             _ => {}
         }
     }
@@ -282,6 +274,24 @@ mod tests {
         assert_eq!(round.len(), 2);
     }
 
+    /// 减到 0 手也仍算这一轮的成交 —— 它**不**归档，那一轮继续挂在持仓上（0 手）。
+    #[test]
+    fn a_reduce_to_zero_is_still_part_of_the_round() {
+        let round = current_round_trades(&[
+            trade(consts::STOCK_TRADE_OPEN, 100),
+            trade(consts::STOCK_TRADE_REDUCE, 100),
+        ]);
+        assert_eq!(round.len(), 2, "减到 0 手不结束本轮");
+        // 减到 0 之后再买：还是这一轮（不是新的一轮）
+        let round = current_round_trades(&[
+            trade(consts::STOCK_TRADE_OPEN, 100),
+            trade(consts::STOCK_TRADE_REDUCE, 100),
+            trade(consts::STOCK_TRADE_ADD, 50),
+        ]);
+        assert_eq!(round.len(), 3);
+        assert_eq!(round[0].shares, 100, "建仓那笔仍在（本轮没有重开）");
+    }
+
     /// 清仓把轮次收尾：结果清空，**清仓那笔本身也不留下**。
     #[test]
     fn a_full_close_clears_the_round_and_does_not_keep_the_close_itself() {
@@ -305,14 +315,26 @@ mod tests {
         assert_eq!(round[0].shares, 200, "只留清仓之后那两笔");
     }
 
-    /// 超出持仓的减仓（数据订正/回滚可能造出来）按"归零"处理，不会把股数带成负数。
+    /// 超出持仓的减仓（数据订正/回滚可能造出来）同样留在本轮：结束这一轮只能靠清仓。
     #[test]
-    fn an_over_reduce_is_clamped_to_zero() {
+    fn an_over_reduce_stays_in_the_round() {
         let round = current_round_trades(&[
             trade(consts::STOCK_TRADE_OPEN, 100),
             trade(consts::STOCK_TRADE_REDUCE, 300),
         ]);
-        assert!(round.is_empty());
+        assert_eq!(round.len(), 2, "超量减仓也不结束本轮");
+    }
+
+    /// 只有清仓收尾：一轮里"减到 0 → 加仓 → 清仓"，清仓之后的结果为空。
+    #[test]
+    fn only_a_close_ends_the_round() {
+        let round = current_round_trades(&[
+            trade(consts::STOCK_TRADE_OPEN, 100),
+            trade(consts::STOCK_TRADE_REDUCE, 100),
+            trade(consts::STOCK_TRADE_ADD, 100),
+            trade(consts::STOCK_TRADE_CLOSE, 100),
+        ]);
+        assert!(round.is_empty(), "清仓之后本轮为空");
     }
 
     #[test]

@@ -134,7 +134,12 @@ fn statistics(
             &history.stock_code,
         ))?;
         for round in rounds {
-            let trades = db(StockDao::list_trades_by_round(&conn, &round.id))?;
+            // 0 手的标记成交（清仓"只归档"那一笔）不算成交：笔数与金额都不该被它带偏
+            let trades: Vec<tr_domain::models::StockTrade> =
+                db(StockDao::list_trades_by_round(&conn, &round.id))?
+                    .into_iter()
+                    .filter(|trade| trade.shares > 0)
+                    .collect();
             let (pnl, pnl_rate, _) = round_pnl(&trades);
             events.push(SettleEvent {
                 stock_name: history.stock_name.clone(),

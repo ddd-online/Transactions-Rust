@@ -73,7 +73,13 @@ fn round_meta_key(stock_code: &str, round_no: i64) -> String {
 }
 
 /// 减仓按剩余总成本的比例结转成本（四舍五入到分），避免整除截断造成已实现盈亏偏差。
+///
+/// `shares == 0`（清仓时只归档那一笔 0 手标记成交）或没有持仓时直接 0：0/0 在浮点里是 NaN，
+/// `NaN as i64` 恰好是 0 —— 别把正确性建在这个巧合上。
 fn cost_basis_of(total_cost: i64, shares: i64, quantity: i64) -> i64 {
+    if shares <= 0 || quantity <= 0 {
+        return 0;
+    }
     (total_cost as f64 * shares as f64 / quantity as f64).round() as i64
 }
 
@@ -214,7 +220,15 @@ pub fn create_trade_order_with_round_fee(
     round_fee: Option<RoundFee>,
 ) -> ServiceResult<Vec<StockTradeDto>> {
     let fills = normalize_trade_fills(fills);
-    if fills.is_empty() {
+    let buy = is_buy(trade_type);
+    let sell = is_sell(trade_type);
+    if !buy && !sell {
+        return Err(AppError::bad_request("无效的交易类型").into());
+    }
+    // 清仓允许多带成交明细：持仓已经是 0 手（减仓减到 0 之后这一轮还在）时，清仓只是
+    // "把这一轮归档进交易历史"—— 不成交、不记资金变化，轮次行与标签/复盘照旧落库。
+    let archive_only = fills.is_empty() && trade_type == consts::STOCK_TRADE_CLOSE;
+    if fills.is_empty() && !archive_only {
         return Err(AppError::bad_request("成交明细不能为空").into());
     }
     for fill in &fills {
@@ -236,12 +250,6 @@ pub fn create_trade_order_with_round_fee(
     } else {
         trade_time
     };
-
-    let buy = is_buy(trade_type);
-    let sell = is_sell(trade_type);
-    if !buy && !sell {
-        return Err(AppError::bad_request("无效的交易类型").into());
-    }
 
     // 品种决定收哪些费：股票（沪市才有过户费、卖出有印花税）还是场内基金（只有佣金）
     let instrument = instrument_of(stock_code);
@@ -270,6 +278,27 @@ pub fn create_trade_order_with_round_fee(
             lots: fill.lots,
             shares,
             amount,
+            trade_time,
+            remark: remark.to_string(),
+            ..StockTrade::default()
+        });
+    }
+    if archive_only {
+        // 0 手标记成交：**必须留下这一行** —— 轮次挂接、资金链与回滚都由"重放"从成交行重建
+        // （`rebuild_trades`），没有它，之后任何一次改成交/删委托都会把这条已归档轮次判成
+        // "不再成立"而删掉（连带复盘）。它不进任何界面列表（读模型按 `shares > 0` 过滤）。
+        trades.push(StockTrade {
+            id: tr_store::util::new_uuid(),
+            ledger_id: ledger_id.to_string(),
+            stock_code: stock_code.to_string(),
+            stock_name: stock_name.to_string(),
+            trade_type: trade_type.to_string(),
+            order_id: order_id.clone(),
+            order_seq: 1,
+            price: 0,
+            lots: 0,
+            shares: 0,
+            amount: 0,
             trade_time,
             remark: remark.to_string(),
             ..StockTrade::default()
@@ -307,9 +336,19 @@ pub fn create_trade_order_with_round_fee(
             round_fee.clone(),
         )?;
         // 委托级一次计收（最低佣金按委托，不按笔）；印花税与过户费**逐笔**取整再相加，
-        // 再按成交额把委托级费用分摊到各笔明细（两份口径一致，见 `tr_domain::fee`）
-        let order_fee = fee::compute_order_fee(&amounts, instrument, &fee_setting, buy);
-        let allocated = fee::allocate_order_fee(order_fee, &amounts, instrument, &fee_setting, buy);
+        // 再按成交额把委托级费用分摊到各笔明细（两份口径一致，见 `tr_domain::fee`）。
+        // "只归档"那条路没有成交额，一律 0（最低佣金不能凭空收一遍）。
+        let (order_fee, allocated) = if archive_only {
+            (
+                fee::FeeBreakdown::default(),
+                vec![fee::FeeBreakdown::default()],
+            )
+        } else {
+            let order_fee = fee::compute_order_fee(&amounts, instrument, &fee_setting, buy);
+            let allocated =
+                fee::allocate_order_fee(order_fee, &amounts, instrument, &fee_setting, buy);
+            (order_fee, allocated)
+        };
 
         for trade in trades.iter_mut() {
             // 每一笔都写上本轮快照（本轮内自证口径；老数据留 NULL 表示"沿用系统配置"）
@@ -326,6 +365,26 @@ pub fn create_trade_order_with_round_fee(
                 ))
                 .into());
             }
+            // 清仓是"结束这一轮"的动作：手数必须等于剩余持仓（界面把它固定成全仓、不可改）。
+            // 想部分卖出就用减仓 —— 减仓（哪怕减到 0 手）不归档。
+            // "只归档"那条路没有成交明细，由下面的 `archive_only` 校验兜住。
+            if trade_type == consts::STOCK_TRADE_CLOSE
+                && !archive_only
+                && sold_shares != position.quantity
+            {
+                return Err(AppError::bad_request(format!(
+                    "清仓必须全部卖出（当前 {} 股）",
+                    position.quantity
+                ))
+                .into());
+            }
+        }
+        if archive_only && position.quantity != 0 {
+            return Err(AppError::bad_request(format!(
+                "清仓请填写成交明细（当前 {} 股）",
+                position.quantity
+            ))
+            .into());
         }
 
         for (index, trade) in trades.iter_mut().enumerate() {
@@ -337,6 +396,12 @@ pub fn create_trade_order_with_round_fee(
             if buy {
                 position.quantity += trade.shares;
                 position.total_cost += trade.amount + trade.fee;
+                continue;
+            }
+
+            if trade.shares == 0 {
+                // "只归档"那笔 0 手标记：不动持仓、不结转成本、已实现为 0
+                trade.realized_pnl = Some(0);
                 continue;
             }
 
@@ -354,8 +419,10 @@ pub fn create_trade_order_with_round_fee(
             }
         }
 
-        // 清仓：把本轮「建仓 → 清仓」的全部交易归档到交易历史
-        if sell && position.quantity == 0 {
+        // 清仓：把本轮「建仓 → 清仓」的全部交易归档到交易历史。
+        // 减仓（哪怕减到 0 手）**不**归档 —— 那一轮继续挂在持仓上（0 手），
+        // 之后买的算本轮加仓，直到用户点清仓（用户口径：清仓才归档）。
+        if trade_type == consts::STOCK_TRADE_CLOSE && position.quantity == 0 {
             let round_id = close_round(
                 conn,
                 ledger_id,
@@ -390,21 +457,25 @@ pub fn create_trade_order_with_round_fee(
             )
         };
 
-        let record = StockFundRecord {
-            id: tr_store::util::new_uuid(),
-            ledger_id: ledger_id.to_string(),
-            record_date: record_date.clone(),
-            event_type: event_type.to_string(),
-            event_text,
-            amount_change,
-            // 余额是派生值：插入时先留占位，紧接着按链序复算（**不**在这里自己算一次 —— `#48`）
-            cash_balance: 0,
-            net_pnl,
-            remark: trade_order_remark(stock_name, total_lots, total_amount, trades.len()),
-            created_at: 0,
-        };
-        db(StockDao::create_fund_record(conn, &record))?;
-        recalculate_cash_chain(conn, ledger_id)?;
+        // 「只归档」的清仓没有资金变化：记一条 ¥0.00 的卖出会把资金变化列表弄脏、
+        // 现金链也多一条空转记录。重放路径（`flush_replay_order`）同一条规则。
+        if total_lots > 0 {
+            let record = StockFundRecord {
+                id: tr_store::util::new_uuid(),
+                ledger_id: ledger_id.to_string(),
+                record_date: record_date.clone(),
+                event_type: event_type.to_string(),
+                event_text,
+                amount_change,
+                // 余额是派生值：插入时先留占位，紧接着按链序复算（**不**在这里自己算一次 —— `#48`）
+                cash_balance: 0,
+                net_pnl,
+                remark: trade_order_remark(stock_name, total_lots, total_amount, trades.len()),
+                created_at: 0,
+            };
+            db(StockDao::create_fund_record(conn, &record))?;
+            recalculate_cash_chain(conn, ledger_id)?;
+        }
 
         for trade in &trades {
             db(StockDao::create_trade(conn, trade))?;
@@ -414,10 +485,14 @@ pub fn create_trade_order_with_round_fee(
             ledger_id,
             consts::STOCK_OP_KIND_ORDER,
             trade_operation_label(trade_type),
-            format!(
-                "{stock_name} {stock_code} · {total_lots} 手 · {}",
-                amount_detail(total_amount)
-            ),
+            if archive_only {
+                format!("{stock_name} {stock_code} · 归档本轮（0 手）")
+            } else {
+                format!(
+                    "{stock_name} {stock_code} · {total_lots} 手 · {}",
+                    amount_detail(total_amount)
+                )
+            },
             &order_id,
         )?;
         Ok(())
@@ -862,6 +937,8 @@ struct ReplayOrder {
     stock_code: String,
     stock_name: String,
     is_buy: bool,
+    /// 是不是**清仓**委托：只有它把本轮收尾归档（减仓减到 0 手也不归档）。
+    is_close: bool,
     amount: i64,
     fee: i64,
     lots: i64,
@@ -956,6 +1033,7 @@ fn rebuild_trades(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult
                 stock_code: trade.stock_code.clone(),
                 stock_name: trade.stock_name.clone(),
                 is_buy: is_buy(&trade.trade_type),
+                is_close: trade.trade_type == consts::STOCK_TRADE_CLOSE,
                 amount: 0,
                 fee: 0,
                 lots: 0,
@@ -1015,7 +1093,10 @@ fn rebuild_trades(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult
         }
 
         if is_buy_trade {
-            if position.quantity == 0 {
+            // 新一轮的起点 = **本轮还没开始**（`cycle_indexes` 里没有这只票），不是"持仓为 0"：
+            // 减仓减到 0 手之后这一轮还在（要等清仓才归档），再买属于本轮加仓 ——
+            // 按持仓为 0 判会把前半段成交漏在轮次之外。
+            if !cycle_indexes.contains_key(&stock_code) {
                 cycle_opened_at.insert(stock_code.clone(), trade_time);
                 cycle_indexes.insert(stock_code.clone(), Vec::new());
             }
@@ -1074,8 +1155,9 @@ fn rebuild_trades(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult
     }
 
     for position in positions.values_mut() {
-        if position.quantity == 0 {
-            // 已清仓：本轮复盘已归档到轮次，持仓上的草稿不再保留
+        if !cycle_indexes.contains_key(&position.stock_code) {
+            // 本轮已经归档（重放结束时没有在建轮次）⇒ 持仓上的复盘草稿已归到轮次，不再保留；
+            // 减仓减到 0 手不算归档，草稿继续留在持仓上（下次加仓还在同一轮里）。
             position.review = String::new();
         }
         db(StockDao::update_position(conn, position))?;
@@ -1122,37 +1204,41 @@ fn flush_replay_order(
             Some(order.net_pnl),
         )
     };
-    let mut record = StockFundRecord {
-        id: tr_store::util::new_uuid(),
-        ledger_id: ledger_id.to_string(),
-        record_date: unix_to_date(order.last_time),
-        event_type: event_type.to_string(),
-        event_text,
-        amount_change,
-        cash_balance: 0,
-        net_pnl,
-        remark: trade_order_remark(
-            &order.stock_name,
-            order.lots,
-            order.amount,
-            order.indexes.len(),
-        ),
-        created_at: order.created_at,
-    };
-    // 录入顺序 = `created_at ASC, id ASC`。created_at 是秒级的，
-    // 同一秒录入的多条记录靠随机 UUID 决胜负，顺序不确定；这里在重放时把时间戳
-    // 拉成严格递增，使重放结果与资金链重算完全确定（不同秒的原值保持不变）。
-    record.created_at = record
-        .created_at
-        .max(last_record_created_at.saturating_add(1));
-    *last_record_created_at = record.created_at;
-    db(StockDao::create_fund_record(conn, &record))?;
+    // 0 手委托（"只归档本轮"那种清仓）不产生资金变化：记一条 ¥0.00 的卖出会把资金变化列表弄脏，
+    // 现金链也会多一条空转的记录。写入路径同一条规则。
+    if order.lots > 0 {
+        let mut record = StockFundRecord {
+            id: tr_store::util::new_uuid(),
+            ledger_id: ledger_id.to_string(),
+            record_date: unix_to_date(order.last_time),
+            event_type: event_type.to_string(),
+            event_text,
+            amount_change,
+            cash_balance: 0,
+            net_pnl,
+            remark: trade_order_remark(
+                &order.stock_name,
+                order.lots,
+                order.amount,
+                order.indexes.len(),
+            ),
+            created_at: order.created_at,
+        };
+        // 录入顺序 = `created_at ASC, id ASC`。created_at 是秒级的，
+        // 同一秒录入的多条记录靠随机 UUID 决胜负，顺序不确定；这里在重放时把时间戳
+        // 拉成严格递增，使重放结果与资金链重算完全确定（不同秒的原值保持不变）。
+        record.created_at = record
+            .created_at
+            .max(last_record_created_at.saturating_add(1));
+        *last_record_created_at = record.created_at;
+        db(StockDao::create_fund_record(conn, &record))?;
+    }
 
-    // 委托全部成交后持仓归零：归档本轮「建仓 → 清仓」
+    // 清仓委托把本轮「建仓 → 清仓」归档；减仓（哪怕减到 0 手）不归档
     let mut round_id = String::new();
     let closed = positions
         .get(&order.stock_code)
-        .map(|position| !order.is_buy && position.quantity == 0)
+        .map(|position| order.is_close && position.quantity == 0)
         .unwrap_or(false);
 
     if closed {

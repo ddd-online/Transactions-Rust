@@ -803,7 +803,10 @@ pub fn list_fund_records(
     })
 }
 
-/// 持仓列表（只含未清仓股票，挂载行情；`fetcher` 由调用方注入）。
+/// 持仓列表（未清仓的股票，挂载行情；`fetcher` 由调用方注入）。
+///
+/// 「未清仓」= **还有持仓，或者本轮还没归档**：减仓减到 0 手时这一轮仍在（0 手、成本 0），
+/// 只有清仓才把它归档出去。判据只看成交（`current_round_trades` 非空），不需要额外的列。
 pub fn list_positions(
     workspace: &Workspace,
     ledger_id: &str,
@@ -811,13 +814,12 @@ pub fn list_positions(
 ) -> ServiceResult<Vec<StockPositionDto>> {
     let conn = workspace.connection();
     let positions = db(StockDao::list_positions(&conn, ledger_id))?;
-    // 已清仓的股票不再出现在持仓列表
+    let by_code = trades_by_code(&conn, ledger_id)?;
     let held: Vec<StockPosition> = positions
         .into_iter()
-        .filter(|position| position.quantity > 0)
+        .filter(|position| position.quantity > 0 || has_open_round(&by_code, &position.stock_code))
         .collect();
     let quotes = fetch_held_quotes(fetcher, &held);
-    let by_code = trades_by_code(&conn, ledger_id)?;
     let flows = round_flows_of(by_code.clone());
     let round_fees = round_fees_of(&by_code);
 
@@ -869,10 +871,10 @@ pub fn update_position_review(
         }
         Err(error) => return Err(ServiceError::Database(error)),
     };
-    if position.quantity <= 0 {
+    // 0 手但本轮还没归档（减仓减到 0）时仍可写本轮复盘 —— 与持仓列表"还在列表里"同一口径
+    if position.quantity <= 0 && !stock_has_open_round(&conn, ledger_id, stock_code)? {
         return Err(AppError::not_found("该股票已清仓，请在「交易历史」中编辑本轮复盘").into());
     }
-
     position.review = review.to_string();
     if let Err(error) = StockDao::update_position(&conn, &position) {
         tracing::error!(
@@ -887,14 +889,16 @@ pub fn update_position_review(
     Ok(StockPositionDto::from(&position))
 }
 
-/// 仅对当前持仓股票请求行情；无持仓时返回空映射。
+/// 为要显示的持仓请求行情（调用方已经筛过"哪几条要显示"）；一条都没有时返回空映射。
+///
+/// 这里**不再**按 `quantity > 0` 过滤：减仓减到 0 手但本轮未归档的票也在持仓列表里，
+/// 现价/涨跌幅照常给它（市值按 0 股算是 0，浮动盈亏只由本轮资金变动决定）。
 fn fetch_held_quotes(
     fetcher: &dyn StockQuoteFetcher,
     held: &[StockPosition],
 ) -> HashMap<String, tr_domain::dto::StockQuoteDto> {
     let codes: Vec<String> = held
         .iter()
-        .filter(|position| position.quantity > 0)
         .map(|position| position.stock_code.clone())
         .collect();
     if codes.is_empty() {
@@ -999,6 +1003,27 @@ fn round_fees_of(by_code: &HashMap<String, Vec<StockTrade>>) -> HashMap<String, 
         .collect()
 }
 
+/// 这只票有没有**未归档的本轮**（`current_round_trades` 非空）。
+///
+/// 它取代了从前的"`quantity > 0` 才算未清仓"：减仓减到 0 手之后这一轮仍在持仓列表上，
+/// 直到用户清仓把它归档（用户口径：清仓才归档）。
+fn has_open_round(by_code: &HashMap<String, Vec<StockTrade>>, stock_code: &str) -> bool {
+    by_code
+        .get(stock_code)
+        .map(|trades| !tr_domain::stock::current_round_trades(trades).is_empty())
+        .unwrap_or(false)
+}
+
+/// 同上，但按股票单独查一次库（给只有 `conn` 的调用点用）。
+fn stock_has_open_round(
+    conn: &rusqlite::Connection,
+    ledger_id: &str,
+    stock_code: &str,
+) -> ServiceResult<bool> {
+    let trades = db(StockDao::list_trades_asc(conn, ledger_id, stock_code))?;
+    Ok(!tr_domain::stock::current_round_trades(&trades).is_empty())
+}
+
 /// 整个账本按股票切出本轮资金口径。
 fn round_flows(
     conn: &rusqlite::Connection,
@@ -1022,7 +1047,10 @@ fn flow_of(flows: &HashMap<String, RoundFlow>, position: &StockPosition) -> Roun
 // ---------- 交易列表 ----------
 
 /// 某股交易列表：
-/// 持仓中的股票只展示本轮（最近一次清仓之后）的交易，历史轮次留在「交易历史」页。
+/// **本轮还没归档**（有持仓，或减仓减到 0 手仍在持仓列表里）时只展示本轮（最近一次清仓之后）
+/// 的交易，历史轮次留在「交易历史」页；已清仓的股票保留"查看该股完整交易记录"的行为。
+///
+/// 0 手的标记成交（清仓时"只归档"那一笔）不进界面。
 pub fn list_trades(
     workspace: &Workspace,
     ledger_id: &str,
@@ -1035,16 +1063,22 @@ pub fn list_trades(
     let trades = db(StockDao::list_trades(&conn, ledger_id, stock_code))?;
 
     let position = StockDao::get_position(&conn, ledger_id, stock_code);
+    // 倒序 → 升序（按索引倒排，避免再查一次库）
+    let asc: Vec<StockTrade> = trades.iter().rev().cloned().collect();
+    let mut current = current_round_trades(&asc);
+    current.reverse();
+    let visible = |rows: Vec<&StockTrade>| -> Vec<StockTradeDto> {
+        rows.into_iter()
+            .filter(|trade| trade.shares > 0)
+            .map(StockTradeDto::from)
+            .collect()
+    };
     match position {
-        Ok(position) if position.quantity > 0 => {
-            // 倒序 → 升序（按索引倒排，避免再查一次库）
-            let asc: Vec<StockTrade> = trades.iter().rev().cloned().collect();
-            let mut current = current_round_trades(&asc);
-            current.reverse();
-            Ok(current.iter().map(StockTradeDto::from).collect())
+        Ok(position) if position.quantity > 0 || !current.is_empty() => {
+            Ok(visible(current.iter().collect()))
         }
-        Ok(_) => Ok(trades.iter().map(StockTradeDto::from).collect()),
-        Err(error) if is_not_found(&error) => Ok(trades.iter().map(StockTradeDto::from).collect()),
+        Ok(_) => Ok(visible(trades.iter().collect())),
+        Err(error) if is_not_found(&error) => Ok(visible(trades.iter().collect())),
         Err(error) => Err(ServiceError::Database(error)),
     }
 }
@@ -1142,50 +1176,37 @@ struct TradeCycle {
     closed_at: i64,
 }
 
-/// 把按时间升序的交易流切分为完整轮次：持仓数量回到 0 即一轮结束。
-/// 尚未回到 0 的在建轮次不返回（保持未挂接，待清仓时归档）。
+/// 把按时间升序的交易流切分为**已经结束的**轮次：只有**清仓**结束一轮
+/// （减仓减到 0 手不算 —— 那一轮还挂在持仓上，等用户点清仓）。
+/// 尚未清仓的在建轮次不返回（保持未挂接，待清仓时归档）。
 fn derive_trade_cycles(trades: &[StockTrade]) -> Vec<TradeCycle> {
     let mut pending: Vec<TradeCycle> = Vec::new();
-    let mut shares = 0_i64;
     let mut current: Option<usize> = None;
+    let start = |pending: &mut Vec<TradeCycle>, current: &mut Option<usize>, at: i64| {
+        if current.is_none() {
+            pending.push(TradeCycle {
+                ids: Vec::new(),
+                opened_at: at,
+                closed_at: 0,
+            });
+            *current = Some(pending.len() - 1);
+        }
+    };
     for trade in trades {
         match trade.trade_type.as_str() {
-            consts::STOCK_TRADE_OPEN | consts::STOCK_TRADE_ADD => {
-                if shares == 0 {
-                    pending.push(TradeCycle {
-                        ids: Vec::new(),
-                        opened_at: trade.trade_time,
-                        closed_at: 0,
-                    });
-                    current = Some(pending.len() - 1);
-                }
-                shares += trade.shares;
+            consts::STOCK_TRADE_OPEN | consts::STOCK_TRADE_ADD | consts::STOCK_TRADE_REDUCE => {
+                start(&mut pending, &mut current, trade.trade_time);
                 if let Some(index) = current {
                     pending[index].ids.push(trade.id.clone());
                 }
             }
-            consts::STOCK_TRADE_REDUCE | consts::STOCK_TRADE_CLOSE => {
-                if current.is_none() {
-                    pending.push(TradeCycle {
-                        ids: Vec::new(),
-                        opened_at: trade.trade_time,
-                        closed_at: 0,
-                    });
-                    current = Some(pending.len() - 1);
-                }
-                shares -= trade.shares;
-                if shares < 0 {
-                    shares = 0;
-                }
+            consts::STOCK_TRADE_CLOSE => {
+                start(&mut pending, &mut current, trade.trade_time);
                 if let Some(index) = current {
                     pending[index].ids.push(trade.id.clone());
+                    pending[index].closed_at = trade.trade_time;
                 }
-                if shares == 0 {
-                    if let Some(index) = current {
-                        pending[index].closed_at = trade.trade_time;
-                    }
-                    current = None;
-                }
+                current = None;
             }
             _ => {}
         }
@@ -1282,7 +1303,11 @@ pub fn get_trade_history_detail(
     let mut total_pnl = 0_i64;
     let mut total_buy_cost = 0_i64;
     for round in &rounds {
-        let trades = db(StockDao::list_trades_by_round(&conn, &round.id))?;
+        // 0 手的标记成交（清仓"只归档"那一笔）不算成交：不进列表，也不计进 `trade_count`
+        let trades: Vec<StockTrade> = db(StockDao::list_trades_by_round(&conn, &round.id))?
+            .into_iter()
+            .filter(|trade| trade.shares > 0)
+            .collect();
         let (pnl, pnl_rate, buy_cost) = round_pnl(&trades);
         total_pnl += pnl;
         total_buy_cost += buy_cost;
@@ -1517,21 +1542,24 @@ pub fn archive_data(
 ) -> ServiceResult<String> {
     let mut new_ledger_id = String::new();
     if let Err(error) = workspace.transaction(|conn| {
-        let held: Vec<String> = db(StockDao::list_positions(conn, ledger_id))?
-            .into_iter()
-            .filter(|position| position.quantity > 0)
-            .map(|position| {
-                if position.stock_name.is_empty() {
+        // 前提是"没有未清仓的轮次"：减仓减到 0 手但没点清仓时，这一轮还在（0 手），
+        // 归档账本会把它连着未归档的成交一起搬走 —— 先用清仓把它结掉。
+        let mut open: Vec<String> = Vec::new();
+        for position in db(StockDao::list_positions(conn, ledger_id))? {
+            if position.quantity > 0 {
+                open.push(if position.stock_name.is_empty() {
                     position.stock_code
                 } else {
                     position.stock_name
-                }
-            })
-            .collect();
-        if !held.is_empty() {
+                });
+            } else if stock_has_open_round(conn, ledger_id, &position.stock_code)? {
+                open.push(format!("{} （0 手）", position.stock_code));
+            }
+        }
+        if !open.is_empty() {
             return Err(AppError::conflict(format!(
-                "仍有持仓（{}），请先全部清仓后再归档",
-                held.join("、")
+                "仍有未清仓的轮次（{}），请先清仓归档后再归档账本",
+                open.join("、")
             ))
             .into());
         }
@@ -3280,8 +3308,8 @@ mod tests {
 
         let error = archive_data(&workspace, TEST_LEDGER_ID, "归档账本").unwrap_err();
         assert!(
-            error.to_string().contains("持仓"),
-            "错误文案要说明是持仓挡住了：{error}"
+            error.to_string().contains("未清仓的轮次"),
+            "错误文案要说明是未清仓的轮次挡住了：{error}"
         );
 
         // 整笔回滚：没留下那个空账本，交易与持仓都还在原账本
@@ -3920,6 +3948,326 @@ mod tests {
                 transfer_fee_rate: 0.00001,
             }),
             "新轮次的快照 = 当前系统配置"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 减仓可以减到 0 手而**不**归档：那一轮继续挂在持仓上（0 手、成本 0），之后再买还是本轮，
+    /// 直到点清仓才归档（用户口径：清仓才归档）。改成交触发的重放也要把同一轮完整重建。
+    #[test]
+    fn a_reduce_to_zero_does_not_archive_the_round() {
+        let (workspace, dir) = workspace("reduce-to-zero-keeps-round");
+        seed_principal(&workspace, 10_000_000);
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            2,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+        let reduce = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_REDUCE,
+            110_000,
+            2,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap();
+        assert!(reduce.round_id.is_empty(), "减仓不归档：这一笔不挂轮次");
+
+        // 持仓列表里还在（0 手、成本 0），本轮资金口径照常
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        let position = positions
+            .iter()
+            .find(|item| item.stock_code == TEST_CODE)
+            .expect("减到 0 手后这只票仍在持仓列表里");
+        assert_eq!(position.quantity, 0, "数量 0 手");
+        assert_eq!(position.total_cost, 0, "成本归零");
+        assert!(
+            position.round_cash_flow > 0,
+            "本轮资金变动合计仍按本轮算（卖出回款冲抵投入）：{}",
+            position.round_cash_flow
+        );
+
+        // 详情区只给本轮两笔；还没有交易历史（没归档）
+        let trades = list_trades(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(trades.len(), 2, "本轮 = 建仓 + 减仓");
+        assert!(
+            get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).is_err(),
+            "减到 0 手不产生交易历史"
+        );
+
+        // 再买 1 手 ⇒ 仍是本轮的加仓
+        let add = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_ADD,
+            100_000,
+            1,
+            1_700_000_200,
+            "",
+            "",
+        )
+        .unwrap();
+        assert!(add.round_id.is_empty(), "本轮还没结束，加仓也不挂轮次");
+        let trades = list_trades(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(trades.len(), 3, "本轮 = 建仓 + 减仓 + 加仓");
+
+        // 清仓 1 手 ⇒ 归档；四笔都归到同一轮
+        let close = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            120_000,
+            1,
+            1_700_000_300,
+            "",
+            "",
+        )
+        .unwrap();
+        assert!(!close.round_id.is_empty(), "清仓挂上轮次");
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(detail.rounds.len(), 1, "三买一卖只归档一轮");
+        assert_eq!(
+            detail.rounds[0].trade_count, 4,
+            "建仓 / 减仓 / 加仓 / 清仓 四笔都在同一轮"
+        );
+        assert_eq!(detail.rounds[0].opened_at, 1_700_000_000, "轮次从建仓算起");
+
+        // 改一笔成交触发重放：新一轮的起点不能是"持仓为 0"，否则减仓到 0 之后那半段会掉出轮次。
+        update_trade_fill(
+            &workspace,
+            TEST_LEDGER_ID,
+            &detail.rounds[0].trades[0].id,
+            105_000,
+            2,
+            1_700_000_000,
+        )
+        .unwrap();
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(detail.rounds.len(), 1, "重放后轮次还在");
+        assert_eq!(
+            detail.rounds[0].trade_count, 4,
+            "重放后四笔仍属同一轮（建仓 / 减仓 / 加仓 / 清仓）"
+        );
+        assert_eq!(
+            detail.rounds[0].opened_at, 1_700_000_000,
+            "轮次的开始时间仍是建仓那一刻"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 持仓已经是 0 手时的清仓 = **只归档**：写一笔 0 手标记成交、不产生资金变化记录、
+    /// 轮次照旧成立（标记那笔不算成交笔数），归档后这只票从持仓列表消失。
+    #[test]
+    fn a_zero_lot_close_archives_without_money_movement() {
+        let (workspace, dir) = workspace("zero-lot-close-archives");
+        seed_principal(&workspace, 10_000_000);
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            2,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_REDUCE,
+            110_000,
+            2,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap();
+        let records_before = db(StockDao::list_all_fund_records(
+            &workspace.connection(),
+            TEST_LEDGER_ID,
+        ))
+        .unwrap()
+        .len();
+
+        let closed = create_trade_order(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            &[],
+            1_700_000_200,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(closed.len(), 1, "只写一笔 0 手标记成交");
+        assert_eq!(
+            (
+                closed[0].lots,
+                closed[0].shares,
+                closed[0].amount,
+                closed[0].fee
+            ),
+            (0, 0, 0, 0),
+            "标记成交不成交、不收费"
+        );
+        assert!(!closed[0].round_id.is_empty(), "标记成交也挂在归档的轮次上");
+        let records_after = db(StockDao::list_all_fund_records(
+            &workspace.connection(),
+            TEST_LEDGER_ID,
+        ))
+        .unwrap()
+        .len();
+        assert_eq!(
+            records_after, records_before,
+            "0 手清仓不产生资金变化记录（建仓 + 减仓两条不变）"
+        );
+
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(detail.rounds.len(), 1, "0 手清仓照样归档出一轮");
+        assert_eq!(detail.rounds[0].trade_count, 2, "0 手标记不算成交笔数");
+        assert!(
+            detail.rounds[0].trades.iter().all(|trade| trade.shares > 0),
+            "0 手标记不进界面的成交列表：{:?}",
+            detail.rounds[0].trades
+        );
+        assert!(
+            list_positions(&workspace, TEST_LEDGER_ID, &no_quotes())
+                .unwrap()
+                .iter()
+                .all(|item| item.stock_code != TEST_CODE),
+            "归档之后这只票从持仓列表消失"
+        );
+
+        // 改一笔成交触发重放：0 手标记那一笔**必须**让轮次重新成立 ——
+        // 重放是从成交行重建轮次的，没有这一行，任何一次改成交/删委托都会把这条已归档轮次删掉。
+        let open_id = detail.rounds[0].trades[0].id.clone();
+        update_trade_fill(
+            &workspace,
+            TEST_LEDGER_ID,
+            &open_id,
+            102_000,
+            2,
+            1_700_000_000,
+        )
+        .unwrap();
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(detail.rounds.len(), 1, "重放后轮次仍在（0 手标记撑住了它）");
+        assert_eq!(detail.rounds[0].trade_count, 2, "重放后仍只算两笔真成交");
+        let markers = db(StockDao::list_trades_by_round(
+            &workspace.connection(),
+            &detail.rounds[0].id,
+        ))
+        .unwrap()
+        .into_iter()
+        .filter(|trade| trade.shares == 0)
+        .count();
+        assert_eq!(markers, 1, "重放后 0 手标记仍挂在轮次上");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 清仓必须全仓：手数不足报错；还有持仓却传空明细也报错（那是"只归档"那条路的前提）。
+    #[test]
+    fn a_partial_close_is_rejected() {
+        let (workspace, dir) = workspace("close-must-be-full");
+        seed_principal(&workspace, 10_000_000);
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            2,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+
+        let error = create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            110_000,
+            1,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("清仓必须全部卖出"),
+            "部分清仓要报错：{error}"
+        );
+
+        let error = create_trade_order(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            &[],
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("清仓请填写成交明细"),
+            "还有持仓时不允许只归档：{error}"
+        );
+
+        // 减仓减到 0 手仍然允许 —— 与清仓的区别就在这
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_REDUCE,
+            110_000,
+            2,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap();
+        let position =
+            StockDao::get_position(&workspace.connection(), TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(position.quantity, 0, "减仓减到 0 手");
+        assert!(
+            !list_positions(&workspace, TEST_LEDGER_ID, &no_quotes())
+                .unwrap()
+                .is_empty(),
+            "减到 0 手仍在持仓列表里"
         );
 
         std::fs::remove_dir_all(&dir).ok();

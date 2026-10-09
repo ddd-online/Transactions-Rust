@@ -291,6 +291,24 @@ fn position_round_fee(code: &str) -> Option<StockFeeSetting> {
     position_round_fee_raw(code).map(|fee| fee.to_setting())
 }
 
+/// 某个代码**当前可卖手数**（同样读模块级持仓快照）。
+///
+/// 详情区那三个按钮用的是页面里的 `available_lots`（读信号）；`trade_modal` 是自由函数拿不到，
+/// 只能走快照 —— 与"可用手数"的提示、清仓时固定成全仓的手数都用它。
+fn position_available_lots(code: &str) -> i64 {
+    POSITION_SNAPSHOT.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|positions| {
+                positions
+                    .iter()
+                    .find(|item| item.stock_code == code)
+                    .map(|item| lots_of(item.quantity))
+            })
+            .unwrap_or(0)
+    })
+}
+
 /// 影响预演弹窗里要展示的信息。
 #[derive(Debug, Clone, PartialEq)]
 struct ImpactPrompt {
@@ -1177,7 +1195,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         }
         let code = trade_code.get_untracked().trim().to_string();
         let name = trade_name.get_untracked().trim().to_string();
-        let mut submit_type = trade_type.get_untracked();
+        let submit_type = trade_type.get_untracked();
         if name.is_empty() {
             Notifier::global().error("请输入股票名称".to_string(), None);
             return;
@@ -1190,21 +1208,27 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
             );
             return;
         }
+        let available = available_lots(&code);
         let raw_count = trade_rows.rows_text.get_untracked().len();
         let fills = trade_rows.parsed();
-        if fills.len() != raw_count || fills.is_empty() {
+        // 「清仓」是结束这一轮的动作：界面把成交手数固定成全仓（不可改）。
+        // 持仓已经是 0 手时（减仓减到 0 之后这一轮还挂在持仓列表上）清仓只是把本轮归档到
+        // 交易历史 —— 没有成交明细，服务层也不写成交额/资金变化。
+        let archive_only = submit_type == "close" && available == 0;
+        if !archive_only && (fills.len() != raw_count || fills.is_empty()) {
             Notifier::global().error("请填写完整的成交价与手数".to_string(), None);
             return;
         }
         let total_lots: i64 = fills.iter().map(|fill| fill.lots).sum();
-        let available = available_lots(&code);
         if submit_type == "reduce" && total_lots > available {
             Notifier::global().error(format!("减仓手数不能超过可用手数（{available} 手）"), None);
             return;
         }
-        // 减仓正好等于可用手数 → 视为清仓
-        if submit_type == "reduce" && available > 0 && total_lots == available {
-            submit_type = "close".to_string();
+        // 清仓的手数由界面固定成全仓；这里再兜一道（服务层也会拒）。
+        // **减仓减到 0 手不算清仓** —— 那一轮继续留着，直到用户点清仓（用户口径）。
+        if submit_type == "close" && !archive_only && total_lots != available {
+            Notifier::global().error(format!("清仓必须全部卖出（当前 {available} 手）"), None);
+            return;
         }
         // 四种委托都带上当前选中的标签：非清仓时它只用于"带到这一轮的下一次委托"
         // （服务层只把它写进轮次，见 `close_round`），清仓时它落成轮次标签。
@@ -1566,6 +1590,8 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                 .into_any();
                         };
                         let has_quote = format::has_quote(position.latest_price);
+                        // 0 手时没有可减的（这一轮还在持仓列表里，点「清仓」才归档）
+                        let can_reduce = position.quantity > 0;
                         let day_change = match (position.latest_price, position.prev_close) {
                             (Some(latest), Some(prev)) if prev > 0 => Some(latest - prev),
                             _ => None,
@@ -1607,6 +1633,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                     </span>
                                 </div>
                                 <div class="stock-detail__actions">
+                                    // 清仓 = 结束这一轮（全是全仓卖出，减仓减到 0 手之后也点它归档）
                                     <Button
                                         variant=ButtonVariant::PrimaryDanger
                                         size=ButtonSize::Small
@@ -1618,9 +1645,11 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                     >
                                         "清仓"
                                     </Button>
+                                    // 0 手时没有可减的（那一轮还在，点清仓才归档）
                                     <Button
                                         variant=ButtonVariant::Secondary
                                         size=ButtonSize::Small
+                                        disabled=Signal::derive(move || !can_reduce)
                                         // 同上：这里写 selected_code 会让「减仓」弹窗弹不出来
                                         on_click=move |_| open_trade("reduce")
                                     >
@@ -2265,17 +2294,30 @@ fn trade_modal(
             <div class="stock-trade-form__fills">
                 <div class="stock-trade-form__fills-head">
                     <span class="modal-form-label">"成交明细"</span>
-                    <button
-                        type="button"
-                        class="ui-btn ui-btn--link ui-btn--sm"
-                        on:click=move |_| {
-                            rows.push_empty();
-                        }
-                    >
-                        "+ 添加一笔成交"
-                    </button>
+                    // 清仓 = 结束这一轮：手数固定成全仓、不给加行；0 手时干脆没有成交明细
+                    <Show when=move || trade_type.get() != "close">
+                        <button
+                            type="button"
+                            class="ui-btn ui-btn--link ui-btn--sm"
+                            on:click=move |_| {
+                                rows.push_empty();
+                            }
+                        >
+                            "+ 添加一笔成交"
+                        </button>
+                    </Show>
                 </div>
+                <Show when=move || {
+                    trade_type.get() == "close" && position_available_lots(&code.get()) == 0
+                }>
+                    <p class="stock-trade-form__hint">
+                        "本轮已无持仓。确认后本轮会归档到「交易历史」，不产生成交与资金变化。"
+                    </p>
+                </Show>
                 {move || {
+                    if trade_type.get() == "close" && position_available_lots(&code.get()) == 0 {
+                        return view! { <span></span> }.into_any();
+                    }
                     let prices = rows.price_signals.get();
                     let lots = rows.lots_signals.get();
                     prices
@@ -2290,21 +2332,10 @@ fn trade_modal(
                                 // 可用手数只能从持仓推出来。`trade_modal` 是自由函数、
                                 // 拿不到 `position_view` 的闭包，因此通过模块级快照读取
                                 // （由 `position_view` 在每次渲染时写入）。
-                                let code_text = code.get();
-                                let available = POSITION_SNAPSHOT.with(|slot| {
-                                    slot.borrow()
-                                        .as_ref()
-                                        .and_then(|positions| {
-                                            positions
-                                                .iter()
-                                                .find(|item| item.stock_code == code_text)
-                                                .map(|item| lots_of(item.quantity))
-                                        })
-                                        .unwrap_or(0)
-                                });
+                                let available = position_available_lots(&code.get());
                                 match current.as_str() {
                                     "close" if available > 0 => {
-                                        format!("手数（全仓 {available} 手）")
+                                        format!("手数（全仓 {available} 手，不可改）")
                                     }
                                     "reduce" if available > 0 => {
                                         format!("手数（可用 {available} 手）")
@@ -2334,9 +2365,14 @@ fn trade_modal(
                             view! {
                                 <div class="stock-fill-row">
                                     <Input value=price_signal placeholder="成交价（元/股）" />
-                                    <Input value=lots_signal placeholder=lots_label />
+                                    // 清仓的手数固定成全仓，用户不能改（想部分卖出用「减仓」）
+                                    <Input
+                                        value=lots_signal
+                                        placeholder=lots_label
+                                        disabled=Signal::derive(move || trade_type.get() == "close")
+                                    />
                                     <span class="stock-fill-row__amount">{amount_value}</span>
-                                    {if count > 1 {
+                                    {if count > 1 && trade_type.get() != "close" {
                                         view! {
                                             <button
                                                 type="button"
@@ -2355,6 +2391,7 @@ fn trade_modal(
                             }
                         })
                         .collect_view()
+                        .into_any()
                 }}
             </div>
 
