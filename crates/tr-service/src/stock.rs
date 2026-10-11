@@ -1626,6 +1626,7 @@ mod tests {
     use super::*;
     use crate::test_support::workspace;
     use tr_domain::dto::StockQuoteDto;
+    use tr_domain::statistics::{StatisticsFilter, StatisticsStrategy};
 
     /// 测试用的账本 / 股票常量。
     const TEST_LEDGER_ID: &str = "ledger-history";
@@ -6147,6 +6148,316 @@ mod tests {
         )
         .unwrap();
         assert_eq!((all.round_count, all.points.len()), (3, 3));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 按「(开仓价, 平仓价)」逐笔造干净结算，从 2023-07-01 起每天一笔（价格单位：**厘**）。
+    ///
+    /// 手数 10 → 每笔盈亏 = (平仓 − 开仓) × 10 手 × 100 股 = (平仓 − 开仓) × 100 分，
+    /// 于是「10000 → 11000」这样的写法正好读成 "+10 万分 = +1000 元"。
+    fn seed_settlements(workspace: &Workspace, prices: &[(i64, i64)]) {
+        for (index, (open, close)) in prices.iter().enumerate() {
+            seed_clean_round_on(
+                workspace,
+                TEST_CODE,
+                TEST_NAME,
+                *open,
+                *close,
+                10,
+                &format!("2023-07-{:02} 12:00:00", index + 1),
+            );
+        }
+    }
+
+    /// 分组口径：每 N 笔一组、**组间互不重叠**，且不改逐笔累计序列。
+    #[test]
+    fn statistics_grouped_splits_into_disjoint_groups() {
+        let (workspace, dir) = workspace("stats-grouped");
+        seed_principal(&workspace, 10_000_000);
+        // 7 笔：+100000 −80000 +50000 −20000 +30000 +10000 −40000
+        seed_settlements(
+            &workspace,
+            &[
+                (10_000, 11_000),
+                (10_000, 9_200),
+                (10_000, 10_500),
+                (10_000, 9_800),
+                (10_000, 10_300),
+                (10_000, 10_100),
+                (10_000, 9_600),
+            ],
+        );
+
+        let grouped = crate::stock_statistics::get_statistics_for(
+            &workspace,
+            TEST_LEDGER_ID,
+            &StatisticsFilter::new("", "", None, "")
+                .with_strategy(StatisticsStrategy::Grouped, Some(5)),
+        )
+        .unwrap();
+        // 7 笔 → 5 + 2 两组；逐笔累计序列照旧是 7 个点（顶部合计与「明细」都读它）
+        assert_eq!((grouped.round_count, grouped.points.len()), (7, 7));
+        assert_eq!(grouped.groups.len(), 2);
+
+        let first = &grouped.groups[0];
+        assert_eq!((first.sequence, first.span), (5, 5));
+        assert_eq!(first.total_pnl, 80_000, "本组盈亏之和");
+        assert_eq!((first.win_count, first.loss_count), (3, 2));
+        assert_eq!(first.win_rate, 60.0);
+        assert_eq!(first.avg_win, 60_000, "(100000 + 50000 + 30000) ÷ 3");
+        assert_eq!(first.avg_loss, 50_000, "(80000 + 20000) ÷ 2");
+        let ratio = first.pnl_ratio.expect("本组有亏损样本");
+        assert!((ratio - 1.2).abs() < 0.0001, "实际 {ratio}");
+        assert_eq!(first.expectancy, 16_000, "80000 ÷ 5");
+        // 组内曲线：峰值 100000（第 1 笔）、谷底 20000（第 2 笔）→ 回撤 80000，占本金 0.8%
+        assert_eq!(first.max_drawdown, 80_000);
+        assert!((first.max_drawdown_pct - 0.8).abs() < 0.001);
+
+        let last = &grouped.groups[1];
+        assert_eq!((last.sequence, last.span), (7, 2), "末组不足 N 笔也不补齐");
+        assert_eq!(last.total_pnl, -30_000);
+        assert_eq!((last.win_count, last.loss_count), (1, 1));
+        assert_eq!(last.win_rate, 50.0);
+        assert_eq!((last.avg_win, last.avg_loss), (10_000, 40_000));
+        assert_eq!(last.expectancy, -15_000);
+        assert_eq!(last.max_drawdown, 40_000, "组内从 0 起步：+10000 → −30000");
+        assert!((last.max_drawdown_pct - 0.4).abs() < 0.001);
+        // 组点挂在组末那笔结算上：「本笔」那几个字段取第 7 笔，统计量是本组的
+        assert_eq!(last.pnl, -40_000);
+        assert_eq!(last.stock_code, TEST_CODE);
+        assert_eq!(last.closed_at, grouped.points[6].closed_at);
+
+        // 组间不重叠也不遗漏：各组盈亏之和 = 全量累计盈亏
+        let sum: i64 = grouped.groups.iter().map(|point| point.total_pnl).sum();
+        assert_eq!(sum, grouped.points[6].total_pnl);
+        assert_eq!(sum, 50_000);
+
+        // 分组不改逐笔累计序列；逐笔累计口径下不返回分组点
+        let cumulative = crate::stock_statistics::get_statistics_for(
+            &workspace,
+            TEST_LEDGER_ID,
+            &StatisticsFilter::new("", "", None, ""),
+        )
+        .unwrap();
+        assert_eq!(grouped.points, cumulative.points);
+        assert!(cumulative.groups.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 分组在**筛选后的集合**里从第 1 笔起算（最近 N 笔 / 月份区间先定集合）。
+    #[test]
+    fn statistics_grouped_follows_the_filter() {
+        let (workspace, dir) = workspace("stats-grouped-filter");
+        seed_principal(&workspace, 10_000_000);
+        // 6 笔：+100000 −80000 +50000 −20000 +30000 +10000
+        seed_settlements(
+            &workspace,
+            &[
+                (10_000, 11_000),
+                (10_000, 9_200),
+                (10_000, 10_500),
+                (10_000, 9_800),
+                (10_000, 10_300),
+                (10_000, 10_100),
+            ],
+        );
+
+        // 最近 3 笔（−20000 +30000 +10000）+ 每 2 笔 → 2 组（2 + 1），集合内重新编号
+        let recent = crate::stock_statistics::get_statistics_for(
+            &workspace,
+            TEST_LEDGER_ID,
+            &StatisticsFilter::new("", "", Some(3), "")
+                .with_strategy(StatisticsStrategy::Grouped, Some(2)),
+        )
+        .unwrap();
+        assert_eq!(
+            (recent.round_count, recent.points.len(), recent.groups.len()),
+            (3, 3, 2)
+        );
+        assert_eq!((recent.groups[0].sequence, recent.groups[0].span), (2, 2));
+        assert_eq!(recent.groups[0].total_pnl, 10_000, "−20000 + 30000");
+        assert_eq!(
+            (recent.groups[1].sequence, recent.groups[1].span),
+            (3, 1),
+            "末组只剩一笔也成点"
+        );
+        assert_eq!(recent.groups[1].total_pnl, 10_000);
+        assert_eq!(recent.groups[1].win_rate, 100.0);
+
+        // 月份区间同样先定集合；集合为空时两组序列都为空
+        let july = crate::stock_statistics::get_statistics_for(
+            &workspace,
+            TEST_LEDGER_ID,
+            &StatisticsFilter::new("2023-07", "2023-07", None, "")
+                .with_strategy(StatisticsStrategy::Grouped, Some(4)),
+        )
+        .unwrap();
+        assert_eq!((july.round_count, july.groups.len()), (6, 2));
+        assert_eq!((july.groups[0].span, july.groups[1].span), (4, 2));
+
+        let empty = crate::stock_statistics::get_statistics_for(
+            &workspace,
+            TEST_LEDGER_ID,
+            &StatisticsFilter::new("2023-06", "2023-06", None, "")
+                .with_strategy(StatisticsStrategy::Grouped, Some(4)),
+        )
+        .unwrap();
+        assert_eq!(
+            (empty.round_count, empty.points.len(), empty.groups.len()),
+            (0, 0, 0)
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 标签先过滤轮次，分组再在过滤后的集合里从第 1 笔起算。
+    #[test]
+    fn statistics_grouped_combines_with_tag() {
+        let (workspace, dir) = workspace("stats-grouped-tag");
+        seed_tagged_stat_rounds(&workspace);
+
+        // 打板 3 笔：+100000（07-01）、+50000（08-01）、+50000（08-02）
+        let daban = crate::stock_statistics::get_statistics_for(
+            &workspace,
+            TEST_LEDGER_ID,
+            &StatisticsFilter::new("", "", None, consts::STOCK_TAG_DABAN)
+                .with_strategy(StatisticsStrategy::Grouped, Some(2)),
+        )
+        .unwrap();
+        assert_eq!((daban.round_count, daban.groups.len()), (3, 2));
+        assert_eq!(
+            (
+                daban.groups[0].sequence,
+                daban.groups[0].span,
+                daban.groups[0].total_pnl,
+            ),
+            (2, 2, 150_000)
+        );
+        assert_eq!(
+            (
+                daban.groups[1].sequence,
+                daban.groups[1].span,
+                daban.groups[1].total_pnl,
+            ),
+            (3, 1, 50_000)
+        );
+        // 标签筛选下逐笔累计序列同样只含这 3 笔
+        assert_eq!(daban.points.len(), 3);
+        assert_eq!(daban.points[2].total_pnl, 200_000);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 组点的回撤率分母是**该组末笔当时的本金**（与逐笔累计、区间口径同一条规则）。
+    #[test]
+    fn statistics_grouped_drawdown_pct_uses_the_principal_at_the_group_end() {
+        let (workspace, dir) = workspace("stats-grouped-drawdown");
+        seed_principal(&workspace, 10_000_000);
+        // 第 1 组（两笔都亏）：−200000、−300000 → 组内回撤 500000 ÷ 当时本金 1000 万 = 5%
+        seed_clean_round_on(
+            &workspace,
+            TEST_CODE,
+            TEST_NAME,
+            20_000,
+            18_000,
+            10,
+            "2023-01-05 12:00:00",
+        );
+        seed_clean_round_on(
+            &workspace,
+            TEST_CODE_B,
+            TEST_NAME_B,
+            20_000,
+            17_000,
+            10,
+            "2023-01-06 12:00:00",
+        );
+        // 组间追加本金 500 万
+        {
+            let conn = workspace.connection();
+            StockDao::update_account_principal(&conn, TEST_LEDGER_ID, 15_000_000).unwrap();
+            let record = StockFundRecord {
+                id: tr_store::util::new_uuid(),
+                ledger_id: TEST_LEDGER_ID.to_string(),
+                record_date: "2023-01-10".to_string(),
+                event_type: consts::STOCK_EVENT_ADD_PRINCIPAL.to_string(),
+                event_text: "追加本金".to_string(),
+                amount_change: 5_000_000,
+                cash_balance: 15_000_000,
+                net_pnl: None,
+                remark: String::new(),
+                created_at: 0,
+            };
+            StockDao::create_fund_record(&conn, &record).unwrap();
+        }
+        // 第 2 组（两笔都亏）：−100000、−200000 → 组内回撤 300000 ÷ 当时本金 1500 万 = 2%
+        seed_clean_round_on(
+            &workspace,
+            TEST_CODE,
+            TEST_NAME,
+            20_000,
+            19_000,
+            10,
+            "2023-01-20 12:00:00",
+        );
+        seed_clean_round_on(
+            &workspace,
+            TEST_CODE_B,
+            TEST_NAME_B,
+            20_000,
+            18_000,
+            10,
+            "2023-01-21 12:00:00",
+        );
+
+        let stats = crate::stock_statistics::get_statistics_for(
+            &workspace,
+            TEST_LEDGER_ID,
+            &StatisticsFilter::new("", "", None, "")
+                .with_strategy(StatisticsStrategy::Grouped, Some(2)),
+        )
+        .unwrap();
+        assert_eq!(stats.groups.len(), 2);
+        assert_eq!(stats.groups[0].max_drawdown, 500_000);
+        assert!((stats.groups[0].max_drawdown_pct - 5.0).abs() < 0.01);
+        assert_eq!(stats.groups[1].max_drawdown, 300_000);
+        assert!(
+            (stats.groups[1].max_drawdown_pct - 2.0).abs() < 0.01,
+            "分母是追加后的 1500 万（实际 {}）",
+            stats.groups[1].max_drawdown_pct
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 分组笔数的判据在 `StatisticsFilter::validate`，生产入口返回同一句错误。
+    #[test]
+    fn statistics_grouped_size_is_validated_on_the_production_path() {
+        let (workspace, dir) = workspace("stats-grouped-invalid");
+
+        for size in [None, Some(0), Some(1), Some(-5), Some(1001)] {
+            let error = crate::stock_statistics::get_statistics_for(
+                &workspace,
+                TEST_LEDGER_ID,
+                &StatisticsFilter::new("", "", None, "")
+                    .with_strategy(StatisticsStrategy::Grouped, size),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("group_size"),
+                "size = {size:?} 应报组笔数非法（实际 {error}）"
+            );
+        }
+        // 逐笔累计口径下同一个字段不参与校验
+        assert!(crate::stock_statistics::get_statistics_for(
+            &workspace,
+            TEST_LEDGER_ID,
+            &StatisticsFilter::new("", "", None, "")
+                .with_strategy(StatisticsStrategy::Cumulative, Some(1)),
+        )
+        .is_ok());
 
         std::fs::remove_dir_all(&dir).ok();
     }

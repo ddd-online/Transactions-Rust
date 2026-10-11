@@ -183,6 +183,10 @@ $PathMap = @(
     @{ Re='^crates/tr-domain/src/events\.rs$';            Groups=@('ipc', 'ui', 'update', 'domain') }
     @{ Re='^crates/tr-domain/src/models/';                Groups=@('domain', 'store') }
     @{ Re='^crates/tr-domain/src/dto/';                   Groups=@('domain', 'ipc') }
+    # 统计筛选 + 统计口径（`StatisticsFilter` / `StatisticsStrategy`）的唯一消费者是股票统计
+    # （`tr-service::stock_statistics`），所以它一变要连 `stock` 组一起跑（`ui-stock.ps1` 会点那两个
+    # 下拉）。必须排在通用的 `tr-domain/` 之前（顺序敏感，第一条命中为准）。
+    @{ Re='^crates/tr-domain/src/statistics\.rs$';        Groups=@('stock', 'domain') }
     @{ Re='^crates/tr-domain/';                           Groups=@('domain') }
     @{ Re='^crates/tr-store/src/(migrations|schema|workspace)\.rs$'; Groups=@('store', 'schema') }
     # 图表 DAO 的列表读序（`ORDER BY sort_order`）就是分析页看到的顺序：改它要跑 analysis。

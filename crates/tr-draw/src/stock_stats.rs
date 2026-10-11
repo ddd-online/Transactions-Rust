@@ -7,9 +7,14 @@
 //!   -100..100），不给的话自动挑刻度会把"数据正好压在 100%"当成"上界还要再大一档"，
 //!   于是多画一条 150% 的网格线；最大回撤同样是百分比但没有天花板，交给按数据自动挑；
 //! * [`Metric::has_reference`] —— 金额类且可能为负的指标才画 y=0 虚线；
-//! * [`Metric::value`] —— 从统计点里取这一档的值（平均亏损**取负**，曲线画在 0 轴下方）。
+//! * [`Metric::value`] —— 从统计点里取这一档的值（平均亏损**取负**，曲线画在 0 轴下方）；
+//! * [`Metric::key`] / [`Metric::label_in`] —— 界面记住的是 **key**，显示的是**随统计口径变**的文案：
+//!   分组口径下「累计盈亏」叫「分组盈亏」（那个点的值是**本组**的盈亏合计，不是自起点累计），
+//!   其余六档的口径天然跟着统计点走，名字不必变；
+//! * [`point_span_label`] —— 统计点在横轴上的覆盖范围（分组口径下是"第 a-b 笔"）。
 
 use tr_domain::dto::StockStatisticsPointDto;
+use tr_domain::statistics::StatisticsStrategy;
 
 use crate::chart::ChartValueKind;
 
@@ -37,7 +42,7 @@ impl Metric {
         Metric::MaxDrawdown,
     ];
 
-    /// 界面上显示的名字（也是选中项的标识 —— 界面按字符串记住当前选的是哪一档）。
+    /// 界面上显示的名字（逐笔累计口径下；分组口径见 [`Metric::label_in`]）。
     pub fn label(self) -> &'static str {
         match self {
             Metric::TotalPnl => "累计盈亏",
@@ -47,6 +52,30 @@ impl Metric {
             Metric::PnlRatio => "实际盈亏比",
             Metric::Expectancy => "期望值",
             Metric::MaxDrawdown => "最大回撤",
+        }
+    }
+
+    /// 稳定标识（**界面按它记住选中项**）：文案会随统计口径变，标识不能是文案。
+    pub fn key(self) -> &'static str {
+        match self {
+            Metric::TotalPnl => "total_pnl",
+            Metric::WinRate => "win_rate",
+            Metric::AvgWin => "avg_win",
+            Metric::AvgLoss => "avg_loss",
+            Metric::PnlRatio => "pnl_ratio",
+            Metric::Expectancy => "expectancy",
+            Metric::MaxDrawdown => "max_drawdown",
+        }
+    }
+
+    /// 某个统计口径下的显示名。
+    ///
+    /// 只有「累计盈亏」要改：分组口径下它是**本组**的盈亏合计（`total_pnl` 在组点上就是组内求和），
+    /// 写成"累计"会让人以为曲线仍是自起点累计的那条。
+    pub fn label_in(self, strategy: StatisticsStrategy) -> &'static str {
+        match (self, strategy) {
+            (Metric::TotalPnl, StatisticsStrategy::Grouped) => "分组盈亏",
+            _ => self.label(),
         }
     }
 
@@ -88,6 +117,20 @@ impl Metric {
             Metric::Expectancy => point.expectancy as f64,
             Metric::MaxDrawdown => point.max_drawdown_pct,
         }
+    }
+}
+
+/// 一个统计点在横轴上的覆盖范围文案。
+///
+/// * 逐笔累计口径：`第 5 笔` —— 那个点覆盖 1..=5，但横轴读作"打到第 5 笔为止"
+///   （`span == sequence`，写成"第 1-5 笔"反而每次都在变）；
+/// * 分组口径：`第 1-5 笔` / `第 6-10 笔` —— 分组是不重叠的区间，范围本身才是信息。
+pub fn point_span_label(strategy: StatisticsStrategy, sequence: i64, span: i64) -> String {
+    let first = sequence - span + 1;
+    if strategy == StatisticsStrategy::Grouped && span > 1 && first >= 1 {
+        format!("第{first}-{sequence}笔")
+    } else {
+        format!("第{sequence}笔")
     }
 }
 
@@ -167,7 +210,7 @@ mod tests {
         assert_eq!(Metric::AvgLoss.kind(), ChartValueKind::Money);
     }
 
-    /// 七档都有名字，且名字两两不同（界面按名字记住选中项）。
+    /// 七档都有名字，且名字两两不同。
     #[test]
     fn every_metric_has_a_unique_label() {
         let labels: Vec<&str> = Metric::ALL.iter().map(|metric| metric.label()).collect();
@@ -177,5 +220,77 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), labels.len(), "{labels:?}");
+    }
+
+    /// 七档都有稳定的 key，两两不同，且**不随口径变** —— 界面按它记住选中项。
+    #[test]
+    fn every_metric_has_a_unique_key() {
+        let keys: Vec<&str> = Metric::ALL.iter().map(|metric| metric.key()).collect();
+        assert_eq!(keys.len(), 7);
+        assert!(keys.iter().all(|key| !key.is_empty()));
+        let mut unique = keys.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), keys.len(), "{keys:?}");
+    }
+
+    /// 显示名只在分组口径下改「累计盈亏」这一档，其余六档两个口径同名。
+    #[test]
+    fn only_the_cumulative_pnl_label_follows_the_strategy() {
+        for metric in Metric::ALL {
+            assert_eq!(
+                metric.label_in(StatisticsStrategy::Cumulative),
+                metric.label(),
+                "{} 在逐笔累计口径下应当就是本名",
+                metric.key()
+            );
+        }
+        assert_eq!(
+            Metric::TotalPnl.label_in(StatisticsStrategy::Grouped),
+            "分组盈亏"
+        );
+        for metric in Metric::ALL.iter().filter(|m| **m != Metric::TotalPnl) {
+            assert_eq!(
+                metric.label_in(StatisticsStrategy::Grouped),
+                metric.label(),
+                "{} 的口径天然跟着统计点走，名字不必变",
+                metric.key()
+            );
+        }
+        // 两个口径下七档名字都仍然唯一（界面按文案找选项的那条老路也不会撞）
+        for strategy in StatisticsStrategy::ALL {
+            let labels: Vec<&str> = Metric::ALL
+                .iter()
+                .map(|metric| metric.label_in(strategy))
+                .collect();
+            let mut unique = labels.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), labels.len(), "{strategy:?} {labels:?}");
+        }
+    }
+
+    /// 横轴文案：逐笔累计只报"第 N 笔"（`span` 与 `sequence` 相同也不写成区间），
+    /// 分组口径报"第 a-b 笔"，单笔的组与末组只剩一笔时退回"第 N 笔"。
+    #[test]
+    fn span_labels_show_a_range_only_when_grouped() {
+        let cumulative = StatisticsStrategy::Cumulative;
+        let grouped = StatisticsStrategy::Grouped;
+        assert_eq!(point_span_label(cumulative, 1, 1), "第1笔");
+        assert_eq!(
+            point_span_label(cumulative, 5, 5),
+            "第5笔",
+            "累计点不写区间"
+        );
+        assert_eq!(point_span_label(grouped, 5, 5), "第1-5笔");
+        assert_eq!(point_span_label(grouped, 10, 5), "第6-10笔");
+        assert_eq!(
+            point_span_label(grouped, 23, 3),
+            "第21-23笔",
+            "末组不足 N 笔"
+        );
+        assert_eq!(point_span_label(grouped, 7, 1), "第7笔", "末组只剩一笔");
+        // 序号口径不符（span 比 sequence 还大）时不写出负数开头
+        assert_eq!(point_span_label(grouped, 1, 5), "第1笔");
     }
 }

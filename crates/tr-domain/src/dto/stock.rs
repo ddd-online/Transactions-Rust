@@ -457,6 +457,11 @@ pub struct StockStatisticsDto {
     pub round_count: i64,
     /// 第 1 笔起的统计点（无结算时为空）
     pub points: Vec<StockStatisticsPointDto>,
+    /// **分组口径**的统计点（`strategy = grouped` 时才有；逐笔累计口径下为空）。
+    ///
+    /// 与 `points` 同一次取数算出来，不是替代关系：顶部合计与「明细」分栏用的是 `points`
+    /// （逐笔累计，始终照旧），分组只换曲线画哪条序列（见 `tr-service::stock_statistics`）。
+    pub groups: Vec<StockStatisticsPointDto>,
 }
 
 /// 一个结算统计点：截至第 N 笔清仓的累计口径指标。
@@ -465,6 +470,9 @@ pub struct StockStatisticsDto {
 pub struct StockStatisticsPointDto {
     /// 全局结算序号（第 N 笔）
     pub sequence: i64,
+    /// 本点覆盖的结算笔数：逐笔累计口径下 = `sequence`（自集合起点累计），分组口径下 = 该组笔数。
+    /// 于是"本点覆盖第 `sequence - span + 1` ..= `sequence` 笔"两个口径都成立。
+    pub span: i64,
     /// 本统计点的结算时间（该笔清仓时间，Unix 秒）
     #[serde(rename = "closedAt")]
     pub closed_at: i64,

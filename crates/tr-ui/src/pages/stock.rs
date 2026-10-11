@@ -14,7 +14,7 @@
 //! | [`position_view`] | 持仓卡片 + 行情面板 + 本轮复盘 + 下单弹窗 + 成交表 + 影响预演；工具栏 = 建仓 |
 //! | [`edit_modal`] / [`impact_modal`] | 编辑成交 / 删除委托 + 影响预演确认 |
 //! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签（无工具栏） |
-//! | [`statistics_view`] | 结算统计 + 自绘 SVG 曲线（统计）/ 逐笔结算明细分页（明细）；工具栏 = 分栏页签 + 区间/笔数/标签筛选 |
+//! | [`statistics_view`] | 结算统计 + 自绘 SVG 曲线（统计）/ 逐笔结算明细分页（明细）；工具栏 = 分栏页签 + 区间/笔数/标签筛选 + 统计口径下拉 |
 //! | [`settings_view`] | 交易标签 + 交易费用设置 + 操作记录（查看 / 回滚）+ 归档到新账本 + 重置股票数据 |
 //! | 状态组织 | 本文件直接持有信号（不引入 store；与其余页面一致） |
 //!
@@ -65,6 +65,7 @@ use tr_domain::dto::{
 use tr_domain::fee::{compute_order_fee, is_valid_stock_code, Instrument};
 use tr_domain::models::{RoundFee, StockFeeSetting};
 use tr_domain::money::{cents_to_yuan, milli_to_price_yuan, price_yuan_to_milli, yuan_to_cents};
+use tr_domain::statistics::StatisticsStrategy;
 use tr_domain::stock::floating_pnl_rate;
 
 use crate::api;
@@ -82,7 +83,7 @@ use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd};
 use tr_draw::section::{section_state, SectionState};
 use tr_draw::stock_rows::{group_trades, impact_summary, removed_rounds_text, TradeRow};
-use tr_draw::stock_stats::Metric;
+use tr_draw::stock_stats::{point_span_label, Metric};
 use tr_draw::text::parse_rate;
 
 /// 页面标题（固定文案，改动即影响界面）。侧栏条目名也用这一个来源。
@@ -323,7 +324,7 @@ struct ImpactPrompt {
 
 // ==================================================================== 页面外壳
 
-/// 统计的查询 key：账本 + 筛选（区间 / 最近 N 笔 / 标签）。
+/// 统计的查询 key：账本 + 筛选（区间 / 最近 N 笔 / 标签）+ 统计口径（策略 / 每组笔数）。
 ///
 /// 它过去被拼成一个字符串喂给 `stats_request_needed`（"key 不限于是字符串"就是这条）；
 /// 现在整个结构体直接作 key，去重与复核判定都由取数 module 管。
@@ -334,6 +335,10 @@ struct StatsKey {
     end_month: String,
     recent: Option<i64>,
     tag: String,
+    /// `StatisticsStrategy::as_str()`（`cumulative` / `grouped`）
+    strategy: String,
+    /// 分组口径下的每组笔数（逐笔累计口径为 `None`）
+    group_size: Option<i64>,
 }
 
 /// 与记账页的 `AccountingPage` 同一套写法：五个子功能各自渲染一份 [`FeaturePage`]
@@ -3439,6 +3444,14 @@ const STATS_TAB_DETAIL: &str = "detail";
 /// 逐笔结算明细的默认每页条数（界面侧分页，理由见 [`statistics_view`]）。
 const STATS_DETAIL_PAGE_SIZE: i32 = 15;
 
+/// 「分组统计」每组笔数的候选档（与「最近 N 笔」同一套做法：固定档下拉）。
+///
+/// 合法性（2–1000）由 `tr_domain::statistics` 判，这里只列界面上给的几档。
+const STATS_GROUP_SIZES: [&str; 4] = ["5", "10", "20", "50"];
+
+/// 切到「分组统计」时的默认每组笔数。
+const STATS_GROUP_SIZE_DEFAULT: &str = "5";
+
 /// 统计子功能：工具栏左侧两个分栏（**统计** / **明细**），右侧是**两个分栏共用**的筛选组。
 ///
 /// * **统计**：结算统计（已实现盈亏 + 6 个累计口径指标）+ 统计曲线。
@@ -3475,7 +3488,8 @@ const STATS_DETAIL_PAGE_SIZE: i32 = 15;
 fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
     let tab = RwSignal::new(STATS_TAB_SUMMARY.to_string());
-    let metric = RwSignal::new(Metric::TotalPnl.label().to_string());
+    // 选中的指标：存的是 `Metric::key()`（**不是**文案 —— 文案随统计口径变）
+    let metric = RwSignal::new(Metric::TotalPnl.key().to_string());
     let filter_mode = RwSignal::new("all".to_string());
     let range_start = RwSignal::new(String::new());
     let range_end = RwSignal::new(String::new());
@@ -3486,6 +3500,14 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
     // 旁边那个下拉选不动的来源）。这里单独建一个、并在 `recent` 被重置时同步。
     let recent_signal = RwSignal::new(recent.get_untracked().to_string());
     let tag_filter = RwSignal::new(String::new());
+    // 统计口径（`tr_domain::statistics::StatisticsStrategy`）：信号里存的是 wire 取值，
+    // 下拉选项由 `StatisticsStrategy::ALL` 生成 —— 名字与取值都只有那一份。
+    let stats_strategy = RwSignal::new(StatisticsStrategy::Cumulative.as_str().to_string());
+    // 「每组笔数」下拉的绑定值：与 `recent_signal` 同一个理由（必须建在组件体里）。
+    let group_size_signal = RwSignal::new(STATS_GROUP_SIZE_DEFAULT.to_string());
+    // 当前口径：下拉里只可能出现 `ALL` 里的取值，解析不出来就按默认（逐笔累计）算。
+    let current_strategy =
+        move || StatisticsStrategy::parse_wire(&stats_strategy.get()).unwrap_or_default();
 
     // ---- 取数：统计（key = 账本 + 筛选）与交易标签，都走跨视图缓存策略 ----
     let stats_q = Query::<Option<StockStatisticsDto>>::new(
@@ -3505,12 +3527,19 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             } else {
                 None
             };
+            let strategy = current_strategy();
             Some(StatsKey {
                 ledger_id,
                 start_month,
                 end_month,
                 recent: recent_value,
                 tag: tag_filter.get(),
+                strategy: strategy.as_str().to_string(),
+                group_size: if strategy == StatisticsStrategy::Grouped {
+                    group_size_signal.get().parse::<i64>().ok()
+                } else {
+                    None
+                },
             })
         },
         move |key: StatsKey| async move {
@@ -3520,6 +3549,8 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                 &key.end_month,
                 key.recent,
                 &key.tag,
+                &key.strategy,
+                key.group_size,
             )
             .await
             .map(Some)
@@ -3569,6 +3600,8 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
         recent.set(0);
         recent_signal.set(String::new());
         tag_filter.set(String::new());
+        stats_strategy.set(StatisticsStrategy::Cumulative.as_str().to_string());
+        group_size_signal.set(STATS_GROUP_SIZE_DEFAULT.to_string());
         ledger_id
     });
 
@@ -3679,6 +3712,33 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                             on_change=UnsyncCallback::new(move |value: String| {
                                 recent.set(value.parse().unwrap_or(10));
                             })
+                        />
+                    </div>
+                </Show>
+                // 统计口径：两个选项由 `StatisticsStrategy::ALL` 生成（选中值即 wire 取值，
+                // 取数 key 读同一个信号）；选「分组统计」时右边才多出「每组笔数」——
+                // 与"选「按时间」才出现月份输入框"是同一个套路（`Select` 自己写信号，不需要回调）。
+                <div class="stock-statistics__strategy">
+                    <Select
+                        value=stats_strategy
+                        options={
+                            StatisticsStrategy::ALL
+                                .iter()
+                                .map(|item| SelectOption::new(item.as_str(), item.label()))
+                                .collect::<Vec<_>>()
+                        }
+                    />
+                </div>
+                <Show when=move || current_strategy() == StatisticsStrategy::Grouped>
+                    <div class="stock-statistics__group-size">
+                        <Select
+                            value=group_size_signal
+                            options={
+                                STATS_GROUP_SIZES
+                                    .iter()
+                                    .map(|size| SelectOption::new(*size, format!("每 {size} 笔")))
+                                    .collect::<Vec<_>>()
+                            }
                         />
                     </div>
                 </Show>
@@ -3869,48 +3929,54 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                         <div class="stock-chart-block">
                             <div class="stock-panel__head">
                                 <h4 class="stock-panel__title">"统计曲线"</h4>
-                                <Segmented
-                                    value=metric
-                                    options={
-                                        Metric::ALL
-                                            .iter()
-                                            .map(|item| SegmentedOption::same(item.label()))
-                                            .collect::<Vec<_>>()
+                                // 指标选择器：值用**稳定的 key**（`Metric::key`），文案随统计口径变 ——
+                                // 分组口径下「累计盈亏」叫「分组盈亏」（那个点是**本组**的盈亏合计）。
+                                // 按文案当值会在切口径时反查不到、选中项被弹回第一档，所以这里放动态块。
+                                {move || {
+                                    let strategy = current_strategy();
+                                    view! {
+                                        <Segmented
+                                            value=metric
+                                            options={
+                                                Metric::ALL
+                                                    .iter()
+                                                    .map(|item| SegmentedOption::new(item.key(), item.label_in(strategy)))
+                                                    .collect::<Vec<_>>()
+                                            }
+                                        />
                                     }
-                                    on_change=UnsyncCallback::new(move |label: String| {
-                                        // `Segmented` 的值就是指标文案，这里反查回枚举
-                                        if let Some(found) = Metric::ALL
-                                            .iter()
-                                            .find(|item| item.label() == label)
-                                        {
-                                            metric.set(found.label().to_string());
-                                        }
-                                    })
-                                />
+                                }}
                             </div>
                             <div class="stock-chart-block__body">
                             {move || {
                                 let Some(data) = stats.get() else {
                                     return ().into_any();
                                 };
+                                let strategy = current_strategy();
                                 let selected = Metric::ALL
                                     .iter()
-                                    .find(|item| item.label() == metric.get())
+                                    .find(|item| item.key() == metric.get())
                                     .copied()
                                     .unwrap_or(Metric::TotalPnl);
-                                let categories = data
-                                    .points
+                                // 画哪条序列由口径决定：分组口径读 `groups`（服务端与 `points`
+                                // 同一次算出来），逐笔累计读 `points`。顶部合计与「明细」分栏
+                                // 用的始终是 `points`，与这里的选择无关。
+                                let points = if strategy == StatisticsStrategy::Grouped {
+                                    &data.groups
+                                } else {
+                                    &data.points
+                                };
+                                let categories = points
                                     .iter()
                                     .map(|point| {
                                         format!(
-                                            "第{}笔 {}",
-                                            point.sequence,
+                                            "{} {}",
+                                            point_span_label(strategy, point.sequence, point.span),
                                             format_timestamp(point.closed_at, "MM-DD"),
                                         )
                                     })
                                     .collect::<Vec<_>>();
-                                let values = data
-                                    .points
+                                let values = points
                                     .iter()
                                     .map(|point| selected.value(point))
                                     .collect::<Vec<_>>();
@@ -3954,7 +4020,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                         categories=Signal::derive(move || categories.clone())
                                         series=Signal::derive(move || {
                                             vec![ChartSeries::new(
-                                                selected.label(),
+                                                selected.label_in(strategy),
                                                 color,
                                                 values.clone(),
                                             )]

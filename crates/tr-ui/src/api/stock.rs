@@ -421,16 +421,21 @@ pub async fn round_tag(
     .await
 }
 
-/// 逐笔结算统计。
+/// 结算统计。
 ///
 /// `recent` 传 `None` 表示"不按最近 N 笔筛选"（**不要传 0**，
 /// 后端对 `<= 0` 会返回 `recent 必须为正整数`）。
+///
+/// `strategy` 是 `StatisticsStrategy::as_str()`（`cumulative` / `grouped`），
+/// `group_size` 只在 `grouped` 下有意义（2–1000，缺了后端会拒绝）。
 pub async fn statistics(
     ledger_id: &str,
     start_month: &str,
     end_month: &str,
     recent: Option<i64>,
     tag: &str,
+    strategy: &str,
+    group_size: Option<i64>,
 ) -> Result<StockStatisticsDto, IpcError> {
     ipc::call(
         commands::STOCK_STATISTICS,
@@ -440,6 +445,8 @@ pub async fn statistics(
             end_month: end_month.to_string(),
             recent: recent.filter(|value| *value > 0).map(Into::into),
             tag: tag.to_string(),
+            strategy: Some(strategy.to_string()),
+            group_size: group_size.map(Into::into),
         },
     )
     .await

@@ -1187,7 +1187,11 @@
   color: var(--transactions-color-text-tertiary);
 }
 
+/* 筛选组里的四个下拉（最近 N 笔 / 统计口径 / 每组笔数 / 标签）**同宽** ——
+ * 它们是同一排的同类控件，宽度不一致会显得像三种东西。 */
 .stock-statistics__recent,
+.stock-statistics__strategy,
+.stock-statistics__group-size,
 .stock-statistics__tag {
   width: 136px;
 }

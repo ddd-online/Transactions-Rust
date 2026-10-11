@@ -8,6 +8,11 @@
 //! 实际口径是：字段缺失 / 空串 / **非数字串**都按"没传"处理（宽松）；只有数字 `<= 0` 才报
 //! `recent 必须为正整数` —— 注释从前写的是"非正整数报错"，与实现对不上（/code-review 的 Spec 轴点名）。
 //!
+//! **统计口径**（`strategy` / `group_size`）：规则本体同样在 `tr_domain::statistics`
+//! （`StatisticsStrategy::parse_wire` + `StatisticsFilter::validate`）。字段缺失 / 空串 = 逐笔累计；
+//! `grouped` 必须同时给出 2–1000 的笔数，否则报 `group_size 需为 2 到 1000 的整数`。
+//! 这里只做"wire 文本 → 值"的转换，一条规则都不重写。
+//!
 //! **价格**：元 → **厘**（1/1000 元）走 `money::price_yuan_to_milli`（浮点那条）—— 别改用
 //! `money::yuan_to_cents`（那是**金额**的字符串入口，单位不同、进位边界也不同）。
 //! 价格走厘是为了场内基金（ETF / LOF / REITs）的 0.001 元报价，规则本体与断言在 `tr-domain`，
@@ -462,8 +467,9 @@ pub fn stock_round_tag(
 
 // ---------- 统计 / 股票名 / 重置 ----------
 
-/// 统计的筛选参数：`start_month` / `end_month` / `recent` / `tag`。
-/// 逐笔结算统计（可按月份区间 / 最近 N 笔 / 标签筛选）。
+/// 统计的筛选参数：`start_month` / `end_month` / `recent` / `tag` + 统计口径
+/// （`strategy` / `group_size`）。
+/// 结算统计（可按月份区间 / 最近 N 笔 / 标签筛选；口径可切逐笔累计 / 分组统计）。
 #[tauri::command]
 pub fn stock_statistics(
     state: State<'_, AppState>,
@@ -472,14 +478,19 @@ pub fn stock_statistics(
     require_ledger_id(&req.ledger_id)?;
     // 筛选条件在这里拼成**一个值**再往下走（候选 6 / #35）：`recent` 的取值规则在
     // tr_domain::statistics（字段缺失 / 空串 / 非数字串都按"没传"处理，数字 <= 0 才报错），
-    // 自洽规则（月区间与笔数互斥）由服务层调 filter.validate() 判。
+    // 自洽规则（月区间与笔数互斥、分组必须有笔数）由服务层调 filter.validate() 判。
+    let strategy = tr_domain::statistics::StatisticsStrategy::parse_wire(
+        req.strategy.as_deref().unwrap_or(""),
+    )
+    .map_err(AppError::bad_request)?;
     let filter = tr_domain::statistics::StatisticsFilter::new(
         req.start_month.clone(),
         req.end_month.clone(),
         tr_domain::statistics::normalize_recent(query_number_as_i64(req.recent.as_ref()))
             .map_err(AppError::bad_request)?,
         req.tag.clone(),
-    );
+    )
+    .with_strategy(strategy, query_number_as_i64(req.group_size.as_ref()));
     let workspace = state.workspace()?;
     Ok(tr_service::stock_statistics::get_statistics_for(
         &workspace,
@@ -684,6 +695,38 @@ mod tests {
             Some(QueryNumber::Integer(value)) => assert_eq!(value, 5),
             other => panic!("意外的解析结果: {other:?}"),
         }
+    }
+
+    /// 口径字段的 wire 形状：`strategy` 是文本，`group_size` 与 `recent` 一样两种形态都收。
+    #[test]
+    fn statistics_request_parses_strategy_shapes() {
+        let text: StockStatisticsRequest =
+            serde_json::from_str(r#"{"ledger_id":"l1","strategy":"grouped","group_size":"5"}"#)
+                .unwrap();
+        assert_eq!(text.strategy.as_deref(), Some("grouped"));
+        match text.group_size {
+            Some(QueryNumber::Text(ref value)) => assert_eq!(value, "5"),
+            other => panic!("意外的解析结果: {other:?}"),
+        }
+
+        let numeric: StockStatisticsRequest =
+            serde_json::from_str(r#"{"ledger_id":"l1","group_size":10}"#).unwrap();
+        match numeric.group_size {
+            Some(QueryNumber::Integer(value)) => assert_eq!(value, 10),
+            other => panic!("意外的解析结果: {other:?}"),
+        }
+
+        // 缺参等价于零值：口径回到默认（逐笔累计），笔数留给 `validate()` 报错
+        let empty: StockStatisticsRequest = serde_json::from_str(r#"{"ledger_id":"l1"}"#).unwrap();
+        assert_eq!(empty.strategy, None);
+        assert!(empty.group_size.is_none());
+        assert_eq!(
+            tr_domain::statistics::StatisticsStrategy::parse_wire(
+                empty.strategy.as_deref().unwrap_or("")
+            )
+            .unwrap(),
+            tr_domain::statistics::StatisticsStrategy::Cumulative
+        );
     }
 
     #[test]

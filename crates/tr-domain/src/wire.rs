@@ -545,7 +545,8 @@ pub struct StockRoundTagRequest {
     pub tag: String,
 }
 
-/// 统计的筛选参数：`start_month` / `end_month` / `recent` / `tag`。
+/// 统计的筛选参数：`start_month` / `end_month` / `recent` / `tag`，外加统计口径
+/// （`strategy` / `group_size`）。
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StockStatisticsRequest {
@@ -555,6 +556,10 @@ pub struct StockStatisticsRequest {
     /// 非法值报 `recent 必须为正整数`
     pub recent: Option<QueryNumber>,
     pub tag: String,
+    /// `cumulative`（逐笔累计）/ `grouped`（分组统计）；缺省或空串 = 逐笔累计，其它取值报错
+    pub strategy: Option<String>,
+    /// 分组口径下每组的结算笔数（2–1000）；逐笔累计口径下忽略
+    pub group_size: Option<QueryNumber>,
 }
 
 /// 查询股票名称（优先本地交易记录，未命中走外部行情；**不需要 ledger_id**）。
@@ -941,8 +946,20 @@ mod tests {
                 end_month: "2026-03".into(),
                 recent: Some(20_i64.into()),
                 tag: "分析".into(),
+                strategy: None,
+                group_size: None,
             }),
-            r#"{"ledger_id":"l1","start_month":"2026-01","end_month":"2026-03","recent":20,"tag":"分析"}"#
+            r#"{"ledger_id":"l1","start_month":"2026-01","end_month":"2026-03","recent":20,"tag":"分析","strategy":null,"group_size":null}"#
+        );
+        // 分组口径：`strategy` 是文本，笔数走 `QueryNumber`（界面下拉给的是字符串）
+        assert_eq!(
+            json(&StockStatisticsRequest {
+                ledger_id: "l1".into(),
+                strategy: Some("grouped".into()),
+                group_size: Some(QueryNumber::Text("5".into())),
+                ..Default::default()
+            }),
+            r#"{"ledger_id":"l1","start_month":"","end_month":"","recent":null,"tag":"","strategy":"grouped","group_size":"5"}"#
         );
         // 成交明细与旧调用：`fills` 与单笔 `price`/`lots` 同时发（与手抄副本逐字一致）
         assert_eq!(

@@ -10,12 +10,22 @@
 //! * 带筛选（月份区间 / 最近 N 笔 / 标签）时，**区间内从 1 起重新编号**，
 //!   累计盈亏、胜率、平均盈亏、回撤全部按筛选集合独立重算；
 //! * 标签先过滤轮次，使「最近 N 笔」取该标签内的最近 N 笔。
+//!
+//! **统计策略**（`tr_domain::statistics::StatisticsStrategy`）只决定"入选的这批结算怎么切成点"，
+//! 上面每一条口径都不变：
+//! * 逐笔累计（默认）：第 i 个点 = 第 1..=i 笔的累计值，`points` 是一条完整的递进曲线；
+//! * 分组统计：每 N 笔一组、**组间互不重叠**，每个组点是**该组自己**的统计 —— 累计盈亏 = 组内盈亏
+//!   之和，回撤 = 组内累计盈亏曲线（从 0 起步）的最大回落，占本金比例仍用"该组末笔当时的本金"。
+//!   组点放在 `groups` 里，而 `points` **照旧算出来**：顶部合计与「明细」分栏读的都是它，
+//!   分组只换曲线画哪条序列（明细是一行一笔结算的原始清单，不跟着口径变）。
+//!   最后一组不足 N 笔时按实际笔数收尾，不做补齐。
 
 use chrono::Datelike;
 use tr_domain::consts;
 use tr_domain::dto::{round_pnl, StockStatisticsDto, StockStatisticsPointDto};
 use tr_domain::error::AppError;
 use tr_domain::models::{StockFundRecord, StockTradeRound};
+use tr_domain::statistics::StatisticsStrategy;
 use tr_store::dao::stock::StockDao;
 use tr_store::Workspace;
 
@@ -53,12 +63,115 @@ struct CapitalFlow {
     id: String,
 }
 
-/// 全量逐笔结算统计（自第 1 笔起累计口径）。
-pub fn get_statistics(workspace: &Workspace, ledger_id: &str) -> ServiceResult<StockStatisticsDto> {
-    statistics(workspace, ledger_id, "", "", 0, "")
+/// 分组口径下一组的累加器（逐笔累计口径不用它）。
+///
+/// 与逐笔累计唯一的差别是**起点**：组的累计盈亏从 0 起步，回撤只看组内那条曲线的峰谷，
+/// 于是每个组点回答"这 N 笔打得怎么样"，而不是"打到这儿一共怎么样"。
+/// 组内每笔的算法与全量那条完全一致（平局计入笔数、盈亏分别求和、回撤取峰值回落）。
+///
+/// 组点 = **挂在组末那笔结算上的、覆盖整组的统计值**：`pnl` / `pnl_rate` / `trade_count` /
+/// 日期 / 股票 / 标签都取组末那笔（与逐笔累计点的"本笔"字段同一套语义），
+/// 只有 `total_pnl` / 胜率 / 平均盈亏 / 期望值 / 回撤 / `span` 是本组的。
+#[derive(Default)]
+struct GroupAcc {
+    /// 组内笔数（末组可能不足 `group_size`）
+    count: i64,
+    win: i64,
+    loss: i64,
+    win_sum: i64,
+    loss_sum: i64,
+    /// 组内盈亏合计（平局记 0，但仍计入 `count`）
+    pnl: i64,
+    /// 组内累计盈亏曲线的当前值 / 峰值 / 最大回落，都从 0 起步
+    cum: i64,
+    peak: i64,
+    drawdown: i64,
 }
 
-/// 筛选统计：时间范围（含首尾整月）与最近 N 笔二选一，两者均可与交易标签叠加。
+impl GroupAcc {
+    /// 收一笔结算（调用顺序必须与结算时序一致）。
+    fn push(&mut self, pnl: i64) {
+        self.count += 1;
+        self.pnl += pnl;
+        if pnl > 0 {
+            self.win += 1;
+            self.win_sum += pnl;
+        } else if pnl < 0 {
+            self.loss += 1;
+            self.loss_sum += -pnl;
+        }
+        self.cum += pnl;
+        if self.cum > self.peak {
+            self.peak = self.cum;
+        }
+        let drawdown = self.peak - self.cum;
+        if drawdown > self.drawdown {
+            self.drawdown = drawdown;
+        }
+    }
+
+    /// 收尾成一个统计点：`anchor` 是本组**最后一笔**的结算事件，`sequence` 是该笔在入选集合里的
+    /// 序号，`principal_at` 是那时的本金（回撤率的分母）。
+    fn finish(
+        &self,
+        anchor: &SettleEvent,
+        sequence: i64,
+        principal_at: i64,
+    ) -> StockStatisticsPointDto {
+        let mut point = StockStatisticsPointDto {
+            sequence,
+            span: self.count,
+            closed_at: anchor.round.closed_at,
+            stock_code: anchor.round.stock_code.clone(),
+            stock_name: anchor.stock_name.clone(),
+            stock_round_no: anchor.round.round_no,
+            tag: anchor.round.tag.clone(),
+            pnl: anchor.pnl,
+            pnl_rate: anchor.pnl_rate,
+            trade_count: anchor.trade_count,
+            total_pnl: self.pnl,
+            win_count: self.win,
+            loss_count: self.loss,
+            max_drawdown: self.drawdown,
+            ..StockStatisticsPointDto::default()
+        };
+        if self.count > 0 {
+            point.win_rate = percent_of(self.win, self.count);
+            // 期望值 = 组内盈亏合计 ÷ 组内笔数（与全量的"累计盈亏 ÷ 总笔数"同一条式子）
+            point.expectancy = (self.pnl as f64 / self.count as f64).round() as i64;
+        }
+        if self.win > 0 {
+            point.avg_win = (self.win_sum as f64 / self.win as f64).round() as i64;
+        }
+        if self.loss > 0 {
+            point.avg_loss = (self.loss_sum as f64 / self.loss as f64).round() as i64;
+            let ratio = if point.avg_win > 0 {
+                point.avg_win as f64 / point.avg_loss as f64
+            } else {
+                0.0
+            };
+            point.pnl_ratio = Some(ratio);
+        }
+        if principal_at > 0 {
+            point.max_drawdown_pct = percent_of(self.drawdown, principal_at);
+        }
+        point
+    }
+}
+
+/// 全量逐笔结算统计（自第 1 笔起累计口径）。
+pub fn get_statistics(workspace: &Workspace, ledger_id: &str) -> ServiceResult<StockStatisticsDto> {
+    statistics(
+        workspace,
+        ledger_id,
+        &tr_domain::statistics::StatisticsFilter::default(),
+        "",
+        "",
+    )
+}
+
+/// 筛选统计：时间范围（含首尾整月）与最近 N 笔二选一，两者均可与交易标签叠加；
+/// 统计口径（逐笔累计 / 分组统计）见 [`tr_domain::statistics::StatisticsStrategy`]。
 ///
 /// **生产路径上的取数入口**（界面 → `tr-ipc` → 这里），只收一个筛选条件
 /// （`tr_domain::statistics::StatisticsFilter`）：自洽规则由它的 `validate()` 判，
@@ -78,19 +191,13 @@ pub fn get_statistics_for(
         }
     }
     let (from_day, to_day) = normalize_statistics_month_range(start_month, end_month)?;
-    statistics(
-        workspace,
-        ledger_id,
-        &from_day,
-        &to_day,
-        filter.recent.unwrap_or(0),
-        tag,
-    )
+    statistics(workspace, ledger_id, filter, &from_day, &to_day)
 }
 
 /// 四个裸字段形状的适配器（**与 wire 请求同形**，方便测试按"某月某标签某笔数"逐条写规格）。
 ///
-/// 生产路径请用 [`get_statistics_for`]：那边筛选条件是一个值，不是六个位置参数。
+/// 它固定是**逐笔累计**口径（`strategy` 缺省即 Cumulative）；要分组口径就不要再加第 7、8 个
+/// 位置参数了 —— 用 [`get_statistics_for`] 收一个 [`tr_domain::statistics::StatisticsFilter`]。
 pub fn get_statistics_range(
     workspace: &Workspace,
     ledger_id: &str,
@@ -112,16 +219,24 @@ pub fn get_statistics_range(
     )
 }
 
-/// 结算统计实现。`from_day`/`to_day` 非空时按清仓日期区间筛选，`recent > 0` 时取最近 N 笔，
-/// `tag` 非空时先按标签过滤轮次，再与区间/笔数筛选叠加。
+/// 结算统计实现。筛选条件直接收 [`StatisticsFilter`]（不再摊成位置参数 —— 那正是 `recent` 的
+/// 取值规则曾经散成两处的原因，而且摊开后参数会越过 clippy 的 7 条线）。
+/// `from_day`/`to_day` 是已经归一化好的日期边界（空串 = 不限）。
+///
+/// `filter.strategy` 是分组口径时额外算一份 `groups`（每 `filter.group_size` 笔一组）；
+/// `points`（逐笔累计）**两个口径下都照旧算出来** —— 顶部合计与「明细」分栏读的都是它（见模块文档）。
 fn statistics(
     workspace: &Workspace,
     ledger_id: &str,
+    filter: &tr_domain::statistics::StatisticsFilter,
     from_day: &str,
     to_day: &str,
-    recent: i64,
-    tag: &str,
 ) -> ServiceResult<StockStatisticsDto> {
+    let recent = filter.recent.unwrap_or(0);
+    let tag = filter.tag.as_str();
+    let strategy = filter.strategy;
+    // 分组口径下 `group_size` 已由 `validate()` 保证落在 2..=1000；逐笔累计口径下它不参与计算
+    let group_size = filter.group_size.unwrap_or(0);
     let conn = workspace.connection();
     crate::stock::ensure_trade_history_backfill(&conn, ledger_id)?;
     let histories = db(StockDao::list_trade_histories(&conn, ledger_id))?;
@@ -183,11 +298,20 @@ fn statistics(
         principal: account.principal,
         round_count: included_total,
         points: Vec::with_capacity(included_total as usize),
+        groups: Vec::new(),
     };
     if included_total == 0 {
         return Ok(result);
     }
     let use_window = !from_day.is_empty() || recent > 0 || !tag.is_empty();
+    let grouped = strategy == StatisticsStrategy::Grouped;
+    // 分组口径的组点（逐笔累计口径下始终为空）；`group_size` 已由 `validate()` 保证 `>= 2`
+    let mut groups: Vec<StockStatisticsPointDto> = if grouped {
+        Vec::with_capacity(((included_total + group_size - 1) / group_size).max(1) as usize)
+    } else {
+        Vec::new()
+    };
+    let mut group_acc = GroupAcc::default();
 
     // 资金事件与结算事件按日期合成同一条时序，保证本金追加/支取在正确时点影响总资产峰值与回撤
     let mut actions: Vec<StatAction> = Vec::with_capacity(flows.len() + events.len());
@@ -328,6 +452,8 @@ fn statistics(
 
         let mut point = StockStatisticsPointDto {
             sequence,
+            // 累计口径下"本点覆盖 1..=sequence 笔"（区间内重新编号后同样成立）
+            span: sequence,
             closed_at: event.round.closed_at,
             stock_code: event.round.stock_code.clone(),
             stock_name: event.stock_name.clone(),
@@ -365,7 +491,18 @@ fn statistics(
             point.max_drawdown_pct = percent_of(drawdown, principal_at);
         }
         result.points.push(point);
+
+        // 分组口径：每 `group_size` 笔收一组，最后一组不足也收（不做补齐）。
+        // 分组**不改**上面那条逐笔累计序列，只额外产出 `groups`。
+        if grouped {
+            group_acc.push(event.pnl);
+            if window_count % group_size == 0 || window_count == included_total {
+                groups.push(group_acc.finish(event, window_count, principal_at));
+                group_acc = GroupAcc::default();
+            }
+        }
     }
+    result.groups = groups;
     Ok(result)
 }
 
@@ -511,6 +648,94 @@ fn push_capital_flow(flows: &mut Vec<CapitalFlow>, record: &StockFundRecord) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一条结算事件（分组收尾只用到轮次上的身份字段与末笔盈亏）。
+    fn settle_event(pnl: i64, closed_at: i64) -> SettleEvent {
+        SettleEvent {
+            round: StockTradeRound {
+                stock_code: "600000".to_string(),
+                round_no: 3,
+                closed_at,
+                tag: "打板".to_string(),
+                ..StockTradeRound::default()
+            },
+            stock_name: "浦发银行".to_string(),
+            pnl,
+            pnl_rate: 1.25,
+            trade_count: 4,
+        }
+    }
+
+    /// 组内曲线从 0 起步：只看本组那几笔的峰谷，组前的盈亏不进回撤。
+    #[test]
+    fn a_group_curve_starts_from_zero() {
+        let mut down_then_up = GroupAcc::default();
+        down_then_up.push(-10_000);
+        down_then_up.push(5_000);
+        assert_eq!(
+            (down_then_up.peak, down_then_up.cum, down_then_up.drawdown),
+            (0, -5_000, 10_000),
+            "先亏后盈：峰值仍是 0（组内起点），回撤是那 10000"
+        );
+
+        let mut up_then_down = GroupAcc::default();
+        up_then_down.push(100_000);
+        up_then_down.push(-30_000);
+        up_then_down.push(-50_000);
+        assert_eq!((up_then_down.count, up_then_down.pnl), (3, 20_000));
+        assert_eq!((up_then_down.win, up_then_down.loss), (1, 2));
+        assert_eq!(
+            (up_then_down.win_sum, up_then_down.loss_sum),
+            (100_000, 80_000)
+        );
+        assert_eq!(up_then_down.drawdown, 80_000);
+    }
+
+    /// 平局计入笔数但不计胜负（与全量那条口径一致）。
+    #[test]
+    fn a_breakeven_settlement_counts_but_does_not_score() {
+        let mut acc = GroupAcc::default();
+        acc.push(0);
+        acc.push(60_000);
+        assert_eq!((acc.count, acc.win, acc.loss), (2, 1, 0));
+        assert_eq!((acc.pnl, acc.drawdown), (60_000, 0));
+    }
+
+    /// 组点：统计量是本组的，"本笔"字段取组末那笔（与逐笔累计点同一套语义）。
+    #[test]
+    fn a_group_point_anchors_on_its_last_settlement() {
+        let mut acc = GroupAcc::default();
+        acc.push(100_000);
+        acc.push(-40_000);
+        let point = acc.finish(&settle_event(-40_000, 1_700_000_000), 7, 10_000_000);
+
+        assert_eq!((point.sequence, point.span), (7, 2));
+        assert_eq!(point.total_pnl, 60_000, "本组盈亏合计");
+        assert_eq!(point.expectancy, 30_000);
+        assert_eq!(point.win_rate, 50.0);
+        assert_eq!((point.win_count, point.loss_count), (1, 1));
+        assert_eq!((point.avg_win, point.avg_loss), (100_000, 40_000));
+        assert_eq!((point.max_drawdown, point.max_drawdown_pct), (40_000, 0.4));
+        // 身份字段来自组末那笔
+        assert_eq!(point.pnl, -40_000);
+        assert_eq!(point.pnl_rate, 1.25);
+        assert_eq!(point.trade_count, 4);
+        assert_eq!(point.closed_at, 1_700_000_000);
+        assert_eq!(point.stock_code, "600000");
+        assert_eq!(point.stock_round_no, 3);
+        assert_eq!(point.tag, "打板");
+    }
+
+    /// 组内没有亏损样本 → 盈亏比缺省 `null`；本金为 0 时不给回撤比例（与逐笔累计一致）。
+    #[test]
+    fn a_group_without_losses_has_no_ratio() {
+        let mut acc = GroupAcc::default();
+        acc.push(10_000);
+        let point = acc.finish(&settle_event(10_000, 0), 1, 0);
+        assert_eq!(point.pnl_ratio, None);
+        assert_eq!(point.avg_loss, 0);
+        assert_eq!(point.max_drawdown_pct, 0.0);
+    }
 
     #[test]
     fn month_range_requires_both_ends_and_valid_format() {

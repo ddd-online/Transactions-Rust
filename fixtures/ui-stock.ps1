@@ -475,6 +475,67 @@ function Get-TradeTagValue { param($Window)
     if ($trigger) { return $trigger.Current.Name }
     return ''
 }
+
+# 统计页工具栏里的下拉（统计口径 / 每组笔数 / 全部标签）：触发器是带 `ui-select__trigger` 类的按钮，
+# 可访问名 = **当前值**。同一时刻页面上可能有好几个同类触发器（口径、每组笔数、标签），所以按名字取 ——
+# 弹窗里那个「唯一触发器」的写法在这里不成立。
+#
+# 为什么不直接用 `Find-VisibleButton`：下拉面板里的选项也是同名节点，而选项是 Div、不是 Button；
+# 触发器只在"当前值"上有名字，于是**类名 + 控件类型 + 名字**一起判才稳（与 `Find-TagTrigger` 同一条理由）。
+function Find-StatsTrigger { param($Window, [string]$Name)
+    $windowRect = $Window.Current.BoundingRectangle
+    foreach ($element in @(Get-Elements $Window)) {
+        if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+        if ($element.Current.IsOffscreen) { continue }
+        if ($element.Current.Name -ne $Name) { continue }
+        $className = [string]$element.Current.ClassName
+        if (-not $className -or -not $className.Contains('ui-select__trigger')) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if (-not (Test-Rect $rect)) { continue }
+        if ($rect.Y -lt $windowRect.Y -or ($rect.Y + $rect.Height) -gt ($windowRect.Y + $windowRect.Height)) { continue }
+        if ($rect.X -lt $windowRect.X -or ($rect.X + $rect.Width) -gt ($windowRect.X + $windowRect.Width)) { continue }
+        return $element
+    }
+    return $null
+}
+
+# 把统计页工具栏上的某个下拉切成目标值：点开 → 轮询等选项进树 → 点它 → 轮询到**触发器文案变成目标值**。
+# `-Name` 传触发器**当前**的可访问名。与 `Select-TradeTag` 同一套姿势（浮层会被抢焦点，必要时重点一次）。
+function Select-StatsDropdown { param($Window, [string]$Name, [string]$Value)
+    $trigger = $null
+    $deadline = (Get-Date).AddSeconds(10)
+    while (-not $trigger -and (Get-Date) -lt $deadline) {
+        $trigger = Find-StatsTrigger -Window $Window -Name $Name
+        if (-not $trigger) { Start-Sleep -Milliseconds 400 }
+    }
+    if (-not $trigger) {
+        Write-Host "    找不到名为「$Name」的统计下拉" -ForegroundColor DarkYellow
+        return $false
+    }
+    $rect = $trigger.Current.BoundingRectangle
+    [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
+    Start-Sleep -Milliseconds 200
+    [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    $option = $null
+    for ($attempt = 1; $attempt -le 5 -and -not $option; $attempt++) {
+        Start-Sleep -Milliseconds 300
+        $option = Wait-Element -Root $Window -Name $Value -TimeoutSec 2
+        if (-not $option -and $attempt -lt 5) {
+            [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+        }
+    }
+    if (-not $option) {
+        Write-Host "    下拉「$Name」里没等到选项「$Value」" -ForegroundColor DarkYellow
+        return $false
+    }
+    $optionRect = $option.Current.BoundingRectangle
+    [TrUia]::Click([int]($optionRect.X + $optionRect.Width / 2), [int]($optionRect.Y + $optionRect.Height / 2))
+    for ($attempt = 1; $attempt -le 8; $attempt++) {
+        Start-Sleep -Milliseconds 300
+        if ([bool](Find-StatsTrigger -Window $Window -Name $Value)) { return $true }
+    }
+    return $false
+}
 # 读输入框当前值（UIA 的 ValuePattern，只读）。
 # 用来断言"清仓的手数被固定成全仓、且控件不可用"，而不是再去写它。
 function Read-ElementValue { param($Element)
@@ -1327,12 +1388,14 @@ try {
         Assert-True (([int64]$feeSellTrade.fee) -eq 1344) `
             "卖出费用 = 120 + 1200 + 24 = 1344 分（实际 $($feeSellTrade.fee)）"
     }
-    # ================= 7/13 统计：分栏页签（统计 / 明细）+ 逐笔结算明细的页脚 =================
+    # ================= 7/13 统计：分栏页签（统计 / 明细）+ 逐笔结算明细的页脚 + 统计口径 =================
     # 这一页原来把「结算统计 + 曲线 + 逐笔明细」竖向摞在一屏里（整页滚动）；
-    # 现在拆成两个**各自填满内容区**的分栏，明细走分页。锁两条链路：
+    # 现在拆成两个**各自填满内容区**的分栏，明细走分页。锁三条链路：
     #   ① 工具栏左侧的页签是 TabItem，切到「明细」要渲染出明细表（按 Button 找会静默失败）；
-    #   ② 页脚要有「共 N 条」与分页控件 —— 并且切回「统计」时曲线面板还在。
-    Write-Host "`n[stock] 7/13 统计：分栏页签（统计 / 明细）+ 逐笔结算明细"
+    #   ② 页脚要有「共 N 条」与分页控件 —— 并且切回「统计」时曲线面板还在；
+    #   ③ 工具栏右侧的统计口径下拉：默认「逐笔累计」且不显示「每组笔数」，切「分组统计」后两个都变，
+    #      指标文案（累计盈亏 ↔ 分组盈亏）跟着口径走，而「明细」分栏**不受口径影响**。
+    Write-Host "`n[stock] 7/13 统计：分栏页签（统计 / 明细）+ 逐笔结算明细 + 统计口径"
     Assert-True (Switch-StockSub -Window $window -Name '统计') '切到「统计」子功能'
     Start-Sleep -Seconds 3
     Assert-True ([bool](Wait-Element -Root $window -Name '结算统计' -TimeoutSec 20)) `
@@ -1352,6 +1415,49 @@ try {
     Start-Sleep -Seconds 2
     Assert-True ([bool](Wait-Element -Root $window -Name '统计曲线' -TimeoutSec 15)) `
         '「统计」分栏出现「统计曲线」'
+
+    # 统计口径（工具栏右侧那个下拉）：默认「逐笔累计」且**不显示**「每组笔数」；切成「分组统计」才出现它，
+    # 指标文案同时从「累计盈亏」变成「分组盈亏」（分组点的值是**本组**的盈亏合计，不是自起点累计）。
+    # 再锁一条：口径只换「统计」分栏画哪条序列 —— 「明细」仍是逐笔一行一笔结算，页脚条数不变。
+    Write-Host '  统计口径：逐笔累计 / 分组统计（+ 每组笔数）'
+    Assert-True ([bool](Find-StatsTrigger -Window $window -Name '逐笔累计')) `
+        '工具栏有统计口径下拉，默认「逐笔累计」'
+    Assert-True (-not [bool](Find-StatsTrigger -Window $window -Name '每 5 笔')) `
+        '逐笔累计口径下不显示「每组笔数」下拉'
+    Assert-True ([bool](Wait-Element -Root $window -Name '累计盈亏' -TimeoutSec 10)) `
+        '默认口径下曲线指标是「累计盈亏」'
+    Assert-True (-not [bool](Find-First $window '分组盈亏')) '默认口径下没有「分组盈亏」'
+
+    Assert-True (Select-StatsDropdown -Window $window -Name '逐笔累计' -Value '分组统计') `
+        '把统计口径切成「分组统计」'
+    Assert-True ([bool](Find-StatsTrigger -Window $window -Name '每 5 笔')) `
+        '分组口径下出现「每组笔数」下拉（默认每 5 笔）'
+    Assert-True ([bool](Wait-Element -Root $window -Name '分组盈亏' -TimeoutSec 15)) `
+        '曲线指标跟着口径改成「分组盈亏」'
+    Assert-True (-not [bool](Find-First $window '累计盈亏')) '统计分栏里不再有「累计盈亏」'
+
+    Assert-True (Select-StatsDropdown -Window $window -Name '每 5 笔' -Value '每 10 笔') `
+        '把每组笔数改成「每 10 笔」'
+    Assert-True (-not [bool](Find-StatsTrigger -Window $window -Name '每 5 笔')) `
+        '「每组笔数」的触发器文案已变成「每 10 笔」'
+
+    Assert-True (Switch-StatsTab -Window $Window -Name '明细') '分组口径下切到「明细」页签'
+    Start-Sleep -Seconds 2
+    Assert-True ([bool](Wait-Element -Root $window -Name '逐笔结算明细' -TimeoutSec 15)) `
+        '分组口径下「明细」仍是「逐笔结算明细」'
+    $detailFooterGrouped = Get-Elements $window | ForEach-Object { [string]$_.Current.Name } |
+        Where-Object { $_ -match '^共 \d+ 条$' } | Select-Object -First 1
+    Assert-True ($detailFooterGrouped -eq $detailFooter) `
+        "明细不受统计口径影响（逐笔累计时 '$detailFooter'，分组时 '$detailFooterGrouped'）"
+
+    Assert-True (Switch-StatsTab -Window $Window -Name '统计') '切回「统计」页签'
+    Start-Sleep -Seconds 2
+    Assert-True (Select-StatsDropdown -Window $window -Name '分组统计' -Value '逐笔累计') `
+        '把统计口径切回「逐笔累计」'
+    Assert-True (-not [bool](Find-StatsTrigger -Window $window -Name '每 10 笔')) `
+        '切回逐笔累计后「每组笔数」下拉收起'
+    Assert-True ([bool](Wait-Element -Root $window -Name '累计盈亏' -TimeoutSec 15)) `
+        '切回逐笔累计后曲线指标回到「累计盈亏」'
 
     # ================= 8/13 账户：利息归本（支取 / 利息归本 / 追加本金）+ 资金记录翻页 =================
     # 两条要求都落在这里：
@@ -1934,4 +2040,4 @@ try {
 }
 
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
-Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓（日期选择器选前天 → 选择器文案 / trade_time 本地日期 / 资金记录日期 / 账户页日期列 四处一致）→ 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 统计分栏页签 → 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 操作记录与回滚（预演不落库 + 撤销后本金/资金记录还原）→ 重置股票数据（不动记账数据）"
+Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓（日期选择器选前天 → 选择器文案 / trade_time 本地日期 / 资金记录日期 / 账户页日期列 四处一致）→ 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 统计分栏页签与统计口径（逐笔累计 / 分组统计 + 每组笔数，明细不受影响）→ 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 操作记录与回滚（预演不落库 + 撤销后本金/资金记录还原）→ 重置股票数据（不动记账数据）"
