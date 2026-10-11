@@ -27,7 +27,11 @@
 #   9. 发布说明（`build/release_notes.md`，骨架见 `build/release_template.md`）合不合模板：
 #      版本标题必须等于 `tauri.conf.json` 的版本（对不上 = 拿上一次的说明发新版）、
 #      四节（新增 / 修改 / 调整 / 优化）顺序固定且不许出现别的节、必须是无序列表、
-#      每项 ≤50 字、空节不许留标题、同一项不许跨节重复。
+#      每项 ≤50 字、空节不许留标题、同一项不许跨节重复；
+#  10. 版本号三处一致：`tauri.conf.json` / `Cargo.toml` 的 `[workspace.package]` /
+#      `src-tauri/Cargo.toml` 的 `[package]`。这条从前只写在文档里，而它**看不出来**
+#      （关于页与安装包自报的版本都来自 `tauri.conf.json`，Cargo.toml 漂了照报正确版本），
+#      所以必须是断言。`Cargo.lock` 刻意不查 —— 理由见那一项自己的注释。
 #
 # 用法（pwsh 7）：pwsh -File fixtures/static-guards.ps1 [-OutDir <dir>]
 # 退出码：0 = 通过，1 = 有失败项。
@@ -56,7 +60,7 @@ function Read-Text([string]$relative) {
 }
 
 # ---------------------------------------------------------------- 1. 开发端口
-Write-Host '[static-guards] 1/9 开发端口一致性' -ForegroundColor Cyan
+Write-Host '[static-guards] 1/10 开发端口一致性' -ForegroundColor Cyan
 $portSources = [ordered]@{}
 $portSources['crates/tr-ui/Trunk.toml'] = @(
     [regex]::Matches((Read-Text 'crates/tr-ui/Trunk.toml'), '(?m)^\s*port\s*=\s*(\d+)') |
@@ -89,7 +93,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 2. 滚动条禁令
-Write-Host '[static-guards] 2/9 自定义滚动条禁令' -ForegroundColor Cyan
+Write-Host '[static-guards] 2/10 自定义滚动条禁令' -ForegroundColor Cyan
 $cssFiles = Get-ChildItem (Join-Path $repo 'crates/tr-ui/static/css') -Filter *.css -File
 $scrollHits = New-Object System.Collections.Generic.List[string]
 foreach ($file in $cssFiles) {
@@ -109,7 +113,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 3. 构建 / 发布纪律
-Write-Host '[static-guards] 3/9 构建与发布纪律' -ForegroundColor Cyan
+Write-Host '[static-guards] 3/10 构建与发布纪律' -ForegroundColor Cyan
 $tauriConf = Read-Text 'src-tauri/tauri.conf.json'
 if ($tauriConf -match '"beforeBuildCommand"\s*:\s*\{[^}]*"script"\s*:\s*"([^"]+)"') {
     $beforeBuild = $Matches[1]
@@ -157,7 +161,7 @@ if ($testPs1 -match "'build-app'[\s\S]{0,400}?tauri/custom-protocol" -and $testP
 else { Fail 'test.ps1 的 build-app 步骤必须带 --release 与 --features tauri/custom-protocol（界面护栏用的就是这种产物）' }
 
 # ---------------------------------------------------------------- 4. wasm-bindgen 版本
-Write-Host '[static-guards] 4/9 wasm-bindgen CLI 版本' -ForegroundColor Cyan
+Write-Host '[static-guards] 4/10 wasm-bindgen CLI 版本' -ForegroundColor Cyan
 $lock = Read-Text 'Cargo.lock'
 if ($lock -match '(?m)^name = "wasm-bindgen"\r?\nversion = "([^"]+)"') {
     $lockVersion = $Matches[1]
@@ -174,7 +178,7 @@ if ($lock -match '(?m)^name = "wasm-bindgen"\r?\nversion = "([^"]+)"') {
 else { Fail 'Cargo.lock 里读不到 wasm-bindgen 的版本' }
 
 # ---------------------------------------------------------------- 5. 分层：tr-domain 无 I/O
-Write-Host '[static-guards] 5/9 tr-domain 的依赖树（不许有 I/O）' -ForegroundColor Cyan
+Write-Host '[static-guards] 5/10 tr-domain 的依赖树（不许有 I/O）' -ForegroundColor Cyan
 $treeFile = Join-Path ([System.IO.Path]::GetTempPath()) "tr-tree-$([guid]::NewGuid().ToString('N')).txt"
 try {
     cargo tree -p tr-domain -e normal --prefix none *> $treeFile
@@ -187,7 +191,7 @@ try {
 finally { Remove-Item $treeFile -Force -ErrorAction SilentlyContinue }
 
 # ---------------------------------------------------------------- 6. markup 类名 → CSS 规则
-Write-Host '[static-guards] 6/9 markup 里的类名都有 CSS 规则' -ForegroundColor Cyan
+Write-Host '[static-guards] 6/10 markup 里的类名都有 CSS 规则' -ForegroundColor Cyan
 # 例外：**刻意**留着的钩子/块名（每条都在这里给理由，不写进文档）
 $classAllow = @{
     'ui-popconfirm--end'    = '意图标记：贴哪条边对齐由组件算（popconfirm.rs 的 align_end），见 ui.css 注释'
@@ -233,7 +237,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 7. CHANGELOG 标题
-Write-Host '[static-guards] 7/9 CHANGELOG 小节标题' -ForegroundColor Cyan
+Write-Host '[static-guards] 7/10 CHANGELOG 小节标题' -ForegroundColor Cyan
 $badHeadings = New-Object System.Collections.Generic.List[string]
 $changelogLines = Get-Content (Join-Path $repo 'CHANGELOG.md')
 for ($i = 0; $i -lt $changelogLines.Count; $i++) {
@@ -251,7 +255,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 8. 文档引用
-Write-Host '[static-guards] 8/9 文档引用（路径 / 版本号 / 小节）' -ForegroundColor Cyan
+Write-Host '[static-guards] 8/10 文档引用（路径 / 版本号 / 小节）' -ForegroundColor Cyan
 # 只查**还在维护的**文档。不查的三种：CHANGELOG.md 是历史记录；`docs/adr/` 记录的是当时的决策
 # （里面提到后来被删掉的文件正是它该有的样子）；`docs/agents/` 与 `fixtures/heic/README.md`
 # 描述的是别处的口径（skill 的通用约定、上游仓库的目录结构）。
@@ -316,7 +320,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 9. 发布说明
-Write-Host '[static-guards] 9/9 发布说明（build/release_notes.md）' -ForegroundColor Cyan
+Write-Host '[static-guards] 9/10 发布说明（build/release_notes.md）' -ForegroundColor Cyan
 # 这份说明就是 Release 正文（`build/release.ps1` 取它），也就是应用内「更新说明」显示的文字。
 # 骨架是 `build/release_template.md`；逐条判据见本文件头注释第 9 条。
 $notesRel = 'build/release_notes.md'
@@ -409,6 +413,40 @@ else {
     else {
         foreach ($hit in $badNotes) { Write-Host "      $hit" -ForegroundColor DarkGray }
         Fail "发布说明有 $($badNotes.Count) 处不合模板 —— 照 build/release_template.md 改 $notesRel"
+    }
+}
+
+# ---------------------------------------------------------------- 10. 版本号一致
+Write-Host '[static-guards] 10/10 版本号（tauri.conf.json / 两处 Cargo.toml）' -ForegroundColor Cyan
+# AGENTS.md 写着"版本号唯一来源是 `src-tauri/tauri.conf.json`，`Cargo.toml` 的 workspace 与
+# src-tauri 两处也要同步"—— 但从前没有任何东西在查它，而它**看不出来**：
+#   * 关于页显示的版本来自 `app.package_info()`，也就是 tauri.conf.json，Cargo.toml 漂了照报正确；
+#   * 安装包自报的 ProductVersion 是 tauri 按 tauri.conf.json 写进 NSIS 的。
+# 六个 crate 与 xtask 都写 `version.workspace = true`，所以要动的字面量只有两处。
+#
+# ⚠ 这里**故意不查 `Cargo.lock`**：本脚本第 5 项要跑 `cargo tree`，而 cargo 会顺手把锁文件刷成
+# 新的版本号 —— 写一条"锁跟上没"的断言，它永远只能通过（实测：把两处 Cargo.toml 改掉、锁不动，
+# 跑完第 5 项锁里就变成新版本了）。**不会失败的断言比没有断言更糟**，它给的是假保证。
+# 锁文件归 cargo 管；"别把刷过的锁落下"靠提交前 `git status --short` 看一眼。
+$versionSources = [ordered]@{
+    'src-tauri/tauri.conf.json'      = [regex]::Match((Read-Text 'src-tauri/tauri.conf.json'), '"version"\s*:\s*"([^"]+)"').Groups[1].Value
+    'Cargo.toml [workspace.package]' = [regex]::Match((Read-Text 'Cargo.toml'), '(?ms)^\[workspace\.package\]\s*$.*?^version\s*=\s*"([^"]+)"').Groups[1].Value
+    'src-tauri/Cargo.toml [package]' = [regex]::Match((Read-Text 'src-tauri/Cargo.toml'), '(?ms)^\[package\]\s*$.*?^version\s*=\s*"([^"]+)"').Groups[1].Value
+}
+$unreadable = @($versionSources.GetEnumerator() | Where-Object { -not $_.Value })
+if ($unreadable.Count -gt 0) {
+    foreach ($u in $unreadable) { Fail "$($u.Key)：读不到 version（判据变了？）" }
+}
+else {
+    $distinct = @($versionSources.Values | Select-Object -Unique)
+    if ($distinct.Count -ne 1) {
+        foreach ($e in $versionSources.GetEnumerator()) {
+            Write-Host "      $($e.Key) = $($e.Value)" -ForegroundColor DarkGray
+        }
+        Fail "三处版本号不一致 —— 改版本号要三处一起改（`crates/*` 与 `xtask` 写的是 version.workspace = true，跟着 workspace 走）"
+    }
+    else {
+        Pass "三处都是 $($distinct[0])（$($versionSources.Count) 处字面量；crates/* 与 xtask 跟着 workspace 走）"
     }
 }
 
