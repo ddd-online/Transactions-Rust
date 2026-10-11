@@ -31,7 +31,7 @@ use crate::api;
 use crate::components::ui::{
     watch_canvas_size, AsyncSection, Button, ButtonSize, ButtonVariant, DatePicker, DragSortItem,
     DragSortState, Empty, FeaturePage, IconButton, IconButtonVariant, Input, Modal, ModalSize,
-    Popconfirm, Select, SelectOption, TabItem, TabPane, Tabs,
+    Popconfirm, Select, SelectOption, Spin, SpinSize, TabItem, TabPane, Tabs,
 };
 use crate::error_handler::notify_error;
 use crate::icons::{self, Icon};
@@ -503,7 +503,13 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
                         )
                     })
                     loading=ViewFn::from(move || {
-                        view! { <div class="todo-loading">"正在加载…"</div> }.into_any()
+                        view! {
+                            <div class="todo-loading">
+                                <Spin spinning=true size=SpinSize::Small />
+                                <span>"正在加载…"</span>
+                            </div>
+                        }
+                            .into_any()
                     })
                     empty=ViewFn::from(move || {
                         view! {
@@ -572,7 +578,13 @@ fn record_view(sub: RwSignal<TodoSub>) -> AnyView {
                         )
                     })
                     loading=ViewFn::from(move || {
-                        view! { <div class="todo-loading">"正在加载…"</div> }.into_any()
+                        view! {
+                            <div class="todo-loading">
+                                <Spin spinning=true size=SpinSize::Small />
+                                <span>"正在加载…"</span>
+                            </div>
+                        }
+                            .into_any()
                     })
                     empty=ViewFn::from(move || {
                         view! {
@@ -894,7 +906,6 @@ fn item_row(
     let card_id = item.card_id.clone();
     let progress_count = item.progress.len();
     let progress = item.progress.clone();
-    let for_expand = id.clone();
     let for_complete = id.clone();
     let for_delete = id.clone();
     let for_row = id.clone();
@@ -916,7 +927,6 @@ fn item_row(
     view! {
         <li
             class="todo-item"
-            class:is-expanded=move || expanded.get() == for_expand
             on:click=move |_| toggle_progress.run(for_row.clone())
         >
             <button
@@ -1574,7 +1584,12 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
                                 rows.failed.get().as_deref(),
                             ) {
                                 SectionState::Loading => {
-                                    view! { <div class="todo-loading">"正在加载…"</div> }
+                                    view! {
+                                        <div class="todo-loading">
+                                            <Spin spinning=true size=SpinSize::Small />
+                                            <span>"正在加载…"</span>
+                                        </div>
+                                    }
                                         .into_any()
                                 }
                                 SectionState::Failed => {
@@ -1631,8 +1646,10 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
                                             <td class="todo-table__time">
                                                 {format_timestamp(row.completed_at, "YYYY-MM-DD HH:mm")}
                                             </td>
-                                            // 主题与事项同规格：允许换行（长卡片名不撑宽整张表）
-                                            <td class="todo-table__card">{row.card_title.clone()}</td>
+                                            // 主题是标签：单行截断（超长靠 title 看全，见 CSS）
+                                            <td class="todo-table__card" title=row.card_title.clone()>
+                                                {row.card_title.clone()}
+                                            </td>
                                             <td class="todo-table__title">{row.title.clone()}</td>
                                             <td class="is-center">
                                                 {consts::todo_level_label(row.urgency)}

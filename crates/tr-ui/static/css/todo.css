@@ -39,13 +39,16 @@
   display: none;
 }
 
+/* 加载态：与模板页 / 记账页同一个写法 —— 共享 `Spin` + 一行说明，这里只负责按版心居中。
+   （从前只有一行 tertiary 的文字，是全站唯一没有转圈的加载态。） */
 .todo-loading {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--transactions-color-text-tertiary);
-  font-size: var(--transactions-size-text-body);
+  gap: var(--transactions-space-sm);
+  color: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-body-sm);
 }
 
 /* ---------------- 待办视图：竖直排列的卡片 ---------------- */
@@ -279,6 +282,17 @@
   color: var(--transactions-color-primary);
 }
 
+/* 按压与键盘焦点：**与事项行的勾选框同一套状态** —— 同一个控件在两处出现过，
+   行的那个两样都有、面板里这个两样都没有（点了没反馈、Tab 过去只有浏览器默认的细框）。 */
+.todo-progress__check:active {
+  translate: 0 1px;
+}
+
+.todo-progress__check:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
 /* 打勾后的那一条：填主色 + 正文划掉 —— "做完了"一眼可辨 */
 .todo-progress__row.is-done .todo-progress__check {
   border-color: var(--transactions-color-primary);
@@ -296,9 +310,12 @@
   color: var(--transactions-color-text-major);
 }
 
+/* 时间与空态都在 **soft gray 底上**（`.todo-progress`）—— 灰底必须用 secondary：
+   tertiary 在 `minor-background` 上只有 3.37:1，12px 正文的门槛是 4.5:1（同一个判据见下面
+   四象限弹窗的 `__meta`）。白底的弹窗里也共用这两条，secondary 在那里是 5.8:1。 */
 .todo-progress__time {
   flex-shrink: 0;
-  color: var(--transactions-color-text-tertiary);
+  color: var(--transactions-color-text-secondary);
   font-size: var(--transactions-size-text-caption);
   font-variant-numeric: tabular-nums;
 }
@@ -314,7 +331,7 @@
 
 .todo-progress__empty {
   margin: 0;
-  color: var(--transactions-color-text-tertiary);
+  color: var(--transactions-color-text-secondary);
   font-size: var(--transactions-size-text-caption);
 }
 
@@ -592,7 +609,7 @@
 }
 
 /* 列宽：**事项**（第 3 列）是唯一会长的一列，剩余宽度全给它；其余六列按内容给固定宽。
-   第 2 列（主题）是卡片名，上限 200 字 —— 给了 150px 并允许换行。 */
+   第 2 列（主题）是卡片名，单行截断（见下面那条 `td.todo-table__card`）。 */
 .todo-table th:nth-child(1) {
   /* 完成时间：`2026-10-10 21:07` 定长 16 字符 */
   width: 136px;
@@ -677,12 +694,21 @@
   white-space: nowrap;
 }
 
-/* 主题（卡片名，上限 200 字）与事项是表里仅有的两个长文本列：都允许换行。 */
-.todo-table td.todo-table__card,
+/* 事项是表里**唯一**允许换行的列。 */
 .todo-table td.todo-table__title {
   white-space: normal;
   /* 中文没有词边界：不断词的话一长串数字/英文会把列撑开 */
   word-break: break-word;
+}
+
+/* 主题（卡片名，上限 200 字）是**标签**不是内容：它只回答"这条事项属于哪张卡片"。
+   所以单行截断（看全靠单元格上的 `title` 提示）—— 让它跟着事项一起换行的话，**行高会由这个
+   标签列决定**：一个 200 字的卡片名把这一行撑到 4 行高（实测 100.7px，常规行 45.3px），
+   而同一行的"事项"只有一行，整张表的节奏就断在这里。行高现在只由**事项**决定。 */
+.todo-table td.todo-table__card {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------------- 弹窗里的小结构 ---------------- */
