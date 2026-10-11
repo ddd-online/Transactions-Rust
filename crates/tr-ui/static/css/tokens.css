@@ -52,6 +52,18 @@
   --transactions-color-outlier-tint: rgba(217, 119, 6, 0.10);
   --transactions-color-outlier-tint-strong: rgba(217, 119, 6, 0.18);
 
+  /* Chart categorical palette — 折线图的候选色池（与交易类型无关，见 DESIGN.md）。
+   * 顺序即"第 N 条曲线"的取值顺序；两套主题色相一一对应，切换主题不改变曲线身份。
+   * 两两可辨（dE00 / 红绿色盲下界）与画布对比度由 fixtures/design-audit.ps1 第 4 项盯着。 */
+  --transactions-color-chart-blue: #3964fe;
+  --transactions-color-chart-amber: #d97706;
+  --transactions-color-chart-green: #15803d;
+  --transactions-color-chart-pink: #db2777;
+  --transactions-color-chart-cyan: #0891b2;
+  --transactions-color-chart-red: #dc2626;
+  --transactions-color-chart-violet: #7e22ce;
+  --transactions-color-chart-neutral: #61666b;
+
   /* UI state */
   --transactions-color-success: #16a34a;
   --transactions-color-warning: #d97706;
@@ -281,6 +293,15 @@
   --transactions-color-outlier-tint: rgba(251, 191, 36, 0.14);
   --transactions-color-outlier-tint-strong: rgba(251, 191, 36, 0.22);
 
+  --transactions-color-chart-blue: #60a5fa;
+  --transactions-color-chart-amber: #f59e0b;
+  --transactions-color-chart-green: #4ade80;
+  --transactions-color-chart-pink: #ec4899;
+  --transactions-color-chart-cyan: #22d3ee;
+  --transactions-color-chart-red: #ef4444;
+  --transactions-color-chart-violet: #a855f7;
+  --transactions-color-chart-neutral: #b6bcc6;
+
   --transactions-color-success: #4ade80;
   --transactions-color-warning: #fbbf24;
   --transactions-color-positive: #4ade80;
@@ -373,6 +394,15 @@
     --transactions-color-transfer-tint: rgba(96, 165, 250, 0.14);
     --transactions-color-outlier-tint: rgba(251, 191, 36, 0.14);
     --transactions-color-outlier-tint-strong: rgba(251, 191, 36, 0.22);
+
+    --transactions-color-chart-blue: #60a5fa;
+    --transactions-color-chart-amber: #f59e0b;
+    --transactions-color-chart-green: #4ade80;
+    --transactions-color-chart-pink: #ec4899;
+    --transactions-color-chart-cyan: #22d3ee;
+    --transactions-color-chart-red: #ef4444;
+    --transactions-color-chart-violet: #a855f7;
+    --transactions-color-chart-neutral: #b6bcc6;
 
     --transactions-color-success: #4ade80;
     --transactions-color-warning: #fbbf24;

@@ -36,6 +36,14 @@ colors:
   ledger-ochre: "#9e8c7e"
   ledger-moss: "#6b9e7e"
   ledger-camel: "#b89a80"
+  chart-blue: "#3964fe"
+  chart-amber: "#d97706"
+  chart-green: "#15803d"
+  chart-pink: "#db2777"
+  chart-cyan: "#0891b2"
+  chart-red: "#dc2626"
+  chart-violet: "#7e22ce"
+  chart-neutral: "#61666b"
 typography:
   display:
     fontFamily: "'Inter', system-ui, -apple-system, sans-serif"
@@ -175,9 +183,34 @@ Cool neutrals carry the interface; Clarity Blue is the single accent; a small se
 
 Eight natural tones give each ledger a stable identity: forest #4a8e70, amber #c6963a, slate-blue #5c8db5, vermillion #d9705a, warm-brown #8c7b6e, ochre #9e8c7e, moss #6b9e7e, camel #b89a80. Dark theme lightens each for legibility.
 
+### Chart categorical palette
+
+折线图的候选色池。曲线上色**按它在图表里的位置**（第 N 条 → 第 N 色），与交易类型无关：
+一张图里同类型的曲线常常不止一条（预设的「年度收入趋势」就是 4 条收入曲线），
+按类型取语义色时第 4 条只能落到别的语义色上。两套主题色相一一对应，切换主题不改变曲线身份。
+
+| # | Token | 浅色 | 深色 | 色相 |
+|---|-------|------|------|------|
+| 1 | `--transactions-color-chart-blue` | `#3964fe` | `#60a5fa` | 蓝（品牌色） |
+| 2 | `--transactions-color-chart-amber` | `#d97706` | `#f59e0b` | 橙 |
+| 3 | `--transactions-color-chart-green` | `#15803d` | `#4ade80` | 绿 |
+| 4 | `--transactions-color-chart-pink` | `#db2777` | `#ec4899` | 粉 |
+| 5 | `--transactions-color-chart-cyan` | `#0891b2` | `#22d3ee` | 青 |
+| 6 | `--transactions-color-chart-red` | `#dc2626` | `#ef4444` | 红 |
+| 7 | `--transactions-color-chart-violet` | `#7e22ce` | `#a855f7` | 紫 |
+| 8 | `--transactions-color-chart-neutral` | `#61666b` | `#b6bcc6` | 灰（第 8 条起） |
+
+顺序不是随手排的：它让**曲线少的时候最容易分**（两两 ΔE76 的下界：2 条 ≥126、3 条 ≥86、
+4 条 ≥77、5 条 ≥44；到第 7 条才降到池内的最差值 31）。
+灰留在最后 —— 只有第 8 条才用得着它；曲线多于 8 条时按 8 取模。
+池内两两可辨（ΔE76 正常视觉 ≥25、红绿色盲 ≥8）与画布对比度 ≥3:1 是硬要求，
+判据与实测值在 `fixtures/design-audit.ps1` 第 4 项。
+
 ### Named Rules
 
 **The Semantic Silo Rule.** Income/expense/transfer/outlier colors appear only on transaction or stock data — never on chrome, navigation, or brand surfaces.
+
+**The Positional Colour Rule.** Multi-series charts take their colours from the chart categorical palette by the series' position in the list, not from the semantic set. The plot, the legend, and the totals column all use the same index, so a curve's colour is identical in all three.
 
 **The One Accent Rule.** Clarity Blue is the system's only accent color. There is no secondary accent; emphasis comes from weight and placement.
 

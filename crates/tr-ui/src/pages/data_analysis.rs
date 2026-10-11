@@ -22,6 +22,8 @@
 //! 4. **编辑图表标题**：曲线表之外补了"重命名"入口（调用同一个 `chart_update`，属行为增强）。
 //! 5. **`isPreset` 的取舍**：按**真实 `isPreset`** 控制 —— 预设图表隐藏"添加曲线/保存修改"。
 //! 6. **配色直接用 CSS 变量**：曲线与图例的颜色写成 `var(--transactions-*)`，SVG 能直接读变量。
+//!    取哪个色由 [`series_color`] 按**曲线在列表里的位置**决定（候选色池见 `chart.rs`），
+//!    不按交易类型 —— 一张图里同类型的曲线常常不止一条。
 
 use std::collections::BTreeMap;
 
@@ -38,10 +40,10 @@ use tr_draw::section::{section_state, SectionState};
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind, CheckboxGroup,
-    CheckboxOption, Divider, DragSortItem, DragSortState, Empty, FeaturePage, IconButton,
-    IconButtonVariant, Input, LineChart, Modal, ModalSize, Popconfirm, Select, SelectOption, Spin,
-    Tag, TagKind, TimeRangePicker,
+    series_color, Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, ChartValueKind,
+    CheckboxGroup, CheckboxOption, Divider, DragSortItem, DragSortState, Empty, FeaturePage,
+    IconButton, IconButtonVariant, Input, LineChart, Modal, ModalSize, Popconfirm, Select,
+    SelectOption, Spin, Tag, TagKind, TimeRangePicker,
 };
 use crate::error_handler::notify_error;
 use crate::format;
@@ -63,27 +65,6 @@ const GRANULARITIES: [(&str, &str); 2] = [("year", "年"), ("month", "月")];
 
 /// 标签匹配策略（取值复用领域层常量，避免同一组字面量在多处各写一份）。
 const TAG_POLICIES: [(&str, &str); 2] = [(TAG_POLICY_ANY, "任意"), (TAG_POLICY_ALL, "全部")];
-
-/// 曲线配色（按交易类型语义色；同类型多条时用调色板兜底）。
-fn series_color(transaction_type: &str, index: usize) -> String {
-    let semantic = match transaction_type {
-        "income" => Some("var(--transactions-color-income)"),
-        "expense" => Some("var(--transactions-color-expense)"),
-        "transfer" => Some("var(--transactions-color-transfer)"),
-        _ => None,
-    };
-    // 曲线配色：前三条按交易类型的语义色，第四条起用调色板按序号兜底。
-    match (semantic, index) {
-        (Some(color), 0) => color.to_string(),
-        (Some(color), 1) => color.to_string(),
-        (Some(color), 2) => color.to_string(),
-        _ => crate::components::ui::ChartConfig::default_colors()
-            .get(index % 5)
-            .copied()
-            .unwrap_or("var(--transactions-color-text-secondary)")
-            .to_string(),
-    }
-}
 
 // ==================================================================== 分析子功能
 
@@ -595,17 +576,6 @@ pub fn AnalysisSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoVi
     }
 }
 
-/// 交易类型 → CSS 颜色变量（列表上的小圆点）。
-fn transaction_type_color(transaction_type: &str) -> String {
-    match transaction_type {
-        "income" => "var(--transactions-color-income)",
-        "expense" => "var(--transactions-color-expense)",
-        "transfer" => "var(--transactions-color-transfer)",
-        _ => "var(--transactions-color-text-secondary)",
-    }
-    .to_string()
-}
-
 // ==================================================================== 图表视图
 
 /// 右侧图表视图：标题 + 粒度 + 曲线表 + 保存 + 自绘图表 + 右侧求和面板。
@@ -789,18 +759,15 @@ fn chart_panel(
                                     .unwrap_or_default()
                             })
                             .unwrap_or_default();
+                        // 曲线的颜色只跟**在列表里的位置**有关（色池见 `series_color`）：
+                        // 同类型的曲线常有不止一条，按类型取语义色会让第 4 条落到别的语义色上。
                         let series = response_lines
                             .iter()
                             .enumerate()
                             .map(|(index, line)| {
-                                let transaction_type = visible
-                                    .iter()
-                                    .find(|(label, _)| *label == line.label)
-                                    .map(|(_, kind)| kind.clone())
-                                    .unwrap_or_default();
                                 ChartSeries::new(
                                     line.label.clone(),
-                                    series_color(&transaction_type, index),
+                                    series_color(index),
                                     line.data
                                         .iter()
                                         .map(|point| point.amount as f64)
@@ -837,13 +804,22 @@ fn chart_panel(
                         let Some(data) = sums_data.clone() else {
                             return ().into_any();
                         };
+                        // 与画布**同一份顺序、同一套过滤**：色点取 `series_color(index)`，
+                        // 两条曲线的颜色在"图例 / 折线 / 合计点"三处必须一致。
+                        let visible = lines.get();
+                        let drawn: Vec<ChartLineData> = data
+                            .lines
+                            .iter()
+                            .filter(|line| visible.iter().any(|item| item.label == line.label))
+                            .cloned()
+                            .collect();
                         view! {
                             <aside class="da-chart__sums">
                                 <h4 class="da-chart__sums-title">"曲线合计"</h4>
-                                {data
-                                    .lines
+                                {drawn
                                     .iter()
-                                    .map(|line| {
+                                    .enumerate()
+                                    .map(|(index, line)| {
                                         let total: i64 =
                                             line.data.iter().map(|point| point.amount).sum();
                                         view! {
@@ -852,9 +828,7 @@ fn chart_panel(
                                                     class="da-list__dot"
                                                     style=format!(
                                                         "background: {}",
-                                                        transaction_type_color(
-                                                            &visible_type(&line.label, &lines.get_untracked()),
-                                                        ),
+                                                        series_color(index),
                                                     )
                                                 ></span>
                                                 <span class="da-chart__sum-label">
@@ -1095,15 +1069,6 @@ fn chart_panel(
         </div>
     }
     .into_any()
-}
-
-/// 曲线 label → 交易类型（右侧求和面板取色用）。
-fn visible_type(label: &str, lines: &[ChartLine]) -> String {
-    lines
-        .iter()
-        .find(|line| line.label == label)
-        .map(|line| line.transaction_type.clone())
-        .unwrap_or_default()
 }
 
 /// 「添加曲线」弹窗（固定文案：标题「添加曲线」、ok「添加」、cancel「取消」、宽 500；

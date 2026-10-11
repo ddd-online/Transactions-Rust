@@ -148,16 +148,34 @@ impl ChartConfig {
         self
     }
 
-    /// 预设配色（语义色，顺序即取值顺序）。
-    pub fn default_colors() -> [&'static str; 5] {
+    /// 折线图的候选色池（分类色，与交易类型无关），顺序即"第 N 条曲线"的取值顺序。
+    ///
+    /// 为什么不按交易类型取语义色：一张图里同类型的曲线常常不止一条（预设的
+    /// 「年度收入趋势」就是 4 条收入曲线），第 4 条起只能落到别的语义色上 —— 实测那条
+    /// 收入曲线被画成了 `outlier` 的橙色，读起来像"支出 / 离群"。候选池按位置取色，
+    /// 四条收入曲线就是四个互不相同的颜色。
+    ///
+    /// 口径（两两 ΔE76、红绿色盲下的下界、与画布的对比度、两套主题色相一一对应）由
+    /// `fixtures/design-audit.ps1` 第 4 项盯着，改色值先看那里的判据。
+    pub fn series_palette() -> [&'static str; 8] {
         [
-            "var(--transactions-color-transfer)",
-            "var(--transactions-color-expense)",
-            "var(--transactions-color-income)",
-            "var(--transactions-color-outlier)",
-            "var(--transactions-color-text-secondary)",
+            "var(--transactions-color-chart-blue)",
+            "var(--transactions-color-chart-amber)",
+            "var(--transactions-color-chart-green)",
+            "var(--transactions-color-chart-pink)",
+            "var(--transactions-color-chart-cyan)",
+            "var(--transactions-color-chart-red)",
+            "var(--transactions-color-chart-violet)",
+            "var(--transactions-color-chart-neutral)",
         ]
     }
+}
+
+/// 第 `index` 条曲线的颜色。曲线多于色池长度时按池长取模：色相会重复，但相邻两条
+/// 一定不同（池内两两都可辨）。
+pub fn series_color(index: usize) -> &'static str {
+    let palette = ChartConfig::series_palette();
+    palette[index % palette.len()]
 }
 
 // ==================================================================== 常量
