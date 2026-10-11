@@ -23,7 +23,11 @@
 #      从前 `.st-pane` 被删、`<div class="st-pane st-about">` 还在，居中就没了）；
 #   7. CHANGELOG 的小节标题不许被字符串替换弄成粘连（`### 修复**…**`）；
 #   8. 文档里的引用不烂：反引号引用的仓库内路径必须存在、发布资产名不许写死版本号、
-#      "`AGENTS.md` 的「小节」"这类引用要对得上真实标题。
+#      "`AGENTS.md` 的「小节」"这类引用要对得上真实标题；
+#   9. 发布说明（`build/release_notes.md`，骨架见 `build/release_template.md`）合不合模板：
+#      版本标题必须等于 `tauri.conf.json` 的版本（对不上 = 拿上一次的说明发新版）、
+#      四节（新增 / 修改 / 调整 / 优化）顺序固定且不许出现别的节、必须是无序列表、
+#      每项 ≤50 字、空节不许留标题、同一项不许跨节重复。
 #
 # 用法（pwsh 7）：pwsh -File fixtures/static-guards.ps1 [-OutDir <dir>]
 # 退出码：0 = 通过，1 = 有失败项。
@@ -52,7 +56,7 @@ function Read-Text([string]$relative) {
 }
 
 # ---------------------------------------------------------------- 1. 开发端口
-Write-Host '[static-guards] 1/8 开发端口一致性' -ForegroundColor Cyan
+Write-Host '[static-guards] 1/9 开发端口一致性' -ForegroundColor Cyan
 $portSources = [ordered]@{}
 $portSources['crates/tr-ui/Trunk.toml'] = @(
     [regex]::Matches((Read-Text 'crates/tr-ui/Trunk.toml'), '(?m)^\s*port\s*=\s*(\d+)') |
@@ -85,7 +89,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 2. 滚动条禁令
-Write-Host '[static-guards] 2/8 自定义滚动条禁令' -ForegroundColor Cyan
+Write-Host '[static-guards] 2/9 自定义滚动条禁令' -ForegroundColor Cyan
 $cssFiles = Get-ChildItem (Join-Path $repo 'crates/tr-ui/static/css') -Filter *.css -File
 $scrollHits = New-Object System.Collections.Generic.List[string]
 foreach ($file in $cssFiles) {
@@ -105,7 +109,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 3. 构建 / 发布纪律
-Write-Host '[static-guards] 3/8 构建与发布纪律' -ForegroundColor Cyan
+Write-Host '[static-guards] 3/9 构建与发布纪律' -ForegroundColor Cyan
 $tauriConf = Read-Text 'src-tauri/tauri.conf.json'
 if ($tauriConf -match '"beforeBuildCommand"\s*:\s*\{[^}]*"script"\s*:\s*"([^"]+)"') {
     $beforeBuild = $Matches[1]
@@ -153,7 +157,7 @@ if ($testPs1 -match "'build-app'[\s\S]{0,400}?tauri/custom-protocol" -and $testP
 else { Fail 'test.ps1 的 build-app 步骤必须带 --release 与 --features tauri/custom-protocol（界面护栏用的就是这种产物）' }
 
 # ---------------------------------------------------------------- 4. wasm-bindgen 版本
-Write-Host '[static-guards] 4/8 wasm-bindgen CLI 版本' -ForegroundColor Cyan
+Write-Host '[static-guards] 4/9 wasm-bindgen CLI 版本' -ForegroundColor Cyan
 $lock = Read-Text 'Cargo.lock'
 if ($lock -match '(?m)^name = "wasm-bindgen"\r?\nversion = "([^"]+)"') {
     $lockVersion = $Matches[1]
@@ -170,7 +174,7 @@ if ($lock -match '(?m)^name = "wasm-bindgen"\r?\nversion = "([^"]+)"') {
 else { Fail 'Cargo.lock 里读不到 wasm-bindgen 的版本' }
 
 # ---------------------------------------------------------------- 5. 分层：tr-domain 无 I/O
-Write-Host '[static-guards] 5/8 tr-domain 的依赖树（不许有 I/O）' -ForegroundColor Cyan
+Write-Host '[static-guards] 5/9 tr-domain 的依赖树（不许有 I/O）' -ForegroundColor Cyan
 $treeFile = Join-Path ([System.IO.Path]::GetTempPath()) "tr-tree-$([guid]::NewGuid().ToString('N')).txt"
 try {
     cargo tree -p tr-domain -e normal --prefix none *> $treeFile
@@ -183,7 +187,7 @@ try {
 finally { Remove-Item $treeFile -Force -ErrorAction SilentlyContinue }
 
 # ---------------------------------------------------------------- 6. markup 类名 → CSS 规则
-Write-Host '[static-guards] 6/8 markup 里的类名都有 CSS 规则' -ForegroundColor Cyan
+Write-Host '[static-guards] 6/9 markup 里的类名都有 CSS 规则' -ForegroundColor Cyan
 # 例外：**刻意**留着的钩子/块名（每条都在这里给理由，不写进文档）
 $classAllow = @{
     'ui-popconfirm--end'    = '意图标记：贴哪条边对齐由组件算（popconfirm.rs 的 align_end），见 ui.css 注释'
@@ -229,7 +233,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 7. CHANGELOG 标题
-Write-Host '[static-guards] 7/8 CHANGELOG 小节标题' -ForegroundColor Cyan
+Write-Host '[static-guards] 7/9 CHANGELOG 小节标题' -ForegroundColor Cyan
 $badHeadings = New-Object System.Collections.Generic.List[string]
 $changelogLines = Get-Content (Join-Path $repo 'CHANGELOG.md')
 for ($i = 0; $i -lt $changelogLines.Count; $i++) {
@@ -247,12 +251,15 @@ else {
 }
 
 # ---------------------------------------------------------------- 8. 文档引用
-Write-Host '[static-guards] 8/8 文档引用（路径 / 版本号 / 小节）' -ForegroundColor Cyan
+Write-Host '[static-guards] 8/9 文档引用（路径 / 版本号 / 小节）' -ForegroundColor Cyan
 # 只查**还在维护的**文档。不查的三种：CHANGELOG.md 是历史记录；`docs/adr/` 记录的是当时的决策
 # （里面提到后来被删掉的文件正是它该有的样子）；`docs/agents/` 与 `fixtures/heic/README.md`
 # 描述的是别处的口径（skill 的通用约定、上游仓库的目录结构）。
-$docPaths = @('AGENTS.md', 'README.md', 'DESIGN.md', 'PRODUCT.md', 'fixtures/README.md') |
-    Where-Object { Test-Path (Join-Path $repo $_) }
+# 发布说明那两份也算维护中的文档：模板里写的路径烂了，下次发布就照着一份错的说明抄。
+$docPaths = @(
+    'AGENTS.md', 'README.md', 'DESIGN.md', 'PRODUCT.md', 'fixtures/README.md',
+    'build/release_template.md', 'build/release_notes.md'
+) | Where-Object { Test-Path (Join-Path $repo $_) }
 
 # 工作树里的真实文件与目录（排除生成物与被忽略的目录），用来判"文档引用的路径是否存在"。
 # 按**顶层目录**剪枝再递归：`target/` 底下十几万个文件，整树扫一遍要好几秒。
@@ -306,6 +313,103 @@ if ($badRefs.Count -eq 0) { Pass "文档引用干净（扫了 $($docPaths.Count)
 else {
     foreach ($hit in $badRefs) { Write-Host "      $hit" -ForegroundColor DarkGray }
     Fail "文档里有 $($badRefs.Count) 处过期引用 —— 改了脚本/小节/版本号，记得回头改文档"
+}
+
+# ---------------------------------------------------------------- 9. 发布说明
+Write-Host '[static-guards] 9/9 发布说明（build/release_notes.md）' -ForegroundColor Cyan
+# 这份说明就是 Release 正文（`build/release.ps1` 取它），也就是应用内「更新说明」显示的文字。
+# 骨架是 `build/release_template.md`；逐条判据见本文件头注释第 9 条。
+$notesRel = 'build/release_notes.md'
+$notesPath = Join-Path $repo $notesRel
+if (-not (Test-Path $notesPath)) {
+    Fail "找不到 $notesRel —— 发布说明的当次内容写在这儿，骨架见 build/release_template.md"
+}
+else {
+    $sectionNames = @('新增', '修改', '调整', '优化')
+    $items = [ordered]@{}
+    $order = New-Object System.Collections.Generic.List[string]
+    $current = $null
+    $notesVersion = $null
+    $badNotes = New-Object System.Collections.Generic.List[string]
+
+    foreach ($line in (Get-Content $notesPath)) {
+        if ($line -match '^##\s*\[([0-9]+\.[0-9]+\.[0-9]+)\]\s*-\s*[0-9]{4}-[0-9]{2}-[0-9]{2}\s*$') {
+            if ($notesVersion) { $badNotes.Add('版本标题出现了两次') }
+            $notesVersion = $Matches[1]
+            continue
+        }
+        if ($line -match '^###\s*(.+?)\s*$') {
+            $name = $Matches[1].Trim()
+            # 节名前后的 `###` 与空白已剥掉；模板里的占位标题（如「新增」带说明）不该出现
+            if ($sectionNames -notcontains $name) {
+                $badNotes.Add("节名「$name」不在四节里（新增 / 修改 / 调整 / 优化）")
+                $current = $null
+            }
+            elseif ($items.Contains($name)) {
+                $badNotes.Add("「$name」这一节出现了两次")
+                $current = $name
+            }
+            else {
+                $items[$name] = New-Object System.Collections.Generic.List[string]
+                $order.Add($name)
+                $current = $name
+            }
+            continue
+        }
+        $entry = $null
+        if ($line -match '^\s*[-*+]\s*(.*)$') { $entry = $Matches[1].Trim() }
+        elseif ($line.Trim()) {
+            if ($current) { $badNotes.Add("「$current」里有不是列表项的内容：$($line.Trim())") }
+            else { $badNotes.Add("有内容既不在版本标题下、也不在任何节里：$($line.Trim())") }
+            continue
+        }
+        if ($null -eq $entry) { continue }                      # 空行
+        if (-not $current) { $badNotes.Add("列表项出现在节标题之前：$entry"); continue }
+        if (-not $entry) { continue }                           # 骨架里的空占位 `- `
+        if ($line -match '^\s*[*+]\s') { $badNotes.Add("「$current」里用了 $($line.Trim()[0]) 做列表符号，统一用 -") }
+        $items[$current].Add($entry)
+    }
+
+    # 9a. 版本标题存在且等于 tauri.conf.json（防止拿上一次的说明发新版）
+    $confVersion = [regex]::Match((Read-Text 'src-tauri/tauri.conf.json'), '"version"\s*:\s*"([^"]+)"').Groups[1].Value
+    if (-not $notesVersion) {
+        $badNotes.Add("缺版本标题（第一行要写 ``## [$confVersion] - YYYY-MM-DD``）")
+    }
+    elseif ($notesVersion -ne $confVersion) {
+        $badNotes.Add("版本标题是 $notesVersion，而 tauri.conf.json 是 $confVersion —— 说明还是上一版的")
+    }
+
+    # 9b. 出现的节必须按固定顺序、且一个都不许是空的
+    $idx = -1
+    foreach ($name in $order) {
+        $now = [array]::IndexOf($sectionNames, $name)
+        if ($now -le $idx) { $badNotes.Add("节的顺序不对：$($order -join ' / ')（固定顺序是 $($sectionNames -join ' / ')）") }
+        $idx = $now
+        if ($items[$name].Count -eq 0) { $badNotes.Add("「$name」是空的 —— 没有变更就整节删掉，别留标题") }
+    }
+    if ($order.Count -eq 0) { $badNotes.Add('一节都没有（四节里至少要有一节）') }
+
+    # 9c. 每项 ≤50 字，且同一项不许跨节重复
+    $seen = @{}
+    foreach ($name in $order) {
+        foreach ($item in $items[$name]) {
+            if ($item.Length -gt 50) {
+                $badNotes.Add("「$name」有一项 $($item.Length) 字（上限 50）：$item")
+            }
+            $key = ($item -replace '[`*。，、；：\s]', '')
+            if ($seen.ContainsKey($key)) { $badNotes.Add("同一项出现在两节里（$($seen[$key]) / $name）：$item") }
+            else { $seen[$key] = $name }
+        }
+    }
+
+    if ($badNotes.Count -eq 0) {
+        $total = 0; foreach ($name in $order) { $total += $items[$name].Count }
+        Pass "v$notesVersion 合规：$($order -join ' / ')（共 $total 项，最长 $(($items.Values | ForEach-Object { $_.ToArray() } | ForEach-Object { $_ } | ForEach-Object { $_.Length } | Measure-Object -Maximum).Maximum) 字）"
+    }
+    else {
+        foreach ($hit in $badNotes) { Write-Host "      $hit" -ForegroundColor DarkGray }
+        Fail "发布说明有 $($badNotes.Count) 处不合模板 —— 照 build/release_template.md 改 $notesRel"
+    }
 }
 
 # ---------------------------------------------------------------- 汇总

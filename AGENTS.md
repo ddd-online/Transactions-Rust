@@ -88,11 +88,8 @@ pwsh -File fixtures/dev-shot.ps1 -Page 股票        # 或 -AllPages
 ## 验证纪律
 
 - **能机器判定的别靠人读**。`core` 那几条便宜且每次必跑（`fmt` / `clippy` / `design-audit` /
-  `static-guards`）；`static-guards` 收的是跨文件、跨脚本的约定 —— 开发端口一致、滚动条禁令、
-  构建脚本纪律、`wasm-bindgen` 版本、`tr-domain` 分层、markup 类名必须有 CSS 规则、
-  CHANGELOG 标题不许粘连、**文档里的引用不许烂**（引用的路径要存在、发布资产名不许写死版本号、
-  "`AGENTS.md` 的「小节」"要对得上真实标题）—— 逐条判据与理由在 `fixtures/static-guards.ps1`
-  的头注释里。
+  `static-guards`）；`static-guards` 收的是跨文件、跨脚本的约定 —— 逐条判据与理由都在
+  `fixtures/static-guards.ps1` 的头注释里（这里不再抄一份清单：抄来的那份会先过期，然后开始骗人）。
 - **共享代码会扩大影响面**：改 `components/ui/`、`shell.rs`、`store.rs`、全局 CSS 时，
   影响面由 `$PathMap` 算（`-Unit changed`），别自己估。连带效果也算：一个 fixture 的检查
   可能由**别处**触发，新增/改动护栏时把这类依赖写进 `$Groups` 的注释里。
@@ -232,6 +229,12 @@ release 的 `tag_name` 与首个 `.exe` 资产的 `digest`；许可证以仓库�
 出现多次，替换会把新小节塞进每个历史版本；标题粘连有 `static-guards` 兜底，"塞错位置"没有）。
 `.gitignore` 已排除 `/target`、`/crates/tr-ui/dist`、`*.db(-wal|-shm)`、`/fixtures/private/` 等，
 **真实工作空间数据绝不入库**，提交前 `git status --short` 核一眼。
+
+**Release 正文取自 `build/release_notes.md`**（四节无序列表：新增 / 修改 / 调整 / 优化，一节没有
+变更就整节不出现，每项 50 字以内）—— 应用内「更新说明」显示的就是它。骨架与怎么归属写在
+`build/release_template.md`，机器判据在 `fixtures/static-guards.ps1` 第 9 项（版本号对不上
+`tauri.conf.json` 就是拿上一版说明发新版，`release.ps1` 会先跑一遍护栏、不合规直接不发）。
+`CHANGELOG.md` 继续留详细正文（根因 / 判据 / 实测数字），两者不再互相绑。
 
 ## AI 工具（DSH）
 
