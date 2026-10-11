@@ -974,7 +974,6 @@ fn item_row(
                 <Button
                     variant=ButtonVariant::Text
                     size=ButtonSize::Small
-                    class="todo-item__progress-btn"
                     on_click=move |_| toggle_progress.run(for_toggle.clone())
                 >
                     {move || {
@@ -1238,7 +1237,7 @@ fn quadrant_item_row(item: &QuadrantItem) -> AnyView {
                 </span>
                 {(!dates.is_empty())
                     .then(|| {
-                        view! { <span class="todo-quadrant-modal__dates">{dates.clone()}</span> }
+                        view! { <span>{dates.clone()}</span> }
                     })}
             </div>
         </li>
@@ -1632,7 +1631,8 @@ fn history_view(sub: RwSignal<TodoSub>) -> AnyView {
                                             <td class="todo-table__time">
                                                 {format_timestamp(row.completed_at, "YYYY-MM-DD HH:mm")}
                                             </td>
-                                            <td>{row.card_title.clone()}</td>
+                                            // 主题与事项同规格：允许换行（长卡片名不撑宽整张表）
+                                            <td class="todo-table__card">{row.card_title.clone()}</td>
                                             <td class="todo-table__title">{row.title.clone()}</td>
                                             <td class="is-center">
                                                 {consts::todo_level_label(row.urgency)}

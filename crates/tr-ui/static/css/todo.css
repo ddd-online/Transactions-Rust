@@ -55,7 +55,10 @@
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--transactions-space-md);
+  /* 卡片之间 16px、卡片内部 12px：**外面必须比里面宽**，两张卡才靠"邻近"分开而不是
+     靠边框撑着（从前内外都是 12px，四张卡叠在一起像同一张表里的分区）。16px 同时也是
+     卡片列自己的四周留白，全页只有"卡外 16 / 卡内 12"两档。 */
+  gap: var(--transactions-space-lg);
   /* 上下左右都留白：卡片列与工具栏底边那条发丝线之间也要有间距（与底部一致） */
   padding: var(--transactions-space-lg);
 }
@@ -575,38 +578,58 @@
 
 .todo-table {
   width: 100%;
+  /* 与 `.tr-table` / `.stock-table--trades` 同一档：窗口再窄也不把列挤到放不下，
+     放不下时由 `.todo-history` 横向滚动（覆盖式滚动条不占位、也不显眼，所以"能放下"
+     这件事必须由列宽自己保证，不能指望用户看见滚出来一半的表）。 */
+  min-width: 880px;
+  /* **固定布局**：下面给了宽的列就是那个宽，`事项`没给宽 → 它独吞剩下的全部。
+     不这么写的话两种自动布局都不成立：`auto` 会把宽度全让给最长的那一格（一个 200 字的
+     卡片名就能把后面四列顶出视口，实测就是这样），百分比则会在窄窗里把"完成时间"压到
+     放不下 16 个字符。 */
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: var(--transactions-size-text-body-sm);
 }
 
-/* 列宽：**事项**（第 3 列）是唯一会长的内容，给它最大的一份；其余列只要"适中"。
-   用百分比当提示（`table-layout: auto`），内容比提示宽时按内容撑开，不会被裁掉。 */
+/* 列宽：**事项**（第 3 列）是唯一会长的一列，剩余宽度全给它；其余六列按内容给固定宽。
+   第 2 列（主题）是卡片名，上限 200 字 —— 给了 150px 并允许换行。 */
 .todo-table th:nth-child(1) {
-  width: 18%;
+  /* 完成时间：`2026-10-10 21:07` 定长 16 字符 */
+  width: 136px;
 }
 
 .todo-table th:nth-child(2) {
-  width: 12%;
+  /* 主题：卡片名 */
+  width: 150px;
 }
 
-.todo-table th:nth-child(3) {
-  width: 34%;
-}
-
-.todo-table th:nth-child(4) {
-  width: 8%;
-}
-
+.todo-table th:nth-child(4),
 .todo-table th:nth-child(5) {
-  width: 8%;
+  /* 紧急 / 重要：两个字一档 */
+  width: 56px;
 }
 
 .todo-table th:nth-child(6) {
-  width: 10%;
+  /* 进度记录：`查看（N）` 那颗按钮 */
+  width: 108px;
 }
 
 .todo-table th:nth-child(7) {
-  width: 10%;
+  /* 操作：`退回进行中` + `删除` 并排 */
+  width: 168px;
+}
+
+/* 对齐：**文本列左对齐、短列居中** —— 与全站表格同一套约定（`.stock-table .is-center`、
+   `.tr-cell--center`：居中是要一个一个标出来的）。这里反过来：原先"整张表都居中"，
+   于是视图里那四个 `is-center` 一直被架空，而**事项**作为唯一的长文本列两端都参差，
+   读一列事项时眼睛没有落点。 */
+.todo-table th,
+.todo-table td {
+  text-align: left;
+}
+
+.todo-table .is-center {
+  text-align: center;
 }
 
 .todo-table th {
@@ -616,8 +639,6 @@
   background-color: var(--transactions-color-minor-background);
   color: var(--transactions-color-text-secondary);
   font-weight: var(--transactions-weight-medium);
-  /* 整张表所有列都居中（表头与单元格同一套对齐） */
-  text-align: center;
   padding: var(--transactions-space-sm);
   border-bottom: 1px solid var(--transactions-color-divider);
   white-space: nowrap;
@@ -627,7 +648,6 @@
   padding: var(--transactions-space-sm);
   border-bottom: 1px solid var(--transactions-color-divider);
   color: var(--transactions-color-text-major);
-  text-align: center;
   white-space: nowrap;
   /* 单元格里常是按钮（比文字高）：靠中线对齐，否则按钮看着"偏下" */
   vertical-align: middle;
@@ -645,16 +665,23 @@
   gap: var(--transactions-space-xs);
 }
 
-.todo-table__time {
+/* ⚠ 单元格级的改写一律写成 `.todo-table td.<类>`：上面那两条 `.todo-table th/td` 的
+ * 权重是 (0,1,1)，光写 `.todo-table__title` 是 (0,1,0) —— 会被 `white-space: nowrap` /
+ * `color` 反压回去，规则在、效果没有（**事项列"允许换行"这条曾经就是死的**：长事项名一路
+ * 撑到把后面四列顶出视口，看着像"表格没有宽度纪律"）。
+ *
+ * 时间列：定长、tabular-nums、不换行（换行会把 `2026-10-10 21:07` 折成两行）。 */
+.todo-table td.todo-table__time {
   color: var(--transactions-color-text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.todo-table__title {
-  color: var(--transactions-color-text-major);
-  /* 事项名可能很长：这一列允许换行，别把表格撑出横向滚动 */
+/* 主题（卡片名，上限 200 字）与事项是表里仅有的两个长文本列：都允许换行。 */
+.todo-table td.todo-table__card,
+.todo-table td.todo-table__title {
   white-space: normal;
+  /* 中文没有词边界：不断词的话一长串数字/英文会把列撑开 */
   word-break: break-word;
 }
 
