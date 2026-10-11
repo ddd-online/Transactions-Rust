@@ -2731,11 +2731,7 @@ fn trade_row_view(
     let count_note = row.trades.len();
 
     view! {
-        <tr
-            class="stock-trade-row"
-            class:is-child=is_child
-            class:is-group=is_group
-        >
+        <tr class="stock-trade-row" class:is-child=is_child>
             <td class="is-center stock-mono">
                 {format_timestamp(row.trade_time, "YYYY-MM-DD HH:mm")}
             </td>

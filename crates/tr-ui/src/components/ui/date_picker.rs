@@ -362,7 +362,7 @@ pub fn DateRangePicker(
     let classes = with_class("ui-date-picker ui-date-range-picker", class.as_deref());
 
     view! {
-        <div class=classes class:is-open=move || open.get() class:is-inline=inline>
+        <div class=classes class:is-open=move || open.get()>
             <Show when=move || !inline>
                 <button
                     type="button"

@@ -200,12 +200,23 @@ foreach ($m in [regex]::Matches($cssText, '\.([A-Za-z][A-Za-z0-9_-]*)')) { [void
 $undefined = [ordered]@{}
 foreach ($file in Get-ChildItem (Join-Path $repo 'crates/tr-ui/src') -Filter *.rs -Recurse -File) {
     $lines = @(Get-Content $file.FullName | Where-Object { -not $_.TrimStart().StartsWith('//') })
-    foreach ($m in [regex]::Matches(($lines -join "`n"), 'class="([^"{}]*)"')) {
+    $body = $lines -join "`n"
+    # 两种写法都要查：`class="a b"` 与 Leptos 的条件类 `class:is-x=…`。
+    # 后者漏过一次：`.todo-item` 上挂着 `class:is-expanded`，全仓库没有一条规则用它 ——
+    # 类名在、样式不在，正是这条检查该抓的"死钩子"，只是当时没扫到。
+    $tokens = New-Object System.Collections.Generic.List[string]
+    foreach ($m in [regex]::Matches($body, 'class="([^"{}]*)"')) {
         foreach ($token in $m.Groups[1].Value.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)) {
-            if ($defined.Contains($token) -or $classAllow.ContainsKey($token)) { continue }
-            if (-not $undefined.Contains($token)) {
-                $undefined[$token] = "$($file.Name) 等"
-            }
+            $tokens.Add($token)
+        }
+    }
+    foreach ($m in [regex]::Matches($body, 'class:([A-Za-z][A-Za-z0-9_-]*)\s*=')) {
+        $tokens.Add($m.Groups[1].Value)
+    }
+    foreach ($token in $tokens) {
+        if ($defined.Contains($token) -or $classAllow.ContainsKey($token)) { continue }
+        if (-not $undefined.Contains($token)) {
+            $undefined[$token] = "$($file.Name) 等"
         }
     }
 }

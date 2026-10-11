@@ -72,7 +72,7 @@ pub fn FormItem(
     let classes = with_class("ui-form-item", class.as_deref());
 
     view! {
-        <div class=classes class:is-error=has_error class:is-required=required>
+        <div class=classes class:is-error=has_error>
             {(!label.is_empty())
                 .then(|| {
                     view! {

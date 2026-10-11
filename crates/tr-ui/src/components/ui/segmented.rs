@@ -65,7 +65,7 @@ pub fn Segmented(
     let classes = with_class(&classes, class.as_deref());
 
     view! {
-        <div class=classes class:is-disabled=move || disabled.get()>
+        <div class=classes>
             {options
                 .into_iter()
                 .map(|option| {
