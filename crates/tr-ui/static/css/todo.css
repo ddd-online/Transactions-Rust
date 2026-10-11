@@ -467,7 +467,9 @@
   font-size: var(--transactions-size-text-section);
 }
 
-/* 事项点：主色实心 + 白圈（白圈让叠在一起的点也分得出"这里有几个"） */
+/* 事项点：主色实心 + 白圈（白圈让叠在一起的点也分得出"这里有几个"）。
+   半径、抖动与"绘图区四周的留白"（点绝不被画布裁掉）都在 `tr_draw::quadrant`
+   （`POINT_RADIUS` / `PLOT_INSET` / `point_of`）—— 这里只管配色与描边宽度。 */
 .todo-quadrant__point {
   fill: var(--transactions-color-primary);
   stroke: var(--transactions-color-major-background);

@@ -14,7 +14,8 @@
 //!   有它 —— 数据只有一份，所以历史里留了一条「退回进行中」的退路（点错了还能回来）。
 //! * **时间只到日**（`YYYY-MM-DD`，与事件日期 / 股票委托时间同口径）；紧急度与重要度是**六档**
 //!   （低 / 中低 / 次低 / 次高 / 中高 / 高 —— 存的是既有整数 `-5 -3 -1 1 3 5`，界面只显示文案），
-//!   四象限图直接把这两个值当坐标：**+紧急向右、+重要向上，0 是原点**。
+//!   四象限图直接把这两个值当坐标：**+紧急向右、+重要向上，0 是原点**（落点与"绘图区留白"
+//!   都在 `tr_draw::quadrant`，见那里的 [`tr_draw::quadrant::point_of`]）。
 //!
 //! 切子功能会**重建**视图（信号随组件 owner 释放），因此来回切会重新拉数据 —— 与"切页面"一致。
 
@@ -1248,6 +1249,9 @@ fn quadrant_item_row(item: &QuadrantItem) -> AnyView {
 /// 四象限图：把**进行中**的事项按（紧急度, 重要度）画成点。
 ///
 /// 坐标：`x = 紧急度`、`y = 重要度`，各 `-5..=5`，0 落在十字轴上（+紧急向右、+重要向上）。
+/// **落点连同抖动一起由 `tr_draw::quadrant::point_of` 给**（那里还带"绘图区四周留白"，
+/// 保证最外档位的点连半径与描边都完整落在画布内 —— 不留白的话"紧急高 + 重要高"正好压在
+/// 画布角上、再叠上抖动就整颗都看不见了；`cargo test -p tr-draw` 盯着这条）。
 /// 四个象限用**同一支色的四种深浅**分档（浅 → 深 = 优先级低 → 高）：设计系统里只有一支强调色，
 /// 靠明度分档而不是引入第二种颜色；「马上做」的象限名用强调色点出来。
 ///
@@ -1259,7 +1263,7 @@ fn quadrant_item_row(item: &QuadrantItem) -> AnyView {
 /// 颜色由 CSS 压成低浓度的墨 —— 图上的"重量"留给数据点，文字只做方位提示。象限的语义不必
 /// 在象限里复述一遍：「重要」那一行 + 「不紧急」那一列 已经就是"计划做"。
 /// 四个名字同时是**按钮**：悬停亮起、点击打开该象限的事项列表（见 [`quadrant_name`]）。
-/// 落在同一坐标的事项按 id 各带一个固定的微小偏移（[`jitter_of`]），否则会叠成一坨。
+/// 落在同一坐标的事项按 id 各带一个固定的微小偏移，否则会叠成一坨。
 fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
     let items: Vec<QuadrantItem> = cards
         .iter()
@@ -1320,12 +1324,9 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
             <div class="todo-quadrant__canvas" node_ref=canvas>
                 {move || {
                     let (w, h) = size.get();
-                    let sx = |urgency: i32| (f64::from(urgency) + 5.0) / 10.0 * w;
-                    let sy = |importance: i32| {
-                        h - (f64::from(importance) + 5.0) / 10.0 * h
-                    };
-                    let axis_x = sx(0);
-                    let axis_y = sy(0);
+                    // 落点算法在 `tr_draw::quadrant`（留白 + 抖动，native 上有单测盯着
+                    // "任何档位都不会被画布裁掉"）；留白是对称的，所以十字轴恒在画布中心。
+                    let (axis_x, axis_y) = tr_draw::quadrant::axis_of(w, h);
                     // 四个象限的中心：水印名各自摆在自己的中心上
                     let mid = |a: f64, b: f64| (a + b) / 2.0;
                     let (plan_x, plan_y) = (mid(0.0, axis_x), mid(0.0, axis_y));
@@ -1418,17 +1419,25 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
                             <text class="todo-quadrant__axis-label" x=axis_x + 10.0 y=h - 10.0>
                                 "不重要"
                             </text>
-                            // 事项点：位置就是数据本身（同时落在同一点上的会重叠，靠悬停看名字）
+                            // 事项点：位置就是数据本身（同时落在同一点上的会重叠，靠悬停看名字）。
+                            // 落点连同抖动一起由 `tr_draw::quadrant::point_of` 给（含让点不被画布
+                            // 裁掉的留白）—— 这里不再自己算坐标。
                                 {items_for_points
                                     .iter()
                                     .map(|item| {
-                                        let (dx, dy) = tr_draw::quadrant::jitter_of(&item.id);
+                                        let (cx, cy) = tr_draw::quadrant::point_of(
+                                            item.urgency,
+                                            item.importance,
+                                            &item.id,
+                                            w,
+                                            h,
+                                        );
                                         view! {
                                             <circle
                                                 class="todo-quadrant__point"
-                                                cx=sx(item.urgency) + dx
-                                                cy=sy(item.importance) + dy
-                                                r=9.0
+                                                cx=cx
+                                                cy=cy
+                                                r=tr_draw::quadrant::POINT_RADIUS
                                             >
                                             <title>
                                                 {format!(
@@ -1483,12 +1492,6 @@ fn quadrant_view(cards: &[TodoCardDto]) -> AnyView {
     }
     .into_any()
 }
-
-/// 事项点的抖动偏移（单位：px）：紧急度与重要度都相同的事项会叠成一坨，
-/// 按 id 给每个点一个固定的小偏移，远近只够分开两颗点、不改变它落在哪个象限。
-///
-/// 实现搬到了 `tr_draw::quadrant::jitter_of`（native 上可断言：同一个 id 永远同一处、
-/// 一批 id 必须散得开）。
 
 // ==================================================================== 子功能二：历史
 

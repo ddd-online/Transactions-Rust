@@ -6,14 +6,17 @@
 #      的 status=doing、urgency/importance 与两个日期都按界面上的选择落库；
 #   3. 展开进度 → 记一条 → `tbl_billadm_todo_progress` 一行（时间 + 正文）；
 #      打勾 / 取消打勾 → 同一条的 `done` 在 1 / 0 之间跟着变；
-#   4. 四象限图分栏：进行中的事项应当被画出来（判据 = 工具栏下那句说明 + SVG 撑满版心）；
+#   4. 再加一条**两轴都是最高档**的事项（六档里最外的 `+5`）—— 它是画布最角上那颗点；
+#   5. 四象限图分栏：进行中的事项应当被画出来（判据 = 工具栏下那句说明 + SVG 撑满版心）；
+#      **最外档位那颗点必须整颗落在画布里**（判据只能是位图：UIA 里 SVG 的 `<circle>` 不进树，
+#      "被画布裁掉/整颗没画"看不见）—— 用户报的"紧急和重要度都是高却在图上找不到"就是这条；
 #      象限名是按钮（role=button）：点开 = 该象限的事项列表，紧急度降序 → 重要度降序
 #      （每格名字里的条数、列表里的行与顺序都拿库里的 `urgency` / `importance` 当判据）；
-#   5. 勾选完成 → status=done 且 completed_at>0，**卡片视图里它消失**、历史里出现
+#   6. 勾选完成 → status=done 且 completed_at>0，**卡片视图里它消失**、历史里出现
 #      （主题名跟着走）→ 历史里的「查看」弹窗能读到那条进度正文；
-#   6. 「退回进行中」→ status 回到 doing（误点的退路）；
-#   7. 删卡片 → 卡片 / 事项 / 进度记录三张表一起清（不留孤儿行）；
-#   8. **写进度 / 勾进度不打断页面**：铺一屏放不下的场景、把目标行滚进视口，勾选它的一条进度后断言
+#   7. 「退回进行中」→ status 回到 doing（误点的退路）；
+#   8. 删卡片 → 卡片 / 事项 / 进度记录三张表一起清（不留孤儿行）；
+#   9. **写进度 / 勾进度不打断页面**：铺一屏放不下的场景、把目标行滚进视口，勾选它的一条进度后断言
 #      "行的矩形 Y 没动（页面没被夹回顶部）+ 进度面板仍然展开"。这一条需要 `sqlite3` 在 PATH
 #      （只用来铺场景与读表，与 `migrate-workspace.ps1` 同款）。
 #
@@ -146,12 +149,12 @@ function Select-Level {
         }
         if (-not $opened) { Click-Element $trigger | Out-Null }
         Start-Sleep -Milliseconds 500
-        $option = Wait-Element -Root $Window -Name $Value -TimeoutSec 6
+        $option = Wait-SelectOption -Window $Window -Value $Value -TimeoutSec 6
         if (-not $option) {
             # InvokePattern 没开面板时退回真实鼠标再试一次
             Click-Element $trigger | Out-Null
             Start-Sleep -Milliseconds 700
-            $option = Wait-Element -Root $Window -Name $Value -TimeoutSec 6
+            $option = Wait-SelectOption -Window $Window -Value $Value -TimeoutSec 6
         }
         if ($option) {
             Click-Element $option | Out-Null
@@ -170,6 +173,77 @@ function Select-Level {
         Write-Host "    下拉($Which) 第 $attempt 次没选中「$Value」（当前 '$($current.Current.Name)'）" -ForegroundColor DarkYellow
     }
     return $false
+}
+
+# 下拉面板里的选项：按**类名 + 文案**定位，不许只按名字。
+#
+# 实测（dump 过 UIA 树）：`<div class="ui-select__option">高</div>` 在 UIA 里是
+# **`ControlType.Group`、且 `Name` 是空的**，文案挂在它的子节点 `ControlType.Text` 上；而
+# `<button class="ui-select__trigger">` 的 `Name` **就等于当前选中的文案**。
+# 于是只按名字找（`Find-First -Name '高'`）会先撞上**触发器**：两个下拉选了同一个档位时
+# （紧急「高」+ 重要「高」），它点的是已经选好的那个触发器 —— 面板被自己关掉，另一个下拉始终停在
+# 默认档，日志里只有一句"下拉(right) 第 N 次没选中「高」（当前 '次低'）"。
+# 做法：先找文案的 Text 节点，再取**把它包在矩形里**的那个 `.ui-select__option`（点它自己的中心）。
+function Wait-SelectOption {
+    param($Window, [string]$Value, [int]$TimeoutSec = 6)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $elements = @(Get-Elements $Window)
+        $labels = @($elements) | Where-Object {
+            $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text -and
+            $_.Current.Name -eq $Value -and (Test-Rect $_.Current.BoundingRectangle)
+        }
+        foreach ($label in $labels) {
+            $lr = $label.Current.BoundingRectangle
+            $option = $elements | Where-Object {
+                if (-not ([string]$_.Current.ClassName).Contains('ui-select__option')) { return $false }
+                $or = $_.Current.BoundingRectangle
+                if (-not (Test-Rect $or)) { return $false }
+                ($or.X -le $lr.X) -and ($or.Y -le $lr.Y) -and
+                    (($or.X + $or.Width) -ge ($lr.X + $lr.Width)) -and
+                    (($or.Y + $or.Height) -ge ($lr.Y + $lr.Height))
+            } | Select-Object -First 1
+            if ($option) { return $option }
+        }
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $deadline)
+    return $null
+}
+
+# 位图上找"主色的点"：UIA 里 SVG 的 `<circle>` 根本不进树，"点被画布裁掉"只有像素看得见。
+# 先在方框里粗扫 3px 找有没有主色，找到了再逐像素扫出包围盒。
+# 主色 = `--transactions-color-primary` #3964fe（深浅两套主题同值），容差与 ui-crud 同款。
+function Get-PrimaryBlobBox {
+    param([System.Drawing.Bitmap]$Bitmap, [int]$X0, [int]$Y0, [int]$X1, [int]$Y1)
+    $X0 = [Math]::Max(0, $X0); $Y0 = [Math]::Max(0, $Y0)
+    $X1 = [Math]::Min($Bitmap.Width - 1, $X1); $Y1 = [Math]::Min($Bitmap.Height - 1, $Y1)
+    if ($X1 -le $X0 -or $Y1 -le $Y0) { return $null }
+    $hit = $false
+    for ($y = $Y0; $y -le $Y1 -and -not $hit; $y += 3) {
+        for ($x = $X0; $x -le $X1; $x += 3) {
+            $p = $Bitmap.GetPixel($x, $y)
+            if ([Math]::Abs($p.R - 57) -le 24 -and [Math]::Abs($p.G - 100) -le 24 -and
+                [Math]::Abs($p.B - 254) -le 24) { $hit = $true; break }
+        }
+    }
+    if (-not $hit) { return $null }
+    $box = [pscustomobject]@{
+        MinX = [int]::MaxValue; MinY = [int]::MaxValue; MaxX = -1; MaxY = -1; Count = 0
+    }
+    for ($y = $Y0; $y -le $Y1; $y++) {
+        for ($x = $X0; $x -le $X1; $x++) {
+            $p = $Bitmap.GetPixel($x, $y)
+            if ([Math]::Abs($p.R - 57) -le 24 -and [Math]::Abs($p.G - 100) -le 24 -and
+                [Math]::Abs($p.B - 254) -le 24) {
+                if ($x -lt $box.MinX) { $box.MinX = $x }
+                if ($x -gt $box.MaxX) { $box.MaxX = $x }
+                if ($y -lt $box.MinY) { $box.MinY = $y }
+                if ($y -gt $box.MaxY) { $box.MaxY = $y }
+                $box.Count = $box.Count + 1
+            }
+        }
+    }
+    return $box
 }
 
 # 分栏页签在 UIA 里是 **TabItem**（不是 Button）：按 Button 找会静默失败，
@@ -338,6 +412,28 @@ try {
     Assert-True ($unchecked.Count -eq 1 -and [int]$unchecked[0].done -eq 0) '取消打勾后 done 落库 = 0'
     Save-Screenshot (Join-Path $OutDir '01-board.png')
 
+    # ---- 再加一条**两轴都是最高档**的事项（用户报的正是它：象限图上找不到）----
+    # 两轴六个档位是线性铺满画布的：最外那两档正好压在画布边线上，半径 9px 的点有一半在
+    # 画布外，再叠上"同坐标错开"的抖动就可能整颗都不见了。下面 5/8 拿位图核"这颗点整颗在
+    # 画布里"（UIA 里 SVG 的 <circle> 不进树，只有像素看得见）。
+    Write-Host "`n[todo] 4/8·b 再加一条紧急「高」/ 重要「高」的事项（画布最外的那一格）"
+    $cornerItemTitle = "象限最外那格$stamp"
+    $addCorner = Find-VisibleButton -Window $window -Name '添加事项'
+    Assert-True ([bool]$addCorner) '卡片上仍有「添加事项」'
+    if ($addCorner) { Invoke-Element $addCorner | Out-Null }
+    Assert-True ([bool](Wait-Element -Root $window -Name '紧急度' -TimeoutSec 10)) '事项弹窗已打开'
+    Assert-True (Set-InputByPaste -Window $window -Name '如：AI辅助研发' -Text $cornerItemTitle) '填入最外档位的事项'
+    Assert-True (Select-Level -Window $window -Which left -Value '高') '紧急度选「高」'
+    Assert-True (Select-Level -Window $window -Which right -Value '高') '重要度选「高」'
+    Assert-True (Invoke-ModalButton -Window $window -Name '保存') '点「保存」'
+    Start-Sleep -Seconds 2
+    $cornerItems = Get-TodoRows -Table 'tbl_billadm_todo_item' | Where-Object { $_.title -eq $cornerItemTitle }
+    Assert-True ($cornerItems.Count -eq 1) "库里恰好一条最外档位的事项（实际 $($cornerItems.Count) 条）"
+    if ($cornerItems.Count -eq 1) {
+        Assert-True ($cornerItems[0].urgency -eq 5 -and $cornerItems[0].importance -eq 5) `
+            "两轴都落最高档 5（实际 紧急 $($cornerItems[0].urgency) / 重要 $($cornerItems[0].importance)）"
+    }
+
     # ================= 5/8 四象限图 =================
     Write-Host "`n[todo] 5/8 切到「四象限图」"
     Assert-True (Select-TabItem -Window $window -Name '四象限图') '切到「四象限图」分栏'
@@ -357,6 +453,40 @@ try {
         $windowHeight = $window.Current.BoundingRectangle.Height
         Assert-True ($quadHeight -gt $windowHeight * 0.7) `
             "四象限图铺满版心（图高 $([int]$quadHeight) / 窗口高 $([int]$windowHeight)）"
+    }
+
+    # ---- 最外档位那个点必须**整颗**画在画布里（用户报的缺陷）----
+    # "紧急和重要度都是高的事项在象限图上看不到"：两轴线性铺满画布时最外档位正好压在画布
+    # 边线上，半径 9px 的点有一半在画布外、抖动再把它推出去，那颗点就整颗都不见了。
+    # 判据只能在位图上（UIA 里 SVG 的 <circle> 不进树）：这个点在画布**右上角**
+    # （+紧急向右、+重要向上）；留白之后它离两条边都还有约 28px。
+    # 拿不到 SVG 的矩形时上面那条断言已经报过错了，这里退化成"空矩形"（扫描框会落空 ⇒ 这条红），
+    # 不在这里抛异常（抛出去就看不到本轮汇总了）
+    $quadRect = if ($quad) { $quad.Current.BoundingRectangle } else { [System.Windows.Rect]::Empty }
+    $cornerShot = Join-Path $OutDir '04-quadrant-corner.png'
+    [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+    Start-Sleep -Milliseconds 300
+    $cornerBox = 160
+    $cornerBlob = $null
+    $deadline = (Get-Date).AddSeconds(8)
+    do {
+        Save-Screenshot $cornerShot
+        $bmp = [System.Drawing.Bitmap]::FromFile($cornerShot)
+        $cornerBlob = Get-PrimaryBlobBox -Bitmap $bmp `
+            -X0 ([int]($quadRect.Right - $cornerBox)) -Y0 ([int]($quadRect.Top)) `
+            -X1 ([int]($quadRect.Right - 1)) -Y1 ([int]($quadRect.Top + $cornerBox))
+        $bmp.Dispose()
+        if ($cornerBlob) { break }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    Assert-True ([bool]$cornerBlob) `
+        "画布右上角画着最外档位（紧急「高」/ 重要「高」）的点（截图 $cornerShot）"
+    if ($cornerBlob) {
+        $edgeGap = [int][Math]::Min(
+            [Math]::Min($cornerBlob.MinX - $quadRect.Left, $quadRect.Right - 1 - $cornerBlob.MaxX),
+            [Math]::Min($cornerBlob.MinY - $quadRect.Top, $quadRect.Bottom - 1 - $cornerBlob.MaxY))
+        Assert-True ($edgeGap -ge 4) `
+            "那颗点整颗落在画布里（主色像素 $($cornerBlob.Count) 个，离画布边线最近 $edgeGap px；被裁掉时这里会 < 4）"
     }
 
     # 象限名是**按钮**：点开 = 这一格里的事项列表（紧急度降序 → 重要度降序）。
@@ -435,7 +565,20 @@ try {
     Write-Host "`n[todo] 6/8 勾选完成 → 历史里出现（含主题名与进度弹窗）"
     Select-TabItem -Window $window -Name '待办视图' | Out-Null
     Start-Sleep -Seconds 2
-    $check = Find-VisibleButton -Window $window -Name '标记为已完成'
+    # 卡片里有**两条**事项了（5/8 之前补的那条"最外档位"是最新的，而 `list_by_card` 按
+    # `created_at DESC` 排 —— 它在最前面）。要的是 `$itemTitle` 那一条的勾选按钮：先按行文字
+    # 锁定那一行的矩形，再取落在该矩形里的那颗（与第 8 步找进度勾选框同一套做法）。
+    $itemRow = Find-ElementByClassText -Window $window -ClassPart 'todo-item' -TextPart $itemTitle
+    Assert-True ([bool]$itemRow) "找到「$itemTitle」那一行"
+    $check = $null
+    if ($itemRow) {
+        $itemRowRect = $itemRow.Current.BoundingRectangle
+        $check = @(Find-All $window '标记为已完成') | Where-Object {
+            $rect = $_.Current.BoundingRectangle
+            (Test-Rect $rect) -and $rect.Y -ge ($itemRowRect.Y - 4) -and
+                ($rect.Y + $rect.Height) -le ($itemRowRect.Y + $itemRowRect.Height + 4)
+        } | Select-Object -First 1
+    }
     Assert-True ([bool]$check) '事项行上有勾选按钮'
     if ($check) { Invoke-Element $check | Out-Null }
     Start-Sleep -Seconds 2
@@ -691,4 +834,4 @@ finally {
     Stop-TrApp -Process $proc -Failures $failures -OutDir $OutDir
 }
 
-Show-TrSummary -Failures $failures -Tag 'todo' -SuccessMessage "[todo] 全部通过：建卡片 → 加事项（紧急「中高」/ 重要「中低」）→ 记进度（打勾 / 取消打勾）→ 四象限图 → 完成进历史（带主题名 + 进度弹窗）→ 退回进行中 → 删卡片（三张表一起清）→ 写进度 / 勾完成不打断页面（滚动位置 + 面板状态）"
+Show-TrSummary -Failures $failures -Tag 'todo' -SuccessMessage "[todo] 全部通过：建卡片 → 加事项（紧急「中高」/ 重要「中低」+ 最外档位「高」/「高」）→ 记进度（打勾 / 取消打勾）→ 四象限图（最外档位那颗点整颗在画布里）→ 完成进历史（带主题名 + 进度弹窗）→ 退回进行中 → 删卡片（三张表一起清）→ 写进度 / 勾完成不打断页面（滚动位置 + 面板状态）"

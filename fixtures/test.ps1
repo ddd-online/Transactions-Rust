@@ -115,7 +115,7 @@ $Steps = [ordered]@{
     'ui-about'          = @{ Title='关于软件 / 版本自报';                          Kind='pwsh';  Script='fixtures\ui-about.ps1'; Needs='exe' }
     'ui-features'       = @{ Title='功能开关（侧栏当场少一项 / 重启后仍生效）';      Kind='pwsh';  Script='fixtures\ui-features.ps1'; Needs='exe' }
     'ui-stock'          = @{ Title='股票全生命周期（含真实行情）';                  Kind='pwsh';  Script='fixtures\ui-stock.ps1'; Needs='exe'; Network=$true }
-    'ui-todo'           = @{ Title='待办：建卡片 → 加事项 → 记进度 → 完成进历史 → 删卡片'; Kind='pwsh'; Script='fixtures\ui-todo.ps1'; Needs='exe' }
+    'ui-todo'           = @{ Title='待办：建卡片 → 加事项 → 记进度 → 四象限图（最外档位那颗点整颗可见）→ 完成进历史 → 删卡片'; Kind='pwsh'; Script='fixtures\ui-todo.ps1'; Needs='exe' }
     'ui-update-restore' = @{ Title='更新下载状态跨页面恢复（依赖 GitHub API）';     Kind='pwsh';  Script='fixtures\ui-update-restore.ps1'; Needs='exe'; Network=$true }
 }
 
@@ -143,7 +143,9 @@ $Groups = [ordered]@{
     'key-event'    = @('ui-key-event', 'ui-link-event')
     'diary'        = @('ui-diary-edit', 'ui-diary-ledger', 'ui-diary-io')
     'stock'        = @('ui-stock')
-    'todo'         = @('ui-todo')
+    # 待办：四象限的**落点算法**（含"最外档位的点不被画布裁掉"那条不变量）在 tr-draw，
+    # 所以这一组带上 `test-draw` —— 只跑 ui-todo 会漏掉那条真正盯着几何的单测。
+    'todo'         = @('ui-todo', 'test-draw')
     'settings'     = @('ui-proxy', 'ui-about', 'ui-features')
     'assets'       = @('ui-upload')
     # 外壳：窗口 / 托盘 / 关闭行为。`test-src-tauri` 是这一整个 crate 的单元测试
