@@ -1447,7 +1447,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         <div class="stock-body">
         <div class="stock-position">
             <div class="stock-position__grid">
-                <div class="stock-panel stock-panel--list">
+                <div class="stock-panel">
                     <Show
                         when=move || !positions.get().is_empty()
                         fallback=move || {
@@ -1581,7 +1581,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                     </div>
                 </div>
 
-                <div class="stock-panel stock-panel--detail">
+                <div class="stock-panel">
                     {move || {
                         let Some(position) = current_position() else {
                             return view! {
@@ -3017,7 +3017,7 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
             </Show>
 
             <div class="stock-history__grid">
-                <div class="stock-panel stock-panel--list">
+                <div class="stock-panel">
                     <Show
                         when=move || !histories.get().is_empty()
                         fallback=move || {
@@ -3095,7 +3095,7 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                     </Show>
                 </div>
 
-                <div class="stock-panel stock-panel--detail">
+                <div class="stock-panel">
                     {move || {
                         let Some(data) = detail.get() else {
                             return view! {

@@ -1609,6 +1609,9 @@
  * 只是把滚动条藏起来：列表一眼看得出是长的，这条滚动条只是噪声。
  * 只作用于本列表：全站的滚动条是 WebView2 的**覆盖式**滚动条（见 `base.css`），
  * 这一处刻意把它藏掉（自定义滚动的宽度为 0，因此也不会占位）。
+ *
+ * scrollbar-ban-exempt —— 全站唯一一处刻意写 `::-webkit-scrollbar` 的地方
+ * （`fixtures/static-guards.ps1` 的滚动条禁令按这行标记放行；别在别处照抄）。
  * ============================================ */
 
 .stock-history__cards::-webkit-scrollbar {

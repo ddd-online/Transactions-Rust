@@ -60,7 +60,7 @@ pub fn AsyncSection(
                 Some(slot) => slot.run(),
                 None => {
                     view! {
-                        <div class="ui-async-loading">
+                        <div>
                             <Spin spinning=true size=SpinSize::Small />
                             <span>"正在加载…"</span>
                         </div>

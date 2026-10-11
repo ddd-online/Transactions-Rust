@@ -67,10 +67,13 @@ $Steps = [ordered]@{
     'build-ui'          = @{ Title='构建界面（trunk，跳过 wasm-opt）';                Kind='pwsh';  Script='build\build-ui.ps1'; Needs='none' }
     'build-app'         = @{ Title='构建外壳（release + custom-protocol）';           Kind='cargo'; Args=@('build','--release','-p','transactions','--features','tauri/custom-protocol'); Needs='none' }
 
-    # ---- 每次必跑的三条便宜的 ----
+    # ---- 每次必跑的几条便宜的 ----
     'fmt'               = @{ Title='cargo fmt --check';                              Kind='cargo'; Args=@('fmt','--check'); Needs='none' }
     'clippy'            = @{ Title='cargo clippy --all-targets -D warnings';         Kind='cargo'; Args=@('clippy','--all-targets','--','-D','warnings'); Needs='none' }
     'design-audit'      = @{ Title='设计令牌审计（tokens.css 之外的硬编码色）';      Kind='pwsh';  Script='fixtures\design-audit.ps1'; Needs='none' }
+    # 跨文件的静态护栏（端口一致 / 滚动条禁令 / 构建纪律 / wasm-bindgen 版本 / tr-domain 分层 /
+    # markup 类名有规则 / CHANGELOG 标题）—— 检查项与理由在脚本头注释里，别在这儿抄第二份。
+    'static-guards'     = @{ Title='跨文件静态护栏（端口 / 滚动条 / 构建 / 分层 / 类名）'; Kind='pwsh'; Script='fixtures\static-guards.ps1'; Needs='none' }
 
     # ---- Rust 单元测试（按包）----
     'test-domain'       = @{ Title='cargo test -p tr-domain';                        Kind='cargo'; Args=@('test','-p','tr-domain'); Needs='none' }
@@ -122,7 +125,7 @@ $Steps = [ordered]@{
 # ---------------------------------------------------------------- 功能分组（单元档）
 # 一处改动 → 该跑哪些步骤。新增护栏脚本时必须同时登记进某个分组（见 -List 与 AGENTS.md）。
 $Groups = [ordered]@{
-    'core'         = @('fmt', 'clippy', 'design-audit')
+    'core'         = @('fmt', 'clippy', 'design-audit', 'static-guards')
     'domain'       = @('test-domain')
     'store'        = @('test-store', 'schema-diff')
     'service'      = @('test-service')

@@ -7,7 +7,7 @@
 
 当前格式空库的原始 DDL（`sqlite3 transactions.db .schema` 的输出），逐字节保存。
 
-- 内容：19 张表 + 21 个索引 + 3 条迁移登记记录（`tbl_billadm_schema_migration`）
+- 内容：当前格式的全部 `CREATE TABLE` / `CREATE INDEX` 与迁移登记行（`tbl_billadm_schema_migration`）
 - 用途：为**全新工作空间**建库时执行；`cargo xtask schema-diff` 校验「Rust 建库结果」与基线逐条一致
 - 纪律：只在 `transactions.db` 不存在时执行一次；打开既有工作空间时绝不执行 DDL/DML
 
@@ -27,9 +27,9 @@ sqlite3 "$ws\transactions.db" ".schema"
 ## 种子工作空间与只读导出
 
 ```powershell
-cargo xtask seed "$env:TEMP\tr-demo-ws"      # 新建并播种：2 账本 / 19 分类 / 57 标签 /
-                                             # 7 条消费记录（含 outlier）/ 事件 + 关联 /
-                                             # 2 篇日记 / 1 个模板 / 3 个预设图表 + 股票全链路数据
+cargo xtask seed "$env:TEMP\tr-demo-ws"      # 新建并播种：2 账本 / 分类与标签 /
+                                             # 消费记录（含 outlier）/ 事件 + 关联 /
+                                             # 日记 / 模板 / 预设图表 + 股票全链路数据
 cargo xtask dump "$env:TEMP\tr-demo-ws"      # 只读导出全部业务表为规范化 JSON（列名升序）
 cargo xtask dump <dir> --table tbl_billadm_stock_trade
 ```
@@ -38,12 +38,12 @@ cargo xtask dump <dir> --table tbl_billadm_stock_trade
 它的取值是**写定的基线**：同一份种子反复播种必须得到同样的落库结果，不要随手改常量。
 
 人工冒烟：`cargo xtask seed <dir>` 后把 `~/.transactions-dev.json` 的 `workspaceDir` 指向该目录，
-再 `cargo tauri dev`（详见 AGENTS.md 的端口注意事项）。
+再 `cargo tauri dev`（端口那类坑见 AGENTS.md 的「本机环境的硬事实」）。
 
 ## `heic/`（HEIC 测试图片）
 
 `flat-64.heic` + `flat-64.ref.png` + `gradient-512.heic`：**从 `heic-rs` 的测试套件里拿来的合成图**
-（由上游的 `scripts/gen-pngs.py` 逐像素生成、macOS `sips` 编码，MIT OR Apache-2.0，
+（由上游的 `gen-pngs.py` 逐像素生成、macOS `sips` 编码，MIT OR Apache-2.0，
 不含任何第三方图片数据 —— 细节见该目录的 `README.md`）。之所以要外借：本机没有任何 HEIC
 **编码器**（Windows 的 WIC 解不了、纯 Rust 的 `still265` 是 GPL-2.0 且要 rustc 1.97），
 这三张图没法在仓库里现造。
@@ -55,8 +55,8 @@ cargo xtask dump <dir> --table tbl_billadm_stock_trade
 
 | 档位 | 命令 | 含义 |
 |---|---|---|
-| 单元档 | `pwsh -File fixtures/test.ps1 -Unit <分组>` | 改某个功能时跑的相关测试：`core`（fmt / clippy / design-audit）+ 该功能的包单测与界面护栏；`-Unit changed` 按 git 改动自动挑 |
-| 全量档 | `pwsh -File fixtures/test.ps1 -All` | 发布前跑：先构建（trunk + `cargo build --release --features tauri/custom-protocol`），再跑全部静态检查、Rust 单测（含 `tr-draw` 的纯算法）、schema-diff 与 20 个界面/外壳护栏 |
+| 单元档 | `pwsh -File fixtures/test.ps1 -Unit <分组>` | 改某个功能时跑的相关测试：`core`（每次必跑的几条静态检查，`-List` 可见）+ 该功能的包单测与界面护栏；`-Unit changed` 按 git 改动自动挑 |
+| 全量档 | `pwsh -File fixtures/test.ps1 -All` | 发布前跑：先构建（trunk + `cargo build --release --features tauri/custom-protocol`），再跑全部静态检查、Rust 单测（含 `tr-draw` 的纯算法）、schema-diff 与全部界面/外壳护栏 |
 
 ```powershell
 pwsh -File fixtures/test.ps1 -List                       # 分组与步骤的权威清单
@@ -81,7 +81,7 @@ pwsh -File fixtures/test.ps1 -All -SkipBuild -SkipNetwork
   一律是 `target\release\transactions.exe`（要核验 `build\` 里的打包产物时显式传 `-Exe`）。
 - 图表与裁剪的**纯算法**（坐标、刻度、SVG 定点改写、裁剪几何）不在 `fixtures/` 里 —— 它们住在
   `crates/tr-draw`，由 `test-draw` 这一步跑 `cargo test -p tr-draw`（native 上真跑，见
-  `docs/adr/0001-pure-draw-crate.md`）。以前那两个"抽源码配桩"的脚本已经删掉。
+  `docs/adr/0001-pure-draw-crate.md`）。
 
 ## 加一个新护栏的步骤
 
@@ -111,13 +111,18 @@ pwsh -File fixtures/test.ps1 -All -SkipBuild -SkipNetwork
   `ui-upload` 的 `SendMessage/PressDefaultButton`、`ui-diary-io` 的 `SetWindowText/GetWindowText`、
   `window-bounds` 的 `GetDpiForSystem/GetDpiForWindow/PostMessage/CloseWindow`、
   `ui-shots`/`dev-shot`/`dev-hot` 的 `GetWindowRect/PrintWindow` 等），公共调用的写法统一是 `[TrUia]::…`；
-- 基础查询/激活/取值/等待：`Assert-True`、`Show-TrSummary`、`Get-Elements`、`Find-First`、`Find-All`、`Find-Like`、
-  `Find-ElementLike`、`Test-Rect`、`Wait-Element`、`Wait-Like`、`Get-ReadyWindow`、`Set-Value`、`Invoke-Element`、
-  `Click-Element`、`Find-RowButton`、`Find-DateTrigger`、`Find-DateCell`、`Save-Screenshot`、`Add-Record`；
+- 基础查询/激活/取值/等待：`Get-Elements`、`Find-*`、`Test-Rect`（幽灵矩形判据）、`Wait-*`、
+  `Get-ReadyWindow`（认主窗口）、`Set-Value`、`Invoke-Element`、`Click-Element`、`Save-Screenshot`；
+- **写受控输入**一律用共享版：`Find-EditByName`、`Set-InputByPaste`、`Paste-Text`、`Set-DiaryContent`
+  （`ValuePattern.SetValue` 不触发 DOM `input` 事件，Leptos 会把值刷回去）；
+- 页面级定位：`Invoke-SubFunction`（图标条）、`Find-RowButton`（先 hover 才出现的行内按钮）、
+  `Find-DateTrigger` / `Find-DateCell`（日期选择器）；
 - 前导/收尾样板：`Initialize-TrSmokeHome`、`Assert-NoRepoInstance`、`Start-App`、`Stop-TrApp`；
 - `Read-Table -Repo <repo> -Workspace <ws> -Table <表名> -OutDir <dir>`
   （**必须显式传参**：早先它靠调用方作用域里的 `$repo`/`$ws`/`$OutDir`，
   正是"断言走文件系统、被测进程走另一个 cwd"那类坑的来源）。
+
+完整清单以 `lib/TrUia.ps1` 为准（这里只列分类，免得抄成第二份会过期的表）。
 
 两条使用约束：
 

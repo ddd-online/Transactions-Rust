@@ -213,7 +213,7 @@ Letter-spacing is tokenised per role — `--transactions-tracking-display` (−0
 
 ## Layout
 
-The spacing scale is 8px-based (2 / 4 / 8 / 12 / 16 / 24 / 32 / 48). The app shell fixes a 48px top band, a 200px navigation sidebar, a 56px sub-function rail, and a 44px footer; page content insets are 16px (full-bleed tables take 0 and pad their own cells). Data surfaces use either auto-filling card grids (`minmax(340px, 1fr)`, 24px gap) or fixed-sidebar layouts (280px rail + fluid main column). Multi-column pages stack to a single column at ≤1080px; wider three-column layouts collapse at ≤1365px. The window has no minimum size — the breakpoints above carry narrow widths, so they must stay live.
+The spacing scale is 8px-based (2 / 4 / 8 / 12 / 16 / 24 / 32 / 48). The app shell fixes a 48px top band, a 200px navigation sidebar, a 56px sub-function rail, and a 44px footer; page content insets are 16px (full-bleed tables take 0 and pad their own cells). Data surfaces are fixed-sidebar layouts (`280px + minmax(0, 1fr)`；事件/日记的两侧轨用 `clamp()` 随窗口收放) or single-column stacks；设置页的字段组用 `repeat(auto-fit, minmax(200px, 1fr))`。多栏页面在 ≤1080px 收成一栏，个别三栏更早先收一档（≤1280 / ≤1200）；共享组件与记账/待办的窄窗兜底在 ≤820px / ≤720px。The window has no minimum size — the breakpoints above carry narrow widths, so they must stay live.
 
 ## Elevation & Depth
 
@@ -295,7 +295,7 @@ Gently curved, consistent radii: 6px for tags and dropdown items, 8px for button
 
 ### Tabs
 
-- **Style:** active tab Clarity Blue 600 with a 2px Clarity Blue ink bar.
+- **Style:** active tab is Clarity Blue text on an `active-bg` tint fill (8px radius, medium weight) — `.ui-tabs__tab.is-active`.
 
 ### Modals / Drawers
 
@@ -319,11 +319,12 @@ Gently curved, consistent radii: 6px for tags and dropdown items, 8px for button
 - **Do** confine income/expense/transfer/outlier colors to transaction and stock data.
 - **Do** layer surfaces with tone and 1px hairlines before reaching for shadows.
 - **Do** add a 2px Clarity Blue focus ring to every interactive element.
-- **Do** honor `prefers-reduced-motion` and use the project's custom scrollbar mixin.
+- **Do** honor `prefers-reduced-motion`（全局兜底在 `base.css`）。
+- **Do** leave scrollbars alone：全站是 WebView2 的**覆盖式**滚动条（`shell.rs` 的 WEBVIEW_ARGS），配色跟随 `color-scheme`。
 
 ### Don't:
 
-- **Don't** use browser-default scrollbars or OS-native window chrome (the frameless window keeps its custom title bar).
+- **Don't** draw your own scrollbars（`::-webkit-scrollbar` / `scrollbar-width` 会让 Blink 退回"占宽度"那条老路，`fixtures/static-guards.ps1` 盯着），也别用 OS-native window chrome（the frameless window keeps its custom title bar）。
 - **Don't** paint chrome or navigation with income/expense/transfer/outlier colors.
 - **Don't** add a second accent color.
 - **Don't** use shadows to create hierarchy where a hairline and a tone will do.

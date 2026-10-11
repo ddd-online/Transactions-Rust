@@ -499,7 +499,6 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
         <div class="tr-toolbar-right">
             <Button
                 variant=ButtonVariant::Secondary
-                class="tr-tool-btn"
                 aria_label="排序"
                 title=Signal::derive(move || {
                     let fields = sort_items.get();
@@ -540,7 +539,6 @@ pub fn RecordSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView
             </Button>
             <Button
                 variant=ButtonVariant::Secondary
-                class="tr-tool-btn"
                 aria_label="筛选"
                 title="筛选条件"
                 on_click=move || filter_open.set(true)

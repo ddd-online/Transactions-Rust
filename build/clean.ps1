@@ -1,5 +1,18 @@
 # clean.ps1 —— 清理构建产物（不会触碰源码与 fixtures）
 
+# This script contains non-ASCII (Chinese) comments, so it MUST run on PowerShell 7 (pwsh).
+# Windows PowerShell 5.1 decodes BOM-less UTF-8 as ANSI and mis-parses this file. Keep this
+# block ASCII-only (same guard as build.ps1 / release.ps1).
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+    if ($pwsh) {
+        Write-Host "This script needs PowerShell 7; re-launching under $pwsh" -ForegroundColor Yellow
+        & $pwsh -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @args
+        exit $LASTEXITCODE
+    }
+    Write-Warning "PowerShell 7 (pwsh) not found - running on 5.1 may mis-parse this script."
+}
+
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $scriptDir = $PSScriptRoot

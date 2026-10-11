@@ -4,616 +4,248 @@ Transactions 是一款桌面个人记账应用，每个工作空间是一个独�
 技术栈：Tauri 2 外壳 + Leptos(WASM) 界面 + rusqlite 存储，全部为 Rust 代码。
 
 另见：`PRODUCT.md`（产品定位）、`DESIGN.md`（设计系统，UI 的裁决标准）、
-`fixtures/README.md`（基线文件与 `lib/TrUia.ps1` 的说明）。
+`fixtures/README.md`（基线文件与 `lib/TrUia.ps1`）。
+
+**本文件只写"去哪里看"与"为什么"。** 凡是能被机器判定的约定，一律落在代码里（脚本 / 单测 /
+护栏），本文件不抄第二份清单 —— 抄来的那份会先过期，然后开始骗人。护栏覆盖什么、为什么需要它，
+都写在各自脚本的头注释里；步骤与分组的唯一事实来源是 `fixtures/test.ps1`（`-List` 可查）。
 
 ## 架构
 
-```
-crates/tr-domain/    # 纯领域层：models / dto / 金额换算 / 费用分摊 / IPC 命令与事件的**名字清单**
-                     #   （native + wasm 双可编，无 I/O）
-crates/tr-draw/      # 界面侧纯算法层：绘制（坐标与刻度 / SVG 定点改写 / 提示框定位 / 裁剪几何）
-                     #   + 页面取数的决策核心（query：去重 / generation / 复核判定）
-                     #   + 公历日历（calendar：月长 / 加减月天 / 周几 / 区间对齐 / 按粒度翻周期）
-                     #   + 分页窗口（paging）与四象限（quadrant；判定 / 排序 / 点的抖动偏移）
-                     #   + 展示词汇（format）、输入文本解析（text）、拖拽重排（list_order）、成交流水行（stock_rows）
-crates/tr-store/     # 存储层：建库 + 迁移引擎（migrations）+ 格式校验 + 各 Dao（rusqlite）
-crates/tr-service/   # 服务层：业务规则（账本/交易/…/股票），不依赖 tauri
-crates/tr-ipc/       # IPC 命令面：全部 #[tauri::command] + 统一错误信封
-crates/tr-ui/        # 界面：Leptos CSR（cdylib，只编 wasm32）+ static/{css,fonts,icons}
-src-tauri/           # 桌面外壳：窗口/托盘/配置/日志/trasset:// 资产协议/更新
-xtask/               # 验证工具：schema-diff（建库护栏）、validate / dump / seed（工作空间工具）
-fixtures/            # schema 基线（fresh.sql）+ 种子与端到端脚本（**不含真实个人数据**）
-```
+| 目录 | 职责 |
+|---|---|
+| `crates/tr-domain/` | 纯领域层：models / dto / 金额换算 / 费用分摊 / IPC 命令与事件的**名字清单** |
+| `crates/tr-draw/` | 界面侧纯算法：绘制（坐标刻度 / SVG 定点改写 / 裁剪）+ 取数决策（query）+ 公历日历 + 分页 + 四象限 + 展示词汇 / 文本解析 / 拖拽重排 / 成交流水行 |
+| `crates/tr-store/` | 存储层：建库 + 迁移引擎 + 格式校验 + 各 Dao（rusqlite） |
+| `crates/tr-service/` | 服务层：业务规则（账本 / 交易 / … / 股票），不依赖 tauri |
+| `crates/tr-ipc/` | IPC 命令面：全部 `#[tauri::command]` + 统一错误信封 |
+| `crates/tr-ui/` | 界面：Leptos CSR（只编 wasm32）+ `static/{css,fonts,icons}` |
+| `src-tauri/` | 桌面外壳：窗口 / 托盘 / 配置 / 日志 / `trasset://` 资产协议 / 更新 |
+| `xtask/` | 验证工具：`schema-diff` 与 `validate` / `dump` / `seed` / `migrate` |
+| `fixtures/` | schema 基线 + 种子与端到端脚本（**不含真实个人数据**） |
 
-分层纪律：`tr-domain` 不得引入任何 I/O 依赖（rusqlite / reqwest / tauri 都不行）—— 它同时被 native 与 wasm
-依赖，界面和后端因此共用同一份金额与费用算法；只有 `tr-ipc` 依赖 `tauri`，业务规则必须能在没有窗口的环境里用
-`cargo test` 验证；`tr-store` / `tr-service` 不参与 wasm 编译（`cfg(not(target_arch = "wasm32"))`）。
-`tr-draw` 与 `tr-domain` 同规格（双可编、零 I/O）：**界面里凡是"能在 native 上断言"的纯算法都放那儿**，
-否则它们会退回"`#[cfg(test)]` 只是规格说明"的状态 —— 起因见 `docs/adr/0001-pure-draw-crate.md`。
+分层纪律（`static-guards` 的依赖树检查与 wasm 目标都在盯着它）：
+
+- `tr-domain` / `tr-draw` **零 I/O、双可编** —— 界面与后端共用同一份金额与费用算法，
+  而且"能在 native 上断言的纯算法"必须放这两处（起因见 `docs/adr/0001-pure-draw-crate.md`）。
+  需要 DOM 的渲染断言在 native 上跑不到，留在 `tr-ui` 的 `#[cfg(test)]` 只能当规格说明。
+- 只有 `tr-ipc` 依赖 `tauri`：业务规则要能在没有窗口的环境里用 `cargo test` 验证。
+- `tr-store` / `tr-service` 不参与 wasm 编译。
 
 ## 常用命令
 
 ```powershell
-# 类型检查 / 测试（不含桌面外壳）
+# 测试统一入口（分组、步骤、影响面映射都在这个脚本里）
+pwsh -File fixtures/test.ps1 -List                 # 列出功能分组与全部步骤
+pwsh -File fixtures/test.ps1 -Unit stock           # 单元档：改了某功能（逗号分隔可给多个，永远带上 core）
+pwsh -File fixtures/test.ps1 -Unit changed         # 按 git 改动自动挑分组（映射见 $PathMap）
+pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：构建 + 全部护栏
+
+# 编译 / 单测（不含桌面外壳）
 cargo check -p tr-domain -p tr-store -p tr-service -p xtask --all-targets
 cargo test  -p tr-domain -p tr-draw -p tr-store -p tr-service
-cargo test  -p transactions                                # 应用外壳的纯逻辑（配置/命令面/日志/资产/更新器）
-cargo check -p tr-draw --all-targets                       # 纯算法（绘制 + 取数决策；native 上就能测）
-cargo check -p tr-ui --target wasm32-unknown-unknown       # 界面只编 wasm32
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo test  -p transactions                        # 应用外壳的纯逻辑（配置 / 命令面 / 日志 / 资产 / 更新器）
+cargo check -p tr-ui --target wasm32-unknown-unknown
 
-# 界面与外壳（发布链路必须走脚本，原因见「构建与工具链」）
-trunk serve --config crates/tr-ui/Trunk.toml      # 开发服务 http://127.0.0.1:16000
-cargo tauri dev                                   # 开发（会自动先跑 trunk）
-cargo tauri build                                 # 打包，产出 NSIS 安装包
+# 工作空间工具（validate / dump 只读；migrate 升级前自动备份）
+cargo xtask schema-diff
+cargo xtask validate|migrate|seed <workspace-dir>
+cargo xtask dump <workspace-dir> [--table <name>]  # 只读导出规范化 JSON（排障 / 回归对比）
 
-# 工作空间工具（validate / dump 只读）
-cargo xtask schema-diff                           # Rust 建库结构与 fixtures/schema/fresh.sql 逐条一致
-cargo xtask validate <workspace-dir>              # 只读校验格式（会报告待应用的迁移）
-cargo xtask migrate <workspace-dir>               # 升级到当前格式（升级前自动备份）
-cargo xtask seed <workspace-dir>                  # 新建并播种一份示例数据（人工冒烟用）
-cargo xtask dump <workspace-dir> [--table <name>] # 只读导出业务表为规范化 JSON（排障/回归对比）
-
-# 测试统一入口（分组与步骤的唯一事实来源是 fixtures/test.ps1）
-pwsh -File fixtures/test.ps1 -List                 # 列出功能分组与全部步骤
-pwsh -File fixtures/test.ps1 -Unit stock           # 单元档：改了某功能（逗号分隔可给多个）
-pwsh -File fixtures/test.ps1 -Unit changed         # 按 git 改动自动挑分组（永远带上 core）
-pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：构建 + 全部护栏
+# 界面与外壳（发布与验收链路必须走脚本，理由见下）
+trunk serve --config crates/tr-ui/Trunk.toml       # 开发服务 http://127.0.0.1:16000
+cargo tauri dev                                    # 开发（会先跑 trunk）
+cargo tauri build                                  # 打包（beforeBuildCommand → build/build-ui.ps1）
 ```
 
-工具链：rust stable 1.96.0 + `wasm32-unknown-unknown`。仓库故意不放 `rust-toolchain.toml`
+工具链：rust stable 1.96.0 + `wasm32-unknown-unknown`。仓库**故意不放** `rust-toolchain.toml`
 （指定具体版本会让 rustup 每次调用都校验并重装组件，实测触发数百 MB 重复下载）。
 
-产物约定：测试产物全在 `target\tests\` 下 —— `target\tests\<脚本名>\{home,out,ws}` 是各护栏自己的工作目录
-（可随手删，脚本会自己重建/播种），每次运行的日志与汇总在 `target\tests\_runs\<时间>-<档位>\`；`target\`
-顶层只应出现 cargo 自己的目录。每个护栏都能单独跑、都支持 `-Exe` / `-Workspace` / `-OutDir` 覆盖，
-**覆盖范围与"为什么需要它"写在脚本头注释里，本文件不维护第二份容易抄错的清单**，只留一张粗表：
-
-| 护栏 | 覆盖 |
-|---|---|
-| `design-audit` | `tokens.css` 之外的硬编码颜色、令牌是否已定义、深浅主题 + `prefers-color-scheme` 兜底覆盖同一组令牌 |
-| `smoke` / `window-bounds` / `close-behavior` | 首启动与已配置两种窗口形态；逻辑尺寸 ↔ 物理尺寸与关闭写回；`quit` / `tray` / 「关闭选项」三种关闭行为 |
-| `ui-smoke` / `ui-shots` | 6 顶级 + 11 子功能逐页渲染（`-WriteFlow` 走真实记账，`-Discover` 导出每页元素清单用来维护脚本顶部的页面标记表）；位图补 UIA 看不见的"被裁掉/没画出来" |
-| `ui-crud` / `ui-drag` | 分类/标签/图表/事件/模板的新增与删除；真实鼠标拖拽排序（分类与图表的 `sort_order` 落库，含图表跨预设组） |
-| `ui-transactions` / `ui-sync-ledger` | 记一笔/编辑/排序/筛选/模板；同步到其他账本（复制而非移动 + 气泡收起） |
-| `ui-stock` | 建仓 → 编辑 → 减仓 → 清仓 → 费用设置 → 统计 → 回滚 → 重置的完整生命周期（含真实行情） |
-| `ui-todo` | 待办：建卡片 → 加事项（紧急/重要）→ 记进度 → 四象限图（最外档位那颗点**整颗**在画布里，判据是位图 —— UIA 里 SVG 的 `<circle>` 不进树）→ 完成进历史（带主题名 + 进度弹窗）→ 退回 → 删卡片（级联清三张表） |
-| `ui-key-event` / `ui-link-event` | 事件任选日期建/upsert/删除；交易关联到某天（含懒创建空事件与解除） |
-| `ui-diary-edit` / `ui-diary-ledger` / `ui-diary-io` | 防抖自动保存/心情/预览；账本隔离；只认 `.txt` 的导入导出（原生选目录框；判据唯一：`tr-service/src/diary.rs` 的 `parse_diary_file_name`，扫描与 `import_file` 两侧共用） |
-| `ui-upload` | 图片按原字节落盘 + 缩略图 + `trasset://` 资产协议 |
-| `ui-proxy` / `ui-about` / `ui-features` / `ui-update-restore` | 假代理日志当判据（行情 `qt.gtimg.cn`、更新 `api.github.com`）；版本自报；功能开关落盘并重启生效；下载状态跨页面恢复（依赖真实 GitHub API，离线用 `-SkipNetwork`） |
-| `migrate-workspace` | 降级 → 升级 → 备份 → 幂等（**迁移引擎这条最高风险路径就靠它**） |
-| `test-draw` | 界面侧**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 + 页面取数的决策（去重 / generation / 复核判定 / 失效）+ **公历日历**（闰年与月长 / 日序号往返 / 周几 / 区间对齐 / 整周判定）+ 分页页码窗口 + 四象限（判定 / 稳定排序 / **落点与留白**（任何档位、任何 id 的点都不被画布裁掉）/ 抖动偏移）+ 实心点只有 `<circle>` 被改写 + **展示词汇**（金额符号两个口径 / 紧凑金额阈值 / 百分比与 `NaN` 兜底 / 按字符截断）+ **输入文本**（金额文本的合法与非法集合、费率文本的 `NaN`·`inf`）+ **拖拽重排**（只报序号变化的行）+ **成交流水行**（按委托分组的加权均价与求和） |
-| `test-src-tauri` | **应用外壳**的纯逻辑真跑（`cargo test -p transactions`）：配置键名与往返、命令面请求形状、**命令注册表 == `tr_domain::commands` 清单**（`src-tauri/src/registry.rs` 的 `catalog_matches_registration`）、日志轮转、资产路径穿越校验、更新器解析；更新流程的状态机本身在 `tr-domain::update`（由 `test-domain` 跑） |
-
-护栏总原则：一律真的启动应用、用 UI Automation 或真实鼠标键盘驱动；**断言落在库/磁盘上**，不落在"点到了没有"。
+产物约定：测试产物全在 `target\tests\` 下 —— `target\tests\<脚本名>\{home,out,ws}` 是各护栏自己的
+工作目录（可随手删，脚本会自己重建/播种），每次运行的日志与汇总在 `_runs\<时间>-<档位>\`；
+`target\` 顶层只应出现 cargo 自己的目录。
 
 ## 改界面的迭代循环
 
-改 `crates/tr-ui` 下的 `.rs` / `.css` 走 dev 服务 + 热更新（一轮 5~10 秒）；`build/build-ui.ps1` +
-`cargo build --release` 是最终验收/发布用的（约 4 分钟），迭代期别用。
+改 `crates/tr-ui` 下的 `.rs` / `.css` 走 dev 服务 + 热更新（一轮几秒）；`build/build-ui.ps1` +
+`cargo build --release` 是最终验收/发布用的（约 4 分钟），迭代期别用。两个脚本的用法与参数都写在
+它们自己的头注释里：
 
-1. 起一次（之后一直开着）：
-   `pwsh -File fixtures/dev-hot.ps1 -Trunk -Launch -Workspace <ws> -ShotDir target\tests\dev-shot\out`
-   —— 它拉起 `trunk serve`（:16000）+ dev 外壳（`target\debug`，走 `devUrl`）+ 盯 trunk 日志；trunk 重建完就给
-   窗口发 `Ctrl+R`（trunk 的自动刷新信号浏览器吃、Tauri 的 WebView2 不吃，但 WebView2 吃键盘刷新，实测 0.8s）；
-   带 `-ShotDir` 时把刷新后的窗口存成 `target\tests\dev-shot\out\current.png`。
-2. 只看某页/全部页面（不重建、不重启）：`pwsh -File fixtures/dev-shot.ps1 -Page 股票` 或 `-AllPages`
-   —— 它用真实鼠标点侧栏，**轮询确认页面真切过去了**再截图。
-3. 需要「内嵌界面的 release 产物」（端到端护栏、发布）才做完整构建：`build/build-ui.ps1` 然后
-   `cargo build --release -p transactions --features tauri/custom-protocol`。
+```powershell
+# 起一次（之后一直开着）：trunk serve + dev 外壳 + 盯 trunk 日志；重建完自动 Ctrl+R 并截图
+pwsh -File fixtures/dev-hot.ps1 -Trunk -Launch -Workspace <ws> -ShotDir target\tests\dev-shot\out
+# 只看某页 / 全部页面（不重建、不重启）：真实鼠标点侧栏，**轮询确认页面真切过去了**再截图
+pwsh -File fixtures/dev-shot.ps1 -Page 股票        # 或 -AllPages
+```
 
-边界：改 `src-tauri/`（外壳）不适用热更新，要 `cargo tauri dev` 重启；`-Launch` / `-Trunk` 用独立配置目录
-（`target\tests\dev-hot\home`），不碰真实的 `~/.transactions-dev.json`；**不给 `-Workspace` 就沿用配置里已有的
-工作空间**（被写空会让外壳停在"选择工作空间"屏上、背景那层 `inert`，主循环按侧栏「记账」永远找不到窗口，
-最后只看到一句"没找到主窗口"）；`NO_COLOR` 由脚本自己清掉。
+边界：改 `src-tauri/`（外壳）不适用热更新，要 `cargo tauri dev` 重启；调 trunk 前要清掉
+`NO_COLOR`（`=1` 会让它直接报 `invalid value '1' for '--no-color'`，脚本自己清）；
+**别在 trunk 写 `dist` 的同时跑 `cargo build`** —— Tauri 编译期读 `crates/tr-ui/dist` 做资源内嵌，
+并发会嵌到半新半旧的资源（表现为空白窗口），顺序固定：`build/build-ui.ps1` 先跑完再 `cargo build`；
+手工跑 release exe 必须带 `--features tauri/custom-protocol`，否则窗口里是"127.0.0.1 拒绝连接"，
+而外壳日志只有"启动/初始化完成"，看着像界面代码坏了。
 
-## 测试：单元档与全量档
+## 验证纪律
 
-- **单元档**（`-Unit <分组>`）= `core`（`fmt` / `clippy` / `design-audit`，每次必跑的三条便宜的）
-  ＋ 该功能的 Rust 包单测与该功能的界面护栏。分组名以 `test.ps1 -List` 为准。
-- **全量档**（`-All`）= 发布前跑：先 `build-ui` + `build-app`（release + custom-protocol，界面护栏用的就是它），
-  再按序跑全部静态检查、Rust 单测、`schema-diff` 与全部界面/外壳护栏。`-SkipBuild` 复用现有
-  产物；离线时 `-SkipNetwork` 跳过依赖外网的 `ui-stock` / `ui-update-restore`（跳过算"跳过"不算失败）。
-- **结果落盘**：`target\tests\_runs\<时间>-<档位>\`（`summary.md` / `summary.json` + 每步一个 `.log`），
-  失败会打印日志尾部并以非零码退出。
-- **界面护栏要求"没有别的实例在跑"**（单实例插件按 app identifier 判重，别的目录装的同名应用也算；表现是护栏
-  窗口起不来）：`test.ps1` 在第一个 e2e 步骤前统一检查并直接报错（列出 PID 与路径），要跳过用 `-KeepRunning`。
-- 单元档的分组名（`domain` / `store` / `service` / `ipc` / `ui` / `chart` / `schema` / `accounting` /
-  `category-tag` / `analysis` / `templates` / `key-event` / `diary` / `stock` / `settings` / `assets` /
-  `shell` / `ui-kit` / `update`）与每个分组含哪些步骤，以 `test.ps1 -List` 为准。
-- **共享代码会扩大范围**：改 `components/ui/` 下的组件（`Modal`、`Popconfirm`、`Button`、`Table`、`chart`…）、
-  `shell.rs`、`store.rs`、全局 CSS —— 至少跑覆盖到的 2~3 个脚本（例：改 `Modal` 宽度档位 →
-  `ui-transactions` / `ui-stock` / `ui-smoke` / `ui-crud` / `ui-key-event`）；`fixtures/lib/TrUia.ps1` 按 `$PathMap`
-  的约定当"全量"处理。**连带效果算进影响面**：一个 fixture 里的检查可能由**别处**触发（如 `ui-upload` 最后一步
-  要删事件，所以改「删除事件」就得带上它）—— 新增/改动护栏时把这类依赖写进 `$Groups` 的注释里。
-- **什么时候才跑全量**：① 动 `fixtures/lib/TrUia.ps1` / 公共组件 / 外壳；② 一次改动跨 3 个以上页面；
-  ③ 合并或发布前；④ 长时间没跑过（不确定基线还绿不绿）。
-- 单独排查时可直接跑某个脚本，但**别漏了 `core` 那三条**。
+- **能机器判定的别靠人读**。`core` 那几条便宜且每次必跑（`fmt` / `clippy` / `design-audit` /
+  `static-guards`）；`static-guards` 收的是跨文件、跨脚本的约定 —— 开发端口一致、滚动条禁令、
+  构建脚本纪律、`wasm-bindgen` 版本、`tr-domain` 分层、markup 类名必须有 CSS 规则、
+  CHANGELOG 标题不许粘连、**文档里的引用不许烂**（引用的路径要存在、发布资产名不许写死版本号、
+  "`AGENTS.md` 的「小节」"要对得上真实标题）—— 逐条判据与理由在 `fixtures/static-guards.ps1`
+  的头注释里。
+- **共享代码会扩大影响面**：改 `components/ui/`、`shell.rs`、`store.rs`、全局 CSS 时，
+  影响面由 `$PathMap` 算（`-Unit changed`），别自己估。连带效果也算：一个 fixture 的检查
+  可能由**别处**触发，新增/改动护栏时把这类依赖写进 `$Groups` 的注释里。
+- **靠截图，别靠 UIA 的矩形**：UIA **看不见**"被裁掉 / 没画出来"（元素矩形照报出来），
+  下拉面板被 `overflow` 截断、图标画到 `view_box` 外都属于这一类。判据优先级：
+  **人眼看窗口 > UIA 树里控件的矩形 > 截图像素**（`PrintWindow` 会把未画完的内联 SVG 抓成一条
+  涂鸦，人眼看完全正常 —— 怀疑图标坏了先开一次窗口）。
+- 护栏一律**真的启动应用**、用 UI Automation 或真实鼠标键盘驱动，**断言落在库/磁盘上**，
+  不落在"点到了没有"。各护栏靠 `USERPROFILE` 指向一次性配置目录（`config.rs` 的 `home_dir()`），
+  所以不碰真实的 `~/.transactions.json`。
+- 别用 `| Select-Object -First N` 截断界面脚本的输出：管道提前关闭会终止上游脚本，
+  它的 `finally`（关掉测试实例）不执行，下一个脚本就会因"已有实例在运行"拒绝启动。
+  要么 `-Last N`，要么 `*> 文件`。
+- 新护栏照抄现成脚本的开头：`$explicitWorkspace` 要在默认值赋值**之前**取，否则
+  "不用显式工作空间就重新播种"恒不成立，断言绝对状态时会叠加。**"脏基线"会让断言以完全无关的
+  面目变红**，看到奇怪的连坐失败先确认工作空间是不是新的。
 
-## 本机环境注意事项（踩过的坑）
+**UIA 公共底座是 `fixtures/lib/TrUia.ps1`**（轮询到标记出现 / 排除 ±∞ 幽灵矩形 /
+启动时认"主窗口" / 受控输入要真的"打"进去 / 按完整路径判重），**新脚本一律用它，别自己写一套** ——
+每条为什么这么写都在那个文件的注释里。页面专用的招数留在各自脚本（如 `ui-crud.ps1` 的
+`Find-RowButton`：行内操作按钮要先 hover 才进树；`ui-crud.ps1` 的 `Find-ConfirmButton`：
+确认键按**类名**定位，因为行内图标按钮与弹窗确认键的可访问名都含「删除」；`ui-upload.ps1` /
+`ui-diary-io.ps1`：原生文件框与选目录框的提交姿势、`AutomationId` 1148/1152、面包屑复核）。
 
-### 构建与工具链
+## 硬契约
 
-- **cargo / git 都不读 Windows 系统代理**（PowerShell、浏览器走系统代理，它们只认环境变量）：本机直连
-  crates.io 会超时、连 GitHub 会 `Recv failure: Connection was reset`，先设
-  `$env:HTTPS_PROXY='http://127.0.0.1:7890'`、`$env:HTTP_PROXY='http://127.0.0.1:7890'`、
-  `$env:CARGO_NET_RETRY='10'`、`$env:CARGO_HTTP_TIMEOUT='120'`；索引拉取偶发中断就重复跑 `cargo metadata`
-  （已缓存条目会累积）。git 失败时用一次性的 `git -c http.proxy=http://127.0.0.1:7890 push origin main`，
-  别把它写进仓库配置。
-- **不要用 PowerShell 管道接 cargo 输出**（`cargo … | Select-Object -Last N`）：管道缓冲写满会让 cargo 阻塞假死，
-  一律 `*> 文件`。
-- **`NO_COLOR=1` 会让 trunk 直接报错**（`invalid value '1' for '--no-color'`）：调 trunk 前
-  `Remove-Item Env:NO_COLOR`。
-- **不要用 `trunk build --release`**：它调用缓存里的 wasm-opt 123，而该版本校验不了 Rust 1.96 的 bulk-memory
-  指令（`memory.copy … requires --enable-bulk-memory-opt`），更新版本又下不下来。发布构建统一走
-  `build/build-ui.ps1`：跑 trunk 的 debug 模式（跳过 wasm-opt）+ `CARGO_PROFILE_DEV_OPT_LEVEL=3` +
-  `CARGO_PROFILE_DEV_DEBUG=false` 把优化拉满、去掉调试信息（产物 wasm 7.3 MiB；不优化带调试约 15 MB）。
-  `tauri.conf.json` 的 `beforeBuildCommand` 已指向该脚本。trunk 自己也下不了 wasm-bindgen（GitHub release 资产
-  在本机网络 TLS 失败），改从 crates.io 装同版本 CLI
-  `cargo install wasm-bindgen-cli --version 0.2.128 --locked`（版本必须与 `wasm-bindgen` crate 一致）。
-- **开发端口是 16000，且 Windows 保留段会漂**：保留段（WinNAT/Hyper-V）归管理员，落在里面的端口非提权进程绑不上
-  （`os error 10013`）。起不来先跑 `netsh interface ipv4 show excludedportrange protocol=tcp`，选端口时**同时
-  避开动态段**（`netsh int ipv4 show dynamicport tcp`）更省事。**换端口必须同时改三处**：
-  `crates/tr-ui/Trunk.toml` 的 `[serve] port`、`src-tauri/tauri.conf.json` 的 `devUrl`、
-  `fixtures/dev-hot.ps1 -Port`（`shell.rs` 的 `is_allowed_navigation` 单测里还有两条 localhost 样例）。
-  `dev-hot.ps1` 会先试绑该端口，几秒内报"端口不可用"而不是干等 240 秒。
-- **`devUrl` 是编译期读进 `tauri.conf.json` 的**：改了它就必须重编 dev 外壳（`cargo build -p transactions`），
-  否则窗口里是 `ERR_CONNECTION_REFUSED`（trunk 其实服务得好好的），看着像界面代码坏了 —— `dev-hot.ps1` 会做
-  时间戳比对并直接 throw。
-- **手跑 exe 必须带 `custom-protocol`**：Tauri 只在启用 `tauri/custom-protocol` 时内嵌界面资源（debug 构建则走
-  `devUrl`）；漏掉时窗口里是 Chromium 的 `127.0.0.1 拒绝连接`，外壳日志却只有"启动/外壳初始化完成"，看着像界面
-  代码坏了。三种正确做法：`cargo tauri build`、`cargo build --release -p transactions --features
-  tauri/custom-protocol`（冒烟/护栏要的就是这种内嵌产物）、或起 `trunk serve` 后跑 debug 构建
-  （等价 `cargo tauri dev`）。
-- **别在 `trunk build` 写 dist 的同时跑 `cargo build`**：Tauri 编译期读 `crates/tr-ui/dist` 做资源内嵌，并发时
-  可能嵌到半新半旧的资源（同样是空白窗口）。顺序固定：`build/build-ui.ps1` 先跑完，再 `cargo build`。
-- **`build/*.ps1` 被 `powershell`(5.1) 调用时必须 ASCII-only**：5.1 把无 BOM 的 UTF-8 当 ANSI 解码，中文会破坏
-  脚本解析（`build-ui.ps1` 因此全英文注释，它确实被 `cargo tauri build` 用 5.1 调用，不能改）；`build.ps1` /
-  `release.ps1` 含中文注释，约定用 pwsh 7，开头有一段 ASCII-only 守卫（检测到 `PSEdition -ne 'Core'` 就用
-  `pwsh` 重跑自己，`$PSCommandPath` + `@args`）。**构建脚本的最后一步也要有产物断言**（`Test-Path` + `Fail`），
-  别只看退出码 —— 有过一次事故：5.1 跑 `build.ps1` 时中文行被误解析，便携版 exe 没留档而退出码仍是 0。
-- **配置目录可被 `USERPROFILE` 覆盖**：`config.rs` 的 `home_dir()` 先读 `USERPROFILE`（非 Windows 读 `HOME`），
-  各护栏靠这个把实例指向一次性配置目录，不碰真实的 `~/.transactions.json`。
-- **判重按完整路径，别按进程名**：本机别的目录也可能装着同名 `Transactions.exe`（如 `D:\software\Transactions\`），
-  按名字判会误判、甚至误杀用户正在用的应用。
-
-### UI 自动化（fixtures 的踩坑）
-
-四条通用纪律（下面各条都是它们的实例）：
-
-1. **一律轮询到标记出现，不要固定 sleep 后取元素**：Chromium 的 UIA 树是**惰性构建**的（窗口刚出现时首查常只
-   返回二十来个元素、连 Button 都没有）；固定 sleep 还会抓到上一页/上一个弹窗。
-2. **同名元素要按"可见 + 落在窗口矩形内 + 取最后一个/最靠右"筛**：页面里常有多个同名按钮（未展开的面板、别的
-   页签也在 DOM 里、重渲染留下的幽灵节点），按名字取第一个常拿到不可见的那个，点了毫无反应。
-3. **`BoundingRectangle` 报 ±∞ 的是幽灵**（没真正渲染出来的元素 `Width/Height=-∞`，`IsOffscreen` 却可能是
-   `False`）：判据要显式排除非有限值（`[double]::IsInfinity/IsNaN` 四个分量都查一遍）——`Width -le 0` 挡得住
-   `-∞`，但 `+∞` 参与 `[int]` 转换会抛"无法将值 "∞" 转换为类型 "System.Int32""。浮层（弹窗/气泡是 portal 出去
-   的节点）可见性不稳，**别拿 `IsOffscreen` 当判据**。
-4. **启动时抓「主窗口」而不是「该进程的第一个窗口」**：窗口刚出现时 UIA 树是惰性的（首查常只有二十来个元素、
-   连 Button 都没有），抓到半成品后面所有按名字查找都会落空。见 `fixtures/ui-crud.ps1` 的 `Get-ReadyWindow`：
-   轮询取窗口元素直到它包含侧栏条目（如「记账」）为止。**未选工作空间**时侧栏整层带 `inert`、连「记账」都查
-   不到（那种状态只有选择屏的「选择目录…」暴露出来），所以各护栏都必须先写好 `workspaceDir` 再启动。
-
-**对话框、路径、cwd**
-
-- **原生对话框的窗口归属分三种**（找错地方就表现为"点了按钮但没弹框"）：
-  * WebView2 自己的文件框（`<input type=file>`，`#32770`、标题「打开」）：它是应用窗口的**子窗口**、`ProcessId`
-    属于 `msedgewebview2.exe` → 在应用窗口的 `TreeScope::Descendants` 里按 `ClassName='#32770'` 找。
-  * Tauri `dialog_open` 插件的选文件/选目录框：**桌面顶层窗口**、`ProcessId` 是应用自己 → 在 `RootElement` 的
-    Children 里按进程号找。
-  * DevTools 窗口：也是桌面顶层，但 `ProcessId` 属于 `msedgewebview2.exe`（`Chrome_WidgetWin_1`、
-    `name='DevTools - …'`），按应用进程号枚举永远看不到，要扫全系统顶层窗口按名字/类名筛。
-  两类框的路径输入框 `AutomationId` 不同：选文件 = 1148（`文件名(N):` 组合框）、选目录 = 1152（`文件夹(F):` 编辑
-  框）。选文件时回车 = 「打开」；选目录时回车只是进入该目录，必须点「选择文件夹」，且只接受已存在的目录。
-- **填进原生对话框的路径必须是绝对路径**：选目录框按自己的"当前目录"解析相对路径，被启动进程按**它自己的 cwd**
-  解析 `-workspace` 这类参数。所有 fixture 入口都做 `GetFullPath` 归一化（`-OutDir` 在内），`Select-Directory`
-  里另有 `IsPathRooted` 断言兜底。**断言红了先确认两侧说的是同一个库。**
-- **选目录的正确姿势**（`ui-diary-io.ps1` 的 `Select-Directory`）：① 把绝对路径**粘贴**进底部「文件夹(F):」框
-  （共享版 `Set-Clipboard` + `Ctrl+A` + `Ctrl+V`；别逐字符 `SendKeys`，中文输入法会把 `\` 变 `、`）；② 回车进
-  目录（不要用地址栏 Alt+D），再点「选择文件夹」——它受"记住的上次目录"影响，粘贴偶尔不生效就停在上次那个目录，
-  "选错了却看不出错"，所以要③ 验证导航到位（面包屑每段是独立元素，出现目标目录名才算到位），没到位就重试；
-  ④ 断言看结果（文件落在哪、库里多了哪几行），别只看"对话框关了没有"。
-- **WebView2 文件框的提交用「右方向键 + 回车」**：直接回车 = 接受 shell 自动补全（完整路径被换成裸文件名 →
-  「找不到文件」）；`TAB` 收起补全但焦点移到"文件类型"，回车不再触发默认按钮；`WM_COMMAND(IDOK)` 会关掉框却
-  跳过 modern 对话框的内部步骤，等同取消。也别用 UIA 坐标点「打开(O)」（底部那行是 legacy provider，报出的矩形
-  不可信），更不能按 `AutomationId` 找控件（文件列表项的 AutomationId 恰好是 1..N，`id=1` 会点中列表第一项）。
-  临时 HOME 里要先建 `Desktop` 目录，否则文件框起始目录不存在，会先弹「位置不可用」。
-
-**UIA 树的读法**
-
-- **确认/保存键按"类名"定位，别按名字取最后一个**：三类按钮的**可访问名都含「删除」**（曾让 `ui-crud` 的分类/
-  标签/图表/事件/模板删除断言整段连坐变红）：
-
-  | 位置 | 类名 |
-  |---|---|
-  | 行内图标按钮（列表行右侧） | `ui-icon-btn--danger` |
-  | 弹窗底栏确认键（`ok_danger=true`） | `ui-btn--primary-danger` |
-  | 气泡（`Popconfirm`）确认键 | `ui-btn--primary` |
-  | 弹窗**自绘**底栏的按钮（如只读弹窗的「关闭」） | `ui-btn--secondary` |
-
-  `ui-crud.ps1` 用 `Find-ConfirmButton -ClassPart <类名>`（+ 可见、矩形有效、取最靠下/最靠右）定位，并用
-  `Wait-ConfirmButton` 轮询等它出现（点完行内按钮只 sleep 一次就查会偶发查不到）。只断言"页面存在叫『删除』
-  的元素"是无效断言：行内那颗按钮就叫这个名字，条件恒真。
-- **别按名字点「关闭」**：外壳窗口三键里那颗**关闭窗口**的按钮 `aria-label="关闭"`（class `window-btn`），弹窗
-  的 × 也叫「关闭」；点到三键 → **应用当场退出**，后面每一步都拿不到窗口矩形（表现是 `New-Object Bitmap` 报
-  "Parameter is not valid"，看着像截图代码坏了）。界面按钮的类名一律以 `ui-btn` 开头，`ui-stock.ps1` 的
-  `Find-VisibleButton` 因此有 `-ClassPart`；点任何叫「关闭」的按钮都必须带上 `-ClassPart 'ui-btn'`。
-- **图标只渲染 `<path>`，且路径坐标必须落在 `view_box` 内**：`icons.rs` 的 `icon()` 输出
-  `<svg><path d=…/></svg>`（`fill: currentColor`），没有 `<circle>`/`<rect>`。新增图标两件事一起核：
-  ① 路径坐标范围要与 `view_box()` 匹配（历史事故：24 格线稿套了 `64 64 896 896`，箭头整体被裁到看不见）；
-  ② 别因为"它是 Ant Design 图标"就放心 —— 有的旧条目路径本身越界（实测 `Icon::Sync` 的 x 到 1133，而 896 格
-  只到 960，在股票页图标条上画成一条扭曲的线）。取新图标用官方包：
+- **金额恒为整数分**：库 / IPC / 算法全用 `i64` 分，只有展示层做分↔元换算（`tr_domain::money`，
+  含负号与 `.5` 的边界是硬契约）。**股票价格走「厘」**（1/1000 元，`tbl_billadm_stock_trade.price`
+  也是厘），价格×股数→分的唯一入口是 `tr_domain::stock::amount_of`。
+- **股票费用**：一次委托多笔成交时，**佣金按委托总额收一次**（最低佣金只在这里生效），
+  **印花税 / 过户费逐笔取整再相加**（不是"先求和再取整"，两者差一分）。算法只有
+  `tr-domain/src/fee.rs` 一份，界面侧唯一调用点是 `estimate_fee`；场内基金（`fee::Instrument::of`
+  判定，同时是代码校验与行情前缀的唯一判据）免印花税与过户费。费率随「本轮」走：建仓时快照进
+  本轮每一笔成交行的 `round_*` 四列，**4 列全 NULL = 老数据 ⇒ 沿用系统配置**（不回填、不回溯）。
+- **「浮动盈亏率」的分母是「本轮净投入」**（= `−`本轮资金变动合计，减仓回款会冲抵），
+  不是本轮买入总额 —— 拿后者当分母会把亏损率摊薄。唯一入口
+  `tr_domain::stock::floating_pnl_rate`（净投入 ≤ 0 返回 `None`，界面显示 `—`）。
+- **资金记录的余额是派生值**，口径只有一处：`tr_domain::fund::cash_chain` 把记录按
+  **(日期 → 创建时间 → ID)** 升序累加（起点 = 本金 − Σ追加本金）。**链序 = 资金变化发生的先后**，
+  不是录入的先后 —— 倒填的记录排在该在的位置上，"链末条的余额 = 本金 + Σ非追加本金变动"恒成立，
+  可用现金取的就是它。四个写入口（下单 / 追加本金 / 支取 / 利息归本）都在**同一事务**里复算。
+- **时间戳语义**：库里是 Unix 秒；`%Y-%m` 这类分桶用 SQL 的 `strftime(..., 'unixepoch')`，
+  别在 Rust 侧重算。两个域把"只选到日"落在**不同时刻**：记账域落在**本地 12:00**（按 UTC 分桶
+  仍是同一天），股票域落在**本地 00:00**（服务层必须按**宿主本地时区**取日期，`chrono::Local`；
+  按 UTC 会得到前一天）。
+- **数据库结构变更只走迁移引擎**：库不存在时用 `fixtures/schema/fresh.sql` 建；已存在时由
+  `tr-store/src/migrations.rs` 按登记表升级后只读校验（`schema::validate_current`），格式过旧就
+  明确拒绝。迁移写法是硬规范：id 唯一稳定、一个事务、幂等防御、只碰本次涉及的表、留单测；
+  升级前 `VACUUM INTO` 备份（失败就不升级），同一工作空间只留最近一份 `.bak`。
+- **IPC 契约**：命令统一只收一个 `req` 形参（个别命令的 `req` 本身就是数组 / DTO），字段名是
+  硬契约。失败载荷 `{"code","msg","status"}`，其中 `code` 是**失败种类**（取值在 `tr_domain::error`），
+  界面按种类分支、不比 `msg` 文案。命令名/事件名只有 `tr_domain::commands` / `events` 两份清单，
+  界面侧不出现字符串字面量（拼错是编译错误）；"本 crate 实现 == 清单业务段"与
+  "注册表 == 清单全表"各有一条**带负向断言**的守卫，规格见那两处测试。
+- **JSON 字段命名不统一，但必须保持不变**：核心记账模型 snake_case，事件/日记/股票模型 camelCase，
+  DTO 两种混用；数据库列名恒为 snake_case，映射在 DAO 层显式书写。
+- **SQL 只允许拼接常量**：列名/表名走 `const …_COLUMNS` 或常量数组，值一律 `?` 占位符；
+  `ORDER BY` 字段必须过白名单（`build_sort_clause` 只认四项）。
+- **生产代码里的 `unwrap/expect/panic!` 必须有据可依**：锁中毒、已校验的不变式、启动期构建失败。
+- **别在 `Effect` 体内创建信号**：`Effect` 每次重跑都会 dispose 上一次建的响应式值，而界面那时
+  往往还在读它（表现是"界面空白 / 点了没反应"，控制台只有一句 disposed）。状态建在组件或根
+  owner 下，`Effect` 里只读、只做副作用。
+- **配置文件是用户数据**：`~/.transactions.json`（dev 为 `~/.transactions-dev.json`）键名与位置
+  都不变，读写必须保留未知键（`AppConfig.extra`）。`features` 四个开关**缺省全开**
+  （`#[serde(default)]` + 默认 `true`），`keyEventLinkedOpen` 缺省展开；两侧靠 `feature_key`
+  字符串对齐 —— 名字写错不会编译报错，只会得到一句"无效的功能开关"。
+- **只有一个窗口，首启动也不例外**：`workspaceDir` 为空时同样是主窗口（界面照常挂载、显示空态），
+  再把不可关闭的「选择工作空间」屏叠在上面，背景那层带 `inert`、外壳同时拒绝关闭请求。
+  界面**不要**自己写配置里的工作空间目录：`workspace_open` 是唯一入口。
+- **图片资产**：`<workspace>/data/assets/key_events/<date>/<uuid>.<ext>` + `thumb_<uuid>.jpg`，
+  库里存相对 `data/assets` 的路径，界面走 `trasset://`（处理器带路径穿越校验）。后端只接受
+  JPEG/PNG/GIF/WebP：**HEIC 在界面层就转成 JPEG**（`tr-draw::heic`），**别改回"交给 WebView2 解
+  HEIF"**（Chromium 内核没有 HEIF 解码器，Windows 侧要靠商店里的「HEIF 图像扩展」，干净机器上
+  必然失败，实测见 `fixtures/heic/README.md`）。缩略图：宽 > 300 等比缩到 300、JPEG q75。
+- **没有本地网络面**：不监听端口、没有 API 令牌、没有 CORS、没有子进程后端。进程即应用。
+- **界面无 Node**：仓库里没有 npm / package.json / vendor 的 JS 库，图表、Markdown、拖拽排序、
+  日期选择全是 Rust 实现。
+- **设计令牌**：`--transactions-*` 是颜色/尺寸的唯一来源（对应 `DESIGN.md` 的调色板），
+  只支持浅/深两套主题（共用同一组令牌名），通过 `<html data-theme="light|dark">` 切换。
+  `crates/tr-ui/dist/` 由 trunk 生成，**不入库**。
+- **图标只渲染 `<path>`**（`icons.rs`，`fill: currentColor`），所以新增图标要同时核两件事：
+  路径坐标范围与 `view_box()` 匹配（不匹配的后果是"图标整段画到画布外、看起来没了"或
+  "缩到看不见"—— 左右翻页箭头与 `Icon::Sync` 都栽过），以及别只因为它来自 Ant Design 就放心。
+  取新图标用官方包：
   `https://cdn.jsdelivr.net/npm/@ant-design/icons-svg@4.4.2/inline-namespaced-svg/outlined/<name>.svg`
   （本机走代理；GitHub 原仓库连不上），它给的 `d` 可与 `view_box = 64 64 896 896` 直接配对。
-- **翻译/新增 UI 文案前先看有没有同名元素**：图标条按钮的可访问名 = 子功能名，容易与页面标题、侧栏条目重名
-  （「记录」两边都有、「设置」与侧栏「应用设置」相邻）；fixtures 用 `Invoke-SubFunction`（同名 Button 里最靠左
-  的那个）定位。
-- **`Input` 的 UIA 判据是 `ControlType.Edit`，不是 ClassName**：本项目输入框渲染成 `.ui-input__control`，用
-  `ClassName -eq 'Edit'` 一个都找不到（表现为"建仓弹窗里找不到股票代码输入框"）；只有原生 `<textarea>` 那类才是
-  `ClassName='Edit'`，所以判据写成"`ControlType` 是 Edit **或** ClassName 是 Edit"。
-- **页签是 `TabItem`**（用 `SelectionItemPattern`），不是 Button，按 Button 找只会静默失败；
-  **股票下单弹窗的三个输入框在 UIA 里没有名字**，只能按包围盒定位 `Edit`（同一列 Y 递增、同一行 X 分列），再靠
-  `ValuePattern` 塞值。
-- **类型不同的同名元素要用控件类型区分**：功能开关是 `<button role="switch">`（UIA 带 `TogglePattern`），侧栏条目
-  是普通按钮 —— 两边可访问名都可能是「日记」，定位不能只看名字。
 
-**写值与点击**
+## 本机环境的硬事实
 
-- **受控 `<input>` / 文本域要把值真的"打"进去**：`ValuePattern.SetValue` 不保证触发 DOM `input` 事件（日记/记账的
-  自动保存挂在 `input` 上），Leptos 的 `<input value=signal>` 会在下一次重渲染时把 DOM 值刷回信号里的空串 ——
-  字段看着被填过、点保存却弹「请输入金额」，而 `Set-Value` 还返回 `true`。纯 `Ctrl+V` 也不行：窗口不是前台时
-  `AutomationElement.SetFocus()` 静默无效，"内容没改、保存却成功了"。共享版做法（新脚本直接用）：
-  `Set-InputByPaste`（单行，`Find-EditByName` 只认 `ControlType`/`ClassName` 是 Edit 的节点）与 `Paste-Text` /
-  `Set-DiaryContent`（文本域）—— 先 `SetForegroundWindow` → `SetFocus` → 校验 `FocusedElement` 是 Edit → 粘贴
-  → 用 `ValuePattern` 读回校验 → 失败整段重试（最多 3 次）。
-- **只读的"行内操作按钮"必须先 hover**（`ui-crud.ps1` 的 `Find-RowButton`）：分类/标签行的操作区是
-  `.ct-item-actions { display: none }`，只在 `:hover` 或 `.is-active` 时 `display: flex`（刻意的交互约定），而
-  `display: none` 的元素不进 UIA 树。做法：真实鼠标移到行中心、等 ~0.5s 再按名字查，并用"中心 Y 最近且在该行
-  右侧"区分同一列里的多个同名按钮。
-- **别用 `| Select-Object -First N` 截断界面脚本的输出**：管道提前关闭会终止上游脚本，它的 `finally`（关掉测试
-  实例）不执行，下一个脚本就会因"本仓库已有实例在运行"而拒绝启动。要么 `-Last N`，要么 `*> 文件`。
-- **「是否复用工作空间」的判断要在默认值赋值之前取**：写成 `if (-not $Workspace) { $Workspace = <默认> }` 之后再判
-  `if (-not $Workspace) { 重新播种 }` 是恒 false → 永远不重新播种，断言"持仓数量"这类绝对状态时会叠加（实测 300
-  股变 600 股）。做法：开头先 `$explicitWorkspace = -not [string]::IsNullOrWhiteSpace($Workspace)`，不用显式
-  工作空间时就 `if (-not $explicitWorkspace) { Remove-Item $ws -Recurse -Force }`。`ui-crud` 中过：残留的
-  `UIA分类*` 越积越多，下拉里出现多个**同名**分类后脚本点到陈旧节点，表单里分类其实是空的 → 保存被「分类不能为
-  空」拦住。**"脏基线"会让断言以完全无关的面目变红** —— 看到奇怪的连坐失败，先确认工作空间是不是新的。
-- **托盘图标能抓到，但浮出面板太"脆"，所以没做成常驻护栏**：Win11 下图标在
-  `TopLevelWindowForOverflowXamlIsland`（「系统托盘溢出窗口」）里、是个 `Button`（`Name='Transactions'`），点任务
-  栏「显示隐藏的图标」能弹出来、右键开 `#32768` 菜单；但实测两次里有一次面板没弹出来（失焦即关、出现时机不固定），
-  做成 fixture 会红绿随机。
-- **股票下单 + 行情链路的验收配方**（一条流程验四件事）：持仓页 → `建仓` 弹窗 → 代码填 `600519` → 点「查询股票
-  名称」，名称框自动变成「贵州茅台」（这一步打通真实行情接口）→ 填价格/手数 → 提交。随后断言：页面行显示现价/涨
-  跌幅/浮盈、`tbl_billadm_stock_trade` 多一笔、持仓数量与成本对得上（成本含手续费：`价格×股数 + 佣金`，单位是分）。
-
-### 界面与外壳的真实缺陷
-
-- **Tauri 默认会吃掉页内 HTML5 拖拽**（"分类/标签/模板拖不动"）：窗口默认 `dragDropEnabled: true`，wry 于是在
-  WebView2 宿主 HWND 上 `RegisterDragDrop` 并 `SetAllowExternalDrop(false)`
-  （`wry-0.55.1/src/webview2/mod.rs:150`），而 Chromium 在 Windows 上的页内拖拽也走 OLE 拖放，`drop` 永远到不了
-  页面 —— 现象很有欺骗性：`dragstart`/`dragover` 正常（行变半透明、插入指示线也画），只有 `drop` 不触发。修法：
-  建窗口时 `.disable_drag_drop_handler()`（`shell.rs` 的 `create_main_window` / `create_init_window`）；代价是拿
-  不到 `tauri://drag-drop` 原生文件落盘事件。回归 `fixtures/ui-drag.ps1`。
-- **关掉拖放处理器之后必须补导航守卫**（`shell.rs` 的 `is_allowed_navigation`）：否则把文件从资源管理器拖进窗口会
-  让 WebView2 直接导航到 `file:///…`、界面整个被换掉。守卫只放行 `tauri.localhost` / `localhost` / `127.0.0.1`，
-  其余（file:、外部站点、data:）一律拦截；`trasset://` 是子资源、不走导航，不受影响。单测覆盖放行/拦截两侧。
-- **窗口几何的单位是逻辑像素（DIP）**（"记不住窗口大小和位置"）：Windows 上 `inner_size()` / `outer_position()`
-  返回**物理**像素，而 `WebviewWindowBuilder::inner_size()` / `position()` 收**逻辑**像素，配置
-  （`~/.transactions.json`）里存的也必须是逻辑值；存成物理值会让 150% 缩放的机器每次启动放大 1.5 倍、位置越跑越
-  偏。`save_window_bounds` 现在做物理 → 逻辑换算（纯函数 `logical_bounds` + 4 个单测），回归
-  `fixtures/window-bounds.ps1`。
-- **`Popconfirm` 的触发必须挂捕获阶段**（`popconfirm.rs` 用 `on:click:capture`）：调用方常在子元素上写
-  `stop_propagation()`（列表项里的删除按钮为了不触发整行"选中"），挂冒泡阶段会被吃掉、气泡不弹。仍在用气泡的是
-  「删除图表」与「删除关联交易」；「删除事件」已改成**弹窗**（`key_event.rs` 的 `confirm_delete_modal`）。改卡片上
-  的删除按钮时别忘了 CSS：定位原先在 `Popconfirm` 的包裹层上（`.key-event-card .ui-popconfirm`），去掉包裹层后
-  要落到按钮自己身上（`.key-event-card__delete`）。
-- **弹窗里的下拉面板会被 `overflow: hidden` 裁掉**：DatePicker / Select 的下拉都是绝对定位子元素，而
-  `.ui-modal__content` 原来带 `overflow: hidden`（只为圆角），小弹窗（如「关联事件」）里日历被裁到只剩月份标题，
-  看着像"面板画坏了"。现改成 `overflow: visible`。**下拉面板的正确做法是 portal 到 body。** 排查提示：UIA 里看
-  不到"被裁掉"（被裁元素的矩形照样报出来），**只有截图（全屏 PNG）才看得出"元素没画出来"**。
-- **滚动条现在是 WebView2 的"覆盖式"（零占位），别再自己画**：`src-tauri/src/shell.rs` 的 `WEBVIEW_ARGS` 开了
-  `--enable-features=OverlayScrollbar,FluentScrollbar,FluentOverlayScrollbar`，滚动条画在内容**之上**、随滚动
-  淡入淡出，所以列表从"不滚动"变成"滚动"时右侧内容不会被挤窄（用户报过的重排就来自这里）。
-  三条纪律：① **不许再写 `::-webkit-scrollbar` / `scrollbar-width`** —— 一旦自定义滚动条，Blink 就退回"占宽度"
-  那条老路，覆盖式直接失效（`base.css` 里留了这段注释，`stock.css` 只保留"刻意藏掉某条滚动条"的 `width: 0`）；
-  ② 滚动条的**配色不再由我们控制**，它跟随 `color-scheme`（见 `tokens.css` 的三处 `color-scheme`），所以删掉了
-  `--transactions-color-scrollbar-thumb*` 两个令牌；③ `additional_browser_args` 会**整体替换** wry 的默认参数，
-  必须把那三个 `--disable-features` 照抄回去。
-  排查提示：覆盖式的滑块**抓不到**（`PrintWindow` 与 `CopyFromScreen` 都不画它），要确认它浮没浮出来只能人眼看；
-  改这条链路的回归用 `fixtures/test.ps1 -Unit shell,ui-kit`。另：`body { user-select: none }` 让全局 `::selection`
-  基本只在输入框里可见。
-- **Tip 的宽度：只写 `max-width` 会被"包含块"坑死**（设置页过户费 ⓘ 的气泡被压成一列窄条）：气泡是
-  `.ui-tooltip::after` 绝对定位伪元素，包含块是触发器本身（那个 ⓘ 只有 ~14px 宽），于是 shrink-to-fit 的可用宽度
-  就是 14px。正确写法：先用 `width: max-content` 按文案铺开，再用 `max-width` 收上限（上限同时受视口约束
-  `min(320px, calc(100vw - …))`）；换行用 `white-space: pre-line`；触发器在版心右缘时套 `.ui-tooltip--end`。
-- **别把 `PrintWindow` 截图里的"残缺图标"当成缺陷**：`ui-shots.ps1` / `dev-shot.ps1` 抓的是
-  `PrintWindow(PW_RENDERFULLCONTENT)` 位图，WebView2 在某些状态下**合成器还没画完**，内联 SVG 图标会被抓成一条
-  竖长的涂鸦（正文文字、布局、表格都正常），人眼看窗口完全正常。判据优先级：**人眼看窗口 > UIA 树里控件的矩形 >
-  截图像素**；怀疑图标坏了先开一次窗口看看。
-- **删/改一条 CSS 规则前先 grep 谁还在用那个类名**（"应用设置 → 关于软件"不再垂直居中）：`8d55b17` 把设置页面板
-  从 `.st-pane` 换成 `.page-pane`（前者整套规则被删），但 `<div class="st-pane st-about">` 漏改了，它退化成普通块
-  级容器，于是 `.st-about` 的 `align-items/justify-content: center` 全部失效、`margin: auto` 也垂直居中不了
-  （`auto` 外边距只在 flex/grid 容器里吃掉剩余空间），内容停在顶部。症状很欺骗：样式不报错、面板照常渲染，只是
-  "居中没了"。改 CSS 结构时用 `grep -rn 'st-pane\b' crates/tr-ui` 之类核一遍调用点。
-- **详情区「减仓/清仓/加仓」点不动 = 产品 bug**（曾被误记成"UIA 自动化不了"）：三个按钮的 `on_click` 里先
-  `selected_code.set(code)` 再 `open_trade(...)`，而详情区本来就按 `current_position()`（= `selected_code` 命中的
-  那条）渲染、写的是同一个值；但 `RwSignal` **同值写入依然会通知订阅者** → 点击瞬间详情子树重渲染 → 交易弹窗永远
-  不 mount（DOM 里连 `ui-modal__mask` 都没有）。表头那个不写 `selected_code` 的「建仓」按钮一直正常，对比才看出
-  差别。修法：三处去掉冗余的 `selected_code.set`（`src/pages/stock.rs` 有注释）。手法可复用：先分清"没点到"和
-  "点了没反应" —— 真实鼠标 / `SetFocus`+回车 / `InvokePattern` 三种激活都试，用 `AutomationElement.FromPoint` +
-  `WindowFromPoint` 确认坐标上是谁（Tauri 的 `TAURI_DRAG_RESIZE_BORDERS` 浮层会抢答 `FromPoint`，但鼠标照样进
-  WebView，所以它单独用会误判），再往 handler 里塞 `Notifier`、给弹窗体加挂载标记，就能锁定"信号写对了、是
-  Modal 没挂载"。别用"这按钮自动化不了"给产品的 bug 打掩护。
-- **不要在 `Effect` 体内创建信号**（踩过两次，都表现为"界面空白 / 点了没反应"）：`Effect` 每次重跑都会 dispose 上
-  一次创建的 reactive 值，而界面那时往往还在读它，控制台里只有一句
-  `you tried to access a reactive value … but it has already been disposed`。两例：`settings.rs` 的
-  `UpdateState`（「关于软件」切走再切回面板空白；修法：状态提前建到根 owner，`init_update_state()` 由
-  `shell::App` 调用）与 `transactions.rs` 排序弹窗的 `SortRow::new(...)`（关掉再打开必 panic；修法："行信号池"
-  把最多 4 行的信号建在页面 owner 下，打开只回填值，见 `sort_modal` 注释）。正确姿势：状态建在组件/根 owner 下，
-  `Effect` 里只读、只做副作用。
-- **charts-rs 的坑都在 `components/ui/chart.rs` 里绕开了，别改回去**（细节见该文件的注释）：① Y 轴刻度它按数量级
-  把步长往上取整（`36000 ÷ 4` → 9,500）⇒ 范围由 `nice_axis_range` 自己算（⚠ 自定义上界必须**严格**大于数据最大
-  值，否则它静默退回自己的阶梯）；② 面积填充的基线它写死成绘图区底边（跨零时负的那段被填成"从折线一路铺到图底"
-  的大色块）⇒ 在生成的 SVG 上定点改写（`anchor_fill_at_zero`；该公式假设**绘图区顶边 = `margin.top`**，所以本组件
-  始终把 charts-rs 的标题/副标题置空、自带图例关掉）；③ `{t}` 千分位**对负数不生效**（它的 `thousands_format_float`
-  第一行 `if value < 1000.0` 把负数全挡进了不分组那条分支，于是同一根轴上 `50,000` 与 `-50000` 并存）⇒ 同样在
-  生成的 SVG 上定点改写（`group_negative_tick_labels`，只改"负号 + ≥ 4 位数字"的文本节点）。
-  另：`tr-ui` 只编 wasm32，native 上 `cargo test -p tr-ui --lib` 是**绿的 0 个测试**
-  —— 留在那儿的 `#[cfg(test)]` 只当规格说明（渲染侧那几条），所以**能在 native 上断言的纯算法一律放 `tr-draw`**
-  （刻度、填充基线、几何拼装、裁剪几何都在那儿，`cargo test -p tr-draw` 真跑，含用 charts-rs **真实输出**的
-  SVG 做的定点断言）。见 `docs/adr/0001-pure-draw-crate.md`。
-
-### 更新与代理
-
-- **自动更新是自研实现**（`src-tauri/src/updater.rs`），没有用 `tauri-plugin-updater`：沿用 GitHub Releases +
-  `asset.digest`(sha256) 校验，不需要签名密钥与 `latest.json`。命令 `update_check` / `update_download` /
-  `update_download_status` / `update_cancel` / `update_install`；行为：仅 GitHub 域名白名单、已下载复用、
-  `.part` 中转、取消清理、打开安装包后退出。因此 `tauri.conf.json` 里**不要**加 `plugins.updater`，
-  capabilities 也不需要 `updater:default`。
-  * **状态的唯一持有者是外壳，词表与迁移规则在 `tr-domain::update`**（纯逻辑、两侧共用、`cargo test -p tr-domain`
-    真跑）。`UpdateStatus` 七个取值（`idle` / `checking` / `available` / `no-update` / `downloading` /
-    `downloaded` / `failed`）**序列化取值就是契约**（`no-update` 是连字符）；`UpdateEvent::apply` 是唯一的迁移
-    入口，四条规则写在里面：**"检查失败 ≠ 已是最新"**（带 `error` 一律进 `failed`）、进度只在 `downloading` 时
-    生效（迟到的进度不会把状态拉回来）、重复事件幂等、没有下载地址不进下载态。
-    **"唯一持有者"是字面意思**：推进状态机的命令只有三个，每一个都在**命令体里** `apply` 并把推进后的快照返回
-    （`update_check` / `update_download` / `update_cancel` → `UpdateSnapshot`；`update_download_status` 只读不推进）。
-    界面**不跑状态机**：`UpdateState` 只有 `accept(快照)` 一个写入口，"正在检查"是它自己的一个在飞 bool（渲染用）。
-    新增一条会推进状态的命令时照这个形状写，别让界面自己 `apply` —— 曾经界面自己喂 `CheckFinished`、外壳从没被喂过，
-    于是 `update_download_status` 永远是 `idle`，换页切回「关于软件」把检查结果抹掉（`ui-update-restore.ps1` 第 2 步
-    就是这条回归）。
-  * **事件载荷是完整快照**（`UpdateSnapshot`，camelCase）：`update:download-progress|complete|error` 三个名字
-    不变（改名字另有其票），改的是"从前各自带一小块字段、界面再拼"这件事。`update_download_status` 返回同一份
-    快照 —— 所以"进页面补状态"与"事件推过来"永远一致，谁先到都不影响结果。
-  * **界面（`crates/tr-ui/src/pages/settings.rs` 的「关于软件」）只渲染快照**：`match` 的分支就是词表（穷尽匹配），
-    不再出现 `"downloading"` 这类字符串比较，也不再自己判断"失败还是最新"。文案常量（按钮 / 通知标题）也在
-    `tr-domain::update` 里，两侧共用，单元测试遍历所有取值断言"每个状态都有文案"。
-    下载请求被外壳拒绝（地址为空 / 不在白名单）走 `UpdateEvent::DownloadRejected`，落点与"下载中途失败"一致 ——
-    界面**不再**自己拼落点（`failed_after_download_attempt` 已删）。
-  * 剩下的纯函数（`parse_release`、`is_newer_version`、`digest_matches` / `normalize_digest`、`format_speed`）
-    有一半已搬进 `tr-domain::update`，留在外壳的（`parse_release` / `url_host` / 缓存文件 digest 复核 / 去重键）
-    由 `cargo test -p transactions` 覆盖 —— 这条链路以前**一个单元测试都不执行**。回归：
-    `fixtures/test.ps1 -Unit update`（`test-domain` + `test-src-tauri` + `ui-update-restore`，端到端那条仍依赖
-    真实 GitHub API）。
-- **代理：三态 + 自动探测系统代理**：「应用设置 → 通用设置 → 代理」= `off`（不使用）/ `auto`（自动探测，默认）/
-  `manual`（手动 `http://host:port`），落在 `~/.transactions.json` 的 `proxy: { mode, url }`（缺该键的老配置按
-  `auto`）。配置由外壳持有，`main.rs` 启动时调 `tr_service::proxy::set(...)`，`config_set_proxy` 落盘后立即再推
-  一次；`tr-service/src/quote.rs`（行情）与 `src-tauri/updater.rs`（更新，`agent()` 是两处共用的唯一入口）都从
-  同一处取，不会"更新走代理、行情不走"。`tauri-plugin-opener` 打开浏览器那次跳转不受影响。
-  * `auto` 的探测顺序：`ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY`（含小写变体，与 ureq 的 `Proxy::try_from_env()` 同
-    序）→ WinINET 注册表 `HKCU\…\Internet Settings`（`ProxyEnable=1` 时取 `ProxyServer` 的 `http=` 段）→ 同路径
-    `HKLM` → 直连。只读注册表（`winreg`，`cfg(windows)`），每次请求重新探测，改系统代理不必重启。
-  * 只支持 HTTP 代理：地址只认 `http://`（`host:port` 自动补 scheme；可带 `user:pass@`）；`socks*://` 与
-    `https://` 明确拒绝并给中文文案；HTTPS 目标（GitHub）走同一个 HTTP 代理的 CONNECT 隧道。不支持 PAC
-    （`AutoConfigURL` 只作为提示上报，不解析），也不支持 `ProxyOverride` 绕过列表。
-  * `off` 会显式 `.proxy(None)`：ureq 的 `Config::default()` 本身就读环境变量代理，不显式覆盖则"不使用代理"名不
-    副实 —— 这是本仓库唯一一处必须传 `Option` 的地方。回归 `fixtures/ui-proxy.ps1`。
-  * 失败形态：代理不可达时更新检查报错、行情静默失败（计入既有的 `quote_failed_count`），都不 panic；手改配置成
-    非法值时按"未配置"（直连）处理并记日志。
-
-## 关键约定与陷阱
-
-- **股票费用：一次委托多笔成交时，印花税/过户费"逐笔取整再相加"**（`tr-domain/src/fee.rs`，两侧共用同一份算法，
-  界面侧只有 `estimate_fee` 一个调用点）：**佣金**按**委托总额**收一次，最低佣金也只在这里生效（按笔收会变成 N
-  份最低佣金）；**印花税 / 过户费**逐笔按成交额算、**逐笔**四舍五入到分再求和 —— 不是"先求和再取整"。两者会差一
-  分：`36.61×100` + `36.67×100` 两笔卖出、沪市，过户费逐笔是 `0.04+0.04=0.08`，先求和只有 `0.07328→0.07`
-  （用户报的就是这一分钱）。因此 `compute_order_fee` 收的是**各笔成交额**（`&[i64]`）而不是总额，
-  `allocate_order_fee` 与它同口径，保证"每笔分摊之和 = 委托级合计"。回归：`cargo test -p tr-domain fee`（含用户
-  那个例子的逐项断言）、`cargo test -p tr-service create_trade_order_charges_fee_once_per_order`。
-- **股票「浮动盈亏率」的分母是「本轮净投入」**（= `−`本轮资金变动合计，即「成交记录 → 资金变动」那一列的逐行和
-  取反）：减仓回款会冲抵本轮投入，所以**本轮买入总额不是分母** —— 拿它当分母会把亏损率摊薄（用户真实数据上
-  −21.18% 被显示成 −6.07%）。算法唯一入口 `tr_domain::stock::floating_pnl_rate`（native 真跑；净投入 ≤ 0 时
-  返回 `None`、界面显示 `—`），持仓卡片与详情区两处共用；买入总额只继续当**已结算轮次**盈亏率的分母
-  （`dto::round_pnl`），两个口径别互换。DTO 因此不再有 `roundCost`，界面用 `roundCashFlow` 推盈亏与率。
-  回归：`cargo test -p tr-domain floating_rate` 与 `fixtures/ui-stock.ps1` 第 2 步（卡片上的盈亏 ÷ 库里的净投入
-  = 卡片上的率）。
-- **价格走「厘」、金额走「分」**（两套单位，别混）：成交价 / 现价 / 昨收是整数**厘**（1/1000 元 —— 场内基金的
-  报价单位就是 0.001 元），其余（成交额/成本/费用/盈亏/市值）全是整数**分**。换算入口 `tr_domain::money`，
-  展示 `tr-draw::format::price`（`amount` 恒两位），**价格 × 股数 → 分**的唯一入口是
-  `tr_domain::stock::amount_of`。表 `tbl_billadm_stock_trade.price` 因此也是厘（迁移
-  `20261009_stock_trade_price_milli` 整列 ×10）。
-- **场内基金（ETF / LOF / 封闭式基金 / REITs）只有佣金**：免印花税、免过户费（沪市基金也是 —— 过户费只对沪市
-  **股票**收）。品种与**代码校验**的唯一判据是 `tr_domain::fee::Instrument::of`（股票 沪 `60`/`68`、深 `00`/`30`；
-  场内基金 沪 `5[0-8]`xxxx、深 `1[5-8]`xxxx），它同时决定行情前缀；不认识的代码（老数据里的北交所）按深市股票
-  回落。回归：`fixtures/ui-stock.ps1` 第 11 步。
-- **费率随「本轮」走（建仓时快照，本轮内不可改）**：建仓把四项写进这一轮**每一笔**成交行的 4 个可空列
-  （`tbl_billadm_stock_trade.round_*`），本轮内的加仓 / 减仓 / 清仓与改成交都走它（唯一入口
-  `resolve_round_fee`）；**4 列全 NULL = 老数据 ⇒ 沿用系统配置（不回填、不回溯）**。回归：
-  `fixtures/ui-stock.ps1` 第 12 步。
-- **SQL 只允许拼接常量**：列名/表名用 `const …_COLUMNS` 或常量数组（如 `STOCK_TABLES`），值一律走 `?` 占位符
-  （`instr(description, ?)` 也是占位符）；`ORDER BY` 的字段必须过白名单 —— `build_sort_clause` 只认
-  `transactionAt` / `transactionType` / `price` / `category` 这 4 项，多一项都不认，方向强制 `asc|desc`。
-- **生产代码里的 `unwrap/expect/panic!` 必须有据可依**：只允许锁中毒（`.expect("…锁中毒")`）、已校验不变式（月份
-  `1..=12`、`valid_up_to` 前缀、池在生命周期内有效）、启动期构建失败（`main.rs`）。新增前先问"它真的不可失败吗"。
-- **金额恒为整数分**：数据库、IPC、算法全用 `i64` 分；只有展示层做分/元换算（`tr_domain::money`）。这两个换算
-  函数的行为是硬契约（含负号、`.5` 输入）。
-- **时间戳语义**：`transaction_at`、`trade_time` 等是 Unix 秒；`%Y-%m` 这类分桶在 SQL 里用
-  `strftime(..., 'unixepoch')` 完成，不要在 Rust 侧重算。两个域把"只选到日"的时间戳落在**不同的时刻**，别混：
-  * 记账域落在**本地 12:00**（`transactions.rs::combine_date_and_time`）→ 按 UTC 分桶也落在同一天；
-  * 股票域落在**本地 00:00**（`tr-ui::time::ymd_to_seconds`）→ 服务层必须按**宿主本地时区**取日期
-    （`tr_service::stock::unix_to_date` 用 `chrono::Local`）。按 UTC 取会得到**前一天**：东八区的
-    `2026-08-24 00:00` = UTC `08-23 16:00`，于是"8 月 24 日清仓"在资金变化列表里显示成 8 月 22 日（用户报的缺陷）。
-  * 资金记录的余额是**派生值**，口径只有一处：`tr_domain::fund::cash_chain` 把记录按 **(日期 → 创建时间 → ID)**
-    升序逐条累加（起点 = `本金 − Σ追加本金`），`stock::write::recalculate_cash_chain` 只是"取出来 → 算 → 写回去"。
-    **链序是"资金变化发生的先后"，不是"录入的先后"** —— 倒填的记录排在它日期该在的位置上，金额不会被跳过
-    （`#48` 之前按录入顺序取"前 i 条里链序最大那条"的余额当起点，倒填那条够不着 ⇒ **可用现金虚高**，用户真实数据上
-    正好虚高了一笔建仓的钱）。于是"链末条（日期最大那条）的余额 = 本金 + Σ 非追加本金的变动"恒成立，
-    而可用现金取的就是它。四个写入口（下单、追加本金、支取、利息归本）都在**同一事务**里复算，插入时不再自己算一次。
-  * 旧数据由 `stock::repair_legacy_trade_fund_dates` 订正：外壳打开工作空间时跑一次，只有"记录日期
-    恰好比对应委托的本地日期早一天"（按方向 + 股票名 + `created_at` 相差 ≤ 2 秒匹配委托，候选有歧义就跳过）才
-    触发**重放**，日期与现金链一起重算；当前版本写的数据永不满足这个条件，所以幂等。回归：
-    `cargo test -p tr-service` 的 `unix_to_date_uses_the_host_local_day`、
-    `repair_legacy_trade_fund_dates_fixes_date_and_cash_chain`、`backdated_trade_is_counted_in_the_cash_chain`、
-    `backdated_fund_events_are_counted_in_available_cash`，以及 `fixtures/ui-stock.ps1` 第 1 步（日期选择器选
-    **上个月的 24 号**（必然翻一次「上一月」）→ 选择器文案 / `trade_time` 的本地日期 / 资金记录 `record_date` /
-    账户页「资金变化记录 → 日期」列 四处一致）。
-- **数据库结构变更只走迁移引擎**：`transactions.db` 不存在时用 `fixtures/schema/fresh.sql` 建库（当前格式）；已
-  存在时先由 `tr-store/src/migrations.rs` 的迁移引擎按 `tbl_billadm_schema_migration` 登记表升级，再按当前格式只读
-  校验（`schema::validate_current`）。校验不通过（比已知格式更早且没有对应迁移）时明确拒绝，用户可见文案是
-  `该工作空间不是当前格式（格式过旧）：…`。
-- **迁移的写法是硬规范**（`migrations::MIGRATIONS` 是唯一入口）：① id 唯一稳定（`YYYYMMDD_描述`）；② 一个事务
-  （执行 + 写登记行，失败整体回滚）；③ 幂等、防御式（先查 `PRAGMA table_info` / `sqlite_master`，结构已在就只补
-  登记行）；④ 只碰本次升级涉及的表，不许"顺手修复"别的结构；⑤ 留单测（旧格式 → 升级后校验通过、数据一字不差、
-  重复应用无副作用）。升级前必须先备份（`VACUUM INTO` 出 `transactions.db.pre-migration-<时间戳>.bak`，备份失败
-  就不升级），同一工作空间只保留最近一份（旧的 `.bak` 在新备份成功之后才清掉），只认自己的命名规则、不动工作空
-  间里别的文件。`cargo xtask migrate` 手工升级，`validate` / `dump` 仍只读。
-- **IPC 契约**：命令统一只收一个 `req` 形参（个别命令的 `req` 本身就是数组 / DTO ——
-  `tr_batch_create`、`tr_create`、`template_create` 是这样，见 `tr_domain::commands` 的清单），
-  字段名是硬契约，改动即破坏兼容。成功时 promise 直接 resolve
-  为数据本身；失败时 reject 载荷为 `{"code":-1,"msg":"...","status":500}` —— 其中 `code` 是**失败种类**
-  而非固定值（普通业务失败 `-1`、"未打开工作空间" `-2`，取值定义在 `tr_domain::error`；界面按种类分支，
-  不再比 `msg` 文案）。`msg` 是用户可见文案。
-  * **字段名靠共享类型，名字靠共享清单**：请求 / 响应类型在 `tr-domain`（`wire` / `dto` / `models`），
-    命令名与事件名在 `tr_domain::commands` / `tr_domain::events`（事件名 6 条，应用里每一个都在那儿）。
-    **每一条命令都在清单里**（112 条 = 外壳 21 + 更新 5 + 业务 86；其中 `workspace_init` 已随候选 11 删除，
-    见下），清单按模块分成 `SHELL_COMMANDS` /
-    `UPDATE_COMMANDS` / `BUSINESS_COMMANDS` 三组，界面侧**不再出现命令名字符串字面量**：
-    `ipc::call(commands::LEDGER_LIST, req)`；没有 `req` 形参的写 `ipc::call_no_args(commands::CONFIG_GET)`，
-    连"无返回"也是条目的一部分（`Command<Req, ()>` 才交给 `call_void`）—— 拼错名字是编译错误，
-    不是运行时的"命令不存在"。
-  * **"一致"由能跑的断言闭合**，不靠人读注释。名字这条链有两段，各有一段断言：
-    `tr-ipc` 的 `implementations_match_the_catalog` 断言"**本 crate 的实现 == 清单里业务那一段**"
-    （扫本 crate 的 `#[tauri::command]` 函数名）；`src-tauri/src/registry.rs` 的
-    `catalog_matches_registration` 断言"**注册表 == 清单全表**"（注册清单与 `generate_handler![]`
-    从同一个 `app_commands![]` 调用处展开，所以守卫读的就是真正注册的那份）。
-    两处都带**负向断言**：注册侧直接改坏**真实注册清单**（少一条 / 改名 / 重复 / 整段删掉 /
-    混进一个不认的路径），实现侧拿真实扫描结果去比一份少一条的清单；比较函数
-    `tr_domain::commands::catalog_mismatch` 自己另有一组单测。
-    前提"注册名 = 函数名"由 tr-ipc 的 `registration_name_is_the_function_name` 钉住
-    （命令**不许**用 `rename` / `rename_all`）。
-- **JSON 字段命名不统一，但必须保持不变**：核心记账模型是 snake_case（`ledger.created_at`），事件/日记/股票模型
-  是 camelCase（`ledgerId`、`createdAt`），DTO 里两种混用（`tr_query_result` 的 `page_size` 与 `trStatistics`
-  并存）。数据库列名恒为 snake_case，列映射在 DAO 层显式书写，不依赖 serde。
-- **图片资产**：`<workspace>/data/assets/key_events/<date>/<uuid>.<ext>` + `thumb_<uuid>.jpg`，库里存相对
-  `data/assets` 的路径，界面走 `trasset://` 自定义协议（处理器带路径穿越校验，只允许 `data/assets` 下的相对路径）。
-  **后端只接受 JPEG/PNG/GIF/WebP**：HEIC/HEIF 在界面层就转成 JPEG（`tr-draw` 的 `heic` 模块 ——
-  随程序分发的纯 Rust 解码器 `heic-rs` 出 RGBA8，再写进 canvas 编 JPEG），后端不引入 libheif/WIC。
-  **别改回"交给 WebView2 解 HEIF"**：Chromium 内核里根本没有 HEIF 解码器，Windows 侧要靠商店里的
-  「HEIF 图像扩展」，而它默认不装 —— 那条路在干净机器上必然失败（`fixtures/heic/README.md` 有实测）。
-  缩略图：宽度 > 300 时等比缩到 300（CatmullRom）、JPEG q75。
-- **没有本地网络面**：不监听端口、没有 API 令牌、没有 CORS、没有子进程后端。进程即应用。
-- **只有一个窗口，首启动也不例外**：`workspaceDir` 为空时同样是主窗口 —— 界面在里面渲染**完整的外壳**
-  （侧栏 + 版心，页面照常挂载，只是显示空态），再把不可关闭的「选择工作空间」屏叠在它上面；背景那层带
-  `inert`（鼠标、键盘、读屏都进不去），外壳侧同时拒绝关闭请求（`close_allowed`）。选完目录后
-  `workspace_open` 打开数据库、界面收起选择屏即可，没有窗口切换。
-  历史：早期为此单开过一个 600×560 的初始化窗口 + `transition_from_init`（在主线程回调外建主窗口再 destroy），
-  被用户吐槽"背景没渲染、全是文案"；那一整套已删除。界面**不要**自己写配置里的工作空间目录：`workspace_open` 是唯一入口（旧的 `workspace_init` 已删除）。
-- **配置文件是用户数据**：`~/.transactions.json`（dev 为 `~/.transactions-dev.json`）的键名与位置都不变，读写时
-  必须保留未知键（`AppConfig.extra`）。`features: { accounting, stock, keyEvent, diary }` 是「应用设置 → 功能
-  开关」，**缺省全开**（`#[serde(default)]` + 字段默认 `true`）；它跨层面：外壳只落盘（`config_set_feature`），
-  侧栏读界面侧 `store::AppStores::enabled_features`（`shell::Page::is_enabled` 是唯一判据），两边靠 `feature_key`
-  字符串对齐 —— 名字写错不会编译报错，只会得到一句"无效的功能开关"。`cargo test -p transactions config` 锁住键名
-  与"缺省全开"，端到端见 `fixtures/ui-features.ps1`。另有 `keyEventLinkedOpen`（事件页右栏「关联交易」展开/收起，
-  **缺省展开**）走同一条路：外壳只落盘（`config_set_key_event_linked_open`），界面读
-  `store::AppStores::key_event_linked_open` —— 放在**全局状态**而不是页面局部，换页回来才不必等 IPC 往返、也不会
-  先展开再收起闪一帧；端到端见 `fixtures/ui-key-event.ps1` 第 4 步（落盘 + 换页 + 重启）。
-- **界面无 Node**：仓库里没有 npm/package.json，没有 vendor 的 JS 库。图表、Markdown、拖拽排序、日期选择全部是
-  Rust 实现（见 `tr-ui`）。
-- **设计令牌**：`--transactions-*` CSS 变量是颜色/尺寸的唯一来源（对应 `DESIGN.md` 的调色板；`PRODUCT.md` 历史
-  文本里的 `#4A8E70` 是过时信息）。只支持浅色/深色两套主题（共用同一组令牌名），主题通过
-  `<html data-theme="light|dark">` 切换；历史上遗留的令牌允许保留。
-- **`crates/tr-ui/dist/` 由 trunk 生成，不入库。**
+- **cargo / git 都不读 Windows 系统代理**（PowerShell 与浏览器走系统代理，它们只认环境变量）：
+  本机直连 crates.io 会超时、连 GitHub 会 `Recv failure: Connection was reset`。先设
+  `$env:HTTPS_PROXY='http://127.0.0.1:7890'`、`$env:HTTP_PROXY='http://127.0.0.1:7890'`、
+  `$env:CARGO_NET_RETRY='10'`、`$env:CARGO_HTTP_TIMEOUT='120'`；索引拉取偶发中断就重复跑
+  （已缓存条目会累积）。git 失败时用一次性的 `git -c http.proxy=http://127.0.0.1:7890 push`，
+  别把它写进仓库配置。
+- **别用 PowerShell 管道接 cargo 输出**（`cargo … | Select-Object`）：管道缓冲写满会让 cargo
+  阻塞假死，一律 `*> 文件`。
+- 开发端口 16000，`Trunk.toml` / `tauri.conf.json` / `dev-hot.ps1 -Port` 与 `shell.rs` 单测样例
+  四处一致由 `static-guards` 盯着；Windows 的保留端口段（WinNAT/Hyper-V）会漂、非提权进程绑不上
+  （`os error 10013`），`dev-hot.ps1` 会先试绑并直接报错而不是干等。
+- 本机别的目录也可能装着同名 `Transactions.exe`（如 `D:\software\Transactions\`）：
+  一律按**完整路径**判是不是本仓库的实例，别按进程名（否则会误判、甚至误杀用户正在用的应用）。
+- **代理**：三态 `off` / `auto`（默认，探测环境变量 → WinINET 注册表）/ `manual`，落在配置的
+  `proxy: { mode, url }`；配置由外壳持有，`main.rs` 启动时推给 `tr_service::proxy`，
+  `config_set_proxy` 落盘后立即再推一次。行情与更新共用同一个 `agent()` 入口，
+  不会"更新走代理、行情不走"。只支持 HTTP 代理（`socks*://` / `https://` 明确拒绝并给中文文案），
+  不支持 PAC 与 `ProxyOverride`；`off` 必须**显式** `.proxy(None)`（ureq 的默认配置本身就读环境变量）。
+- **更新是自研实现**（GitHub Releases + `asset.digest` 校验，不用 `tauri-plugin-updater`，
+  所以 `tauri.conf.json` 里不要加 `plugins.updater`）。**状态的唯一持有者是外壳，词表与迁移规则在
+  `tr-domain::update`**：七个状态取值就是序列化契约，`UpdateEvent::apply` 是唯一迁移入口
+  （"检查失败 ≠ 已是最新"、进度只在下载态生效、重复事件幂等、没地址不进下载态）；事件载荷是
+  **完整快照**，只有 `update_check` / `update_download` / `update_cancel` 三个命令在命令体里推进
+  状态机并返回推进后的快照，界面只 `accept(快照)`、不跑状态机。
 
 ## 发布
 
-**远程仓库**：`https://github.com/ddd-online/Transactions-Rust`（分支 `main`）。应用内更新检查、「关于软件」的
-GitHub 链接、`build/release.ps1` 的 `$repo` 都必须指向它，否则会比对到不相干的版本、提示"有新版本"却下载到错误
-的安装包。改这三处时自检：
+远程仓库 `https://github.com/ddd-online/Transactions-Rust`（分支 `main`）。应用内更新检查、
+「关于软件」的 GitHub 链接、`build/release.ps1` 的 `$repo` 三处必须一致：
 
 ```powershell
 Select-String -Path src-tauri\src\updater.rs,crates\tr-ui\src\pages\settings.rs,build\release.ps1 -Pattern 'ddd-online'
 ```
 
-**版本控制**：`.gitignore` 已排除 `/target`、`/build/target`、`/crates/tr-ui/dist`、`/src-tauri/gen/schemas`、
-`*.db(-wal|-shm)`、`transactions.log` 与 `/fixtures/private/`，**真实工作空间数据绝不入库**。提交前
-`git status --short` 核一眼，别把本地验证用的库或截图带进去。
+链路：`build/clean.ps1` → `build/build.ps1`（trunk → `cargo tauri build` → 产物重命名为
+`Transactions-x64-v{version}.exe`）→ `build/release.ps1`（`gh release create`）。版本号唯一来源是
+`src-tauri/tauri.conf.json`（`Cargo.toml` 的 workspace 与 `src-tauri` 两处也要同步）；应用内更新读
+release 的 `tag_name` 与首个 `.exe` 资产的 `digest`；许可证以仓库根 `LICENSE` 为准（Apache-2.0）。
 
-**发布链路**：`build/clean.ps1` → `build/build.ps1`（trunk → cargo tauri build → 重命名产物为
-`Transactions-x64-v{version}.exe`）→ `build/release.ps1`（`gh release create` 上传该 .exe）。版本号唯一来源是
-`src-tauri/tauri.conf.json`（`Cargo.toml` 的 workspace 与 `src-tauri` 两处也要同步）；应用内更新读 release 的
-`tag_name` 与首个 `.exe` 资产的 `digest`。许可证以仓库根 `LICENSE` 为准（Apache-2.0）。
+构建脚本的最后一步必须是**产物断言**（`Test-Path` + 失败），别只看退出码 —— 有过一次事故：
+5.1 跑 `build.ps1` 时中文行被误解析，便携版 exe 没留档而退出码仍是 0。发布前用
+`fixtures/ui-about.ps1` 对产物核自报版本号，发布后 `gh release view <tag> --json assets` 核对
+`digest` 与本地 `Get-FileHash` 一致（同一个 digest 出现在两个 tag 下就是发错了）。
 
-**发布页的说明**：`release.ps1` 用 `gh release create --generate-notes`，而 GitHub 对**直接 push 的提交**（没有
-PR）只会生成一行 `Full Changelog` 链接 —— 想给正文就自己填：
-`gh release edit vX.Y.Z --notes-file <CHANGELOG 对应小节 + 安装包名 + compare 链接>`（只改元数据，不动资产；
-改完照例 `gh release view --json assets` 回读一次 digest）。
-
-**`clean.ps1` 会连 `target\` 一起删**，而护栏的工作空间与产物都在 `target\tests\` 下。每个界面护栏都自己播种（缺
-`transactions.db` 就跑 `cargo -q xtask seed`），所以 clean 之后直接跑 `fixtures/test.ps1 -All` 会自己重建，不再
-需要手工补种；只是**全量档会因此变慢**（每个脚本都要重新播种一份）。
-
-**踩过的坑：发布资产可能是上一版的安装包**（0.2.0 的 release 资产其实是 0.1.0 的，用户装完看到的还是旧界面）：
-`cargo tauri build` 不清 `target\release\bundle\nsis\`，旧脚本用
-`Get-ChildItem *-setup.exe | Select-Object -First 1` 取到了字典序在前的旧包。现在 `build.ps1` 构建前会删掉陈旧
-安装包、只认 `Transactions_{版本}_x64-setup.exe`，并断言它的 `LastWriteTime` 晚于本轮构建开始时刻；安装包与便携
-版都必须落盘成功。**别只信退出码，也别按"第一个匹配"取产物**：发布前用 `fixtures/ui-about.ps1` 对产物核自报版本
-号，发布后再 `gh release view <tag> --json assets` 核对 `digest` 与本地 `Get-FileHash` 一致（同一个 digest 出现
-在两个 tag 下就是发错了）。
-
-**改 `CHANGELOG.md` 一律用 `edit` 工具，别用 PowerShell 的字符串替换**（踩过两次，两次都推上去了才肉眼发现）：
-`### 修复` 这个锚点在文件里出现**多次**（每个历史版本一个），
-`$t.Replace("### 修复`n", <新小节 + "### 修复`n")` 会把新小节复制到**每一个**历史版本的修复段之前；
-而 PowerShell here-string 的结尾常常不带换行，于是原 `### 修复` 标题还会和下一行**粘成一行**
-（`### 修复**更新状态只有一个持有者…**`）。两次的现场都在 `git show <我的提交之前>:CHANGELOG.md` 里能对照出来。
-自查两行命令：`(Select-String -Path CHANGELOG.md -Pattern '<新小节的标题>').Count` 应当等于 1；
-`Select-String -Path CHANGELOG.md -Pattern '^### \S'` 不该多出 `### 修复**` / `### 修复- ` 这类粘连行。
+`clean.ps1` 会连 `target\` 一起删，而护栏的工作空间与产物都在 `target\tests\` 下：各脚本自己会
+重新播种（缺 `transactions.db` 就跑 `cargo -q xtask seed`），所以 clean 之后可以直接跑 `-All`，
+只是会变慢。`CHANGELOG.md` 一律用编辑工具改，别用 PowerShell 字符串替换（`### 修复` 在文件里
+出现多次，替换会把新小节塞进每个历史版本；标题粘连有 `static-guards` 兜底，"塞错位置"没有）。
+`.gitignore` 已排除 `/target`、`/crates/tr-ui/dist`、`*.db(-wal|-shm)`、`/fixtures/private/` 等，
+**真实工作空间数据绝不入库**，提交前 `git status --short` 核一眼。
 
 ## AI 工具（DSH）
 
-本项目用 DeepSeek Harness（DSH）开发。
+项目本地 skill 都在 `.dsh/skills/`（整个 `.dsh/` 属本机安装、**不入库**，换机重装即可）：
+每个 skill 是 `<name>/SKILL.md`，frontmatter 必须有 kebab-case 的 `name` 与 `description`，
+否则会被**静默丢弃**（只在启动日志里留一句警告，目录里看不出少了谁）；带
+`disable-model-invocation: true` 的不进模型目录、只作命令，所以"目录里比磁盘上少几个"是设计如此。
+**别再建第二处 skills 根**（`.agents/skills/` 已并进这里，两处同名会互相遮）。
 
-**skill**：都在 `.dsh/skills/`（DSH 的 `dsh-skill-filesystem` 扫的项目本地覆盖根，rank 100）。原先还并存一份
-rank 200 的 `<项目根>/.agents/skills/`，已整个并进这里 —— **别再建第二处**，两处同名 skill 会互相遮。每个 skill
-是 `<name>/SKILL.md`（或平铺的
-`<name>.md`），frontmatter 必须有 kebab-case 的 `name` 与 `description`——**不合法的 skill 会被静默丢弃**，只在
-启动日志里留一句警告，目录里看不出"少了谁"。带 `disable-model-invocation: true` 的 skill 不进模型目录、只作为
-用户主动调用的命令（`ask-matt` / `handoff` / `triage` / `to-spec` / `wayfinder` 等都是这一类），所以"目录里比
-磁盘上少几个"是设计如此，不是没加载。整个 `.dsh/` 属本机安装（含 vendored JS 与引擎 exe，impeccable 一份就
-20 MB）、**不入库**（见 `.gitignore`），换机重装即可。
-
-**没有设计检测工具链**：原来的 Codex hook（`.codex/hooks.json`，`PostToolUse` 扫当次改动、`Stop` 做深扫）与它
-调的 `impeccable` skill 都已删除，`.impeccable/`（配置 / 缓存 / 表面简报 / 验证截图）也一并删掉——现在既没有
-自动扫描，也没有可跑的扫描命令，别照旧文档去调 `impeccable`。**要加回来别只抄旧配置**：DSH 没有项目级插件配置，
-唯一的 hook 入口是消费 Codex / Claude Code 清单的桥接（`dsh-hooks-codex` / `dsh-hooks-claude-code`），而它在
-Windows 上有三处对不上——`commandWindows` 字段被忽略（`ctx.shell` 是 pwsh，POSIX 那行 `[ ! -f … ] || …` 跑不
-通）、matcher 是大小写敏感的 `new RegExp`（DSH 工具名是小写 `edit` / `write`，`Edit|Write|apply_patch` 永不
-匹配）、非 shell 工具的入参被压成 `tool_input: { command }`（被编辑的文件路径传不进检测器）。残留物（都已无
-消费者）：`app.css` / `diary.css` / `fonts.css` 各一处 `impeccable-disable-line` 注释、`PRODUCT.md` 首行一个
-`<!-- impeccable:product-schema 1 -->` 标记。
-
-**裁决标准只有 `DESIGN.md`**（调色板 / 排版 / 间距 / 分层规则都在里面），动界面之前先读它。
+动界面之前先读 `DESIGN.md`（调色板 / 排版 / 间距 / 分层的唯一裁决标准）。
 
 ## Agent skills
 
-### Issue tracker
-
-问题与规格记在 GitHub Issues（`ddd-online/Transactions-Rust`），一律走 `gh` CLI。见 `docs/agents/issue-tracker.md`。
-
-### Triage labels
-
-沿用 `triage` 的五个默认状态标签，字符串与角色名一致。见 `docs/agents/triage-labels.md`。
-
-### Domain docs
-
-单上下文（single-context）：根 `CONTEXT.md` + `docs/adr/`。见 `docs/agents/domain.md`。
+- **Issue tracker**：问题与规格记在 GitHub Issues（`ddd-online/Transactions-Rust`），一律走 `gh` CLI。
+  见 `docs/agents/issue-tracker.md`。
+- **Triage labels**：沿用 `triage` 的五个默认状态标签，字符串与角色名一致。见 `docs/agents/triage-labels.md`。
+- **Domain docs**：单上下文（single-context），见 `docs/agents/domain.md`。

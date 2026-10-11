@@ -4,8 +4,7 @@
 界面和内核都是 Rust。仓库里没有 npm，也没有前端构建链。
 
 记账数据放在你自己选的本地工作空间里，一个工作空间就是一个 SQLite 数据库。没有云端账户，也没有常驻后台。
-
-本文档描述 **0.14.0**。
+版本号只有一个来源：`src-tauri/tauri.conf.json`。
 
 ## 功能
 
@@ -33,12 +32,12 @@
 
 ```
 crates/tr-domain/    # 纯领域层：模型 / DTO / 金额分元换算 / 费用分摊（native + wasm 双可编，无 I/O）
-crates/tr-store/     # 存储层：当前 schema 建库 + 只读格式校验 + 各 Dao
+crates/tr-store/     # 存储层：建库 + 迁移引擎 + 只读格式校验 + 各 Dao
 crates/tr-service/   # 服务层：业务规则（账本 / 交易 / 图表 / 事件 / 日记 / 股票），不依赖 tauri
 crates/tr-ipc/       # IPC 命令面：全部 #[tauri::command] + 统一错误信封
 crates/tr-ui/        # 界面：Leptos CSR + static/{css,fonts,icons}
 src-tauri/           # 桌面外壳：窗口 / 托盘 / 配置 / 日志 / 资产协议 / 更新
-xtask/               # 验证工具：schema-diff（建库护栏）、seed / dump（示例数据与只读导出）
+xtask/               # 验证工具：schema-diff（建库护栏）、validate / dump / seed / migrate（工作空间）
 fixtures/            # schema 基线、端到端脚本（**不含任何真实个人数据**）
 ```
 
@@ -58,7 +57,7 @@ fixtures/            # schema 基线、端到端脚本（**不含任何真实个
 
 ## 下载安装
 
-到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载 `Transactions-x64-v0.14.0.exe`。
+到 [Releases](https://github.com/ddd-online/Transactions-Rust/releases) 下载 `Transactions-x64-v<版本>.exe`（版本号见 `src-tauri/tauri.conf.json`）。
 
 首次启动会让你选一个工作空间目录。
 
@@ -79,7 +78,7 @@ cargo tauri dev
 pwsh -File build/build.ps1
 ```
 
-产物：`build\target\Transactions-x64-v0.14.0.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
+产物：`build\target\Transactions-x64-v<版本>.exe`（安装包）、`build\target\transactions.exe`（免安装版）。
 发布流程：`build/clean.ps1` → `build/build.ps1` → `build/release.ps1`（`gh release create` + 上传安装包）。
 版本号唯一来源是 `src-tauri/tauri.conf.json`。
 
@@ -90,7 +89,8 @@ pwsh -File build/build.ps1
 
 > 发布构建**必须**走 `build/build-ui.ps1`（trunk debug 模式，优化拉满，跳过 wasm-opt），
 > 别直接用 `trunk build --release`。手跑 exe 时要带 `tauri/custom-protocol` 特性，
-> 不然窗口里要么空白要么是"连接被拒绝"。原因写在 `AGENTS.md` 的「踩过的坑」里。
+> 不然窗口里要么空白要么是"连接被拒绝"。原因写在 `AGENTS.md` 的「改界面的迭代循环」里，
+> 这两条现在由 `fixtures/static-guards.ps1` 拦着。
 
 ## 调试
 
@@ -131,7 +131,7 @@ cargo xtask dump <workspace-dir>            # 只读导出业务表为规范化 
 | 文件 | 内容 |
 |---|---|
 | `CHANGELOG.md` | 版本变更记录 |
-| `AGENTS.md` | 架构、全部常用命令、本机环境陷阱与经验教训（开发前必读） |
+| `AGENTS.md` | 架构、常用命令、验证纪律与硬契约（开发前必读） |
 | `PRODUCT.md` | 产品定位、用户、能力边界 |
 | `DESIGN.md` | 设计系统与设计令牌（界面改动的裁决标准） |
 | `fixtures/README.md` | 数据基线、种子数据与端到端脚本说明 |

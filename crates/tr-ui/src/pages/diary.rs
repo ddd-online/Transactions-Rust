@@ -760,7 +760,7 @@ fn DiaryTree(
                                         </span>
                                     </button>
                                     <Show when=move || !collapsed_years.get().contains(&year)>
-                                        <div class="diary-tree__months">
+                                        <div>
                                             {month_entries
                                                 .clone()
                                                 .into_iter()
@@ -772,7 +772,7 @@ fn DiaryTree(
                                                     let count = days.len();
                                                     let key_for_click = key.clone();
                                                     view! {
-                                                        <div class="diary-tree__month">
+                                                        <div>
                                                             <button
                                                                 type="button"
                                                                 id=month_node_id(year, month)
@@ -808,7 +808,7 @@ fn DiaryTree(
                                                             <Show when=move || {
                                                                 expanded_months.get().contains(&key)
                                                             }>
-                                                                <div class="diary-tree__days">
+                                                                <div>
                                                                     {days
                                                                         .clone()
                                                                         .into_iter()
