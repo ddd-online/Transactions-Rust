@@ -31,7 +31,8 @@ transactions.log
 *.swp
 Thumbs.db
 
-# 本机安装的 AI 编码工具 skill：DSH 扫 `/.agents/skills/`（rank 200 的 `project-agents` 根；项目本地覆盖根是
-# `/.dsh/skills/`，rank 100）；含 vendored JS/数据，与「界面无 Node、不 vendor JS 库」的约定不符，故不入库；
-# 换机重装即可。
-/.agents/
+# 本机安装的 AI 编码工具 skill：**项目内的唯一根是 `/.dsh/skills/`**（DSH 的 rank 100 项目本地覆盖根；
+# 原先那份 rank 200 的 `/.agents/skills/` 已并进来，别再建第二处）。含 vendored JS/数据（impeccable 一份
+# 就 20 MB，含它自己的引擎 exe），与「界面无 Node、不 vendor JS 库」的约定不符，故不入库；换机重装即可
+# （`npx impeccable install --providers=dsh --project`，本机拉 GitHub 那份 skill 包要走代理）。
+/.dsh/

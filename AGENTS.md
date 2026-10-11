@@ -78,13 +78,13 @@ pwsh -File fixtures/test.ps1 -All                  # 全量档（发布前）：
 | `ui-crud` / `ui-drag` | 分类/标签/图表/事件/模板的新增与删除；真实鼠标拖拽排序（分类与图表的 `sort_order` 落库，含图表跨预设组） |
 | `ui-transactions` / `ui-sync-ledger` | 记一笔/编辑/排序/筛选/模板；同步到其他账本（复制而非移动 + 气泡收起） |
 | `ui-stock` | 建仓 → 编辑 → 减仓 → 清仓 → 费用设置 → 统计 → 回滚 → 重置的完整生命周期（含真实行情） |
-| `ui-todo` | 待办：建卡片 → 加事项（紧急/重要）→ 记进度 → 四象限图 → 完成进历史（带主题名 + 进度弹窗）→ 退回 → 删卡片（级联清三张表） |
+| `ui-todo` | 待办：建卡片 → 加事项（紧急/重要）→ 记进度 → 四象限图（最外档位那颗点**整颗**在画布里，判据是位图 —— UIA 里 SVG 的 `<circle>` 不进树）→ 完成进历史（带主题名 + 进度弹窗）→ 退回 → 删卡片（级联清三张表） |
 | `ui-key-event` / `ui-link-event` | 事件任选日期建/upsert/删除；交易关联到某天（含懒创建空事件与解除） |
 | `ui-diary-edit` / `ui-diary-ledger` / `ui-diary-io` | 防抖自动保存/心情/预览；账本隔离；只认 `.txt` 的导入导出（原生选目录框；判据唯一：`tr-service/src/diary.rs` 的 `parse_diary_file_name`，扫描与 `import_file` 两侧共用） |
 | `ui-upload` | 图片按原字节落盘 + 缩略图 + `trasset://` 资产协议 |
 | `ui-proxy` / `ui-about` / `ui-features` / `ui-update-restore` | 假代理日志当判据（行情 `qt.gtimg.cn`、更新 `api.github.com`）；版本自报；功能开关落盘并重启生效；下载状态跨页面恢复（依赖真实 GitHub API，离线用 `-SkipNetwork`） |
 | `migrate-workspace` | 降级 → 升级 → 备份 → 幂等（**迁移引擎这条最高风险路径就靠它**） |
-| `test-draw` | 界面侧**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 + 页面取数的决策（去重 / generation / 复核判定 / 失效）+ **公历日历**（闰年与月长 / 日序号往返 / 周几 / 区间对齐 / 整周判定）+ 分页页码窗口 + 四象限（判定 / 稳定排序 / 抖动偏移）+ 实心点只有 `<circle>` 被改写 + **展示词汇**（金额符号两个口径 / 紧凑金额阈值 / 百分比与 `NaN` 兜底 / 按字符截断）+ **输入文本**（金额文本的合法与非法集合、费率文本的 `NaN`·`inf`）+ **拖拽重排**（只报序号变化的行）+ **成交流水行**（按委托分组的加权均价与求和） |
+| `test-draw` | 界面侧**纯算法**真跑（`cargo test -p tr-draw`）：Y 轴范围 / 填充基线 / 0 轴分色 / 几何拼装 / 裁剪几何 + 页面取数的决策（去重 / generation / 复核判定 / 失效）+ **公历日历**（闰年与月长 / 日序号往返 / 周几 / 区间对齐 / 整周判定）+ 分页页码窗口 + 四象限（判定 / 稳定排序 / **落点与留白**（任何档位、任何 id 的点都不被画布裁掉）/ 抖动偏移）+ 实心点只有 `<circle>` 被改写 + **展示词汇**（金额符号两个口径 / 紧凑金额阈值 / 百分比与 `NaN` 兜底 / 按字符截断）+ **输入文本**（金额文本的合法与非法集合、费率文本的 `NaN`·`inf`）+ **拖拽重排**（只报序号变化的行）+ **成交流水行**（按委托分组的加权均价与求和） |
 | `test-src-tauri` | **应用外壳**的纯逻辑真跑（`cargo test -p transactions`）：配置键名与往返、命令面请求形状、**命令注册表 == `tr_domain::commands` 清单**（`src-tauri/src/registry.rs` 的 `catalog_matches_registration`）、日志轮转、资产路径穿越校验、更新器解析；更新流程的状态机本身在 `tr-domain::update`（由 `test-domain` 跑） |
 
 护栏总原则：一律真的启动应用、用 UI Automation 或真实鼠标键盘驱动；**断言落在库/磁盘上**，不落在"点到了没有"。
@@ -583,12 +583,14 @@ PR）只会生成一行 `Full Changelog` 链接 —— 想给正文就自己填�
 
 本项目用 DeepSeek Harness（DSH）开发。
 
-**skill**：都在 `.agents/skills/`。DSH 的 `dsh-skill-filesystem` 按 rank 扫本地根：`<项目根>/.dsh/skills` 是
-rank 100、`<项目根>/.agents/skills` 是 rank 200（本项目用后者）。每个 skill 是 `<name>/SKILL.md`（或平铺的
+**skill**：都在 `.dsh/skills/`（DSH 的 `dsh-skill-filesystem` 扫的项目本地覆盖根，rank 100）。原先还并存一份
+rank 200 的 `<项目根>/.agents/skills/`，已整个并进这里 —— **别再建第二处**，两处同名 skill 会互相遮。每个 skill
+是 `<name>/SKILL.md`（或平铺的
 `<name>.md`），frontmatter 必须有 kebab-case 的 `name` 与 `description`——**不合法的 skill 会被静默丢弃**，只在
 启动日志里留一句警告，目录里看不出"少了谁"。带 `disable-model-invocation: true` 的 skill 不进模型目录、只作为
 用户主动调用的命令（`ask-matt` / `handoff` / `triage` / `to-spec` / `wayfinder` 等都是这一类），所以"目录里比
-磁盘上少几个"是设计如此，不是没加载。整个 `.agents/` 属本机安装、**不入库**（见 `.gitignore`），换机重装即可。
+磁盘上少几个"是设计如此，不是没加载。整个 `.dsh/` 属本机安装（含 vendored JS 与引擎 exe，impeccable 一份就
+20 MB）、**不入库**（见 `.gitignore`），换机重装即可。
 
 **没有设计检测工具链**：原来的 Codex hook（`.codex/hooks.json`，`PostToolUse` 扫当次改动、`Stop` 做深扫）与它
 调的 `impeccable` skill 都已删除，`.impeccable/`（配置 / 缓存 / 表面简报 / 验证截图）也一并删掉——现在既没有
