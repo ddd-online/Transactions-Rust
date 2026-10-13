@@ -254,6 +254,86 @@ function Find-RowButton { param($Window, [string]$RowText, [string]$ButtonName)
     return $null
 }
 
+# ---------------------------------------------------------------- 账本切换
+
+# 切到指定账本：点开侧栏顶部的账本选择器，在浮层里选 `-Target`。返回 $true/$false（不在这里断言）。
+# `-Current` 是**此刻**显示的那个账本名（调用方按库里的账本名认出来），`-Target` 是要切过去的。
+#
+# 判据（三条都是 UIA 树里实测出来的，不是猜的）：
+#   * **触发器是 `Button`，且要取最靠左的那个**。它的可访问名是两副形态（`shell.rs` 的
+#     `aria-label`）：展开态**就是账本名**，收起态是 `切换账本，当前 X` —— 而正文里也可能出现
+#     账本名（设置页的功能开关说明行就写着它）。只按名字找会命中那段文字，点上去什么都没发生；
+#     限定成按钮之后那段文字（`Text`）天然出局，同名候选取最靠左的（侧栏在最左边）。
+#   * **浮层里的选项是 `MenuItem`（`role="menuitem"`），不是 `Button`** —— 可访问名 = 账本名。
+#     按 `Button` 过滤会一条都找不到（实测）。
+#   * **切成功的判据是"触发器上的名字变成 `-Target`"**，不是"点到了没有"。
+function Switch-TrLedger {
+    param($Window, [string]$Current, [string]$Target, [int]$TimeoutSec = 15)
+
+    # 触发器：名字 == 当前账本名（展开态）或含 `切换账本`（收起态），且是可见按钮。
+    # 同名候选（浮层里的选项也是按钮）取**最靠左**的 —— 侧栏在最左边。
+    $switcher = $null
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $candidates = @()
+        foreach ($element in @(Get-Elements $Window)) {
+            if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+            if ($element.Current.IsOffscreen) { continue }
+            if (-not (Test-Rect $element.Current.BoundingRectangle)) { continue }
+            $name = $element.Current.Name
+            if (-not $name) { continue }
+            if ($name -ne $Current -and -not $name.Contains('切换账本')) { continue }
+            $candidates += $element
+        }
+        if ($candidates.Count -gt 0) {
+            $switcher = $candidates | Sort-Object { $_.Current.BoundingRectangle.X } | Select-Object -First 1
+        }
+        if (-not $switcher) { Start-Sleep -Milliseconds 400 }
+    } while (-not $switcher -and (Get-Date) -lt $deadline)
+    if (-not $switcher) {
+        Write-Host "    找不到账本选择器（此刻应显示「$Current」）" -ForegroundColor DarkYellow
+        return $false
+    }
+    Invoke-Element $switcher | Out-Null
+    Start-Sleep -Seconds 1
+
+    $option = $null
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        foreach ($element in @(Get-Elements $Window)) {
+            $kind = $element.Current.ControlType
+            if ($kind -ne [System.Windows.Automation.ControlType]::MenuItem -and
+                $kind -ne [System.Windows.Automation.ControlType]::Button) { continue }
+            $name = $element.Current.Name
+            if (-not $name -or -not $name.Contains($Target)) { continue }
+            if ($element.Current.IsOffscreen) { continue }
+            if (-not (Test-Rect $element.Current.BoundingRectangle)) { continue }
+            $option = $element
+            break
+        }
+        if (-not $option) { Start-Sleep -Milliseconds 400 }
+    } while (-not $option -and (Get-Date) -lt $deadline)
+    if (-not $option) {
+        Write-Host "    浮层里没有账本「$Target」" -ForegroundColor DarkYellow
+        return $false
+    }
+    Invoke-Element $option | Out-Null
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        foreach ($element in @(Get-Elements $Window)) {
+            if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+            $name = $element.Current.Name
+            if ($name -and ($name -eq $Target -or ($name.Contains('切换账本') -and $name.Contains($Target)))) {
+                return $true
+            }
+        }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $deadline)
+    Write-Host "    点了「$Target」，但账本选择器上还是别的名字" -ForegroundColor DarkYellow
+    return $false
+}
+
 # ---------------------------------------------------------------- 日期选择器
 
 function Find-DateTrigger { param($Window)

@@ -66,25 +66,13 @@ function Read-DiaryRows {
         Where-Object { $_.date -eq $today }
 }
 
-# 切到指定账本：账本选择器的可访问名是**当前**账本名，所以先按 `Current` 找到它、点开，
-# 再在浮层里选 `Target`。
+# 切到指定账本：招数在公共底座（`lib/TrUia.ps1` 的 `Switch-TrLedger`），这里只补断言与停留时间。
+# `$Current` 只用于断言文案（切成功与否由公共招数按"选择器上的名字变了"判定）。
 function Switch-Ledger { param($Window, [string]$Current, [string]$Target)
-    $switcher = Wait-Like -Root $Window -Pattern $Current -TimeoutSec 10
-    Assert-True ([bool]$switcher) "找到账本选择器（当前显示「$Current」）"
-    if (-not $switcher) { return $false }
-    Invoke-Element $switcher | Out-Null
-    Start-Sleep -Seconds 1
-    $option = $null
-    $deadline = (Get-Date).AddSeconds(10)
-    do {
-        $option = Find-Like -Root $Window -Pattern $Target
-        if (-not $option) { Start-Sleep -Milliseconds 400 }
-    } while (-not $option -and (Get-Date) -lt $deadline)
-    Assert-True ([bool]$option) "浮层里能选到「$Target」"
-    if (-not $option) { return $false }
-    Invoke-Element $option | Out-Null
-    Start-Sleep -Seconds 4
-    return $true
+    $ok = Switch-TrLedger -Window $Window -Current $Current -Target $Target
+    Assert-True $ok "账本选择器：从「$Current」切到「$Target」"
+    Start-Sleep -Seconds 3
+    return $ok
 }
 
 $process = $null

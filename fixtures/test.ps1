@@ -187,6 +187,9 @@ $PathMap = @(
     # （`tr-service::stock_statistics`），所以它一变要连 `stock` 组一起跑（`ui-stock.ps1` 会点那两个
     # 下拉）。必须排在通用的 `tr-domain/` 之前（顺序敏感，第一条命中为准）。
     @{ Re='^crates/tr-domain/src/statistics\.rs$';        Groups=@('stock', 'domain') }
+    # 线上类型（请求 / 响应形状）是界面与命令面共用的契约：改它要跑两边的形状守卫
+    # （`test-domain` 的序列化断言 + `test-ipc` / `test-src-tauri` 的请求解析断言）。
+    @{ Re='^crates/tr-domain/src/wire\.rs$';              Groups=@('domain', 'ipc') }
     @{ Re='^crates/tr-domain/';                           Groups=@('domain') }
     @{ Re='^crates/tr-store/src/(migrations|schema|workspace)\.rs$'; Groups=@('store', 'schema') }
     # 图表 DAO 的列表读序（`ORDER BY sort_order`）就是分析页看到的顺序：改它要跑 analysis。
@@ -229,6 +232,10 @@ $PathMap = @(
     @{ Re='^crates/tr-ui/src/pages/templates\.rs$';       Groups=@('templates') }
     @{ Re='^crates/tr-ui/src/pages/(transactions|accounting)\.rs$'; Groups=@('accounting') }
     @{ Re='^crates/tr-ui/src/components/ui/';             Groups=@('ui-kit') }
+    # 功能开关：界面侧的权威状态（默认 + 按账本 → 生效那份的派生）在 `store.rs`，
+    # 侧栏过滤与账本切换在 `shell.rs` —— 这两处的改动只有 `ui-features` 那条端到端能验
+    # （单测测不到侧栏），所以它们连带 `settings` 组。必须排在下面通用的 ui-kit 规则之前。
+    @{ Re='^crates/tr-ui/src/(shell|store)\.rs$';         Groups=@('ui-kit', 'settings') }
     @{ Re='^crates/tr-ui/src/(shell|store|icons|notify|error_handler|format|time)\.rs$'; Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/static/css/';                    Groups=@('ui-kit') }
     @{ Re='^crates/tr-ui/(index\.html|Trunk\.toml)$';     Groups=@('ui-kit') }
@@ -236,6 +243,9 @@ $PathMap = @(
     # 命令注册表（`generate_handler![]` 的唯一入口 + "注册表 == 清单"守卫）：
     # 改了它要跑命令面的守卫，也要跑 shell / update 那两组（那里也跑 test-src-tauri）。
     @{ Re='^src-tauri/src/registry\.rs$';                 Groups=@('ipc', 'shell', 'update') }
+    # 配置文件（`ledgerFeatures` 落盘的地方）：改它要跑外壳单测（壳的内存与磁盘形状）
+    # 与设置页那三条界面护栏 —— 从前只映射到 shell，改它会漏跑 `ui-features`。
+    @{ Re='^src-tauri/src/config\.rs$';                   Groups=@('shell', 'update', 'settings') }
     # 外壳：`test-src-tauri` 在 shell 分组里（含更新器的解析与去重键）
     @{ Re='^src-tauri/';                                  Groups=@('shell', 'update') }
     @{ Re='^(Cargo\.toml|Cargo\.lock|\.cargo/config\.toml)$'; Groups=@('core') }
