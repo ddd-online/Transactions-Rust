@@ -10,8 +10,9 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tr_domain::proxy::ProxySetting;
-// 功能开关（`features`）与 IPC 的 `config_get` / `config_set_feature` 共用同一份定义。
-use tr_domain::wire::FeatureFlags;
+// 功能开关（`features` = 默认，`ledgerFeatures` = 按账本）与 IPC 的
+// `config_get` / `config_set_feature` 共用同一份定义。
+use tr_domain::wire::{FeatureFlags, LedgerFeatures};
 
 /// 生产配置文件名（用户数据契约，不可更改）。
 pub const CONFIG_FILE: &str = ".transactions.json";
@@ -50,8 +51,18 @@ pub struct AppConfig {
     #[serde(rename = "proxy")]
     pub proxy: ProxySetting,
     /// 功能开关：哪些顶级功能在侧边栏出现（缺省 = 全开）。
+    ///
+    /// 这是**默认**那一份：没在 [`AppConfig::ledger_features`] 里单独配过的账本用它，
+    /// 于是老配置（只有这个键）升级后行为逐字不变。
     #[serde(rename = "features")]
     pub features: FeatureFlags,
+    /// 按账本的功能开关（键 = 账本 id）；**表里没有的账本 = 用 `features` 那份默认**。
+    ///
+    /// 放配置而不是数据库：这是"侧边栏显示哪几项"的界面偏好，与 `keyEventLinkedOpen` /
+    /// `sidebarCollapsed` 同类，加一张表要连迁移 / 级联 / 备份一起改。代价是它不跟工作空间
+    /// 数据库走（换机拷库要重配），且删掉的账本会留一条几十字节的旧条目（无害，刻意不清理）。
+    #[serde(rename = "ledgerFeatures", default)]
+    pub ledger_features: LedgerFeatures,
     /// 事件页右栏（关联交易）是展开还是收起。
     ///
     /// **缺省 = 展开**：老配置里没有这个键时行为与升级前一致；界面在开合时写回，
@@ -82,6 +93,8 @@ impl Default for AppConfig {
             appearance: APPEARANCE_SYSTEM.to_string(),
             proxy: ProxySetting::default(),
             features: FeatureFlags::defaults(),
+            // 按账本的开关缺省 = 空表（每个账本都用默认那份）
+            ledger_features: LedgerFeatures::new(),
             // 事件页右栏默认展开（老配置没有这个键也是它）
             key_event_linked_open: true,
             // 侧边栏默认展开（老配置没有这个键也是它）
@@ -247,6 +260,8 @@ mod tests {
         );
         // 事件页右栏缺省 = 展开（老配置没有这个键时与升级前一致）
         assert!(config.key_event_linked_open);
+        // 按账本的开关缺省 = 空表（老配置没有这个键时，每个账本都用上面的默认）
+        assert!(config.ledger_features.is_empty());
     }
 
     /// 事件页右栏偏好：缺省展开、写 false 能落盘、读回来还是 false。
@@ -299,6 +314,44 @@ mod tests {
         assert_eq!(reloaded["features"]["diary"], false);
 
         let back = AppConfig::load(&path);
+        assert_eq!(back.features, config.features);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 按账本的开关：缺键 = 空表（每个账本都用 `features` 那份默认），
+    /// 写进表里的只碰那一个账本，默认那份原样不动。
+    #[test]
+    fn ledger_features_are_per_ledger_and_missing_key_means_default() {
+        let path = temp_path("ledger-features");
+        // 老配置（没有 ledgerFeatures 键）→ 空表
+        std::fs::write(&path, r#"{"features":{"diary":false}}"#).unwrap();
+        let mut config = AppConfig::load(&path);
+        assert!(config.ledger_features.is_empty());
+        assert!(!config.features.diary);
+
+        // 只有账本 A 配过：B 不在表里（它用默认那份）
+        config.ledger_features.insert(
+            "ledger-a".to_string(),
+            FeatureFlags {
+                stock: false,
+                ..FeatureFlags::defaults()
+            },
+        );
+        config.save(&path).unwrap();
+
+        let reloaded: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded["ledgerFeatures"]["ledger-a"]["stock"], false);
+        assert_eq!(reloaded["ledgerFeatures"]["ledger-a"]["diary"], true);
+        assert_eq!(reloaded["features"]["diary"], false, "默认那份不该被改写");
+        assert!(!reloaded["ledgerFeatures"]
+            .as_object()
+            .unwrap()
+            .contains_key("ledger-b"));
+
+        let back = AppConfig::load(&path);
+        assert_eq!(back.ledger_features, config.ledger_features);
         assert_eq!(back.features, config.features);
 
         std::fs::remove_file(&path).ok();

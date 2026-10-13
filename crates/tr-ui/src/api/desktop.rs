@@ -11,8 +11,10 @@
 //! * `app_info.field`：`name` / `version` / `isDev`
 //! * `config_set_appearance.appearance`：`light` / `dark` / `system`
 //! * `config_set_close_behavior.behavior`：`quit` / `tray` / `""`（空串 = 每次询问）
-//! * `config_set_feature.feature`：`accounting` / `stock` / `keyEvent` / `diary`
-//!   （与侧栏读的 `feature_key` 字符串对齐；写错只会得到一句"无效的功能开关"）
+//! * `config_set_feature.feature`：`accounting` / `stock` / `keyEvent` / `diary` / `todo`
+//!   （与侧栏读的 `feature_key` 字符串对齐；写错只会得到一句"无效的功能开关"）。
+//!   它还有 `ledger_id`（**作用域**）：省略 / 空串 = 改默认那份（`features`），
+//!   否则改的是那个账本自己的那份（`ledgerFeatures`）
 //! * `devtools_toggle` 会广播 `devtools:state-changed`（名字在 `tr_domain::events`）
 //!
 //! `dialog_open` / `file_save_image` 的返回形状是固定契约
@@ -22,9 +24,10 @@ use tr_domain::commands;
 use tr_domain::proxy::ProxySetting;
 pub use tr_domain::wire::{
     AppInfoRequest, AssetUrlRequest, ConfigSnapshot, DevToolsToggleRequest, DialogOpenRequest,
-    DialogOpenResponse, FeatureFlags, FileSaveRequest, FileSaveResponse, ProxyDetectResponse,
-    SetAppearanceRequest, SetCloseBehaviorRequest, SetFeatureRequest, SetKeyEventLinkedOpenRequest,
-    SetSidebarCollapsedRequest, WindowControlRequest, WorkspaceDirRequest, WorkspaceIconRequest,
+    DialogOpenResponse, FeatureFlags, FileSaveRequest, FileSaveResponse, LedgerFeatures,
+    ProxyDetectResponse, SetAppearanceRequest, SetCloseBehaviorRequest, SetFeatureRequest,
+    SetKeyEventLinkedOpenRequest, SetSidebarCollapsedRequest, WindowControlRequest,
+    WorkspaceDirRequest, WorkspaceIconRequest,
 };
 
 use crate::ipc::{self, IpcError};
@@ -118,14 +121,25 @@ pub async fn config_set_proxy(setting: ProxySetting) -> Result<ProxySetting, Ipc
 
 /// 设置某个顶级功能是否启用（决定它是否出现在侧边栏）。
 ///
-/// `feature` 只认 `accounting` / `stock` / `keyEvent` / `diary`（与
-/// [`crate::shell::Page::feature_key`] 同名字）；返回落盘后的**全部**开关，界面用它回显。
-pub async fn config_set_feature(feature: &str, enabled: bool) -> Result<FeatureFlags, IpcError> {
+/// `feature` 只认 `accounting` / `stock` / `keyEvent` / `diary` / `todo`（与
+/// [`crate::shell::Page::feature_key`] 同名字）；`ledger_id` 是**作用域** ——
+/// 空串表示"改默认那份"（还没选账本时就是它），否则改那个账本自己的那份。
+/// 返回该作用域**落盘后**的全部开关，界面用它回显（并按当前账本重算生效的一份）。
+pub async fn config_set_feature(
+    feature: &str,
+    enabled: bool,
+    ledger_id: &str,
+) -> Result<FeatureFlags, IpcError> {
     ipc::call(
         commands::CONFIG_SET_FEATURE,
         SetFeatureRequest {
             feature: feature.to_string(),
             enabled,
+            ledger_id: if ledger_id.is_empty() {
+                None
+            } else {
+                Some(ledger_id.to_string())
+            },
         },
     )
     .await

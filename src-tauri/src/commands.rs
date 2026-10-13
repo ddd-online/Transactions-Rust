@@ -30,7 +30,7 @@ use tr_ipc::{ApiError, ApiResult, AppState};
 
 use crate::assets;
 use crate::config::{
-    home_dir, ConfigStore, APPEARANCE_SYSTEM, CLOSE_BEHAVIOR_QUIT, CLOSE_BEHAVIOR_TRAY,
+    home_dir, AppConfig, ConfigStore, APPEARANCE_SYSTEM, CLOSE_BEHAVIOR_QUIT, CLOSE_BEHAVIOR_TRAY,
 };
 use crate::logging::LogSinks;
 use crate::shell;
@@ -169,6 +169,7 @@ pub fn config_get(state: State<'_, DesktopState>) -> ApiResult<ConfigSnapshot> {
         is_dev: state.is_dev,
         proxy: config.proxy,
         features: config.features,
+        ledger_features: config.ledger_features,
         key_event_linked_open: config.key_event_linked_open,
         sidebar_collapsed: config.sidebar_collapsed,
     })
@@ -216,10 +217,40 @@ pub fn config_set_appearance(
 
 // ------------------------------------------------------------ 功能开关
 
-/// 功能开关：某个顶级功能是否在侧边栏出现。
+/// 按账本写一个功能开关：`ledger_id` 为空 = 改**默认**那份（`features` 键）。
+///
+/// 账本第一次被改时，先按当时的默认整份复制进表（`or_insert`）再改那一项 ——
+/// 于是"这个账本只差一项"的结果可预期，而**没配过的账本仍然走默认**（不在表里）。
+/// 未知名一律拒绝：「认不认这个名字」的判据只有 [`FeatureFlags::get`] 一处，
+/// 静默忽略会表现成"开关点了没反应"。
+///
+/// 抽成纯函数是为了能直接单测（命令本体只做 `State` 包装与落盘）。
+fn set_feature_in(
+    config: &mut AppConfig,
+    ledger_id: &str,
+    feature: &str,
+    enabled: bool,
+) -> Result<FeatureFlags, ApiError> {
+    if config.features.get(feature).is_none() {
+        return Err(ApiError::from(AppError::bad_request("无效的功能开关")));
+    }
+    if ledger_id.is_empty() {
+        config.features.set(feature, enabled);
+        return Ok(config.features.clone());
+    }
+    let default = config.features.clone();
+    let entry = config
+        .ledger_features
+        .entry(ledger_id.to_string())
+        .or_insert(default);
+    entry.set(feature, enabled);
+    Ok(entry.clone())
+}
+
+/// 功能开关：某个顶级功能是否在侧边栏出现 —— **按账本**（`req.ledger_id` 省略 / 空串 = 改默认那份）。
 ///
 /// 只写配置，**不改界面**：侧边栏读的是界面侧的共享状态（`store::AppStores::enabled_features`），
-/// 由界面在调用成功后自己更新，所以这里返回落盘后的完整开关集合，界面拿它回显。
+/// 由界面在调用成功后自己更新，所以这里返回**该作用域**落盘后的完整开关集合，界面拿它回显。
 /// 「设置」不在可关闭之列（`FeatureFlags` 里根本没有它），关掉它就没有界面能再打开它了。
 #[tauri::command]
 pub fn config_set_feature(
@@ -228,22 +259,24 @@ pub fn config_set_feature(
 ) -> ApiResult<FeatureFlags> {
     let snapshot = state.config.snapshot();
     // `get` 先拦一次未知名：`set` 对未知名返回 false 也能挡住，但先查一次能让
-    // "这个功能名到底认不认"只有一个判据（`FeatureFlags::get`）。
+    // "这个功能名到底认不认"只有一个判据（`FeatureFlags::get`），而且坏名字不会白写一次盘。
     if snapshot.features.get(&req.feature).is_none() {
         return Err(ApiError::from(AppError::bad_request("无效的功能开关")));
     }
-    let features = state.config.update(|config| {
-        config.features.set(&req.feature, req.enabled);
-        config.features.clone()
-    });
+    let ledger_id = req.ledger_id.clone().unwrap_or_default();
+    let features = state
+        .config
+        .update(|config| set_feature_in(config, &ledger_id, &req.feature, req.enabled))?;
     tracing::info!(
-        "IPC config_set_feature: {}={} → accounting={} stock={} keyEvent={} diary={}",
+        "IPC config_set_feature: ledger={:?} {}={} → accounting={} stock={} keyEvent={} diary={} todo={}",
+        ledger_id,
         req.feature,
         req.enabled,
         features.accounting,
         features.stock,
         features.key_event,
-        features.diary
+        features.diary,
+        features.todo
     );
     Ok(features)
 }
@@ -712,6 +745,14 @@ mod tests {
     /// 改名的后果是界面静默读不到（`#[serde(default)]` 兜底成默认值），必须在这里锁住。
     #[test]
     fn config_snapshot_serializes_the_documented_keys() {
+        let mut ledger_features = tr_domain::wire::LedgerFeatures::new();
+        ledger_features.insert(
+            "l1".to_string(),
+            FeatureFlags {
+                diary: false,
+                ..FeatureFlags::defaults()
+            },
+        );
         let snapshot = ConfigSnapshot {
             workspace_dir: r"D:\ws".to_string(),
             close_behavior: "quit".to_string(),
@@ -720,6 +761,7 @@ mod tests {
             is_dev: false,
             proxy: ProxySetting::manual("http://127.0.0.1:7890"),
             features: FeatureFlags::defaults(),
+            ledger_features,
             key_event_linked_open: false,
             sidebar_collapsed: true,
         };
@@ -740,6 +782,7 @@ mod tests {
                 "features",
                 "isDev",
                 "keyEventLinkedOpen",
+                "ledgerFeatures",
                 "proxy",
                 "sidebarCollapsed",
                 "workspaceDir"
@@ -752,10 +795,47 @@ mod tests {
         assert_eq!(value["features"]["stock"], true);
         assert_eq!(value["features"]["keyEvent"], true);
         assert_eq!(value["features"]["diary"], true);
+        // 按账本那份同理：键是账本 id，值是整份开关（界面按这个键读，改名会静默回落成空表）
+        assert_eq!(value["ledgerFeatures"]["l1"]["diary"], false);
+        assert_eq!(value["ledgerFeatures"]["l1"]["stock"], true);
         // 事件页右栏偏好同样是契约（界面共用 `tr_domain::wire::ConfigSnapshot`）
         assert_eq!(value["keyEventLinkedOpen"], false);
         // 侧边栏偏好同理
         assert_eq!(value["sidebarCollapsed"], true);
+    }
+
+    /// 按账本写开关：空 id 只碰默认那份；有 id 时**第一次**先复制默认再改那一项；
+    /// 两个账本各记各的（写 A 不会动 B，也不会动默认）。
+    #[test]
+    fn set_feature_in_scopes_the_write_to_one_ledger() {
+        let mut config = AppConfig::default();
+        // 先关掉默认那份里的日记（模拟老用户的配置）
+        config.features.diary = false;
+
+        // ① 空 id = 改默认那份
+        let updated = set_feature_in(&mut config, "", "stock", false).unwrap();
+        assert!(!updated.stock);
+        assert!(!config.features.stock);
+        assert!(config.ledger_features.is_empty(), "不该顺手建账本条目");
+
+        // ② 账本 A 第一次被改：其余四项 == 当时的默认（日记是关的），不是硬编码 true
+        let a = set_feature_in(&mut config, "ledger-a", "diary", true).unwrap();
+        assert!(a.diary);
+        assert!(a.todo && a.accounting && a.key_event);
+        assert!(!a.stock, "复制的是默认那份（stock 已关）");
+        assert_eq!(config.ledger_features.len(), 1);
+
+        // ③ 账本 B 不受影响，也不在表里
+        assert!(!config.ledger_features.contains_key("ledger-b"));
+        // ④ 默认那份被 A 的改动碰上（A 改 diary 只动 A）
+        assert!(!config.features.diary, "默认那份不该被账本的改动改写");
+
+        // ⑤ 未知名：拒绝，且什么都没写
+        let before = config.clone();
+        let error = set_feature_in(&mut config, "ledger-a", "nope", false).unwrap_err();
+        assert_eq!(error.msg, "无效的功能开关");
+        assert_eq!(config.ledger_features, before.ledger_features);
+        assert_eq!(config.features, before.features);
     }
 
     #[test]

@@ -17,6 +17,8 @@
 //! **不要"顺手统一"**。结构体上的 `#[serde(default)]` 同样原样保留：它决定"少传一个字段"
 //! 是报错还是取零值（请求体侧的原样保留尤其重要，改了就换了错误文案与语义）。
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::proxy::ProxySetting;
@@ -608,12 +610,18 @@ pub struct SetAppearanceRequest {
 /// 功能开关的写入请求。
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SetFeatureRequest {
-    /// 功能名：`accounting` / `stock` / `keyEvent` / `diary`。
+    /// 功能名：`accounting` / `stock` / `keyEvent` / `diary` / `todo`。
     ///
     /// 是**硬契约**（界面 `FeatureFlags` 与 `shell::Page::feature_key` 两边都按它写），
     /// 未知名一律拒绝而不是静默忽略 —— 静默忽略会表现成"开关点了没反应"。
     pub feature: String,
     pub enabled: bool,
+    /// 这次改动落在哪个账本上；**省略 / 空串 = 改默认那一份**（`features` 键）。
+    ///
+    /// 换成按账本配置之后这个字段就是"作用域"：界面在**发起时**把当时的账本 id 抓下来传进来，
+    /// 于是请求在飞的时候用户切了账本，结果也只会落到出发时那个账本上（见 `ledgerFeatures`）。
+    #[serde(default)]
+    pub ledger_id: Option<String>,
 }
 
 /// 事件页右栏（关联交易）是否展开。
@@ -643,6 +651,10 @@ pub struct WorkspaceIconRequest {
 ///
 /// **默认全开**：老配置里没有 `features` 这个键、或外壳漏发该字段时，
 /// 五个功能照常显示（缺少个别字段同理）。
+///
+/// 它同时是**默认那一份**：单个账本可以有自己的开关（见 [`LedgerFeatures`] 与
+/// [`effective_features`]），没单独配过的账本就用这里这份 —— 于是升级前关掉过功能的用户，
+/// 在所有账本里看到的仍是关掉。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FeatureFlags {
@@ -703,6 +715,29 @@ impl FeatureFlags {
     }
 }
 
+/// 按账本保存的功能开关（配置里的 `ledgerFeatures` 键）：键 = 账本 id，值 = 那个账本自己的一份。
+///
+/// **没配过的账本不在表里** —— 它用 [`FeatureFlags`]（`features` 键，缺省全开）。
+/// 于是老配置（没有这张表）与"从没拨过开关的账本"走的是同一条路，升级不需要动用户数据；
+/// 键是账本 id（uuid），换工作空间、拷贝数据库都不会串台。
+pub type LedgerFeatures = BTreeMap<String, FeatureFlags>;
+
+/// 某个账本生效的开关：单独配过就用那一份，否则用默认。
+///
+/// 这是**唯一的裁决点**：落盘的是"默认 + 按账本的覆盖"，而"现在这一屏该显示哪几项"
+/// 永远由这里算出来（外壳的写入、界面的派生都走它，免得两处各写一遍过滤条件）。
+/// `ledger_id` 为空（还没选账本）→ 直接用默认。
+pub fn effective_features(
+    default: &FeatureFlags,
+    by_ledger: &LedgerFeatures,
+    ledger_id: &str,
+) -> FeatureFlags {
+    if ledger_id.is_empty() {
+        return default.clone();
+    }
+    by_ledger.get(ledger_id).unwrap_or(default).clone()
+}
+
 /// `config_get` 的返回。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -719,8 +754,13 @@ pub struct ConfigSnapshot {
     pub is_dev: bool,
     /// 代理设置（`mode` / `url`）；缺省 = 自动探测。
     pub proxy: ProxySetting,
-    /// 功能开关（缺省 = 全开，见 [`FeatureFlags`]）。
+    /// 功能开关（缺省 = 全开，见 [`FeatureFlags`]）。这是**默认**那一份。
     pub features: FeatureFlags,
+    /// 按账本的功能开关（`ledgerFeatures`）：没单独配过的账本用上面的 `features`。
+    ///
+    /// 缺键 = 空表（老配置、或从没拨过任何开关）= 每个账本都用默认。
+    #[serde(rename = "ledgerFeatures")]
+    pub ledger_features: LedgerFeatures,
     /// 事件页右栏（关联交易）是否展开（**缺省 = 展开**）。
     #[serde(rename = "keyEventLinkedOpen", default = "default_true")]
     pub key_event_linked_open: bool,
@@ -1021,5 +1061,86 @@ mod tests {
         // 侧边栏缺省是**展开**（缺字段时不能静默变成收起）
         assert!(!snapshot.sidebar_collapsed);
         assert_eq!(snapshot.features, FeatureFlags::defaults());
+        // 按账本的开关缺省是**空表**（老配置没有这个键）= 每个账本都用默认
+        assert!(snapshot.ledger_features.is_empty());
+    }
+
+    /// 功能开关的作用域：`ledger_id` 省略 = 改默认那份，带上 = 改那个账本。
+    ///
+    /// 请求形状是契约（界面按它发、外壳按它读）；`ledgerFeatures` 是配置里的键名，
+    /// 改名会让界面静默读不到（`#[serde(default)]` 兜底成空表 = 每个账本都全开）。
+    #[test]
+    fn feature_scope_is_per_ledger_and_optional_on_the_wire() {
+        assert_eq!(
+            json(&SetFeatureRequest {
+                feature: "diary".into(),
+                enabled: false,
+                ledger_id: None,
+            }),
+            r#"{"feature":"diary","enabled":false,"ledger_id":null}"#
+        );
+        assert_eq!(
+            json(&SetFeatureRequest {
+                feature: "diary".into(),
+                enabled: true,
+                ledger_id: Some("l1".into()),
+            }),
+            r#"{"feature":"diary","enabled":true,"ledger_id":"l1"}"#
+        );
+
+        // 老调用方（不带 ledger_id）仍然能解析，且落到默认那一份
+        let legacy: SetFeatureRequest =
+            serde_json::from_str(r#"{"feature":"stock","enabled":false}"#).unwrap();
+        assert!(legacy.ledger_id.is_none());
+        assert!(!legacy.enabled);
+
+        // 响应侧：按账本的条目半份也认（缺的字段 = 开）
+        let snapshot: ConfigSnapshot = serde_json::from_str(
+            r#"{"features":{"todo":false},"ledgerFeatures":{"l1":{"diary":false}}}"#,
+        )
+        .unwrap();
+        assert!(!snapshot.features.todo);
+        let l1 = snapshot
+            .ledger_features
+            .get("l1")
+            .expect("ledgerFeatures 里应当有 l1");
+        assert!(!l1.diary);
+        assert!(l1.stock && l1.accounting && l1.key_event && l1.todo);
+    }
+
+    /// 生效开关的裁决点：有账本那份用它，没有用默认，空 id 直接默认。
+    #[test]
+    fn effective_features_prefers_the_ledger_then_the_default() {
+        let default = FeatureFlags::defaults();
+        let mut by_ledger = LedgerFeatures::new();
+        by_ledger.insert(
+            "l1".to_string(),
+            FeatureFlags {
+                stock: false,
+                ..FeatureFlags::defaults()
+            },
+        );
+
+        // 配过的账本 → 自己那份（即使默认是全开）
+        assert!(!effective_features(&default, &by_ledger, "l1").stock);
+        // 没配过的账本 → 默认
+        assert!(effective_features(&default, &by_ledger, "l2").stock);
+        // 还没选账本（空 id）→ 默认，且**不去表里找空串那个键**
+        by_ledger.insert(
+            String::new(),
+            FeatureFlags {
+                stock: false,
+                ..FeatureFlags::defaults()
+            },
+        );
+        assert!(effective_features(&default, &by_ledger, "").stock);
+
+        // 默认那份被关掉时，没配过的账本跟着关（老用户升级后看到的仍是关）
+        let default_off = FeatureFlags {
+            diary: false,
+            ..FeatureFlags::defaults()
+        };
+        assert!(!effective_features(&default_off, &by_ledger, "l2").diary);
+        assert!(effective_features(&default_off, &by_ledger, "l1").diary);
     }
 }

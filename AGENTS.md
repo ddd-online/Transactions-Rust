@@ -153,8 +153,9 @@ pwsh -File fixtures/dev-shot.ps1 -Page 股票        # 或 -AllPages
   往往还在读它（表现是"界面空白 / 点了没反应"，控制台只有一句 disposed）。状态建在组件或根
   owner 下，`Effect` 里只读、只做副作用。
 - **配置文件是用户数据**：`~/.transactions.json`（dev 为 `~/.transactions-dev.json`）键名与位置
-  都不变，读写必须保留未知键（`AppConfig.extra`）。`features` 四个开关**缺省全开**
-  （`#[serde(default)]` + 默认 `true`），`keyEventLinkedOpen` 缺省展开；两侧靠 `feature_key`
+  都不变，读写必须保留未知键（`AppConfig.extra`）。功能开关是**两层**：`features` 是**默认**
+  （五个开关缺省全开），`ledgerFeatures` 按账本 id 覆盖它（表里没有的账本用默认，老配置只有
+  前一个键时行为不变）；`keyEventLinkedOpen` 缺省展开；两侧靠 `feature_key`
   字符串对齐 —— 名字写错不会编译报错，只会得到一句"无效的功能开关"。
 - **只有一个窗口，首启动也不例外**：`workspaceDir` 为空时同样是主窗口（界面照常挂载、显示空态），
   再把不可关闭的「选择工作空间」屏叠在上面，背景那层带 `inert`、外壳同时拒绝关闭请求。

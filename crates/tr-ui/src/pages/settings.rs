@@ -675,18 +675,35 @@ impl DiaryImportRow {
     }
 }
 
-/// 功能开关：四个顶级功能各自一行的开关（关掉就不再出现在侧边栏）。
+/// 功能开关：五个顶级功能各自一行的开关（关掉就不再出现在侧边栏）。
 ///
 /// 设计约定（改前先读）：
 /// * **一行一个功能，右侧是开关**，默认全开；改动立即落盘，不需要「保存」按钮
 ///   （与「外观」「关闭行为」同一口径）。
+/// * **按账本**：下面这几项只对**当前账本**生效（`config_set_feature` 的 `ledger_id` 作用域）。
+///   没单独配过的账本用配置里 `features` 那份**默认**（缺省全开），所以老配置升级后行为不变；
+///   切账本时侧栏与这些开关跟着换（`store::AppStores::refresh_enabled_features`）。
 /// * 只有**顶级功能**可关，页内的子功能不在这里（它们是同一件事的几种看法，不是独立功能）。
 /// * **「设置」不在列表里**：它必须永远可达 —— 关掉它就没有任何界面能再把它打开。
-/// * 开关的读写在 `config_set_feature`，权威状态在 `store::AppStores::enabled_features`；
-///   侧边栏读同一个信号，所以拨动开关时侧边栏**当场**就少一项/多一项。
+/// * 开关的读写在 `config_set_feature`，界面侧的权威状态是 `store::AppStores::enabled_features`
+///   （**派生值**：默认 + 当前账本那份）；侧边栏读同一个信号，所以拨动开关时侧边栏**当场**
+///   就少一项/多一项。
 #[component]
 fn FeatureSetting() -> impl IntoView {
     let stores = AppStores::global();
+
+    // 作用域说明（一行小字）。
+    //
+    // ⚠ `"只对当前账本"` 是 `fixtures/ui-features.ps1` 的**定位锚点**（那条端到端按它
+    // 确认面板渲染好了）—— 改这句话要同步改那个脚本，否则护栏会连坐变红。
+    let scope_hint = move || {
+        let name = stores.current_ledger_name();
+        if name.is_empty() {
+            "当前没有账本：以下开关作为默认值，新账本沿用。".to_string()
+        } else {
+            format!("只对当前账本「{name}」生效，切到别的账本可单独配置。")
+        }
+    };
 
     /// 一行：功能名 + 一句话说明。
     struct FeatureRow {
@@ -733,13 +750,16 @@ fn FeatureSetting() -> impl IntoView {
         std::rc::Rc::new(features.iter().map(|row| (row.key, row.checked)).collect());
 
     // 用 `Rc<dyn Fn>` 而不是裸闭包：它要被 move 进**每一个**开关的回调里，
-    // 而裸闭包移进第二个就会报"移出捕获变量"（四个开关共用一个回调）。
+    // 而裸闭包移进第二个就会报"移出捕获变量"（五个开关共用一个回调）。
     let set_feature: std::rc::Rc<dyn Fn(&'static str, bool)> =
         std::rc::Rc::new(move |key: &'static str, enabled: bool| {
             if saving.get_untracked().contains(&key) {
                 return;
             }
             saving.update(|list| list.push(key));
+            // **出发时**把作用域抓下来：请求在飞的时候用户切了账本，结果也只落到这个账本上
+            // （`current_ledger_id` 是全局信号，`await` 之后再读就不是当时那个了）。
+            let scope = stores.current_ledger_id.get_untracked();
             let checked_signals = std::rc::Rc::clone(&checked_signals);
             leptos::task::spawn_local(async move {
                 // 失败面走 `change::submit`（判据见 #34）。**在飞态刻意不走它**：这一处的在飞是
@@ -749,16 +769,16 @@ fn FeatureSetting() -> impl IntoView {
                 let result = crate::change::submit(
                     None,
                     "设置功能开关",
-                    api::desktop::config_set_feature(key, enabled),
+                    api::desktop::config_set_feature(key, enabled, &scope),
                 )
                 .await;
                 match result {
-                    // 后端返回**落盘后的全部开关**，用它覆盖本地状态最权威
+                    // 后端返回**该作用域落盘后**的全部开关，用它覆盖本地状态最权威
                     // （不用自己记"点之前是什么"，也就没有回滚写错值的可能）。
-                    Some(features) => stores.set_enabled_features(features),
+                    Some(features) => stores.record_feature_write(&scope, features),
                     None => {
-                        // 失败时把这一行的开关**拨回磁盘上的真实值**。全局集合没变，所以下面那个
-                        // Effect 不会重跑（它只订阅全局集合），得在这里主动同步一次；
+                        // 失败时把这一行的开关**拨回磁盘上的真实值**。生效集合没变，所以下面那个
+                        // Effect 不会重跑（它只订阅生效集合），得在这里主动同步一次；
                         // 否则开关会停在用户点的那一侧 —— 看着像已经生效了。
                         if let Some((_, checked)) =
                             checked_signals.iter().find(|(name, _)| *name == key)
@@ -777,9 +797,9 @@ fn FeatureSetting() -> impl IntoView {
             });
         });
 
-    // 全局开关集合 → 每行本地信号（单向同步）。两处会改变全局集合：
-    // 写入成功后（后端返回值）、以及别处重新读了配置。
-    // 写入**失败**时全局集合没变，所以这里不会重跑 —— 那种情况由 `set_feature` 的错误分支
+    // **生效开关集合**（= 当前账本那一份）→ 每行本地信号（单向同步）。三种情况会改变它：
+    // 写入成功后（后端返回值）、切换/新建/删除账本（`store` 重算）、别处重新读了配置。
+    // 写入**失败**时生效集合没变，所以这里不会重跑 —— 那种情况由 `set_feature` 的错误分支
     // 主动把那一行拨回去（见上面的注释）。
     //
     // ⚠ 只读信号、只写信号，**不在 Effect 体内建信号**（那会 dispose 掉界面正在读的值，
@@ -796,32 +816,37 @@ fn FeatureSetting() -> impl IntoView {
     }
 
     view! {
-        <div class="st-list">
-            {features
-                .into_iter()
-                .map(|row| {
-                    let key = row.key;
-                    let checked = row.checked;
-                    let busy = Signal::derive(move || saving.get().contains(&key));
-                    // 每个开关的回调各持一份：同一个 `Fn` 闭包被 move 进多个闭包会变成"移出捕获变量"
-                    let set_feature = std::rc::Rc::clone(&set_feature);
-                    view! {
-                        <div class="st-card">
-                            <div class="st-card-info">
-                                <span class="st-card-title">{row.title}</span>
-                                <span class="st-card-desc">{row.description}</span>
+        // 说明行在 `.st-list` **外面**：进了列表，`.st-list > .st-card:first-child`
+        // 那条"第一行紧贴工具栏"的规则就不再命中任何一行（第一项变成了说明文字）。
+        <div class="st-feature-pane">
+            <div class="st-feature-hint">{scope_hint}</div>
+            <div class="st-list">
+                {features
+                    .into_iter()
+                    .map(|row| {
+                        let key = row.key;
+                        let checked = row.checked;
+                        let busy = Signal::derive(move || saving.get().contains(&key));
+                        // 每个开关的回调各持一份：同一个 `Fn` 闭包被 move 进多个闭包会变成"移出捕获变量"
+                        let set_feature = std::rc::Rc::clone(&set_feature);
+                        view! {
+                            <div class="st-card">
+                                <div class="st-card-info">
+                                    <span class="st-card-title">{row.title}</span>
+                                    <span class="st-card-desc">{row.description}</span>
+                                </div>
+                                <div class="st-card-action">
+                                    <Switch
+                                        checked=checked
+                                        disabled=busy
+                                        on_change=move |next: bool| set_feature(key, next)
+                                    />
+                                </div>
                             </div>
-                            <div class="st-card-action">
-                                <Switch
-                                    checked=checked
-                                    disabled=busy
-                                    on_change=move |next: bool| set_feature(key, next)
-                                />
-                            </div>
-                        </div>
-                    }
-                })
-                .collect_view()}
+                        }
+                    })
+                    .collect_view()}
+            </div>
         </div>
     }
 }

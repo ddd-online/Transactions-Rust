@@ -4,7 +4,7 @@
 //! * 账本列表 + 当前账本
 //! * 底部状态栏显示的收支统计
 //! * 外观（浅色 / 深色）
-//! * 功能开关（哪些顶级功能在侧边栏出现）
+//! * 功能开关（哪些顶级功能在侧边栏出现）—— **按当前账本算出来的那一份**
 //!
 //! 实现方式与 [`crate::notify`] 一致：`RwSignal` + 模块级 thread_local 全局槽位。
 //! 原因相同——这些状态会在 `spawn_local` 的异步块与 window 事件回调里被读写，
@@ -15,8 +15,9 @@ use std::collections::BTreeMap;
 
 use leptos::prelude::*;
 use tr_domain::dto::LedgerDto;
+use tr_domain::wire::effective_features;
 
-use crate::api::desktop::FeatureFlags;
+use crate::api::desktop::{FeatureFlags, LedgerFeatures};
 
 /// 账本切换请求里"全部"的语义值（`tr_domain::consts::ALL`）。
 pub use tr_domain::consts::ALL;
@@ -41,10 +42,18 @@ pub struct AppStores {
     pub statistics: RwSignal<BTreeMap<String, i64>>,
     /// 外观：light / dark / system。
     pub appearance: RwSignal<String>,
-    /// 功能开关：哪些顶级功能在侧边栏出现（`config_get` 读入，设置页写入）。
+    /// 功能开关：**当前账本生效**的那一份，侧边栏按它过滤（`shell.rs` 的 `Page::is_enabled`）。
     ///
+    /// **派生值**：由 [`AppStores::default_features`] 与 [`AppStores::ledger_features`]
+    /// 按当前账本算出来（规则只有 `tr_domain::wire::effective_features` 一处）。
     /// **默认全开**：首屏读到配置之前的短暂窗口里，侧边栏按"全开"渲染，与老配置一致。
     pub enabled_features: RwSignal<FeatureFlags>,
+    /// 功能开关的**默认**那一份（配置里的 `features` 键）：没单独配过的账本用它。
+    pub default_features: RwSignal<FeatureFlags>,
+    /// 按账本的功能开关（配置里的 `ledgerFeatures` 键）：键是账本 id，值是该账本那一份。
+    ///
+    /// 表里没有的账本 = 用默认；**键只增不改**（一次写只动一个账本），所以切账本不必再发请求。
+    pub ledger_features: RwSignal<LedgerFeatures>,
     /// 事件页右栏（关联交易列表）是否展开（`config_get` 读入，事件页开合时写回配置）。
     ///
     /// 放在全局状态里而不是页面局部：换页回来时不必再等一次 IPC 往返，
@@ -92,6 +101,8 @@ impl AppStores {
             statistics: RwSignal::new(BTreeMap::new()),
             appearance: RwSignal::new(APPEARANCE_SYSTEM.to_string()),
             enabled_features: RwSignal::new(FeatureFlags::defaults()),
+            default_features: RwSignal::new(FeatureFlags::defaults()),
+            ledger_features: RwSignal::new(LedgerFeatures::new()),
             key_event_linked_open: RwSignal::new(true),
             sidebar_collapsed: RwSignal::new(false),
             sidebar_morphing: RwSignal::new(false),
@@ -147,6 +158,8 @@ impl AppStores {
         };
         self.ledgers.set(ledgers);
         self.current_ledger_id.set(next);
+        // 当前账本可能变了（首次进入 / 上一个被删掉）→ 生效开关跟着换
+        self.refresh_enabled_features();
     }
 
     /// 切换当前账本。
@@ -156,6 +169,8 @@ impl AppStores {
             self.statistics.set(BTreeMap::new());
         }
         self.current_ledger_id.set(id);
+        // 功能开关是**按账本**的：切账本时侧栏要立刻跟着换（否则"关了却还在用"）
+        self.refresh_enabled_features();
     }
 
     /// 把外观写入 `<html data-theme>`：
@@ -183,9 +198,43 @@ impl AppStores {
         self.enabled_features.get().get(feature).unwrap_or(true)
     }
 
-    /// 用后端返回的开关集合覆盖本地状态（`config_set_feature` 的返回值）。
-    pub fn set_enabled_features(&self, features: FeatureFlags) {
-        self.enabled_features.set(features);
+    /// 用后端返回的开关集合覆盖本地状态（`config_get` 的返回值）。
+    ///
+    /// 三份状态的关系：`default_features`（配置里的 `features`）+ `ledger_features`（按账本）
+    /// → `enabled_features`（当前账本生效的）。计算规则只有 `effective_features` 一处，
+    /// 所以"哪个账本看到哪几项"不会出现第二套过滤条件。
+    pub fn set_features(&self, default: FeatureFlags, by_ledger: LedgerFeatures) {
+        self.default_features.set(default);
+        self.ledger_features.set(by_ledger);
+        self.refresh_enabled_features();
+    }
+
+    /// 按当前账本重算生效开关。
+    ///
+    /// 调用点固定三处（都在本文件里，免得外面各写一遍）：`set_features` / `set_ledgers` /
+    /// `select_ledger`，加上写入成功后的 `record_feature_write`。
+    pub fn refresh_enabled_features(&self) {
+        let ledger_id = self.current_ledger_id.get_untracked();
+        let default = self.default_features.get_untracked();
+        let by_ledger = self.ledger_features.get_untracked();
+        self.enabled_features
+            .set(effective_features(&default, &by_ledger, &ledger_id));
+    }
+
+    /// 一次成功的开关写入落地：`scope` 为空 = 改的是默认那一份，否则是那个账本。
+    ///
+    /// ⚠ `scope` 必须由**调用方在发起时**抓下来传进来（`current_ledger_id` 会变，
+    /// 不能在这里再读一次）：请求在飞的时候用户切了账本，结果也只落到出发时那个账本上，
+    /// 而"当前这一屏"永远由 `refresh_enabled_features` 重算。
+    pub fn record_feature_write(&self, scope: &str, features: FeatureFlags) {
+        if scope.is_empty() {
+            self.default_features.set(features);
+        } else {
+            self.ledger_features.update(|map| {
+                map.insert(scope.to_string(), features);
+            });
+        }
+        self.refresh_enabled_features();
     }
 
     /// 工作空间图标变化：把相对路径翻成 `<img src>` 可用的 URL 并写入共享状态。

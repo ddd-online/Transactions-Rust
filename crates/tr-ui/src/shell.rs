@@ -199,8 +199,11 @@ pub fn App() -> impl IntoView {
                 stores.appearance.set(appearance);
                 stores.apply_appearance();
                 stores.workspace_dir.set(config.workspace_dir.clone());
-                // 功能开关：决定侧边栏显示哪几项（老配置里没有这个键 = 全开）
-                stores.set_enabled_features(config.features.clone());
+                // 功能开关：决定侧边栏显示哪几项（老配置里没有这个键 = 全开）。
+                // 两份：`features` 是默认，`ledgerFeatures` 按账本 —— 生效的那一份由
+                // store 按当前账本算出来（此刻还没选账本，先按默认渲染，`refresh_ledgers`
+                // 落定当前账本后会立刻重算）。
+                stores.set_features(config.features.clone(), config.ledger_features.clone());
                 // 事件页右栏偏好：换页/重启后仍保持用户上一次的开合（老配置缺键 = 展开）
                 stores
                     .key_event_linked_open

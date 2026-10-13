@@ -65,6 +65,24 @@
   padding-top: var(--transactions-space-sm);
 }
 
+/* 功能开关（`settings.rs` 的 `FeatureSetting`）：作用域说明行 + 卡片列表。
+ * 说明行必须在 `.st-list` **外面** —— 进了列表，上面那条 `:first-child` 规则就不再命中
+ * 任何一行（第一项变成了说明文字），第一行会重新贴到工具栏线上。这一层只负责把两者摞起来。 */
+.st-feature-pane {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 位置与 `.st-list > .st-card:first-child` 同一意图：紧贴工具栏那条底边线。 */
+.st-feature-hint {
+  padding-top: var(--transactions-space-sm);
+  padding-bottom: var(--transactions-space-2xs);
+  font-family: var(--transactions-font-body);
+  font-size: var(--transactions-size-text-caption);
+  line-height: var(--transactions-height-snug);
+  color: var(--transactions-color-text-secondary);
+}
+
 /* **最后一行同样画线**（不再有 `:last-child { border-bottom: none }` 那个例外）：
  * 少了这条线时，列表在最后一行看起来像被截断 —— 而且同一页里"上面三行有线、最后一行没有"
  * 会被读成渲染坏了。所有设置行列表（通用设置 / 日记配置 / 股票）都以一条线收尾。 */
