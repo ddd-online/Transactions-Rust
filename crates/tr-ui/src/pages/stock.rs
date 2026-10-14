@@ -67,6 +67,7 @@ use tr_domain::models::{RoundFee, StockFeeSetting};
 use tr_domain::money::{cents_to_yuan, milli_to_price_yuan, price_yuan_to_milli, yuan_to_cents};
 use tr_domain::statistics::StatisticsStrategy;
 use tr_domain::stock::floating_pnl_rate;
+use wasm_bindgen::JsCast;
 
 use crate::api;
 use crate::components::ui::{
@@ -150,7 +151,7 @@ impl StockSub {
 const FUND_PAGE_SIZE: i64 = 10;
 
 /// 本轮复盘模板（固定文案，改动即影响界面）。
-const ROUND_REVIEW_TEMPLATE: &str = "判断层\n\n买入理由：\n卖出理由：\n\n改进层\n\n交易心得\n";
+const ROUND_REVIEW_TEMPLATE: &str = "买入理由：\n卖出理由：\n交易心得：\n";
 
 /// 复盘占位文案（固定文案，改动即影响界面）。
 const REVIEW_PLACEHOLDER: &str = "写下本轮的操作依据、得失与可改进之处（500 字以内）";
@@ -999,9 +1000,10 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         }
     });
 
-    // 复盘编辑态
+    // 本轮复盘：只读态内联在面板里，写作在弹窗里（见 `review_modal`）
     let review_open = RwSignal::new(true);
-    let review_editing = RwSignal::new(false);
+    // `review_target` 非空 = 弹窗开着，里面带着"这次写的是哪一处"
+    let review_target = RwSignal::new(None::<ReviewTarget>);
     let review_draft = RwSignal::new(String::new());
     let review_saving = RwSignal::new(false);
 
@@ -1085,7 +1087,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         if prev.as_deref() == Some(code.as_str()) {
             return code;
         }
-        review_editing.set(false);
+        review_target.set(None);
         review_open.set(true);
         review_draft.set(String::new());
         // 成交由取数 module 按 key（账本 + 选中代码）重拉，这里不再手写
@@ -1118,10 +1120,37 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                         existing.review = updated.review.clone();
                     }
                 });
-                review_editing.set(false);
+                // 关掉弹窗并把这块复盘摊开：让用户当场看到它落下了（toast 只是旁证）
+                review_target.set(None);
+                review_open.set(true);
+                review_draft.set(String::new());
                 Notifier::global().success("本轮复盘已保存".to_string(), None);
             }
         });
+    };
+
+    // 打开写作面：空复盘预填模板，已有复盘带原文
+    let open_review = move |()| {
+        let (text, identity) = current_position()
+            .map(|item| {
+                (
+                    item.review.clone(),
+                    format!("{} {}", item.stock_name, item.stock_code),
+                )
+            })
+            .unwrap_or_default();
+        review_draft.set(if text.is_empty() {
+            ROUND_REVIEW_TEMPLATE.to_string()
+        } else {
+            text
+        });
+        review_target.set(Some(ReviewTarget {
+            scope: ReviewScope::Position,
+            identity,
+            // 持仓这一轮还没归档：清仓时这份复盘会随轮次走（服务层已断言）
+            context: "持仓中 · 清仓时随这一轮归档".to_string(),
+        }));
+        review_open.set(true);
     };
 
     // ---- 下单 ----
@@ -1745,66 +1774,34 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                             </span>
                                         </Show>
                                     </button>
-                                    <Show when=move || !review_editing.get()>
-                                        <button
-                                            type="button"
-                                            class="ui-btn ui-btn--text ui-btn--sm"
-                                            on:click=move |_| {
-                                                let current = current_position()
-                                                    .map(|item| item.review.clone())
-                                                    .unwrap_or_default();
-                                                review_draft.set(if current.is_empty() {
-                                                    ROUND_REVIEW_TEMPLATE.to_string()
-                                                } else {
-                                                    current
-                                                });
-                                                review_open.set(true);
-                                                review_editing.set(true);
-                                            }
-                                        >
-                                            <span class="ui-btn__icon">{icons::icon(Icon::Edit)}</span>
-                                            {if position.review.is_empty() { "写复盘" } else { "编辑" }}
-                                        </button>
-                                    </Show>
+                                    <button
+                                        type="button"
+                                        class="ui-btn ui-btn--text ui-btn--sm"
+                                        on:click=move |_| open_review(())
+                                    >
+                                        <span class="ui-btn__icon">{icons::icon(Icon::Edit)}</span>
+                                        {if position.review.is_empty() { "写复盘" } else { "编辑" }}
+                                    </button>
                                 </div>
                                 <Show when=move || review_open.get()>
-                                    <Show
-                                        when=move || review_editing.get()
-                                        fallback=move || {
+                                    {
+                                        let review_text = current_position()
+                                            .map(|item| item.review)
+                                            .unwrap_or_default();
+                                        if review_text.is_empty() {
                                             view! {
-                                                {
-                                                    let review_text = current_position()
-                                                        .map(|item| item.review)
-                                                        .unwrap_or_default();
-                                                    if review_text.is_empty() {
-                                                        view! {
-                                                            <p class="stock-review__hint">
-                                                                "还没有写本轮复盘，可随时记录建仓理由与操作计划。"
-                                                            </p>
-                                                        }
-                                                            .into_any()
-                                                    } else {
-                                                        view! {
-                                                            <p class="stock-review__text">
-                                                                {review_text.clone()}
-                                                            </p>
-                                                        }
-                                                            .into_any()
-                                                    }
-                                                }
+                                                <p class="stock-review__hint">
+                                                    "还没有写本轮复盘，可随时记录建仓理由与操作计划。"
+                                                </p>
                                             }
+                                                .into_any()
+                                        } else {
+                                            view! {
+                                                <p class="stock-review__text">{review_text.clone()}</p>
+                                            }
+                                                .into_any()
                                         }
-                                    >
-                                        {review_editor(
-                                            review_draft,
-                                            review_saving,
-                                            UnsyncCallback::new(move |()| {
-                                                review_editing.set(false);
-                                                review_draft.set(String::new());
-                                            }),
-                                            UnsyncCallback::new(move |()| save_review()),
-                                        )}
-                                    </Show>
+                                    }
                                 </Show>
                             </div>
 
@@ -1911,6 +1908,13 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
             )}
 
             {impact_modal(impact, impact_running, UnsyncCallback::new(move |()| confirm_impact()))}
+
+            {review_modal(
+                review_target,
+                review_draft,
+                review_saving,
+                UnsyncCallback::new(move |()| save_review()),
+            )}
         </div>
         </div>
     }
@@ -1926,42 +1930,186 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     .into_any()
 }
 
-/// 本轮复盘编辑块：持仓区与历史轮次区各一处，结构逐行相同，只有「取消 / 保存」不同。
+/// 复盘能写多少字：与服务层同一口径（`tr-service` 的两个 `update_*_review` 数码点判 500）。
 ///
-/// 刻意**不**统一两处的「取消」写法：持仓区是 `review_editing.set(false)`（`RwSignal<bool>`），
-/// 轮次区是 `review_editing.set(String::new())`（`RwSignal<String>` 存的是轮次 id），语义不同。
-fn review_editor(
+/// 已知的近似：`maxlength` 数的是 UTF-16 码元、计数行与后端数码点，纯 emoji 时界面更严一档
+/// （一个 emoji 占两个码元）—— 宁可严不可松，权威仍是后端那句校验。
+const REVIEW_MAX_CHARS: usize = 500;
+
+/// 「本轮复盘」写在哪一处：进行中的持仓，或某个已归档的轮次。
+///
+/// 存储是两根字段（持仓表 / 轮次表各一根 `review`），界面却是同一张纸 ——
+/// 所以写作面只有一个，落哪条写路径由它决定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReviewScope {
+    /// 持仓侧：清仓时这份复盘随这一轮归档（服务层的 `position_review_carries_into_closed_round` 已断言）
+    Position,
+    /// 已归档的轮次（存轮次 id）
+    Round(String),
+}
+
+/// 一次复盘编辑的上下文（`None` = 弹窗关着）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReviewTarget {
+    scope: ReviewScope,
+    /// 标题里的身份：`上海电影 601595`
+    identity: String,
+    /// 正文首行的上下文：`第 1 轮 · 2026-10-13 00:00 → 2026-10-14 00:00`
+    context: String,
+}
+
+/// 「本轮复盘」写作面弹窗：持仓与轮次共用同一张纸。
+///
+/// 为什么是弹窗，而不是原来那个"面板里的 3 行文本框"：
+///
+/// 1. 面板里没有不裁剪的空间 —— `.stock-panel` 是 `overflow: hidden`，成交表还要抢高度；
+/// 2. 模板本身就有 3 行，而 `rows=3` + `min-height: 72px` 只装得下 3 行，多出来的被裁掉；
+/// 3. WebView2 是**覆盖式**滚动条、仓库又禁止自绘滚动条（`base.css` 的滚动条段落），
+///    静止时被裁掉的部分读起来就是"内容丢了" —— 唯一的正解是**静止永不裁剪**。
+///
+/// 写作是需要保护焦点的任务，所以给它一张 `ModalSize::Large` 的整纸：写作面 320px 起
+/// （640 宽约 42 字/行 × 1.8 行高 ≈ 12 行 ≈ 整个 500 字预算一眼看得完），窄窗再按内容长高。
+///
+/// 有改动时关闭**要二次确认**（底栏换成「继续编辑 / 放弃」）—— 一记 `Esc` 丢掉整段复盘
+/// 是这类编辑器最贵的一种错。两态用的都是 `Modal` 本来就有的三件套
+/// （`cancel_text` / `ok_text` / `ok_danger` 都收 `Signal`），共享组件因此一个字都不用改。
+fn review_modal(
+    target: RwSignal<Option<ReviewTarget>>,
     draft: RwSignal<String>,
     saving: RwSignal<bool>,
-    on_cancel: UnsyncCallback<()>,
     on_save: UnsyncCallback<()>,
 ) -> AnyView {
+    // 打开那一刻的原文：脏不脏全看它和当前草稿是否一致
+    let baseline = RwSignal::new(String::new());
+    let confirming = RwSignal::new(false);
+    let focused = RwSignal::new(false);
+    let editor = NodeRef::<leptos::html::Textarea>::new();
+
+    // 打开 → 记下原文、清掉确认态，把焦点与光标放进文本域（只做一次）
+    //
+    // 用 `focused` 而不是"目标变了没有"：`target` 前后相等是常态（同一只票、同一轮，
+    // 关掉再打开就是同一个值），拿相等性判会漏掉第二次打开。
+    Effect::new(move |_| {
+        if target.get().is_none() {
+            if focused.get_untracked() {
+                focused.set(false);
+            }
+            return;
+        }
+        if focused.get_untracked() {
+            return;
+        }
+        // 文本域还没挂上：这一读是**被跟踪**的，`NodeRef` 一设就会再跑一次
+        let Some(element) = editor.get() else {
+            return;
+        };
+        let text = draft.get_untracked();
+        baseline.set(text.clone());
+        confirming.set(false);
+        // 模板刚预填 → 光标落在第一行末（「买入理由：」之后）；已有复盘 → 文末
+        let caret = if text == ROUND_REVIEW_TEMPLATE {
+            tr_draw::text::line_end_caret(&text, 0)
+        } else {
+            text.encode_utf16().count() as u32
+        };
+        let _ = element.focus();
+        // 光标要等**这一帧的渲染落下**再放：`prop:value` 是渲染效果写的，而程序化写值在
+        // Chromium 里会把光标甩到文末 —— 在同一个 tick 里设选区会被它顶掉
+        // （实测：打开后直接粘贴，文本落在文末而不是第一行末）。
+        if let Some(window) = web_sys::window() {
+            let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+                if let Some(element) = editor.get_untracked() {
+                    let _ = element.focus();
+                    let _ = element.set_selection_range(caret, caret);
+                }
+            });
+            let _ = window.request_animation_frame(callback.unchecked_ref());
+        }
+        focused.set(true);
+    });
+
+    let dirty = Signal::derive(move || draft.get() != baseline.get());
+    let close = move || {
+        target.set(None);
+        draft.set(String::new());
+        confirming.set(false);
+    };
+    // 关闭请求：确认态再点 = 回编辑；有改动 = 先问一句；没改动 = 直接关
+    let request_close = move || {
+        if confirming.get_untracked() {
+            confirming.set(false);
+        } else if dirty.get_untracked() {
+            confirming.set(true);
+        } else {
+            close();
+        }
+    };
+    let request_ok = move || {
+        if confirming.get_untracked() {
+            close();
+        } else {
+            on_save.run(());
+        }
+    };
+
     view! {
-        <Textarea
-            value=draft
-            rows=3
-            maxlength=500
-            placeholder=REVIEW_PLACEHOLDER
-            class="stock-review__textarea"
-        />
-        <div class="stock-review__actions">
-            <Button
-                variant=ButtonVariant::Secondary
-                size=ButtonSize::Small
-                disabled=Signal::derive(move || saving.get())
-                on_click=move |_| on_cancel.run(())
+        <Modal
+            open=Signal::derive(move || target.get().is_some())
+            title=move || {
+                target
+                    .get()
+                    .map(|item| format!("本轮复盘 · {}", item.identity))
+                    .unwrap_or_else(|| "本轮复盘".to_string())
+            }
+            size=ModalSize::Large
+            ok_text=Signal::derive(move || {
+                if confirming.get() { "放弃".to_string() } else { "保存".to_string() }
+            })
+            cancel_text=Signal::derive(move || {
+                if confirming.get() { "继续编辑".to_string() } else { "取消".to_string() }
+            })
+            ok_danger=Signal::derive(move || confirming.get())
+            ok_loading=Signal::derive(move || saving.get())
+            on_ok=UnsyncCallback::new(move |()| request_ok())
+            on_close=UnsyncCallback::new(move |()| request_close())
+        >
+            <div
+                class="stock-review-editor"
+                on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                    // Esc 只在这一子树里有意义（不做全局劫持）：走的是与「取消」同一条判定
+                    if ev.key() == "Escape" {
+                        ev.prevent_default();
+                        request_close();
+                    }
+                }
             >
-                "取消"
-            </Button>
-            <Button
-                variant=ButtonVariant::Primary
-                size=ButtonSize::Small
-                loading=Signal::derive(move || saving.get())
-                on_click=move |_| on_save.run(())
-            >
-                "保存"
-            </Button>
-        </div>
+                <p class="stock-review-editor__context">
+                    {move || target.get().map(|item| item.context).unwrap_or_default()}
+                </p>
+                <Textarea
+                    value=draft
+                    rows=12
+                    maxlength=REVIEW_MAX_CHARS as u32
+                    auto_grow=true
+                    node_ref=editor
+                    placeholder=REVIEW_PLACEHOLDER
+                    class="stock-review-editor__surface"
+                    on_save_shortcut=UnsyncCallback::new(move |()| request_ok())
+                />
+                <div class="stock-review-editor__foot">
+                    <span class="stock-review-editor__count">
+                        {move || {
+                            format!(
+                                "{} / {} 字",
+                                tr_domain::util::char_count(&draft.get()),
+                                REVIEW_MAX_CHARS,
+                            )
+                        }}
+                    </span>
+                    <span class="stock-review-editor__hint">"Ctrl+S 保存 · Esc 取消"</span>
+                </div>
+            </div>
+        </Modal>
     }
     .into_any()
 }
@@ -2890,7 +3038,8 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
     let detail_failed = Signal::derive(move || detail_q.failed.get());
     let collapsed_rounds = RwSignal::new(BTreeSet::<String>::new());
     let collapsed_reviews = RwSignal::new(BTreeSet::<String>::new());
-    let review_editing = RwSignal::new(String::new());
+    // 写作面与持仓侧共用同一个弹窗（见 `review_modal`）：`review_target` 非空 = 开着
+    let review_target = RwSignal::new(None::<ReviewTarget>);
     let review_draft = RwSignal::new(String::new());
     let review_saving = RwSignal::new(false);
     let tag_saving = RwSignal::new(false);
@@ -2925,7 +3074,7 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
             return code;
         }
         // 切换股票 → 展开态与草稿全部重置
-        review_editing.set(String::new());
+        review_target.set(None);
         review_draft.set(String::new());
         collapsed_rounds.set(BTreeSet::new());
         collapsed_reviews.set(BTreeSet::new());
@@ -2940,19 +3089,24 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
         }
         let review = review_draft.get_untracked();
         review_saving.set(true);
+        let round_id_for_expand = round_id.clone();
         leptos::task::spawn_local(async move {
             // 在飞与失败面走 change::submit（判据见 #34）；成功后的界面更新留在调用点
             let saved = crate::change::submit(
                 Some(review_saving),
-                "保存交易复盘失败",
+                "保存本轮复盘失败",
                 api::stock::round_review(&ledger_id, &round_id, &review),
             )
             .await;
             if let Some(data) = saved {
                 detail.set(Some(data));
-                review_editing.set(String::new());
+                // 关掉弹窗、摊开这一轮的复盘：让用户当场看到它落下了
+                review_target.set(None);
                 review_draft.set(String::new());
-                Notifier::global().success("交易复盘已保存".to_string(), None);
+                collapsed_reviews.update(|set| {
+                    set.remove(&round_id_for_expand);
+                });
+                Notifier::global().success("本轮复盘已保存".to_string(), None);
             }
         });
     };
@@ -3165,16 +3319,13 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                                     .map(|round| {
                                         round_card(
                                             round,
+                                            format!("{} {}", data.stock_name, data.stock_code),
                                             collapsed_rounds,
                                             collapsed_reviews,
-                                            review_editing,
+                                            review_target,
                                             review_draft,
-                                            review_saving,
                                             tag_saving,
                                             tags,
-                                            UnsyncCallback::new(move |id: String| {
-                                                save_round_review(id)
-                                            }),
                                             UnsyncCallback::new(move |(id, tag): (String, String)| {
                                                 save_round_tag((id, tag))
                                             }),
@@ -3187,6 +3338,22 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                     }}
                 </div>
             </div>
+
+            {review_modal(
+                review_target,
+                review_draft,
+                review_saving,
+                UnsyncCallback::new(move |()| {
+                    // 落哪条写路径由弹窗带着的目标决定（持仓侧自己那份在 `position_view`）
+                    if let Some(ReviewTarget {
+                        scope: ReviewScope::Round(id),
+                        ..
+                    }) = review_target.get_untracked()
+                    {
+                        save_round_review(id);
+                    }
+                }),
+            )}
         </div>
         </div>
     }
@@ -3224,14 +3391,14 @@ fn SummaryCell(
 #[allow(clippy::too_many_arguments)]
 fn round_card(
     round: StockTradeRoundDto,
+    // 卡片所属股票的身份（`上海电影 601595`）：复盘弹窗的标题用它
+    identity: String,
     collapsed_rounds: RwSignal<BTreeSet<String>>,
     collapsed_reviews: RwSignal<BTreeSet<String>>,
-    review_editing: RwSignal<String>,
+    review_target: RwSignal<Option<ReviewTarget>>,
     review_draft: RwSignal<String>,
-    review_saving: RwSignal<bool>,
     tag_saving: RwSignal<bool>,
     tags: Signal<Vec<String>>,
-    on_save_review: UnsyncCallback<String>,
     on_save_tag: UnsyncCallback<(String, String)>,
 ) -> AnyView {
     // 频繁复用的几个值放进 `StoredValue`（`Copy`）：
@@ -3242,7 +3409,14 @@ fn round_card(
     let has_review = StoredValue::new(!round.review.trim().is_empty());
     let collapsed = collapsed_rounds.get().contains(&round.id);
     let review_collapsed = collapsed_reviews.get().contains(&round.id);
-    let editing = review_editing.get() == round.id;
+    // 写作面在弹窗里（见 `review_modal`）：这一轮的身份与上下文在这里拼好
+    let identity = StoredValue::new(identity);
+    let context = StoredValue::new(format!(
+        "第 {} 轮 · {} → {}",
+        round.round_no,
+        format_timestamp(round.opened_at, "YYYY-MM-DD HH:mm"),
+        format_timestamp(round.closed_at, "YYYY-MM-DD HH:mm"),
+    ));
     let result_class = format::result_class(round.pnl);
     let pnl_class = format::pnl_class(round.pnl);
 
@@ -3376,59 +3550,44 @@ fn round_card(
                                 <span class="stock-review__summary">{review.get_value()}</span>
                             </Show>
                         </button>
-                        <Show when=move || !editing>
-                            <button
-                                type="button"
-                                class="ui-btn ui-btn--text ui-btn--sm"
-                                on:click=move |_| {
-                                    let key = id.get_value();
-                                    review_draft.set(if has_review.get_value() {
-                                        review.get_value()
-                                    } else {
-                                        ROUND_REVIEW_TEMPLATE.to_string()
-                                    });
-                                    collapsed_reviews.update(|set| {
-                                        set.remove(&key);
-                                    });
-                                    review_editing.set(key);
-                                }
-                            >
-                                <span class="ui-btn__icon">{icons::icon(Icon::Edit)}</span>
-                                {if has_review.get_value() { "编辑" } else { "写复盘" }}
-                            </button>
-                        </Show>
-                    </div>
-                    <Show when=move || !collapsed_reviews.get().contains(&id.get_value())>
-                        <Show
-                            when=move || review_editing.get() == id.get_value()
-                            fallback=move || {
-                                view! {
-                                    {if has_review.get_value() {
-                                        view! {
-                                            <p class="stock-review__text">{review.get_value()}</p>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        view! {
-                                            <p class="stock-review__hint">
-                                                "还没有写本轮复盘，可随时记录建仓理由与操作计划。"
-                                            </p>
-                                        }
-                                            .into_any()
-                                    }}
-                                }
+                        <button
+                            type="button"
+                            class="ui-btn ui-btn--text ui-btn--sm"
+                            on:click=move |_| {
+                                let key = id.get_value();
+                                review_draft.set(if has_review.get_value() {
+                                    review.get_value()
+                                } else {
+                                    ROUND_REVIEW_TEMPLATE.to_string()
+                                });
+                                collapsed_reviews.update(|set| {
+                                    set.remove(&key);
+                                });
+                                review_target.set(Some(ReviewTarget {
+                                    scope: ReviewScope::Round(key),
+                                    identity: identity.get_value(),
+                                    context: context.get_value(),
+                                }));
                             }
                         >
-                            {review_editor(
-                                review_draft,
-                                review_saving,
-                                UnsyncCallback::new(move |()| {
-                                    review_editing.set(String::new());
-                                    review_draft.set(String::new());
-                                }),
-                                UnsyncCallback::new(move |()| on_save_review.run(id.get_value())),
-                            )}
-                        </Show>
+                            <span class="ui-btn__icon">{icons::icon(Icon::Edit)}</span>
+                            {if has_review.get_value() { "编辑" } else { "写复盘" }}
+                        </button>
+                    </div>
+                    <Show when=move || !collapsed_reviews.get().contains(&id.get_value())>
+                        {if has_review.get_value() {
+                            view! {
+                                <p class="stock-review__text">{review.get_value()}</p>
+                            }
+                                .into_any()
+                        } else {
+                            view! {
+                                <p class="stock-review__hint">
+                                    "还没有写本轮复盘，可随时记录建仓理由与操作计划。"
+                                </p>
+                            }
+                                .into_any()
+                        }}
                     </Show>
                 </div>
             </Show>

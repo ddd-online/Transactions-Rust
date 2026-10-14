@@ -656,6 +656,10 @@
   margin: var(--transactions-space-sm) 0 0;
   white-space: pre-wrap;
   word-break: break-word;
+  /* 长正文的行宽与行距：复盘是成段的散文（不是数据行），一行铺满整块面板时
+   * 视线回行会丢掉起点 —— 68ch 是 DESIGN 的正文行宽上限区，1.8 是长正文那一档 */
+  max-width: 68ch;
+  line-height: var(--transactions-height-relaxed);
   font-size: var(--transactions-size-text-body-sm);
   color: var(--transactions-color-text-major);
 }
@@ -666,19 +670,48 @@
   color: var(--transactions-color-text-secondary);
 }
 
-.stock-review__textarea {
-  margin-top: var(--transactions-space-sm);
+/* ============================================
+ * 复盘写作面（弹窗）—— 静止时**永不裁剪**
+ *
+ * 320px 不是拍的，是算出来的：640 宽 − 48 内边距 = 592px 内容宽，14px 汉字 ≈ 42 字/行，
+ * 行高 1.8 → 25.2px/行，500 字（服务层的上限）≈ 12 行 ≈ 302px。
+ * 再往上由 `Textarea` 的 `auto_grow` 按内容长，60vh 封顶 —— 窗口很窄时同一段文字更高，
+ * 靠它撑开；面板里那条覆盖式滚动条静止时看不见，所以框绝不允许比内容矮。
+ * ============================================ */
+
+.stock-review-editor {
+  display: grid;
+  gap: var(--transactions-space-md);
 }
 
-.stock-review__textarea .ui-textarea__control {
-  min-height: 72px;
+.stock-review-editor__context {
+  margin: 0;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
 }
 
-.stock-review__actions {
-  margin-top: var(--transactions-space-sm);
+.stock-review-editor__surface .ui-textarea__control {
+  min-height: 320px;
+  max-height: 60vh;
+  line-height: var(--transactions-height-relaxed);
+}
+
+.stock-review-editor__foot {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--transactions-space-sm);
+}
+
+.stock-review-editor__count {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-review-editor__hint {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-tertiary);
 }
 
 .stock-trades {

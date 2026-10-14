@@ -311,6 +311,7 @@ Gently curved, consistent radii: 6px for tags and dropdown items, 8px for button
 - **Style:** Paper face, 1px hairline border, 8px radius, 36px height, padding 0 12px.
 - **Focus:** border turns Clarity Blue with the 2px focus ring.
 - **DatePicker / Select:** same height and radius; hover darkens border to l2.
+- **Writing surface (prose, not a field):** a paragraph-length note gets its own paper — `ModalSize::Large` (640) with a body ≥320px tall, growing with its content up to 60vh. **At rest it must never clip:** the shell runs WebView2's *overlay* scrollbars (see the scrollbar note in `base.css`), so content taller than its box reads as content that is gone. 320px is the arithmetic, not a taste: 640 − 48 padding = 592px of measure, ~42 CJK glyphs per line at 14px, 1.8 line-height → 500 characters ≈ 12 lines ≈ 302px. Ship a live character count (`tr_domain::util::char_count`, the same ruling as the server), `Ctrl+S` to save, `Esc` to leave, and focus plus caret placed on open — a writer should never click into the field they just asked for.
 
 ### Navigation
 

@@ -78,9 +78,42 @@ pub fn parse_year_month_bound(input: &str) -> (Option<i64>, Option<i64>) {
     }
 }
 
+/// 第 `line` 行（0 起）**行末**在 UTF-16 里的下标 —— `setSelectionRange` 要的单位。
+///
+/// 复盘弹窗打开时模板刚预填进文本域，光标该落在**第一行末尾**（「买入理由：」之后）：
+/// 文首会写在标签前面，文末会写在「交易心得：」之后，两者都要用户先挪一次光标。
+/// `line` 越界（或文本没有那么多行）时返回文末 —— 退化成"跟在文末"，不 panic。
+pub fn line_end_caret(text: &str, line: usize) -> u32 {
+    let mut units = 0_usize;
+    for (index, segment) in text.split('\n').enumerate() {
+        if index == line {
+            return (units + segment.encode_utf16().count()) as u32;
+        }
+        // 换行符本身也占一个 UTF-16 码元
+        units += segment.encode_utf16().count() + 1;
+    }
+    text.encode_utf16().count() as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 光标位：按**行末**算，且单位是 UTF-16 码元（代理对占 2），越界退到文末。
+    #[test]
+    fn line_end_caret_counts_utf16_units_and_falls_back_to_the_end() {
+        assert_eq!(line_end_caret("", 0), 0);
+        assert_eq!(line_end_caret("买入理由：\n卖出理由：\n交易心得：\n", 0), 5);
+        assert_eq!(
+            line_end_caret("买入理由：\n卖出理由：\n交易心得：\n", 1),
+            11
+        );
+        assert_eq!(line_end_caret("abc\ndef", 1), 7, "行末含中间那个换行符");
+        assert_eq!(line_end_caret("abc", 0), 3);
+        assert_eq!(line_end_caret("abc\ndef", 9), 7, "行号越界 = 文末");
+        assert_eq!(line_end_caret("😀\nab", 0), 2, "代理对占两个码元");
+        assert_eq!(line_end_caret("😀\nab", 5), 5, "文末同样是 UTF-16 长度");
+    }
 
     /// 筛选用的年份 / 年月输入：空 = 不限，非法也当"不限"（不会把筛选拦下来）。
     #[test]
