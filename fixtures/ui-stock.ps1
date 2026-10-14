@@ -1459,6 +1459,118 @@ try {
     Assert-True ([bool](Wait-Element -Root $window -Name '累计盈亏' -TimeoutSec 15)) `
         '切回逐笔累计后曲线指标回到「累计盈亏」'
 
+    # ---- 放大层：曲线块头的「放大曲线」→ 铺满窗口内容区的曲线 ----
+    # 这一条锁三件事：
+    #   ① 入口：曲线块头有「放大曲线」图标按钮（可访问名 = aria-label）；
+    #   ② 铺满：放大层的 UIA 矩形盖住窗口的绝大部分（宽 ≥ 窗口宽 × 0.9、高 ≥ 窗口高 × 0.8），
+    #      且把身后的统计面板**整个包住** —— "够不够大"正是 UIA 矩形能量的东西
+    #      （它量不出的是"被裁掉/没画出来"，所以这里同时留一张截图给人眼）；
+    #   ③ 关得掉：× / ESC / 点四周留白三条路各关一次，且关掉后仍回到「统计」分栏
+    #      （放大层不是"换了一页"），焦点落进层里、关掉后还回入口那颗按钮。
+    # ESC 那条是**焦点**的判据：入口按钮在层外，放大层必须自己把焦点收进去，
+    # 否则键盘事件根本不会派发到它身上（灯箱那边漏的正是这一手）；点留白那条是
+    # `is_mask_self_click`（"点的是遮罩本身"）唯一的端到端判据。
+    Write-Host '  放大层：铺满窗口内容区的统计曲线（入口 / 几何 / 三条关法）'
+    $zoomButton = Wait-VisibleButton -Window $window -Name '放大曲线' -TimeoutSec 15
+    Assert-True ([bool]$zoomButton) '曲线块头有「放大曲线」按钮'
+    if ($zoomButton) {
+        $windowRect = $window.Current.BoundingRectangle
+        Invoke-Element $zoomButton | Out-Null
+        Start-Sleep -Seconds 2
+        $layer = Wait-Element -Root $window -Name '统计曲线放大' -TimeoutSec 10
+        Assert-True ([bool]$layer) '点「放大曲线」后出现放大层（可访问名「统计曲线放大」）'
+        if ($layer) {
+            $layerRect = $layer.Current.BoundingRectangle
+            $coverWidth = $layerRect.Width / $windowRect.Width
+            $coverHeight = $layerRect.Height / $windowRect.Height
+            Assert-True ($coverWidth -ge 0.9 -and $coverHeight -ge 0.8) `
+                ("放大层铺满窗口（宽 {0:P0} / 高 {1:P0}；实际 {2:N0}×{3:N0}，窗口 {4:N0}×{5:N0}）" -f `
+                    $coverWidth, $coverHeight, $layerRect.Width, $layerRect.Height, `
+                    $windowRect.Width, $windowRect.Height)
+            $behind = Wait-Element -Root $window -Name '结算统计' -TimeoutSec 5
+            $covered = $false
+            if ($behind) {
+                $inside = $behind.Current.BoundingRectangle
+                $covered = ($inside.X -ge $layerRect.X) -and
+                    (($inside.X + $inside.Width) -le ($layerRect.X + $layerRect.Width)) -and
+                    ($inside.Y -ge $layerRect.Y) -and
+                    (($inside.Y + $inside.Height) -le ($layerRect.Y + $layerRect.Height))
+            }
+            Assert-True $covered '放大层把身后的「结算统计」面板整个盖住'
+            # 「全部 · 共 N 笔结算」这行筛选摘要只存在于放大层里（面板上没有这一行）
+            $scope = Wait-Like -Root $layer -Pattern '共 ' -TimeoutSec 5
+            Assert-True ([bool]$scope) "放大层里有当前筛选摘要（'$([string]$scope.Current.Name)'）"
+            Save-Screenshot -Path (Join-Path $OutDir '13-放大层.png')
+
+            # 关法一：层里那颗「关闭」——**按层内找**，别找到窗口右上角那颗（同名，点了会关应用）
+            $closeButton = @(Find-All $layer '关闭') | Where-Object {
+                $_.Current.ControlType.ProgrammaticName -eq 'ControlType.Button'
+            } | Select-Object -First 1
+            Assert-True ([bool]$closeButton) '放大层里有「关闭」按钮'
+            if ($closeButton) { Invoke-Element $closeButton | Out-Null }
+            Start-Sleep -Seconds 2
+            Assert-True (-not [bool](Find-First $window '统计曲线放大')) '点「关闭」后放大层收起'
+            Assert-True ([bool](Wait-Element -Root $window -Name '结算统计' -TimeoutSec 10)) `
+                '关掉放大层后仍回到「统计」分栏'
+
+            # 关法二：ESC。
+            # 先断言**焦点确实被收进了这一层**：键盘事件只派发给有焦点的元素，而入口那颗按钮在层外，
+            # 所以"层拿到了焦点"正是 ESC 能成立的那个机制（这条判据不依赖前台窗口，最稳）。
+            # 重新定位一次入口（元素引用可能因为这一次挂载/卸载失效），顺带断言入口还在。
+            $zoomAgain = Wait-VisibleButton -Window $window -Name '放大曲线' -TimeoutSec 10
+            Assert-True ([bool]$zoomAgain) '关掉放大层后「放大曲线」入口还在'
+            if ($zoomAgain) {
+                Invoke-Element $zoomAgain | Out-Null
+                Start-Sleep -Seconds 2
+                Assert-True ([bool](Wait-Element -Root $window -Name '统计曲线放大' -TimeoutSec 10)) `
+                    '再点一次「放大曲线」能重新打开'
+                $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+                $focusedClass = if ($focused) { [string]$focused.Current.ClassName } else { '(无)' }
+                Assert-True ($focusedClass -eq 'stock-chart-zoom') "放大层拿到焦点（实际 '$focusedClass'）"
+
+                # 再发 ESC。SendKeys 只打给**前台窗口**，而 `SetForegroundWindow` 不保证一次就生效
+                # （实测偶发被系统拒绝）——最多试三次，别把"窗口没到前台"当成功能回归。
+                $closed = $false
+                foreach ($attempt in 1..3) {
+                    [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+                    Start-Sleep -Milliseconds 400
+                    [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+                    Start-Sleep -Seconds 2
+                    if (-not [bool](Find-First $window '统计曲线放大')) { $closed = $true; break }
+                }
+                Assert-True $closed 'ESC 也能关掉放大层'
+
+                # 焦点要还回入口那颗按钮：不然下一次 Tab 从应用最顶上重新数起
+                $back = [System.Windows.Automation.AutomationElement]::FocusedElement
+                $backName = if ($back) { [string]$back.Current.Name } else { '(无)' }
+                Assert-True ($backName -eq '放大曲线') "关掉后焦点回到「放大曲线」（实际 '$backName'）"
+
+                # 关法三：点四周那圈留白（这一层自己就是遮罩 —— 点留白关、点面板不关）。
+                # 这是 `is_mask_self_click` 那条"点的是不是遮罩本身"判定的**唯一**端到端判据。
+                # 落点取层的左上角内 8 物理像素处：内边距是 16 逻辑像素（150% DPI 下 24 物理），
+                # 所以那儿必然在留白里、不在面板上。
+                $zoomOnceMore = Wait-VisibleButton -Window $window -Name '放大曲线' -TimeoutSec 10
+                if ($zoomOnceMore) {
+                    Invoke-Element $zoomOnceMore | Out-Null
+                    Start-Sleep -Seconds 2
+                    $layerAgain = Wait-Element -Root $window -Name '统计曲线放大' -TimeoutSec 10
+                    Assert-True ([bool]$layerAgain) '第三次打开放大层（为了试点留白关闭）'
+                    if ($layerAgain) {
+                        $layerRect = $layerAgain.Current.BoundingRectangle
+                        [TrUia]::Click([int]($layerRect.X + 8), [int]($layerRect.Y + 8))
+                        Start-Sleep -Seconds 2
+                        Assert-True (-not [bool](Find-First $window '统计曲线放大')) `
+                            '点放大层四周的留白也能关掉它'
+                        $afterGutter = [System.Windows.Automation.AutomationElement]::FocusedElement
+                        $afterGutterName = if ($afterGutter) { [string]$afterGutter.Current.Name } else { '(无)' }
+                        Assert-True ($afterGutterName -eq '放大曲线') `
+                            "点留白关掉后焦点也回到「放大曲线」（实际 '$afterGutterName'）"
+                    }
+                }
+            }
+        }
+    }
+
     # ================= 8/13 账户：利息归本（支取 / 利息归本 / 追加本金）+ 资金记录翻页 =================
     # 两条要求都落在这里：
     #   ① 「利息归本」按钮在「支取」与「追加本金」**中间**，金额要显示在账户页指标区；
