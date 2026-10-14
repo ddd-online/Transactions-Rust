@@ -118,6 +118,9 @@ $Steps = [ordered]@{
     'ui-about'          = @{ Title='关于软件 / 版本自报';                          Kind='pwsh';  Script='fixtures\ui-about.ps1'; Needs='exe' }
     'ui-features'       = @{ Title='功能开关（侧栏当场少一项 / 重启后仍生效）';      Kind='pwsh';  Script='fixtures\ui-features.ps1'; Needs='exe' }
     'ui-stock'          = @{ Title='股票全生命周期（含真实行情）';                  Kind='pwsh';  Script='fixtures\ui-stock.ps1'; Needs='exe'; Network=$true }
+    # 复盘写作面（弹窗）：UIA 看不见"被裁掉"，所以几何（≥320 逻辑像素）+ 光标 + 落库三条一起判。
+    # 它同时是 `components/ui/textarea.rs` 两个新可选项（`node_ref` / `auto_grow`）的第一处消费者。
+    'ui-stock-review'   = @{ Title='股票·本轮复盘写作面（弹窗 / 不裁剪 / 光标 / 上限 / 脏关闭 / 落库）'; Kind='pwsh'; Script='fixtures\ui-stock-review.ps1'; Needs='exe' }
     'ui-todo'           = @{ Title='待办：建卡片 → 加事项 → 记进度 → 四象限图（最外档位那颗点整颗可见）→ 完成进历史 → 删卡片'; Kind='pwsh'; Script='fixtures\ui-todo.ps1'; Needs='exe' }
     'ui-update-restore' = @{ Title='更新下载状态跨页面恢复（依赖 GitHub API）';     Kind='pwsh';  Script='fixtures\ui-update-restore.ps1'; Needs='exe'; Network=$true }
 }
@@ -145,7 +148,7 @@ $Groups = [ordered]@{
     'templates'    = @('ui-crud', 'ui-transactions')
     'key-event'    = @('ui-key-event', 'ui-link-event')
     'diary'        = @('ui-diary-edit', 'ui-diary-ledger', 'ui-diary-io')
-    'stock'        = @('ui-stock')
+    'stock'        = @('ui-stock', 'ui-stock-review')
     # 待办：四象限的**落点算法**（含"最外档位的点不被画布裁掉"那条不变量）在 tr-draw，
     # 所以这一组带上 `test-draw` —— 只跑 ui-todo 会漏掉那条真正盯着几何的单测。
     'todo'         = @('ui-todo', 'test-draw')
@@ -157,7 +160,7 @@ $Groups = [ordered]@{
     'shell'        = @('test-src-tauri', 'smoke', 'window-bounds', 'close-behavior')
     # 共享组件 / 全局样式 / 侧栏骨架：影响面按 AGENTS.md 的约定放大到"覆盖到的代表页"
     # 图表与裁剪的纯算法已搬进 tr-draw（native 可编），由 test-draw 真跑 —— 见 docs/adr/0001
-    'ui-kit'       = @('design-audit', 'check-ui-wasm', 'test-draw', 'ui-smoke', 'ui-shots', 'ui-transactions', 'ui-stock')
+    'ui-kit'       = @('design-audit', 'check-ui-wasm', 'test-draw', 'ui-smoke', 'ui-shots', 'ui-transactions', 'ui-stock', 'ui-stock-review')
     # 更新流程：状态机在 tr-domain::update（native 真跑），外壳持有状态、界面只渲染快照，
     # 端到端那条仍然依赖真实 GitHub API（离线用 -SkipNetwork 跳过）。
     'update'       = @('test-domain', 'test-src-tauri', 'ui-update-restore')
