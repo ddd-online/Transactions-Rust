@@ -41,7 +41,7 @@ use crate::dto::{
     CreateChartRequest, CreateTagRequest, DiaryExportRequest, DiaryExportResult, DiaryScanResponse,
     DiaryUpsertRequest, InitializeCategoriesResponse, LedgerDto, StockFundRecordPage, StockNameDto,
     StockOperationDto, StockOperationRollbackDto, StockOperationRollbackPreviewDto,
-    StockOverviewDto, StockPositionDto, StockStatisticsDto, StockTradeDto,
+    StockOverviewDto, StockPositionDto, StockReviewSettingDto, StockStatisticsDto, StockTradeDto,
     StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
     StockTradeImpactDto, StockTradeTagSettingDto, TagDto, TodoCardDto, TodoHistoryDto, TodoItemDto,
     TodoProgressDto, TrQueryCondition, TrQueryResult, TransactionRecordDto, TransactionTemplateDto,
@@ -60,8 +60,8 @@ use crate::wire::{
     ProxyDetectResponse, SetAppearanceRequest, SetCloseBehaviorRequest, SetFeatureRequest,
     SetKeyEventLinkedOpenRequest, SetSidebarCollapsedRequest, StockAmountDateRequest,
     StockArchiveRequest, StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest,
-    StockPositionReviewRequest, StockRoundReviewRequest, StockRoundTagRequest,
-    StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    StockPositionReviewRequest, StockReviewTemplateRequest, StockRoundReviewRequest,
+    StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
     StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
     StockTradesRequest, TagDeleteRequest, TagListRequest, TemplateIdRequest, TemplateListRequest,
     TemplateSortRequest, TodoCardCreateRequest, TodoCardSortRequest, TodoItemCreateRequest,
@@ -243,6 +243,8 @@ command_catalog! {
     STOCK_FEE_SETTINGS_PUT = "stock_fee_settings_put": StockFeeSettingsRequest => StockFeeSetting,
     STOCK_TAG_SETTINGS_GET = "stock_tag_settings_get": LedgerIdRequest => StockTradeTagSettingDto,
     STOCK_TAG_SETTINGS_PUT = "stock_tag_settings_put": StockTagSettingsRequest => StockTradeTagSettingDto,
+    STOCK_REVIEW_TEMPLATE_GET = "stock_review_template_get": LedgerIdRequest => StockReviewSettingDto,
+    STOCK_REVIEW_TEMPLATE_PUT = "stock_review_template_put": StockReviewTemplateRequest => StockReviewSettingDto,
     STOCK_FUND_RECORDS = "stock_fund_records": StockFundRecordsRequest => StockFundRecordPage,
     STOCK_POSITIONS = "stock_positions": LedgerIdRequest => Vec<StockPositionDto>,
     STOCK_POSITION_REVIEW = "stock_position_review": StockPositionReviewRequest => StockPositionDto,
@@ -350,7 +352,7 @@ mod tests {
         }
     }
 
-    /// 分组与数量的口径：外壳 21 + 更新 5 在应用外壳 crate 里，业务 86 条在 `tr-ipc` 里。
+    /// 分组与数量的口径：外壳 21 + 更新 5 在应用外壳 crate 里，业务 88 条在 `tr-ipc` 里。
     ///
     /// 数量变了就顺手核一遍调用点：这里对不上说明清单被改过，而注册表 / 界面的
     /// 一致性守卫会紧接着告诉你哪里对不上。
@@ -358,14 +360,14 @@ mod tests {
     fn the_table_covers_every_command() {
         assert_eq!(SHELL_COMMANDS.len(), 21);
         assert_eq!(UPDATE_COMMANDS.len(), 5);
-        assert_eq!(BUSINESS_COMMANDS.len(), 86);
+        assert_eq!(BUSINESS_COMMANDS.len(), 88);
         assert_eq!(COMMAND_GROUPS.len(), 3);
         assert_eq!(
             COMMAND_GROUPS
                 .iter()
                 .map(|group| group.len())
                 .sum::<usize>(),
-            112
+            114
         );
     }
 

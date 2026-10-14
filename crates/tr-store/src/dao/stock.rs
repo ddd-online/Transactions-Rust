@@ -20,7 +20,7 @@ use rusqlite::{params, params_from_iter, Connection};
 use tr_domain::consts;
 use tr_domain::models::{
     RoundFee, StockAccount, StockFeeSetting, StockFundRecord, StockOperation, StockPosition,
-    StockTrade, StockTradeHistory, StockTradeRound, StockTradeTagSetting,
+    StockReviewSetting, StockTrade, StockTradeHistory, StockTradeRound, StockTradeTagSetting,
 };
 
 pub struct StockDao;
@@ -29,6 +29,7 @@ const ACCOUNT_COLUMNS: &str = "id, ledger_id, principal, created_at, updated_at"
 const FEE_COLUMNS: &str = "id, ledger_id, commission_rate, min_commission, stamp_duty_rate, \
      transfer_fee_rate, created_at, updated_at";
 const TAG_SETTING_COLUMNS: &str = "id, ledger_id, tags, created_at, updated_at";
+const REVIEW_SETTING_COLUMNS: &str = "id, ledger_id, template, created_at, updated_at";
 const FUND_COLUMNS: &str = "id, ledger_id, record_date, event_type, event_text, amount_change, \
      cash_balance, net_pnl, remark, created_at";
 const POSITION_COLUMNS: &str = "id, ledger_id, stock_code, stock_name, quantity, total_cost, \
@@ -51,10 +52,11 @@ pub const STOCK_OPERATION_LIMIT: i64 = 10;
 const UNATTACHED_ROUND_SQL: &str = "(round_id = '' OR round_id IS NULL)";
 
 /// 重置时清空的股票表（这个顺序是有意的：避免外键/触发器顺序差异）。
-const STOCK_TABLES: [&str; 9] = [
+const STOCK_TABLES: [&str; 10] = [
     "tbl_billadm_stock_fund_record",
     "tbl_billadm_stock_fee_setting",
     "tbl_billadm_stock_trade_tag_setting",
+    "tbl_billadm_stock_review_setting",
     "tbl_billadm_stock_trade",
     "tbl_billadm_stock_trade_round",
     "tbl_billadm_stock_trade_history",
@@ -63,7 +65,7 @@ const STOCK_TABLES: [&str; 9] = [
     "tbl_billadm_stock_account",
 ];
 
-/// 归档时**搬走**的股票表（`STOCK_TABLES` 去掉两张配置表与只会被清空的操作记录）。
+/// 归档时**搬走**的股票表（`STOCK_TABLES` 去掉三张配置表与只会被清空的操作记录）。
 const STOCK_DATA_TABLES: [&str; 6] = [
     "tbl_billadm_stock_fund_record",
     "tbl_billadm_stock_trade",
@@ -210,6 +212,49 @@ impl StockDao {
             "UPDATE tbl_billadm_stock_trade_tag_setting SET tags = ?2, updated_at = ?3 \
              WHERE ledger_id = ?1",
             params![ledger_id, tags_json, crate::util::now_unix()],
+        )?;
+        Ok(())
+    }
+
+    // ---------- 本轮复盘模板设置 ----------
+
+    pub fn get_review_setting(
+        conn: &Connection,
+        ledger_id: &str,
+    ) -> rusqlite::Result<StockReviewSetting> {
+        conn.query_row(
+            &format!(
+                "SELECT {REVIEW_SETTING_COLUMNS} FROM tbl_billadm_stock_review_setting \
+                 WHERE ledger_id = ?1 ORDER BY id LIMIT 1"
+            ),
+            [ledger_id],
+            review_setting_from_row,
+        )
+    }
+
+    pub fn create_review_setting(
+        conn: &Connection,
+        setting: &StockReviewSetting,
+    ) -> rusqlite::Result<()> {
+        let now = crate::util::now_unix();
+        conn.execute(
+            "INSERT INTO tbl_billadm_stock_review_setting \
+             (id, ledger_id, template, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![setting.id, setting.ledger_id, setting.template, now],
+        )?;
+        Ok(())
+    }
+
+    /// 写模板（空串 = 清除自定义，服务层据此回落到内置模板）。
+    pub fn update_review_setting_template(
+        conn: &Connection,
+        ledger_id: &str,
+        template: &str,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE tbl_billadm_stock_review_setting SET template = ?2, updated_at = ?3 \
+             WHERE ledger_id = ?1",
+            params![ledger_id, template, crate::util::now_unix()],
         )?;
         Ok(())
     }
@@ -1185,6 +1230,16 @@ fn tag_setting_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockTradeT
     })
 }
 
+fn review_setting_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockReviewSetting> {
+    Ok(StockReviewSetting {
+        id: row.get(0)?,
+        ledger_id: row.get(1)?,
+        template: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
+}
+
 fn fund_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockFundRecord> {
     Ok(StockFundRecord {
         id: row.get(0)?,
@@ -1878,6 +1933,37 @@ mod tests {
         assert_eq!(
             StockDao::get_trade_tag_setting(&conn, "l1").unwrap().tags,
             r#"["分析"]"#
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 复盘模板设置：新建 → 读回（换行原样保留）→ 改写 → 清空。
+    #[test]
+    fn review_setting_roundtrip_keeps_newlines_and_can_be_cleared() {
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-review-setting");
+        let conn = workspace.connection();
+
+        // 没设过：`get` 返回 `QueryReturnedNoRows`（服务层据此回落到内置模板）
+        assert!(StockDao::get_review_setting(&conn, "l1").is_err());
+
+        let setting = StockReviewSetting {
+            id: crate::util::new_uuid(),
+            ledger_id: "l1".to_string(),
+            template: "判断层：\n改进层：\n".to_string(),
+            ..StockReviewSetting::default()
+        };
+        StockDao::create_review_setting(&conn, &setting).unwrap();
+        assert_eq!(
+            StockDao::get_review_setting(&conn, "l1").unwrap().template,
+            "判断层：\n改进层：\n",
+            "换行是模板的一部分，不许被抹平"
+        );
+
+        StockDao::update_review_setting_template(&conn, "l1", "").unwrap();
+        assert_eq!(
+            StockDao::get_review_setting(&conn, "l1").unwrap().template,
+            ""
         );
 
         std::fs::remove_dir_all(&dir).ok();

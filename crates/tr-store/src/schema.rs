@@ -250,6 +250,10 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
         &["id", "ledger_id", "tags", "created_at", "updated_at"],
     ),
     (
+        "tbl_billadm_stock_review_setting",
+        &["id", "ledger_id", "template", "created_at", "updated_at"],
+    ),
+    (
         "tbl_billadm_stock_operation",
         &[
             "id",
@@ -376,7 +380,7 @@ mod tests {
     #[test]
     fn fresh_database_has_current_schema() {
         let conn = fresh_conn();
-        // 23 张表（22 张数据表 + 迁移登记表）
+        // 24 张表（23 张数据表 + 迁移登记表）
         let tables: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
@@ -384,8 +388,8 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(tables, 23);
-        // 26 个索引
+        assert_eq!(tables, 24);
+        // 27 个索引
         let indexes: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL",
@@ -393,7 +397,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(indexes, 26);
+        assert_eq!(indexes, 27);
         validate_current(&conn).unwrap();
     }
 

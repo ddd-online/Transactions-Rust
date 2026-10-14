@@ -10,7 +10,7 @@
 //! 现在清单只写一次（[`app_commands!`] 的调用处）：注册闭包与注册名清单
 //! （[`REGISTERED_PATHS`]）从**同一份 token** 展开，所以"注册的东西"和
 //! "守卫读的东西"不可能各说各话。[`tests::catalog_matches_registration`]
-//! 再拿注册名去核对 `tr_domain::commands` 的**全表**（112 条）—— 那是界面侧取名字的地方。
+//! 再拿注册名去核对 `tr_domain::commands` 的**全表**（114 条）—— 那是界面侧取名字的地方。
 //!
 //! ## 名字怎么来的
 //!
@@ -21,7 +21,7 @@
 //!
 //! ## 覆盖范围
 //!
-//! 全部 112 条：21 条外壳命令 + 5 条更新命令 + 86 条业务命令，
+//! 全部 114 条：21 条外壳命令 + 5 条更新命令 + 88 条业务命令，
 //! 与 `tr_domain::commands` 的全表一一对应（分组的名字清单也在那边：
 //! `SHELL_COMMANDS` / `UPDATE_COMMANDS` / `BUSINESS_COMMANDS`）。
 
@@ -136,6 +136,8 @@ app_commands! {
     tr_ipc::commands::stock_fee_settings_put,
     tr_ipc::commands::stock_tag_settings_get,
     tr_ipc::commands::stock_tag_settings_put,
+    tr_ipc::commands::stock_review_template_get,
+    tr_ipc::commands::stock_review_template_put,
     tr_ipc::commands::stock_fund_records,
     tr_ipc::commands::stock_positions,
     tr_ipc::commands::stock_position_review,
@@ -227,7 +229,7 @@ mod tests {
         None
     }
 
-    /// **本票的核心断言**：注册表 == `tr_domain::commands` 的全表（112 条，不重不漏）。
+    /// **本票的核心断言**：注册表 == `tr_domain::commands` 的全表（114 条，不重不漏）。
     ///
     /// 两边都是"名字"：一边来自界面侧取名字的清单，一边来自注册闭包本身
     /// （`generate_handler![]` 与 [`REGISTERED_PATHS`] 同源）—— 所以这条断言真的在测

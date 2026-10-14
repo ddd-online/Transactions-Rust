@@ -15,7 +15,7 @@
 //! | [`edit_modal`] / [`impact_modal`] | 编辑成交 / 删除委托 + 影响预演确认 |
 //! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签（无工具栏） |
 //! | [`statistics_view`] | 结算统计 + 自绘 SVG 曲线（统计）/ 逐笔结算明细分页（明细）；工具栏 = 分栏页签 + 区间/笔数/标签筛选 + 统计口径下拉 |
-//! | [`settings_view`] | 交易标签 + 交易费用设置 + 操作记录（查看 / 回滚）+ 归档到新账本 + 重置股票数据 |
+//! | [`settings_view`] | 交易标签 + 本轮复盘模板 + 交易费用设置 + 操作记录（查看 / 回滚）+ 归档到新账本 + 重置股票数据 |
 //! | 状态组织 | 本文件直接持有信号（不引入 store；与其余页面一致） |
 //!
 //! 切子功能会**重建**该子功能的视图（信号随组件 owner 一起释放），因此来回切会重新拉数据 ——
@@ -31,7 +31,7 @@
 //! * 请求字段 snake_case、响应字段 camelCase —— 逐字照抄命令面，不做归一化。
 //! * **A 股红涨绿跌**：本页作用域内的 `.amount-income` / `.amount-expense` 被 CSS 反向映射
 //!   （盈 → 红、亏 → 绿），与记账域语义相反（本页作用域的覆盖写在 `stock.css`）。
-//! * 「设置」子功能的费用设置与交易标签是**按账本**存的（不是应用级配置），
+//! * 「设置」子功能的费用设置、交易标签与本轮复盘模板是**按账本**存的（不是应用级配置），
 //!   换算一律过 `tr_domain::money`，不自行 `/100`：**金额走分**（`cents_to_yuan` / `yuan_to_cents`），
 //!   **价格走厘**（`format::price` / `price_yuan_to_milli`）—— 场内基金的 0.001 元报价靠厘。
 //!
@@ -45,12 +45,13 @@
 //!
 //! ## 取数
 //!
-//! 本页的六条查询（账户总览 / 资金记录 / 费用设置 / 交易标签 / 成交 / 持仓）连同统计，
+//! 本页的七条查询（账户总览 / 资金记录 / 费用设置 / 交易标签 / 复盘模板 / 成交 / 持仓）连同统计，
 //! 全部是 [`crate::query::Query`] 的**声明**：key 是（账本，选中股票 / 页码 / 筛选），
 //! 各带自己的 loading，失败语义写在声明里。统计与统计页的标签下拉用**跨视图缓存**
 //! （[`crate::query::Cache::Keep`] + `cache_scope` = 账本）：统计视图是普通函数、
 //! 每次父级重渲染都会重建，缓存与去重状态必须活过这一次重建 —— 那正是这个策略要解决的问题，
-//! 不再是本页的 `thread_local` 槽位。写路径（下单 / 改成交 / 回滚 / 重置 / 归档）不走 module。
+//! 不再是本页的 `thread_local` 槽位。复盘模板同理（设置页写、持仓 / 记录页读，
+//! 走 [`REVIEW_TEMPLATE_CACHE`] 那一个键）。写路径（下单 / 改成交 / 回滚 / 重置 / 归档）不走 module。
 
 use std::collections::BTreeSet;
 
@@ -58,9 +59,9 @@ use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
 use tr_domain::dto::{
     StockFundRecordDto, StockFundRecordPage, StockOperationDto, StockOperationRollbackPreviewDto,
-    StockOverviewDto, StockPositionDto, StockStatisticsDto, StockStatisticsPointDto, StockTradeDto,
-    StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
-    StockTradeImpactDto, StockTradeRoundDto, StockTradeTagSettingDto,
+    StockOverviewDto, StockPositionDto, StockReviewSettingDto, StockStatisticsDto,
+    StockStatisticsPointDto, StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto,
+    StockTradeHistorySummaryDto, StockTradeImpactDto, StockTradeRoundDto, StockTradeTagSettingDto,
 };
 use tr_domain::fee::{compute_order_fee, is_valid_stock_code, Instrument};
 use tr_domain::models::{RoundFee, StockFeeSetting};
@@ -150,11 +151,47 @@ impl StockSub {
 /// 资金记录每页条数（默认 10 条）。
 const FUND_PAGE_SIZE: i64 = 10;
 
-/// 本轮复盘模板（固定文案，改动即影响界面）。
-const ROUND_REVIEW_TEMPLATE: &str = "买入理由：\n卖出理由：\n交易心得：\n";
+/// 本轮复盘模板的**跨视图缓存键**：设置页写它、持仓页与记录页读它（预填新建的复盘）。
+/// 三处必须是同一个键，所以只写一处 —— 拼错一个字符不会有编译错误，只会静默地各拿一份。
+const REVIEW_TEMPLATE_CACHE: &str = "stock.review-template";
 
 /// 复盘占位文案（固定文案，改动即影响界面）。
 const REVIEW_PLACEHOLDER: &str = "写下本轮的操作依据、得失与可改进之处（500 字以内）";
+
+/// 「本轮复盘模板」的取数声明（设置页 / 持仓页 / 记录页共用同一份跨视图缓存）。
+///
+/// 三个视图是**普通函数**、每次父级重渲染都会重建，所以缓存必须活过重建
+/// （[`crate::query::Cache::Keep`] + `cache_scope` = 账本）；同一账本下这份声明在谁那里
+/// 先跑都只发一次请求，别的两处直接读缓存 —— 打开复盘弹窗因此不必再等一次请求。
+fn review_template_query(stores: AppStores) -> Query<StockReviewSettingDto> {
+    Query::<StockReviewSettingDto>::new(
+        move || {
+            let ledger_id = stores.current_ledger_id.get();
+            (!ledger_id.is_empty()).then_some(ledger_id)
+        },
+        move |ledger_id: String| async move { api::stock::review_template_get(&ledger_id).await },
+    )
+    .cache(Cache::Keep(REVIEW_TEMPLATE_CACHE))
+    .cache_scope(move || stores.current_ledger_id.get_untracked())
+    .on_error(OnError::notify("读取复盘模板失败"))
+    // 失败保留手上那份（模板缺了不会让复盘写不了，只是预填空着）
+    .keep_stale(true)
+    .start()
+}
+
+/// 「生效的模板」：查询还没回来 / 读失败时用内置模板兜底 —— 预填本来就是那三行提纲，
+/// 缺了它用户得自己敲一遍。
+fn review_template_signal(query: Query<StockReviewSettingDto>) -> Signal<String> {
+    let value = query.value;
+    Signal::derive(move || {
+        let template = value.get().template;
+        if template.trim().is_empty() {
+            tr_domain::consts::STOCK_REVIEW_TEMPLATE_DEFAULT.to_string()
+        } else {
+            template
+        }
+    })
+}
 
 /// 委托内一笔成交的输入行（元 / 手）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1006,6 +1043,8 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     let review_target = RwSignal::new(None::<ReviewTarget>);
     let review_draft = RwSignal::new(String::new());
     let review_saving = RwSignal::new(false);
+    // 模板按账本存（在「设置」子功能里改）这里是读；打开复盘时拿它预填
+    let review_template = review_template_signal(review_template_query(stores));
 
     // 下单弹窗
     let trade_open = RwSignal::new(false);
@@ -1140,7 +1179,8 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
             })
             .unwrap_or_default();
         review_draft.set(if text.is_empty() {
-            ROUND_REVIEW_TEMPLATE.to_string()
+            // 空复盘 → 用这个账本配置的模板（没配过就是内置那三行）
+            review_template.get_untracked()
         } else {
             text
         });
@@ -1913,6 +1953,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                 review_target,
                 review_draft,
                 review_saving,
+                review_template,
                 UnsyncCallback::new(move |()| save_review()),
             )}
         </div>
@@ -1973,10 +2014,14 @@ struct ReviewTarget {
 /// 有改动时关闭**要二次确认**（底栏换成「继续编辑 / 放弃」）—— 一记 `Esc` 丢掉整段复盘
 /// 是这类编辑器最贵的一种错。两态用的都是 `Modal` 本来就有的三件套
 /// （`cancel_text` / `ok_text` / `ok_danger` 都收 `Signal`），共享组件因此一个字都不用改。
+///
+/// `template` 是这个账本**生效的**复盘模板（设置子功能里可改）：只用来判"这份草稿是不是
+/// 刚预填出来的模板"，据此决定光标落在第一行末还是文末。
 fn review_modal(
     target: RwSignal<Option<ReviewTarget>>,
     draft: RwSignal<String>,
     saving: RwSignal<bool>,
+    template: Signal<String>,
     on_save: UnsyncCallback<()>,
 ) -> AnyView {
     // 打开那一刻的原文：脏不脏全看它和当前草稿是否一致
@@ -2006,8 +2051,9 @@ fn review_modal(
         let text = draft.get_untracked();
         baseline.set(text.clone());
         confirming.set(false);
-        // 模板刚预填 → 光标落在第一行末（「买入理由：」之后）；已有复盘 → 文末
-        let caret = if text == ROUND_REVIEW_TEMPLATE {
+        // 模板刚预填 → 光标落在第一行末（模板的第一个提示语之后）；已有复盘 → 文末。
+        // 比的是**这个账本生效的那份模板**：模板可自定义，拿写死的字面量比会对不上。
+        let caret = if text == template.get_untracked() {
             tr_draw::text::line_end_caret(&text, 0)
         } else {
             text.encode_utf16().count() as u32
@@ -3042,6 +3088,8 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
     let review_target = RwSignal::new(None::<ReviewTarget>);
     let review_draft = RwSignal::new(String::new());
     let review_saving = RwSignal::new(false);
+    // 模板按账本存（在「设置」子功能里改）这里是读；轮次复盘预填用它
+    let review_template = review_template_signal(review_template_query(stores));
     let tag_saving = RwSignal::new(false);
 
     // 历史列表结果 → 同步选中股票（还在就留着，不在了就选第一只）
@@ -3320,6 +3368,7 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                                         round_card(
                                             round,
                                             format!("{} {}", data.stock_name, data.stock_code),
+                                            review_template,
                                             collapsed_rounds,
                                             collapsed_reviews,
                                             review_target,
@@ -3343,6 +3392,7 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                 review_target,
                 review_draft,
                 review_saving,
+                review_template,
                 UnsyncCallback::new(move |()| {
                     // 落哪条写路径由弹窗带着的目标决定（持仓侧自己那份在 `position_view`）
                     if let Some(ReviewTarget {
@@ -3393,6 +3443,8 @@ fn round_card(
     round: StockTradeRoundDto,
     // 卡片所属股票的身份（`上海电影 601595`）：复盘弹窗的标题用它
     identity: String,
+    // 这个账本生效的复盘模板：本轮还没写过复盘时拿它预填
+    template: Signal<String>,
     collapsed_rounds: RwSignal<BTreeSet<String>>,
     collapsed_reviews: RwSignal<BTreeSet<String>>,
     review_target: RwSignal<Option<ReviewTarget>>,
@@ -3558,7 +3610,8 @@ fn round_card(
                                 review_draft.set(if has_review.get_value() {
                                     review.get_value()
                                 } else {
-                                    ROUND_REVIEW_TEMPLATE.to_string()
+                                    // 空复盘 → 这个账本配置的模板（没配过就是内置那三行）
+                                    template.get_untracked()
                                 });
                                 collapsed_reviews.update(|set| {
                                     set.remove(&key);
@@ -4606,11 +4659,15 @@ const TRANSFER_TOOLTIP: &str =
 /// 交易标签最多保存数量（上限 20）。
 const MAX_STOCK_TAGS: usize = 20;
 
-/// 设置子功能：交易标签 + 交易费用设置 + 操作记录（查看 / 回滚）+ 重置股票数据。
+/// 设置子功能：交易标签 + 本轮复盘模板 + 交易费用设置 + 操作记录（查看 / 回滚）+ 重置股票数据。
 ///
 /// 这是原「应用设置 → 股票」整块迁进来的（它属于股票事务，不属于应用配置）：
-/// 费用设置与标签都是**按账本**存的，放在这里与下单、复盘、统计同屏更顺手。
-/// 「保存」是费用表单的提交键，放工具栏；标签的增删是即存即生效，不在工具栏里。
+/// 费用设置、标签与复盘模板都是**按账本**存的，放在这里与下单、复盘、统计同屏更顺手。
+/// 「保存」是费用表单与复盘模板各自的提交键，放在各自卡片头；标签的增删是即存即生效，
+/// 不在卡头里。
+///
+/// 这是原「应用设置 → 股票」整块迁进来的（它属于股票事务，不属于应用配置）：
+/// 费用设置、标签与复盘模板都是**按账本**存的，放在这里与下单、复盘、统计同屏更顺手。
 fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
 
@@ -4626,6 +4683,10 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     let default_tag = RwSignal::new(String::new());
     let tags_saving = RwSignal::new(false);
     let new_tag = RwSignal::new(String::new());
+
+    // ---- 本轮复盘模板（同上：表单是本地状态，取数与持仓 / 记录页共用一份缓存）----
+    let template_draft = RwSignal::new(String::new());
+    let template_saving = RwSignal::new(false);
 
     // ---- 操作记录 / 回滚 ----
     // 最多保留的条数（与后端 `STOCK_OPERATION_LIMIT` 同口径；界面只用于说明文案）
@@ -4672,6 +4733,9 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     let tags_loading = Signal::derive(move || tags_q.loading.get());
     let tags_loaded = Signal::derive(move || tags_q.loaded.get());
     let tags_failed = Signal::derive(move || tags_q.failed.get());
+    // 复盘模板：与持仓 / 记录页共用同一份缓存，所以在这里改了，切过去立刻是新的
+    let template_q = review_template_query(stores);
+    let template_value = review_template_signal(template_q);
     let operations_q = Query::<Vec<StockOperationDto>>::new(
         move || {
             let ledger_id = stores.current_ledger_id.get();
@@ -4840,6 +4904,51 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
         });
     };
 
+    // ---- 本轮复盘模板 ----
+    // 取回来 → 回填表单。按"值真的变了"判，而不是每次都写：否则用户正在编辑时来一次后台
+    // 复核，草稿就被冲掉了；空账本清空。
+    Effect::new(move |prev: Option<String>| {
+        let current = template_value.get();
+        if prev.as_deref() == Some(current.as_str()) {
+            return current;
+        }
+        template_draft.set(if stores.current_ledger_id.get_untracked().is_empty() {
+            String::new()
+        } else {
+            current.clone()
+        });
+        current
+    });
+
+    // 写模板：`template` 为空 = 恢复默认（后端按"全空白 = 清除自定义"处理）。
+    let save_template = move |template: String, success: &str| {
+        if template_saving.get_untracked() {
+            return;
+        }
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        if ledger_id.is_empty() {
+            Notifier::global().error("请先选择工作空间", None);
+            return;
+        }
+        template_saving.set(true);
+        let message = success.to_string();
+        leptos::task::spawn_local(async move {
+            // 在飞与失败面走 change::submit（判据见 #34）
+            let saved = crate::change::submit(
+                Some(template_saving),
+                "保存复盘模板失败",
+                api::stock::review_template_put(&ledger_id, &template),
+            )
+            .await;
+            if let Some(setting) = saved {
+                // 以后端返回的**生效值**为准：写回缓存，持仓 / 记录页下次打开就是它
+                template_q.value.set(setting.clone());
+                template_draft.set(setting.template);
+                Notifier::global().success(message, None);
+            }
+        });
+    };
+
     // ---- 交易标签 ----
     // 标签设置取回来 → 同步到本地列表 / 默认标签（空账本清空）
     Effect::new(move |_| match tags_q.value.get() {
@@ -4939,10 +5048,11 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
             match api::stock::reset(&ledger_id).await {
                 Ok(_) => {
                     confirm_open.set(false);
-                    // 重置会清掉费用设置与交易标签，重新拉一遍
+                    // 重置会清掉费用设置、交易标签与复盘模板，重新拉一遍
                     let _ = ledger_id;
                     fee_q.reload();
                     tags_q.reload();
+                    template_q.reload();
                     Notifier::global().success("股票数据已重置", None);
                 }
                 Err(error) => notify_error("重置股票数据失败", &error),
@@ -5133,6 +5243,56 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                     </div>
                 </div>
 
+                // ---- 本轮复盘模板 ----
+                // 放在标签与费用之间：三者都是"按账本"的设置，模板是那条写给自己的提纲。
+                // 保存键与「恢复默认」都在这张卡里（与费用表单同一套：表单 + 提交键）。
+                <div class="st-card st-card--block">
+                    <div class="st-panel-head">
+                        <div class="st-card-info">
+                            <span class="st-card-title">"本轮复盘模板"</span>
+                            <span class="st-card-desc">
+                                {move || {
+                                    format!(
+                                        "新建复盘时预填这份提纲（最多 {} 字）；留空即用内置模板。",
+                                        tr_domain::consts::STOCK_REVIEW_TEMPLATE_MAX_CHARS,
+                                    )
+                                }}
+                            </span>
+                        </div>
+                        <div class="st-panel-actions">
+                            <Button
+                                variant=ButtonVariant::Secondary
+                                size=ButtonSize::Small
+                                disabled=Signal::derive(move || {
+                                    template_saving.get()
+                                        || no_ledger()
+                                        || template_draft.get()
+                                            == tr_domain::consts::STOCK_REVIEW_TEMPLATE_DEFAULT
+                                })
+                                on_click=move || save_template(String::new(), "已恢复默认模板")
+                            >
+                                "恢复默认"
+                            </Button>
+                            <Button
+                                variant=ButtonVariant::Primary
+                                loading=template_saving
+                                disabled=Signal::derive(no_ledger)
+                                on_click=move || save_template(template_draft.get_untracked(), "复盘模板已保存")
+                            >
+                                "保存"
+                            </Button>
+                        </div>
+                    </div>
+                    <Textarea
+                        value=template_draft
+                        rows=4
+                        maxlength=tr_domain::consts::STOCK_REVIEW_TEMPLATE_MAX_CHARS as u32
+                        auto_grow=true
+                        placeholder=tr_domain::consts::STOCK_REVIEW_TEMPLATE_DEFAULT
+                        class="st-review-template"
+                    />
+                </div>
+
                 // ---- 交易费用设置 ----
                 <div class="st-card st-card--block">
                     <div class="st-panel-head">
@@ -5255,7 +5415,7 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                     <div class="st-card-info">
                         <span class="st-card-title">"归档"</span>
                         <span class="st-card-desc">
-                            "把当前账本的账户本金、资金记录、交易与轮次/复盘迁到一个新账本；原账本只保留交易标签与费用设置。需先清空全部持仓。"
+                            "把当前账本的账户本金、资金记录、交易与轮次/复盘迁到一个新账本；原账本只保留交易标签、复盘模板与费用设置。需先清空全部持仓。"
                         </span>
                     </div>
                     <div class="st-card-action">
@@ -5274,7 +5434,7 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                     <div class="st-card-info">
                         <span class="st-card-title">"重置"</span>
                         <span class="st-card-desc">
-                            "清空当前账本的股票数据（账户本金、持仓、交易记录、资金记录、费用设置与交易标签），此操作不可恢复。"
+                            "清空当前账本的股票数据（账户本金、持仓、交易记录、资金记录、费用设置、交易标签与复盘模板），此操作不可恢复。"
                         </span>
                     </div>
                     <div class="st-card-action">
@@ -5301,7 +5461,7 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                 on_ok=move || do_reset()
             >
                 <p class="st-modal-text">
-                    "将清空当前账本的账户本金、持仓、交易记录、资金记录、费用设置与交易标签。此操作不可恢复，确定继续吗？"
+                    "将清空当前账本的账户本金、持仓、交易记录、资金记录、费用设置、交易标签与复盘模板。此操作不可恢复，确定继续吗？"
                 </p>
             </Modal>
 
@@ -5326,7 +5486,7 @@ fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
                     />
                 </div>
                 <p class="st-modal-text">
-                    "将把当前账本的账户本金、资金记录、交易与轮次/复盘迁到这个新账本；原账本只保留交易标签与费用设置。此操作不可恢复，确定继续吗？"
+                    "将把当前账本的账户本金、资金记录、交易与轮次/复盘迁到这个新账本；原账本只保留交易标签、复盘模板与费用设置。此操作不可恢复，确定继续吗？"
                 </p>
             </Modal>
 

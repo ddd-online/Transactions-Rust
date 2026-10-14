@@ -499,6 +499,21 @@
   gap: var(--transactions-space-xs);
 }
 
+/* 卡头右侧的动作组（本轮复盘模板：恢复默认 + 保存）：不参与收缩，宽度由按钮自己定 */
+.st-panel-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+/* 复盘模板的写作面：四行起（内置模板就三行，一打开要看全），
+ * 长模板按内容长高 —— 与复盘弹窗同一个 `auto_grow` 机制。 */
+.st-review-template .ui-textarea__control {
+  min-height: 108px;
+  line-height: var(--transactions-height-relaxed);
+}
+
 .st-panel-title {
   margin: 0;
   font-family: var(--transactions-font-body);

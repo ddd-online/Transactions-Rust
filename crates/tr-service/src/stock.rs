@@ -38,7 +38,8 @@ use tr_domain::dto::{
 use tr_domain::error::AppError;
 use tr_domain::models::{
     Ledger, RoundFee, StockAccount, StockFeeSetting, StockFundRecord, StockOperation,
-    StockPosition, StockTrade, StockTradeHistory, StockTradeRound, StockTradeTagSetting,
+    StockPosition, StockReviewSetting, StockTrade, StockTradeHistory, StockTradeRound,
+    StockTradeTagSetting,
 };
 use tr_store::dao::is_not_found;
 use tr_store::dao::ledger::LedgerDao;
@@ -751,6 +752,79 @@ pub fn save_trade_tags(
         tags: normalized,
         default_tag: consts::STOCK_TAG_ANALYSIS.to_string(),
     })
+}
+
+// ---------- 本轮复盘模板（按账本设置）----------
+
+/// 取某账本**生效的**复盘模板：设过就用设的，没设过（或设成空）就用内置模板。
+pub fn get_review_template(workspace: &Workspace, ledger_id: &str) -> ServiceResult<String> {
+    let conn = workspace.connection();
+    let stored = match StockDao::get_review_setting(&conn, ledger_id) {
+        Ok(setting) => setting.template,
+        Err(error) if is_not_found(&error) => String::new(),
+        Err(error) => return Err(ServiceError::Database(error)),
+    };
+    Ok(effective_review_template(&stored))
+}
+
+/// 「生效的模板」的唯一判据：去空白后为空 ⇒ 内置模板（老账本没这行，行为与升级前一致）。
+fn effective_review_template(stored: &str) -> String {
+    if stored.trim().is_empty() {
+        consts::STOCK_REVIEW_TEMPLATE_DEFAULT.to_string()
+    } else {
+        stored.to_string()
+    }
+}
+
+/// 保存复盘模板，返回**生效的那份**。
+///
+/// 两处口径：
+/// * 全空白 = 清除自定义（回到内置模板）；其余**原样存**（含换行 —— 换行是模板的一部分）；
+/// * 长度上限 [`consts::STOCK_REVIEW_TEMPLATE_MAX_CHARS`]：模板会被预填进正文，而正文有
+///   500 字上限，模板太长会让"新建一篇复盘"一开局就写不下。
+pub fn save_review_template(
+    workspace: &Workspace,
+    ledger_id: &str,
+    template: &str,
+) -> ServiceResult<String> {
+    if ledger_id.is_empty() {
+        return Err(AppError::bad_request("ledger_id is required").into());
+    }
+    if template.chars().count() > consts::STOCK_REVIEW_TEMPLATE_MAX_CHARS {
+        return Err(AppError::bad_request(format!(
+            "复盘模板不能超过 {} 字",
+            consts::STOCK_REVIEW_TEMPLATE_MAX_CHARS
+        ))
+        .into());
+    }
+    let stored = if template.trim().is_empty() {
+        ""
+    } else {
+        template
+    };
+
+    let conn = workspace.connection();
+    match StockDao::get_review_setting(&conn, ledger_id) {
+        Ok(_) => db(StockDao::update_review_setting_template(
+            &conn, ledger_id, stored,
+        ))?,
+        Err(error) if is_not_found(&error) => {
+            let setting = StockReviewSetting {
+                id: tr_store::util::new_uuid(),
+                ledger_id: ledger_id.to_string(),
+                template: stored.to_string(),
+                ..StockReviewSetting::default()
+            };
+            db(StockDao::create_review_setting(&conn, &setting))?;
+        }
+        Err(error) => return Err(ServiceError::Database(error)),
+    }
+    tracing::info!(
+        "保存复盘模板, ledger: {}, chars: {}",
+        ledger_id,
+        stored.chars().count()
+    );
+    Ok(effective_review_template(stored))
 }
 
 // ---------- 资金记录 / 持仓 ----------
@@ -3189,6 +3263,68 @@ mod tests {
         reset_data(&workspace, TEST_LEDGER_ID).unwrap();
         let setting = get_trade_tags(&workspace, TEST_LEDGER_ID).unwrap();
         assert_eq!(setting, consts::default_stock_trade_tags());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 复盘模板：没设过 → 内置；设过 → 原样（含换行）；空/全空白 → 清除回内置；超长被拒；作用域按账本。
+    #[test]
+    fn review_template_falls_back_to_builtin_and_is_per_ledger() {
+        let (workspace, dir) = workspace("review-template");
+
+        // 没设过：内置模板（老账本升级后就是这个行为）
+        assert_eq!(
+            get_review_template(&workspace, TEST_LEDGER_ID).unwrap(),
+            consts::STOCK_REVIEW_TEMPLATE_DEFAULT
+        );
+
+        let custom = "判断层：\n买入理由：\n改进层：\n心得：";
+        assert_eq!(
+            save_review_template(&workspace, TEST_LEDGER_ID, custom).unwrap(),
+            custom,
+            "换行原样保留"
+        );
+        assert_eq!(
+            get_review_template(&workspace, TEST_LEDGER_ID).unwrap(),
+            custom
+        );
+
+        // 空 = 清除自定义（写回空串，读出来仍是内置）
+        assert_eq!(
+            save_review_template(&workspace, TEST_LEDGER_ID, "   ").unwrap(),
+            consts::STOCK_REVIEW_TEMPLATE_DEFAULT
+        );
+        assert_eq!(
+            get_review_template(&workspace, TEST_LEDGER_ID).unwrap(),
+            consts::STOCK_REVIEW_TEMPLATE_DEFAULT
+        );
+
+        // 超长被拒（上限与界面 maxlength 同值）
+        let too_long = "复".repeat(consts::STOCK_REVIEW_TEMPLATE_MAX_CHARS + 1);
+        let error = save_review_template(&workspace, TEST_LEDGER_ID, &too_long).unwrap_err();
+        assert!(
+            error.to_string().contains("复盘模板不能超过"),
+            "报的是模板那句：{error}"
+        );
+        save_review_template(
+            &workspace,
+            TEST_LEDGER_ID,
+            &"复".repeat(consts::STOCK_REVIEW_TEMPLATE_MAX_CHARS),
+        )
+        .unwrap();
+
+        // 按账本：另一个账本仍是内置模板
+        assert_eq!(
+            get_review_template(&workspace, "other-ledger").unwrap(),
+            consts::STOCK_REVIEW_TEMPLATE_DEFAULT
+        );
+
+        // 重置股票数据会连模板一起清掉（与费用设置 / 交易标签同一条口径）
+        reset_data(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(
+            get_review_template(&workspace, TEST_LEDGER_ID).unwrap(),
+            consts::STOCK_REVIEW_TEMPLATE_DEFAULT
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

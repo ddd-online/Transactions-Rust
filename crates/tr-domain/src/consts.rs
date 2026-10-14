@@ -83,6 +83,20 @@ pub const TAG_POLICY_ANY: &str = "any";
 /// 标签匹配策略：全部命中。
 pub const TAG_POLICY_ALL: &str = "all";
 
+// ---------- 本轮复盘模板（按账本设置）----------
+
+/// 内置的复盘模板：账本没设过模板时就是它（也是界面上「恢复默认」要写回的值）。
+///
+/// 三行标签是**提纲**，用户写的时候就在标签后面接着写 —— 所以服务层返回的是"生效的那份"
+/// （存过就用存的、没存过就用它），界面不必自己拼默认值。
+pub const STOCK_REVIEW_TEMPLATE_DEFAULT: &str = "买入理由：\n卖出理由：\n交易心得：\n";
+
+/// 复盘模板的长度上限（字）。
+///
+/// 模板会被**预填进正文**，而正文本身有 500 字上限（`tr_service::stock` 的两个
+/// `update_*_review`）：200 字给提纲，剩下 300 字留给写作。
+pub const STOCK_REVIEW_TEMPLATE_MAX_CHARS: usize = 200;
+
 // ---------- 待办 ----------
 
 /// 待办事项：进行中（卡片视图里显示的那批）
@@ -154,6 +168,19 @@ mod tests {
         );
         // 列表内的字面量必须始终存在，否则会破坏既有账本的标签校验
         assert!(default_stock_trade_tags().contains(&STOCK_TAG_ANALYSIS.to_string()));
+    }
+
+    /// 复盘模板的默认值与上限是**界面文案级**的契约：改了要连 `ui-stock-review` 的断言一起改。
+    #[test]
+    fn review_template_default_is_the_three_line_outline() {
+        assert_eq!(
+            STOCK_REVIEW_TEMPLATE_DEFAULT,
+            "买入理由：\n卖出理由：\n交易心得：\n"
+        );
+        // 模板必须能塞进 500 字的正文预算里（否则预填出来的草稿一开始就超限）。
+        // 两者都是常量，所以在**编译期**就把它钉住（clippy 也不接受运行时常量断言）。
+        const _: () = assert!(STOCK_REVIEW_TEMPLATE_DEFAULT.len() < 500);
+        const _: () = assert!(STOCK_REVIEW_TEMPLATE_MAX_CHARS < 500);
     }
 
     /// 六档的取档规则与文案（迁移与界面都依赖它，改规则必须同时改这条）。

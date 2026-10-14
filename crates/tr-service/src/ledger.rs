@@ -176,6 +176,8 @@ mod tests {
              VALUES (?2, ?1, 0.0002354, 500, 0.0005, 0.00001, 1, 1)",
             "INSERT INTO tbl_billadm_stock_trade_tag_setting (id, ledger_id, tags, created_at, updated_at) \
              VALUES (?2, ?1, '[]', 1, 1)",
+            "INSERT INTO tbl_billadm_stock_review_setting (id, ledger_id, template, created_at, updated_at) \
+             VALUES (?2, ?1, '买入理由：', 1, 1)",
             "INSERT INTO tbl_billadm_stock_trade \
              (id, ledger_id, stock_code, stock_name, trade_type, round_id, order_id, order_seq, price, lots, shares, amount, fee, commission, stamp_duty, transfer_fee, realized_pnl, trade_time, remark, created_at) \
              VALUES (?2, ?1, '600519', '贵州茅台', 'open', '', '', 1, 100, 1, 100, 10000, 5, 5, 0, 0, NULL, 1, '', 1)",

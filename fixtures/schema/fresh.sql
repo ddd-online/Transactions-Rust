@@ -49,6 +49,8 @@ CREATE TABLE `tbl_billadm_stock_trade_tag_setting` (`id` text,`ledger_id` varcha
 CREATE UNIQUE INDEX `idx_tbl_billadm_stock_trade_tag_setting_ledger_id` ON `tbl_billadm_stock_trade_tag_setting`(`ledger_id`);
 CREATE TABLE `tbl_billadm_stock_operation` (`id` text,`ledger_id` varchar(36) DEFAULT "",`kind` varchar(16) NOT NULL DEFAULT "",`action` varchar(32) NOT NULL DEFAULT "",`detail` varchar(200) NOT NULL DEFAULT "",`target_id` varchar(36) DEFAULT "",`created_at` integer NOT NULL,PRIMARY KEY (`id`));
 CREATE INDEX `idx_tbl_billadm_stock_operation_ledger` ON `tbl_billadm_stock_operation`(`ledger_id`,`created_at`);
+CREATE TABLE `tbl_billadm_stock_review_setting` (`id` text,`ledger_id` varchar(36) DEFAULT "",`template` text NOT NULL DEFAULT "",`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
+CREATE UNIQUE INDEX `idx_tbl_billadm_stock_review_setting_ledger_id` ON `tbl_billadm_stock_review_setting`(`ledger_id`);
 CREATE TABLE `tbl_billadm_todo_card` (`id` text,`ledger_id` varchar(36) DEFAULT "",`title` varchar(200) NOT NULL DEFAULT "",`created_at` integer NOT NULL,`updated_at` integer NOT NULL, sort_order integer NOT NULL DEFAULT 0,PRIMARY KEY (`id`));
 CREATE INDEX `idx_tbl_billadm_todo_card_ledger` ON `tbl_billadm_todo_card`(`ledger_id`,`created_at`);
 CREATE TABLE `tbl_billadm_todo_item` (`id` text,`ledger_id` varchar(36) DEFAULT "",`card_id` varchar(36) DEFAULT "",`title` varchar(500) NOT NULL DEFAULT "",`start_date` varchar(10) NOT NULL DEFAULT "",`due_date` varchar(10) NOT NULL DEFAULT "",`urgency` integer NOT NULL DEFAULT 0,`importance` integer NOT NULL DEFAULT 0,`status` varchar(16) NOT NULL DEFAULT "doing",`completed_at` integer NOT NULL DEFAULT 0,`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
@@ -71,3 +73,4 @@ INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260929_todo
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260929_todo_levels_snap', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261009_stock_trade_price_milli', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261009_stock_trade_round_fee', CAST(strftime('%s','now') AS INTEGER));
+INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261015_stock_review_setting', CAST(strftime('%s','now') AS INTEGER));

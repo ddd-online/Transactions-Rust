@@ -95,6 +95,16 @@ pub struct StockTradeTagSettingDto {
     pub default_tag: String,
 }
 
+/// 本轮复盘模板设置：`template` 是**生效的那份**（账本设过就是它，没设过就回落到
+/// [`tr_domain::consts::STOCK_REVIEW_TEMPLATE_DEFAULT`]），界面拿它预填、不必自己拼默认值。
+/// 长度上限不进来：它就是 [`tr_domain::consts::STOCK_REVIEW_TEMPLATE_MAX_CHARS`]，
+/// 界面与本 crate 都直接引那一个常量，不传第二份数字。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockReviewSettingDto {
+    pub template: String,
+}
+
 /// 资金变化记录分页结果。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

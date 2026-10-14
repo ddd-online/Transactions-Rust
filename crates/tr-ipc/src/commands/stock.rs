@@ -22,9 +22,9 @@ use tauri::State;
 
 use tr_domain::dto::{
     StockFundRecordPage, StockNameDto, StockOperationDto, StockOperationRollbackDto,
-    StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockStatisticsDto,
-    StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
-    StockTradeImpactDto, StockTradeTagSettingDto,
+    StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockReviewSettingDto,
+    StockStatisticsDto, StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto,
+    StockTradeHistorySummaryDto, StockTradeImpactDto, StockTradeTagSettingDto,
 };
 use tr_domain::error::AppError;
 use tr_domain::models::{RoundFee, StockFeeSetting};
@@ -32,9 +32,10 @@ use tr_domain::money::price_yuan_to_milli;
 use tr_domain::wire::{
     LedgerIdRequest, QueryNumber, StockAmountDateRequest, StockArchiveRequest,
     StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
-    StockRoundReviewRequest, StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest,
-    StockTradeCreateRequest, StockTradeImpactRequest, StockTradeOrderDeleteRequest,
-    StockTradeUpdateRequest, StockTradesRequest,
+    StockReviewTemplateRequest, StockRoundReviewRequest, StockRoundTagRequest,
+    StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
+    StockTradesRequest,
 };
 use tr_service::quote::TencentStockQuoteFetcher;
 use tr_service::stock::{self, TradeFill};
@@ -189,6 +190,33 @@ pub fn stock_tag_settings_put(
         &req.ledger_id,
         &req.tags,
     )?)
+}
+
+// ---------- 本轮复盘模板设置 ----------
+
+/// 读取本轮复盘模板（返回**生效的那份**：没设过就是内置模板）。
+#[tauri::command]
+pub fn stock_review_template_get(
+    state: State<'_, AppState>,
+    req: LedgerIdRequest,
+) -> ApiResult<StockReviewSettingDto> {
+    require_ledger_id(&req.ledger_id)?;
+    let workspace = state.workspace()?;
+    Ok(StockReviewSettingDto {
+        template: stock::get_review_template(&workspace, &req.ledger_id)?,
+    })
+}
+
+/// 保存本轮复盘模板（全空白 = 清除自定义，回到内置模板；超长由服务层报错）。
+#[tauri::command]
+pub fn stock_review_template_put(
+    state: State<'_, AppState>,
+    req: StockReviewTemplateRequest,
+) -> ApiResult<StockReviewSettingDto> {
+    let workspace = state.workspace()?;
+    Ok(StockReviewSettingDto {
+        template: stock::save_review_template(&workspace, &req.ledger_id, &req.template)?,
+    })
 }
 
 // ---------- 资金记录 / 持仓 ----------

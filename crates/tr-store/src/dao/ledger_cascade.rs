@@ -24,6 +24,7 @@ pub const LEDGER_CASCADE: &[&str] = &[
     "DELETE FROM tbl_billadm_stock_fund_record WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_fee_setting WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_trade_tag_setting WHERE ledger_id = ?1",
+    "DELETE FROM tbl_billadm_stock_review_setting WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_trade WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_trade_round WHERE ledger_id = ?1",
     "DELETE FROM tbl_billadm_stock_trade_history WHERE ledger_id = ?1",

@@ -315,6 +315,24 @@ pub struct StockTradeTagSetting {
     pub updated_at: i64,
 }
 
+/// 本轮复盘模板设置（每个账本一份）。空串 = 没设过 ⇒ 用
+/// [`tr_domain::consts::STOCK_REVIEW_TEMPLATE_DEFAULT`]（服务层返回"生效的那份"）。
+/// 表 `tbl_billadm_stock_review_setting`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockReviewSetting {
+    #[serde(rename = "id")]
+    pub id: String,
+    #[serde(rename = "ledgerId")]
+    pub ledger_id: String,
+    #[serde(rename = "template")]
+    pub template: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+}
+
 /// 可回滚的操作记录（每个账本最多保留最新 10 条）。
 /// 表 `tbl_billadm_stock_operation`。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

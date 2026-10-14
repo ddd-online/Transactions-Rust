@@ -8,6 +8,8 @@
 //! | `stock_trade_create` | `{ ledger_id, stock_code, stock_name, trade_type, trade_time, tag, fills, round_fee? }` |
 //! | `stock_tag_settings_get` | `{ ledger_id }` |
 //! | `stock_tag_settings_put` | `{ ledger_id, tags }`（同时接受 `ledgerId`） |
+//! | `stock_review_template_get` | `{ ledger_id }` → 生效的复盘模板 |
+//! | `stock_review_template_put` | `{ ledger_id, template }`（全空白 = 恢复内置模板） |
 //! | `stock_reset` | `{ ledger_id }` |
 //! | `stock_archive` | `{ ledger_id, name }` → 新账本 id |
 //!
@@ -30,15 +32,16 @@
 use tr_domain::commands;
 use tr_domain::dto::{
     StockFundRecordPage, StockNameDto, StockOperationDto, StockOperationRollbackDto,
-    StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockStatisticsDto,
-    StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
-    StockTradeImpactDto, StockTradeTagSettingDto,
+    StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockReviewSettingDto,
+    StockStatisticsDto, StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto,
+    StockTradeHistorySummaryDto, StockTradeImpactDto, StockTradeTagSettingDto,
 };
 use tr_domain::models::StockFeeSetting;
 use tr_domain::wire::{
     LedgerIdRequest, StockAmountDateRequest, StockArchiveRequest, StockFeeSettingsRequest,
-    StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest, StockRoundReviewRequest,
-    StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
+    StockReviewTemplateRequest, StockRoundReviewRequest, StockRoundTagRequest,
+    StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
     StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
     StockTradesRequest,
 };
@@ -105,6 +108,32 @@ pub async fn tag_settings_put(
         StockTagSettingsRequest {
             ledger_id: ledger_id.to_string(),
             tags,
+        },
+    )
+    .await
+}
+
+/// 读取本轮复盘模板（后端返回**生效的那份**：没设过 = 内置模板）。
+pub async fn review_template_get(ledger_id: &str) -> Result<StockReviewSettingDto, IpcError> {
+    ipc::call(
+        commands::STOCK_REVIEW_TEMPLATE_GET,
+        LedgerIdRequest {
+            ledger_id: ledger_id.to_string(),
+        },
+    )
+    .await
+}
+
+/// 保存本轮复盘模板（全空白 = 清除自定义 → 回到内置模板）。
+pub async fn review_template_put(
+    ledger_id: &str,
+    template: &str,
+) -> Result<StockReviewSettingDto, IpcError> {
+    ipc::call(
+        commands::STOCK_REVIEW_TEMPLATE_PUT,
+        StockReviewTemplateRequest {
+            ledger_id: ledger_id.to_string(),
+            template: template.to_string(),
         },
     )
     .await

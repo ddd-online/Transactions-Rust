@@ -94,6 +94,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20261009_stock_trade_round_fee",
         apply: stock_trade_round_fee,
     },
+    Migration {
+        id: "20261015_stock_review_setting",
+        apply: stock_review_setting,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -475,6 +479,30 @@ fn stock_trade_round_fee(conn: &Connection) -> MigrateResult {
         conn.execute_batch(&format!(
             "ALTER TABLE tbl_billadm_stock_trade ADD COLUMN {column} {ty}"
         ))
+        .map_err(stringify)?;
+    }
+    Ok(())
+}
+
+/// `20261015_stock_review_setting` —— 新增「本轮复盘模板」设置表（每个账本一份）。
+///
+/// 与「股票操作记录」「待办三张表」同一种形状：**纯新增**，不碰任何既有表、不回填数据
+/// —— 升级之前模板是写死在界面里的常量，升级后没有自定义模板的账本一律回落到那个常量
+/// （服务层按"存过就用存的、没存过就用内置"返回生效值），所以老账本的行为一字不变。
+///
+/// ⚠ 这里的 DDL 必须与 `fixtures/schema/fresh.sql` 里那两条**逐字节相同**：
+/// 升级出来的库与新建的库在 `.schema` 层面要完全一致，否则两条建库路径会分叉。
+fn stock_review_setting(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_stock_review_setting").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE TABLE `tbl_billadm_stock_review_setting` (`id` text,`ledger_id` varchar(36) DEFAULT \"\",`template` text NOT NULL DEFAULT \"\",`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));",
+        )
+        .map_err(stringify)?;
+    }
+    if !index_exists(conn, "idx_tbl_billadm_stock_review_setting_ledger_id").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX `idx_tbl_billadm_stock_review_setting_ledger_id` ON `tbl_billadm_stock_review_setting`(`ledger_id`);",
+        )
         .map_err(stringify)?;
     }
     Ok(())
@@ -1207,6 +1235,40 @@ mod tests {
             .unwrap();
         assert_eq!(columns, 1);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `20261015_stock_review_setting`：新增复盘模板设置表，**纯新增**，老库的数据一字不动。
+    ///
+    /// 判据三条：表与唯一索引出现；既有表的数据没被碰；重复应用无副作用（登记行已在）。
+    #[test]
+    fn stock_review_setting_migration_creates_table_without_touching_data() {
+        let dir = temp_dir("review-setting");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        // 升级前：表还不存在（模拟更早格式）
+        conn.execute_batch("DROP TABLE tbl_billadm_stock_review_setting;")
+            .unwrap();
+        conn.execute_batch(
+            "DELETE FROM tbl_billadm_schema_migration WHERE id = '20261015_stock_review_setting';",
+        )
+        .unwrap();
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(applied, vec!["20261015_stock_review_setting".to_string()]);
+        assert!(table_exists(&conn, "tbl_billadm_stock_review_setting").unwrap());
+        assert!(index_exists(&conn, "idx_tbl_billadm_stock_review_setting_ledger_id").unwrap());
+        // 账本没被碰过（纯新增只碰本次涉及的表）
+        let ledgers: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tbl_billadm_ledger", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(ledgers, 1);
+        crate::schema::validate_current(&conn).unwrap();
+
+        // 幂等：登记行已在 ⇒ 没有待应用迁移，也不会重复建表
+        assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 
