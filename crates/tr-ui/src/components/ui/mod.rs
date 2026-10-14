@@ -111,6 +111,8 @@ pub use chart::{series_color, ChartConfig, ChartSeries, ChartValueKind, LineChar
 // 自绘 SVG 的页面（待办的四象限图）也要按真实像素出图，但这不是对外的组件接口
 pub(crate) use chart::watch_canvas_size;
 pub use checkbox::{Checkbox, CheckboxGroup, CheckboxOption};
+// 「点的是遮罩本身才关」判定：弹窗 / 抽屉 / 通知之外，股票统计的放大层也直接用
+pub(crate) use modal::is_mask_self_click;
 // 日期算术（月长 / 加减月 / 周几 / 区间对齐）住在 tr-draw（native 上可测）；
 // 只有"今天"这件事要宿主时区，留在 `date_picker::today`。
 pub use date_picker::{DatePicker, DateRangePicker};

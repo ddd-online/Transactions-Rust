@@ -199,6 +199,12 @@ pub fn IconButton(
     /// 附加类名
     #[prop(optional, into)]
     class: Option<String>,
+    /// 元素引用。
+    ///
+    /// 需要"关掉浮层后把焦点还给打开它的那颗按钮"时用（股票统计的放大层就是这么做的）：
+    /// 焦点管理必须有元素引用，而 `IconButton` 的 `<button>` 在组件内部，调用方拿不到。
+    #[prop(optional)]
+    node_ref: Option<NodeRef<leptos::html::Button>>,
     /// 禁用
     #[prop(optional, into)]
     disabled: Option<Signal<bool>>,
@@ -212,6 +218,7 @@ pub fn IconButton(
     children: Children,
 ) -> impl IntoView {
     let disabled = disabled.unwrap_or_else(|| Signal::derive(|| false));
+    let node_ref = node_ref.unwrap_or_default();
 
     let mut classes = String::from(variant.class());
     if compact {
@@ -223,6 +230,7 @@ pub fn IconButton(
         <button
             type="button"
             class=classes
+            node_ref=node_ref
             title=label.clone()
             aria-label=label
             disabled=move || disabled.get()

@@ -227,7 +227,10 @@ pub fn Modal(
 /// 用 `Object.is(target, currentTarget)` 判定，而不是给内容挂 `stop_propagation`：
 /// 本仓库有过一次"`stop_propagation` 吃掉 `Popconfirm` 捕获阶段触发"的真实缺陷
 /// （见 AGENTS.md），能不打断事件传播就不打断。抽屉的遮罩复用同一个判定。
-pub(super) fn is_mask_self_click(ev: &leptos::ev::MouseEvent) -> bool {
+///
+/// `pub(crate)` 的第三个使用者是股票统计的放大层（`pages/stock.rs`）：它自己就是遮罩，
+/// 点四周留白要关、点内容不能关 —— 同一个判定，别在那边再写一遍。
+pub(crate) fn is_mask_self_click(ev: &leptos::ev::MouseEvent) -> bool {
     match (ev.target(), ev.current_target()) {
         (Some(target), Some(current)) => js_sys::Object::is(target.as_ref(), current.as_ref()),
         _ => false,

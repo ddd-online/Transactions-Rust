@@ -70,9 +70,10 @@ use tr_domain::stock::floating_pnl_rate;
 
 use crate::api;
 use crate::components::ui::{
-    Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries, DatePicker, Empty, FeaturePage,
-    Form, FormItem, FormLayout, Input, LineChart, Modal, ModalSize, Pagination, Segmented,
-    SegmentedOption, Select, SelectOption, TabItem, TabPane, Tabs, Textarea, Tooltip,
+    close_button, is_mask_self_click, Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries,
+    DatePicker, Empty, FeaturePage, Form, FormItem, FormLayout, IconButton, Input, LineChart,
+    Modal, ModalSize, Pagination, Segmented, SegmentedOption, Select, SelectOption, TabItem,
+    TabPane, Tabs, Textarea, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::format::{self, lots_of};
@@ -3638,6 +3639,58 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             || !tag_filter.get().is_empty()
     };
 
+    // 放大层是否打开（入口是曲线块标题右边那颗「放大」）。放大层**不重新取数**：
+    // 它读的还是 `stats` 这一份结果与 `metric` 这一个选中值，关掉不丢任何状态。
+    let chart_zoom = RwSignal::new(false);
+    // 入口那颗按钮的元素引用：关掉放大层时把焦点还回这里（见 `chart_zoom_overlay`）。
+    let zoom_trigger = NodeRef::<leptos::html::Button>::new();
+    // 放大层顶部那行小字：把工具栏上散落的筛选收成一句话。放大之后工具栏被这层盖住，
+    // 不写出来的话"这条曲线是哪一段"就只剩记忆了。
+    //
+    // 只报**偏离默认**的那几项：逐笔累计是默认口径，指标名自己已经写着「累计盈亏」，
+    // 再补一句「逐笔累计」是噪音；而分组口径必须说 —— 同一个点上它是**本组**的值。
+    // 笔数/组数照实报：曲线上有几个点，是这张图最容易被误读的地方。
+    let zoom_scope = Signal::derive(move || {
+        let strategy = current_strategy();
+        let mode = filter_mode.get();
+        let slice = if mode == "range" {
+            let start = range_start.get();
+            let end = range_end.get();
+            match (start.is_empty(), end.is_empty()) {
+                (false, false) => format!("{start} ~ {end}"),
+                (false, true) => format!("{start} 起"),
+                (true, false) => format!("截至 {end}"),
+                (true, true) => "全部".to_string(),
+            }
+        } else if mode == "recent" && recent.get() > 0 {
+            format!("最近 {} 笔", recent.get())
+        } else {
+            "全部".to_string()
+        };
+        let mut parts = vec![slice];
+        let tag = tag_filter.get();
+        if !tag.is_empty() {
+            parts.push(format!("标签「{tag}」"));
+        }
+        let count = stats
+            .get()
+            .map(|data| {
+                if strategy == StatisticsStrategy::Grouped {
+                    data.groups.len()
+                } else {
+                    data.points.len()
+                }
+            })
+            .unwrap_or(0);
+        if strategy == StatisticsStrategy::Grouped {
+            parts.push(format!("每 {} 笔一组", group_size_signal.get()));
+            parts.push(format!("共 {count} 组"));
+        } else {
+            parts.push(format!("共 {count} 笔结算"));
+        }
+        parts.join(" · ")
+    });
+
     let latest_point = move || stats.get().and_then(|data| data.points.last().cloned());
 
     // 明细表的数据源：结算点按日期**倒序**（最近一笔在最上面），再按页切片。
@@ -3928,107 +3981,27 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
 
                         <div class="stock-chart-block">
                             <div class="stock-panel__head">
-                                <h4 class="stock-panel__title">"统计曲线"</h4>
-                                // 指标选择器：值用**稳定的 key**（`Metric::key`），文案随统计口径变 ——
-                                // 分组口径下「累计盈亏」叫「分组盈亏」（那个点是**本组**的盈亏合计）。
-                                // 按文案当值会在切口径时反查不到、选中项被弹回第一档，所以这里放动态块。
-                                {move || {
-                                    let strategy = current_strategy();
-                                    view! {
-                                        <Segmented
-                                            value=metric
-                                            options={
-                                                Metric::ALL
-                                                    .iter()
-                                                    .map(|item| SegmentedOption::new(item.key(), item.label_in(strategy)))
-                                                    .collect::<Vec<_>>()
-                                            }
-                                        />
-                                    }
-                                }}
+                                <div class="stock-chart-block__heading">
+                                    <h4 class="stock-panel__title">"统计曲线"</h4>
+                                    // 「放大」：把同一张图铺满窗口再看（口径与这里共用
+                                    // `metric_chart` —— 放大层不会画出另一条曲线）。
+                                    // 带 `node_ref` 是为了关掉放大层时把焦点还给这里。
+                                    <IconButton
+                                        label="放大曲线"
+                                        node_ref=zoom_trigger
+                                        on_click=UnsyncCallback::new(move |()| chart_zoom.set(true))
+                                    >
+                                        {icons::icon(Icon::Fullscreen)}
+                                    </IconButton>
+                                </div>
+                                {metric_segmented(metric, current_strategy)}
                             </div>
                             <div class="stock-chart-block__body">
                             {move || {
                                 let Some(data) = stats.get() else {
                                     return ().into_any();
                                 };
-                                let strategy = current_strategy();
-                                let selected = Metric::ALL
-                                    .iter()
-                                    .find(|item| item.key() == metric.get())
-                                    .copied()
-                                    .unwrap_or(Metric::TotalPnl);
-                                // 画哪条序列由口径决定：分组口径读 `groups`（服务端与 `points`
-                                // 同一次算出来），逐笔累计读 `points`。顶部合计与「明细」分栏
-                                // 用的始终是 `points`，与这里的选择无关。
-                                let points = if strategy == StatisticsStrategy::Grouped {
-                                    &data.groups
-                                } else {
-                                    &data.points
-                                };
-                                let categories = points
-                                    .iter()
-                                    .map(|point| {
-                                        format!(
-                                            "{} {}",
-                                            point_span_label(strategy, point.sequence, point.span),
-                                            format_timestamp(point.closed_at, "MM-DD"),
-                                        )
-                                    })
-                                    .collect::<Vec<_>>();
-                                let values = points
-                                    .iter()
-                                    .map(|point| selected.value(point))
-                                    .collect::<Vec<_>>();
-                                // A 股配色：0 轴之上（盈利 / 胜率）红、之下（亏损）绿 ——
-                                // 面积、折线、数据点三处按同一条规则分色（`sign_colors`）。
-                                let above = "var(--transactions-color-expense)";
-                                let below = "var(--transactions-color-income)";
-                                // 图例色跟着**最后一点**的正负，与上面的 KPI 卡片同色。
-                                // 例外只有「最大回撤」：它不是盈亏（值恒 ≥ 0，但**越低越好**），
-                                // 按符号上色会变成"红色回撤"，跟自己那张绿色 KPI 卡片打架 ——
-                                // 保持单色绿、不做 0 轴分色。
-                                let last = values.last().copied().unwrap_or(0.0);
-                                let split = selected != Metric::MaxDrawdown;
-                                let color = if !split {
-                                    below
-                                } else if last >= 0.0 {
-                                    above
-                                } else {
-                                    below
-                                };
-                                let config = ChartConfig::default()
-                                    .height(320)
-                                    .value_kind(selected.kind())
-                                    .y_title("金额（元）");
-                                let config = if split {
-                                    config.sign_colors(above, below)
-                                } else {
-                                    config
-                                };
-                                let config = if selected.has_reference() {
-                                    config.reference(0)
-                                } else {
-                                    config
-                                };
-                                let config = match selected.y_bounds(&values) {
-                                    Some((low, high)) => config.y_bounds(low, high),
-                                    None => config,
-                                };
-                                view! {
-                                    <LineChart
-                                        categories=Signal::derive(move || categories.clone())
-                                        series=Signal::derive(move || {
-                                            vec![ChartSeries::new(
-                                                selected.label_in(strategy),
-                                                color,
-                                                values.clone(),
-                                            )]
-                                        })
-                                        config=config
-                                    />
-                                }
-                                    .into_any()
+                                metric_chart(&data, &metric.get(), current_strategy())
                             }}
                             </div>
                         </div>
@@ -4135,6 +4108,9 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             </TabPane>
         </div>
         </div>
+        // 放大层放在 `.stock-body` 之外：它是 `position: fixed` 的整屏层，不参与这一列
+        // 各级 `flex: 1; min-height: 0` 的高度链（`.stock-panel` 仍是这里唯一的弹性项）。
+        {chart_zoom_overlay(chart_zoom, metric, current_strategy, stats.into(), zoom_scope, zoom_trigger)}
     }
     .into_any();
 
@@ -4146,6 +4122,225 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
             toolbar=toolbar
             content=content
         />
+    }
+    .into_any()
+}
+
+/// 指标选择器（统计分栏的曲线块头与放大层**共用**）。
+///
+/// 值用**稳定的 key**（[`Metric::key`]），文案随统计口径变 —— 分组口径下「累计盈亏」叫
+/// 「分组盈亏」（那个点是**本组**的盈亏合计）。按文案当值会在切口径时反查不到、选中项被弹回
+/// 第一档，所以选项必须放在自己的动态块里（重建范围也只剩这个下拉）。
+fn metric_segmented(
+    metric: RwSignal<String>,
+    current_strategy: impl Fn() -> StatisticsStrategy + Copy + Send + Sync + 'static,
+) -> AnyView {
+    view! {
+        {move || {
+            let strategy = current_strategy();
+            view! {
+                <Segmented
+                    value=metric
+                    options={
+                        Metric::ALL
+                            .iter()
+                            .map(|item| SegmentedOption::new(item.key(), item.label_in(strategy)))
+                            .collect::<Vec<_>>()
+                    }
+                />
+            }
+        }}
+    }
+    .into_any()
+}
+
+/// 曲线本体（统计分栏与放大层**共用**）：一份取数结果 + 一个选中指标 → 一张 SVG 折线图。
+///
+/// 抽出来是为了"口径只有一份"：A 股红涨绿跌的分色、最大回撤不分色、胜率的 0..100 上下界、
+/// 金额类才画 0 轴参考线、图例色跟着**最后一点**的正负 —— 这几条都写在下面，
+/// 放大层要是自己再算一遍，两处迟早会长出不一样的两张图。
+fn metric_chart(
+    data: &StockStatisticsDto,
+    metric_key: &str,
+    strategy: StatisticsStrategy,
+) -> AnyView {
+    let selected = Metric::ALL
+        .iter()
+        .find(|item| item.key() == metric_key)
+        .copied()
+        .unwrap_or(Metric::TotalPnl);
+    // 画哪条序列由口径决定：分组口径读 `groups`（服务端与 `points` 同一次算出来），
+    // 逐笔累计读 `points`。顶部合计与「明细」分栏用的始终是 `points`，与这里的选择无关。
+    let points = if strategy == StatisticsStrategy::Grouped {
+        &data.groups
+    } else {
+        &data.points
+    };
+    let categories = points
+        .iter()
+        .map(|point| {
+            format!(
+                "{} {}",
+                point_span_label(strategy, point.sequence, point.span),
+                format_timestamp(point.closed_at, "MM-DD"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let values = points
+        .iter()
+        .map(|point| selected.value(point))
+        .collect::<Vec<_>>();
+    // A 股配色：0 轴之上（盈利 / 胜率）红、之下（亏损）绿 ——
+    // 面积、折线、数据点三处按同一条规则分色（`sign_colors`）。
+    let above = "var(--transactions-color-expense)";
+    let below = "var(--transactions-color-income)";
+    // 图例色跟着**最后一点**的正负，与上面的 KPI 卡片同色。
+    // 例外只有「最大回撤」：它不是盈亏（值恒 ≥ 0，但**越低越好**），
+    // 按符号上色会变成"红色回撤"，跟自己那张绿色 KPI 卡片打架 ——
+    // 保持单色绿、不做 0 轴分色。
+    let last = values.last().copied().unwrap_or(0.0);
+    let split = selected != Metric::MaxDrawdown;
+    let color = if !split {
+        below
+    } else if last >= 0.0 {
+        above
+    } else {
+        below
+    };
+    let config = ChartConfig::default()
+        .height(320)
+        .value_kind(selected.kind())
+        .y_title("金额（元）");
+    let config = if split {
+        config.sign_colors(above, below)
+    } else {
+        config
+    };
+    let config = if selected.has_reference() {
+        config.reference(0)
+    } else {
+        config
+    };
+    let config = match selected.y_bounds(&values) {
+        Some((low, high)) => config.y_bounds(low, high),
+        None => config,
+    };
+    view! {
+        <LineChart
+            categories=Signal::derive(move || categories.clone())
+            series=Signal::derive(move || {
+                vec![ChartSeries::new(
+                    selected.label_in(strategy),
+                    color,
+                    values.clone(),
+                )]
+            })
+            config=config
+        />
+    }
+    .into_any()
+}
+
+/// 放大层：把统计曲线铺满**整个窗口内容区**（含侧栏），只看这一张图。
+///
+/// ## 为什么是"铺满窗口"而不是又一个弹窗
+///
+/// 这条曲线的价值在**形状**：结算点的拐点、回撤段的斜率、0 轴两侧的面积。
+/// 分栏里它只有 `画布高度 − 图例` 那点高度，走势被压成一条带子。放大层把它放到
+/// 整块窗口上，同一份数据因此读得出细节 —— 所以它不是"另一个视图"：取数、指标、口径
+/// 与分栏里**完全共用**（[`metric_chart`] / [`metric_segmented`]），关掉就回到原样。
+///
+/// ## 边界（三处都不是随手定的）
+///
+/// * 顶部让开 48px 的自绘标题栏（`--transactions-size-top-band`）：窗口的最小化 / 最大化 /
+///   关闭仍可直接点，不必先关掉这一层；
+/// * 四周 16px 留白：留出"这一层是浮在上面的"这层意思，同时露出一点被压暗的原页面；
+/// * `z-index` 压在侧栏菜单与下拉（1050）**之下**：放大期间账本切换器仍要能用 ——
+///   切了账本这一层留在原地，曲线跟着换（两层读的是同一个信号）。
+///
+/// ## ESC 为什么要点焦点
+///
+/// 键盘事件只派发给**有焦点**的元素，而入口那颗「放大」按钮在层外 —— 不收焦点的话
+/// 下面那个 `on:keydown` 一次都不会响。所以打开时把焦点收到这一层（`tabindex="-1"`），
+/// 关掉时再还回入口那颗按钮（否则下一次 Tab 从应用最顶上重新数起）。
+///
+/// ## 它**不声称** `aria-modal`
+///
+/// `aria-modal="true"` 的语义是"这一层之外的都在惰性状态"，而这一层做不到：被盖住的外壳
+/// （侧栏 / 子功能条 / 页面）仍在 Tab 序里，`inert` 得由外壳那一侧统一加（工作空间选择屏
+/// 就是那么做的）。与其声明一个不成立的承诺，不如不声明 —— 本仓的 `Modal` 组件同样不声明。
+fn chart_zoom_overlay(
+    open: RwSignal<bool>,
+    metric: RwSignal<String>,
+    current_strategy: impl Fn() -> StatisticsStrategy + Copy + Send + Sync + 'static,
+    stats: Signal<Option<StockStatisticsDto>>,
+    scope: Signal<String>,
+    trigger: NodeRef<leptos::html::Button>,
+) -> AnyView {
+    let layer = NodeRef::<leptos::html::Div>::new();
+    // 只看"上一拍是不是开着"来决定还焦点：首次挂载时 `was_open` 是 `None`，
+    // 那时若也还焦点，焦点会自己跳到入口那颗按钮上（还亮起一圈 focus 环）。
+    Effect::new(move |was_open: Option<bool>| {
+        let is_open = open.get();
+        if is_open {
+            if let Some(element) = layer.get() {
+                let _ = element.focus();
+            }
+        } else if was_open == Some(true) {
+            // 关掉时把焦点还给入口（层一收起，入口必然还在：只有面板里有曲线时才画得出它）
+            if let Some(element) = trigger.get() {
+                let _ = element.focus();
+            }
+        }
+        is_open
+    });
+
+    let close = move || open.set(false);
+
+    view! {
+        <Show when=move || open.get()>
+            <div
+                class="stock-chart-zoom"
+                node_ref=layer
+                tabindex="-1"
+                role="dialog"
+                aria-label="统计曲线放大"
+                on:keydown=move |event: leptos::ev::KeyboardEvent| {
+                    if event.key() == "Escape" {
+                        close();
+                    }
+                }
+                on:click=move |event| {
+                    // 只有点四周那圈留白才关（点内容时 `target` 是里面的元素，冒泡上来不算）
+                    if is_mask_self_click(&event) {
+                        close();
+                    }
+                }
+            >
+                <div class="stock-chart-zoom__panel">
+                    <div class="stock-chart-zoom__head">
+                        <div class="stock-chart-zoom__heading">
+                            <h3 class="stock-chart-zoom__title">"统计曲线"</h3>
+                            <p class="stock-chart-zoom__scope">{move || scope.get()}</p>
+                        </div>
+                        <div class="stock-chart-zoom__actions">
+                            {metric_segmented(metric, current_strategy)}
+                            // 关法与全仓其它浮层一致：弹窗右上角那颗 ×（`.ui-modal__close`，
+                            // 悬停转危险色）—— 同一个动作不在这里另造一种长相
+                            {close_button("ui-modal__close", Some(UnsyncCallback::new(move |()| close())))}
+                        </div>
+                    </div>
+                    <div class="stock-chart-zoom__chart">
+                        {move || {
+                            let Some(data) = stats.get() else {
+                                return ().into_any();
+                            };
+                            metric_chart(&data, &metric.get(), current_strategy())
+                        }}
+                    </div>
+                </div>
+            </div>
+        </Show>
     }
     .into_any()
 }

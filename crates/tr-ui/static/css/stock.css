@@ -1282,10 +1282,137 @@
   padding: var(--transactions-space-md);
 }
 
+/* 曲线块的标题组：「统计曲线」+ 右边那颗「放大」。图标按钮自带约 7px 内边距，
+ * 所以组内只留 4px —— 视觉上约 11px，既不贴住标题，也不像两个彼此独立的块。 */
+.stock-chart-block__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
+  min-width: 0;
+  /* 这一组**不许收缩**：它是两个固定尺寸的东西，被压扁的只会是标题 ——
+   * 窄窗里「统计曲线」会变成一列单字（窗口 760px 逻辑宽时实测 16×103）。 */
+  flex-shrink: 0;
+}
+
+/* 曲线块的头在窄窗里**换行**而不是把标题挤扁：标题组不许收缩，7 档指标选择器是 `nowrap`
+ * 的、也缩不动，于是两者放不下时整组移到第二行（宽窗里仍然是一行，布局不变）。
+ * 只作用于这一块的头部：其余面板的头都很短，还不需要这条兜底。 */
+.stock-chart-block .stock-panel__head {
+  flex-wrap: wrap;
+  row-gap: var(--transactions-space-sm);
+}
+
+/* 7 档指标选择器本身也要能换行：它是 `nowrap` 的，窄到一行放不下时硬撑会顶破卡片宽度，
+ * 而 `.stock-panel { overflow: hidden }` 会从中间把最后一档裁掉（窗口 760px 逻辑宽时
+ * 实测「最大回撤」只剩半个字形）。整组换行后七档都读得到；宽窗里仍然是一行。
+ * 放大层里那一份同样处理 —— 它自己不裁，但窄到放不下时会溢出到面板外。 */
+.stock-chart-block .ui-segmented,
+.stock-chart-zoom__actions .ui-segmented {
+  flex-wrap: wrap;
+  row-gap: var(--transactions-space-xs);
+  max-width: 100%;
+}
+
 /* 图表根吃满 `__body`：`.chart__canvas` 自己 `flex: 1`，
  * 于是画布拿到的是"图例之下、块之内的实际像素"（`watch_canvas_size` 按它重画 SVG）。
  * 这覆盖了 ui.css 里"内容流里固定 320px"的用法 —— 在分栏里高度由容器决定。 */
 .stock-chart-block .chart {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+/* ---------------- 放大层：铺满窗口内容区的统计曲线 ---------------- */
+/* 入口是曲线块标题右边那颗「放大」。它不是"又一个弹窗"：弹窗最大也只有 640px，
+ * 而这一层要的是**画布**——吃掉整个窗口内容区（含侧栏），只让开顶部 48px 的自绘标题栏，
+ * 于是窗口三按钮仍可直接点，不必先关掉它。 */
+.stock-chart-zoom {
+  position: fixed;
+  /* 从标题栏下沿开始（`--transactions-size-top-band`，与 `size-top-band` 同一个 48px） */
+  top: var(--transactions-size-top-band);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  /* **低于侧栏菜单与下拉（1050）**：放大期间账本切换器仍然要能用
+   * （切了账本这一层留在原地、曲线跟着换，见 chart_zoom_overlay 的文档注释）。 */
+  z-index: 1000;
+  display: flex;
+  /* 四周留白：既是"浮在上面"的那层意思，也露出一点被压暗的原页面 */
+  padding: var(--transactions-space-lg);
+  background-color: var(--transactions-color-hover-bg);
+  /* 遮罩只淡入（与 `.ui-modal__mask` 同一条）：整屏会动的层读起来像"窗口在动" */
+  animation: tr-fade-in var(--transactions-transition-fast);
+}
+
+.stock-chart-zoom__panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--transactions-color-major-background);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-xl);
+  box-shadow: var(--transactions-shadow-xl);
+  /* 面板本体的落位：遮罩淡入、面板自己 4px 落定（与 `.ui-modal__content` 同一拍） */
+  animation: tr-rise-in var(--transactions-transition-enter);
+}
+
+/* 头部：左「标题 + 筛选摘要」、右「指标选择器 + 关闭」。
+ * `flex-wrap` 是窄窗兜底：7 档指标选择器是 `nowrap` 的，放不下时让右组整体换到第二行，
+ * 而不是被挤出面板外。 */
+.stock-chart-zoom__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-sm) var(--transactions-space-md);
+  padding: var(--transactions-space-md) var(--transactions-space-lg);
+  border-bottom: 1px solid var(--transactions-color-divider);
+}
+
+.stock-chart-zoom__heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-2xs);
+  min-width: 0;
+}
+
+/* 标题 = 弹窗标题那一档（18px / 600）：这一层本来就是"对话框式"的整屏层 */
+.stock-chart-zoom__title {
+  margin: 0;
+  font-size: var(--transactions-size-text-title-sm);
+  font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-snug);
+  letter-spacing: var(--transactions-tracking-display);
+  color: var(--transactions-color-text-major);
+}
+
+/* 筛选摘要：这一层盖住了工具栏，所以"现在看的是哪一段"只有这一个出处。
+ * 用 secondary 而不是 tertiary —— 它是给人读的信息，不是可以淡掉的标签。 */
+.stock-chart-zoom__scope {
+  margin: 0;
+  font-size: var(--transactions-size-text-caption);
+  line-height: var(--transactions-height-snug);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-chart-zoom__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--transactions-space-sm);
+}
+
+/* 图表吃掉面板剩余高度：与 `.stock-chart-block` 同一条口径
+ * （`.chart` 自己 `flex: 1`，画布因此拿到实际像素，`watch_canvas_size` 按它出图）。 */
+.stock-chart-zoom__chart {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--transactions-space-md) var(--transactions-space-lg) var(--transactions-space-lg);
+}
+
+.stock-chart-zoom__chart .chart {
   flex: 1;
   height: auto;
   min-height: 0;
