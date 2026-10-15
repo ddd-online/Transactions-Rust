@@ -172,6 +172,41 @@ function Get-FeeFormEdits { param($Window)
     return @($best | Sort-Object { $_.Rect.X } | Select-Object -First 4 | ForEach-Object { $_.Element })
 }
 
+# 费用卡自己的「保存」。
+#
+# ⚠ 设置页现在有**两颗**「保存」（「本轮复盘模板」卡与「交易费用设置」卡），而
+# `Wait-VisibleButton -Name '保存'` 取的是**树序第一个** —— 模板块在 DOM 里排在费用卡之前，
+# 于是这个查找一直点到的是模板那颗：费用设置一条都没落库，而"佣金费率落库 0.0001"那条还因为
+# **种子值恰好等于目标值**（`xtask seed` 里种的就是万1）而假绿（实测：另外三条立刻变红）。
+# 判据改成几何：费用输入框那一排**正上方**、且横向落在这一排跨度里的那颗。
+function Find-FeeSaveButton { param($Window, $Edits, [int]$TimeoutSec = 10)
+    $left = ($Edits | ForEach-Object { $_.Current.BoundingRectangle.X } | Measure-Object -Minimum).Minimum
+    $right = ($Edits | ForEach-Object { $_.Current.BoundingRectangle.X + $_.Current.BoundingRectangle.Width } |
+        Measure-Object -Maximum).Maximum
+    $top = ($Edits | ForEach-Object { $_.Current.BoundingRectangle.Y } | Measure-Object -Minimum).Minimum
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $best = $null
+        foreach ($element in @(Find-All $Window '保存')) {
+            if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+            if ($element.Current.IsOffscreen) { continue }
+            $rect = $element.Current.BoundingRectangle
+            if ($rect.Width -le 0 -or $rect.Height -le 0 -or -not (Test-Rect $rect)) { continue }
+            $centerX = $rect.X + $rect.Width / 2
+            if ($centerX -lt ($left - 60) -or $centerX -gt ($right + 60)) { continue }
+            # 卡片头在表单之上 ⇒ 只认"在输入框上方"的那颗，取最近的一颗
+            $gap = $top - ($rect.Y + $rect.Height)
+            if ($gap -lt 0) { continue }
+            if (-not $best -or $gap -lt $best.Gap) {
+                $best = [pscustomobject]@{ Element = $element; Gap = $gap }
+            }
+        }
+        if ($best) { return $best.Element }
+        Start-Sleep -Milliseconds 400
+    }
+    return $null
+}
+
 # 弹窗/气泡里的按钮：与页面入口同名时取**最后一个**（浮层在 DOM 末尾）
 function Invoke-ModalButton { param($Window, [string]$Name)
     $all = Find-All $Window $Name
@@ -816,7 +851,7 @@ function Set-SystemFeeSetting {
     Set-Value $edits[2] $Stamp | Out-Null
     Set-Value $edits[3] $Transfer | Out-Null
     Start-Sleep -Milliseconds 500
-    $save = Wait-VisibleButton -Window $Window -Name '保存' -TimeoutSec 10
+    $save = Find-FeeSaveButton -Window $Window -Edits $edits -TimeoutSec 10
     Assert-True ([bool]$save) '找到费用表单的「保存」'
     if ($save) { Invoke-Element $save | Out-Null }
     Start-Sleep -Seconds 3
@@ -1336,7 +1371,7 @@ try {
         Assert-True (Set-Value $feeEdits[2] '0.1') '印花税填 0.1%'
         Assert-True (Set-Value $feeEdits[3] '0.002') '过户费填 0.002%'
         Start-Sleep -Milliseconds 500
-        $saveFee = Wait-VisibleButton -Window $window -Name '保存' -TimeoutSec 10
+        $saveFee = Find-FeeSaveButton -Window $window -Edits $feeEdits -TimeoutSec 10
         Assert-True ([bool]$saveFee) '找到费用表单的「保存」'
         if ($saveFee) { Invoke-Element $saveFee | Out-Null }
         Start-Sleep -Seconds 3
