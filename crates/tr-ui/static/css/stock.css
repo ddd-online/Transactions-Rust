@@ -564,12 +564,16 @@
   color: var(--transactions-color-text-secondary);
 }
 
-/* 本轮标签的下拉：宽度与「记录」页每一轮那个同款（`128px`，四字标签刚好放得下）。
- * 身份区是按**文字基线**对齐的（名字大一档、代码小一档），而控件没有基线可对 ——
- * 让它自己居中，别把名字顶上去。 */
+/* 本轮标签：一枚**可就地改的标签芯片**（`ui-select--tag`，脸与「记录」页 / 明细表的标签同源，
+ * 见 ui.css 那个变体的注释）。宽度贴着内容 —— 标签两三字，没必要占一块固定宽度；
+ * 身份区按**文字基线**对齐（名字大一档、代码小一档），而控件没有基线可对，让它自己居中。 */
 .stock-detail__tag {
-  width: 128px;
   align-self: center;
+  flex-shrink: 0;
+}
+
+.stock-detail__tag .ui-select {
+  width: auto;
 }
 
 .stock-detail__actions {

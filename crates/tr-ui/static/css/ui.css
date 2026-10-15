@@ -545,6 +545,74 @@
   color: var(--transactions-color-text-secondary);
 }
 
+/* 变体：`ui-select--tag` —— 下拉画成**标签芯片**（可改的分类，不是表单字段）。
+ *
+ * 用在哪：值本身就是一个「标签」的地方 —— 持仓详情头的本轮交易标签。默认那套 36px 描边输入框
+ * 摆在标题行里像「一个没人填的字段」：它比标题还高、还围着一圈边框，读起来不是「这一轮的标签」。
+ * 这里换成全站标签那副脸（与 `.ui-tag` / `.stock-cell-tag` 同一套：caption 字号、6px 圆角、
+ * 中性填充、没有描边），右边跟一颗小箭头表示「点开能换」，宽度贴着内容。
+ *
+ * 三态：**静息 = 标签脸（`minor-background`）→ 悬停 = `active-bg` + 主色文字（「这一格能动」）
+ * → 展开 / 聚焦 = 同上再加焦点环**。浅色主题里中性那两级填充几乎同色（近灰白的
+ * `minor-background` 与墨色 6% 的 `hover-bg` 差不到一档），
+ * 悬停必须走到蓝那一档才看得出来 —— 那也正是全站「可操作 / 在用」那一档填充。
+ *
+ * `min-height: 22px` 是给指针的：显示用的标签只有 18px 高，而这一颗是要点的
+ * （介于标签脸与 28px 的小按钮之间），其余尺寸一律与标签对齐。禁用态沿用 `.ui-btn` 那一套。
+ *
+ * 面板宽度按**最长选项**铺（默认那套 `left:0; right:0` = 触发器多宽它多宽）：标签是用户自定义
+ * 的，当前值可能两个字、列表里却有八个字 —— 面板跟着芯片缩会把长标签折成两行。 */
+.ui-select--tag .ui-select__trigger {
+  width: auto;
+  height: auto;
+  min-height: 22px;
+  gap: var(--transactions-space-xs);
+  padding: 2px 6px 2px var(--transactions-space-sm);
+  border: 0;
+  border-radius: var(--transactions-radius-sm);
+  background-color: var(--transactions-color-minor-background);
+  font-size: var(--transactions-size-text-caption);
+  line-height: var(--transactions-height-tight);
+  color: var(--transactions-color-text-secondary);
+  white-space: nowrap;
+  transition: background-color var(--transactions-transition-fast),
+    color var(--transactions-transition-fast),
+    box-shadow var(--transactions-transition-fast);
+}
+
+.ui-select--tag .ui-select__trigger:hover:not(:disabled) {
+  background-color: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
+}
+
+/* 展开与键盘聚焦同一副长相：默认那套是「边框转主色 + 焦点环」，这里没有边框，改用底色 + 环。 */
+.ui-select--tag .ui-select__trigger:focus-visible,
+.ui-select--tag.is-open .ui-select__trigger {
+  outline: none;
+  border-color: transparent;
+  background-color: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
+  box-shadow: var(--transactions-shadow-focus);
+}
+
+.ui-select--tag .ui-select__trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* 箭头跟着文字走：静息是次级灰、悬停 / 展开转主色（`currentColor`），字号降一档更贴标签。 */
+.ui-select--tag .ui-select__arrow {
+  font-size: var(--transactions-size-text-small);
+  color: currentColor;
+}
+
+.ui-select--tag .ui-select__panel {
+  right: auto;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(240px, calc(100vw - var(--transactions-space-2xl)));
+}
+
 /* ============================================
  * Modal —— 16px 圆角 + 大阴影
  * ============================================ */

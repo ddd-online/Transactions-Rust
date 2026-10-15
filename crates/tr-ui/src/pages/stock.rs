@@ -1756,11 +1756,13 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                     <span class="stock-mono stock-detail__code">
                                         {position.stock_code.clone()}
                                     </span>
-                                    // 本轮标签：就地能看能改。值来自服务层的**生效值** ——
+                                    // 本轮标签：一枚可改的标签芯片（`ui-select--tag`，与「记录」页 /
+                                    // 明细表的标签同一副脸）。值来自服务层的**生效值** ——
                                     // 没设过的老持仓显示默认「分析」，不会是空的一项。
-                                    // 与「记录」页每一轮那个标签下拉是同一个组件、同一份选项。
-                                    <div class="stock-detail__tag">
+                                    // 外层带一个可访问名（`role=group`）：单念「分析」不知道说的是什么。
+                                    <div class="stock-detail__tag" role="group" aria-label="本轮交易标签">
                                         <Select
+                                            class="ui-select--tag"
                                             value=RwSignal::new(position.tag.clone())
                                             options={
                                                 tags.get()

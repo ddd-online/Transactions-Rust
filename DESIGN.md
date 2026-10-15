@@ -326,6 +326,7 @@ Gently curved, consistent radii: 6px for tags and dropdown items, 8px for button
 ### Tags / Chips
 
 - **Style:** 10% semantic tint background + semantic text, 6px radius, no border, 2px 8px padding.
+- **Editable tag (chip button):** when a tag is something the user can change, it keeps the tag face (caption, 6px radius, `minor-background`, 2px 8px) and gains an 11px caret plus a 22px minimum height so it is a fair pointer target — a bordered 36px field parked in a title row reads as an unfilled input, not as that row's tag (`ui-select--tag`). Hover steps the fill to `active-bg` with primary text; open and keyboard focus add the focus ring. Its panel is sized to the widest option, so a long custom tag never wraps inside a narrow chip.
 
 ### Tabs
 
