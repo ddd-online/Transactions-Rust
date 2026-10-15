@@ -11,6 +11,10 @@
 //! * [`Metric::key`] / [`Metric::label_in`] —— 界面记住的是 **key**，显示的是**随统计口径变**的文案：
 //!   分组口径下「累计盈亏」叫「分组盈亏」（那个点的值是**本组**的盈亏合计，不是自起点累计），
 //!   其余六档的口径天然跟着统计点走，名字不必变；
+//! * [`Metric::hint`] —— "这个指标在说什么"的一句话（**只写人话，不写公式**：公式在卡片副标题里）。
+//!   只有六档有：`TotalPnl` 是合计位那个数，它自己带着"截至 …"的副标题，再挂一句释义只会跟副标题
+//!   抢位置 —— 界面按 `Option` 决定要不要画那颗 ⓘ。名字与释义都从这里取，卡 / 曲线选择器 / 明细
+//!   表头因此不会各说各话；
 //! * [`point_span_label`] —— 统计点在横轴上的覆盖范围（分组口径下是"第 a-b 笔"）。
 
 use tr_domain::dto::StockStatisticsPointDto;
@@ -49,7 +53,7 @@ impl Metric {
             Metric::WinRate => "胜率",
             Metric::AvgWin => "平均盈利",
             Metric::AvgLoss => "平均亏损",
-            Metric::PnlRatio => "实际盈亏比",
+            Metric::PnlRatio => "盈亏比",
             Metric::Expectancy => "期望值",
             Metric::MaxDrawdown => "最大回撤",
         }
@@ -76,6 +80,24 @@ impl Metric {
         match (self, strategy) {
             (Metric::TotalPnl, StatisticsStrategy::Grouped) => "分组盈亏",
             _ => self.label(),
+        }
+    }
+
+    /// 「这个指标在说什么」的一句话（见模块文档）。
+    ///
+    /// 写的是**读法**不是算法：算法在卡片副标题（"盈利均值 ÷ 亏损均值"）与
+    /// `tr-service/src/stock_statistics.rs` 里，这里只回答"我该拿它判断什么"。
+    /// 一句话不带句号、不换行 —— 它是气泡里的一行字，不是段落。
+    pub fn hint(self) -> Option<&'static str> {
+        match self {
+            // 合计位那个数的不写：它自己带着"截至 … · 第 N 笔结算"的副标题
+            Metric::TotalPnl => None,
+            Metric::WinRate => Some("我赢的次数够不够多"),
+            Metric::AvgWin => Some("赢的时候能赢多少"),
+            Metric::AvgLoss => Some("输的时候会输多少"),
+            Metric::PnlRatio => Some("赢一次的收获等于几次的代价"),
+            Metric::Expectancy => Some("每开一笔，长期平均赚多少"),
+            Metric::MaxDrawdown => Some("最坏的时候我要忍多少"),
         }
     }
 
@@ -220,6 +242,35 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), labels.len(), "{labels:?}");
+    }
+
+    /// 六档各有"一句话"，累计盈亏没有 —— 界面按 `None` 决定不画那颗 ⓘ。
+    #[test]
+    fn six_metrics_carry_one_plain_sentence_and_the_total_does_not() {
+        assert_eq!(Metric::TotalPnl.hint(), None, "合计位那个数不挂释义");
+        for metric in Metric::ALL.iter().filter(|m| **m != Metric::TotalPnl) {
+            let hint = metric.hint().expect("除累计盈亏外都该有一句话");
+            assert!(!hint.trim().is_empty(), "{} 的释义是空的", metric.label());
+            assert_eq!(hint.trim(), hint, "{} 的释义首尾不留空白", metric.label());
+            assert!(!hint.ends_with('。'), "一句话不带句号：{hint}");
+            assert!(
+                !hint.contains('\n') && !hint.contains('\r'),
+                "一句话只有一行：{hint}"
+            );
+        }
+    }
+
+    /// 名字里不再有"实际"：盈亏比就是平均盈利 ÷ 平均亏损（旧名「实际盈亏比」已废弃）。
+    #[test]
+    fn the_ratio_drops_the_actual_prefix() {
+        assert_eq!(Metric::PnlRatio.label(), "盈亏比");
+        for metric in Metric::ALL {
+            assert!(
+                !metric.label().contains("实际"),
+                "{} 还带着旧名",
+                metric.label()
+            );
+        }
     }
 
     /// 七档都有稳定的 key，两两不同，且**不随口径变** —— 界面按它记住选中项。

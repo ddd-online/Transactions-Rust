@@ -4099,7 +4099,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                             </div>
                             <div class="stock-stats-overview__kpis">
                                 <StatKpi
-                                    label="胜率".to_string()
+                                    metric=Metric::WinRate
                                     value=Signal::derive(move || {
                                         format::rate_text(latest.win_rate)
                                     })
@@ -4112,7 +4112,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                     })
                                 />
                                 <StatKpi
-                                    label="实际盈亏比".to_string()
+                                    metric=Metric::PnlRatio
                                     value=Signal::derive(move || {
                                         format::ratio_text(latest.pnl_ratio)
                                     })
@@ -4120,7 +4120,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                     sub=Signal::derive(|| "盈利均值 ÷ 亏损均值".to_string())
                                 />
                                 <StatKpi
-                                    label="期望值".to_string()
+                                    metric=Metric::Expectancy
                                     value=Signal::derive(move || {
                                         format::signed_yuan(latest.expectancy)
                                     })
@@ -4130,7 +4130,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                     sub=Signal::derive(|| "每笔均值".to_string())
                                 />
                                 <StatKpi
-                                    label="最大回撤".to_string()
+                                    metric=Metric::MaxDrawdown
                                     value=Signal::derive(move || {
                                         format::rate_text(latest.max_drawdown_pct)
                                     })
@@ -4149,7 +4149,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                     })
                                 />
                                 <StatKpi
-                                    label="平均盈利".to_string()
+                                    metric=Metric::AvgWin
                                     value=Signal::derive(move || {
                                         if latest.avg_win > 0 {
                                             format!("¥{}", format::amount(latest.avg_win))
@@ -4169,7 +4169,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                     })
                                 />
                                 <StatKpi
-                                    label="平均亏损".to_string()
+                                    metric=Metric::AvgLoss
                                     value=Signal::derive(move || {
                                         if latest.avg_loss > 0 {
                                             format!("-¥{}", format::amount(latest.avg_loss))
@@ -4264,12 +4264,16 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                         <th class="is-center">"本笔盈亏"</th>
                                         <th class="is-center">"累计盈亏"</th>
                                         <th class="is-center">"胜负"</th>
-                                        <th class="is-center">"胜率"</th>
-                                        <th class="is-center">"平均盈利"</th>
-                                        <th class="is-center">"平均亏损"</th>
-                                        <th class="is-center">"实际盈亏比"</th>
-                                        <th class="is-center">"期望值"</th>
-                                        <th class="is-center">"最大回撤"</th>
+                                        // 后六档与曲线选择器、KPI 卡共用 tr-draw 那份词汇表
+                                        // （`Metric::label`：`ALL` 的第 2..7 档正好就是这六列）。
+                                        // 名字改一处三处一起改 —— 这里原来把名字抄了一份。
+                                        {Metric::ALL
+                                            .iter()
+                                            .skip(1)
+                                            .map(|metric| {
+                                                view! { <th class="is-center">{metric.label()}</th> }
+                                            })
+                                            .collect_view()}
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -4628,16 +4632,38 @@ fn statistics_detail_row(point: StockStatisticsPointDto, is_latest: bool) -> Any
 }
 
 /// 一个统计 KPI 格（标签 + 值 + 副标题）。
+///
+/// 名字与「一句话释义」**都取自 [`Metric`]**（不再各写一份字面量）：文案只有 tr-draw 那一处，
+/// 六张卡、曲线选择器、明细表头因此不会各说各话（「实际盈亏比」改名时就是四处字面量一起动）。
+/// 标签行右边那颗 ⓘ 只在有释义时画（[`Metric::hint`] 为 `None` 的档没有），气泡由纯 CSS 的
+/// `Tooltip` 出；`tabindex` 是为了键盘 —— `.ui-tooltip:focus-within` 那条规则负责让它显形。
 #[component]
 fn StatKpi(
-    label: String,
+    metric: Metric,
     #[prop(into)] value: Signal<String>,
     #[prop(into)] class: Signal<String>,
     #[prop(into)] sub: Signal<String>,
 ) -> impl IntoView {
+    let label = metric.label();
+    let hint = metric.hint();
     view! {
         <div class="stock-kpi">
-            <span class="stock-kpi__label">{label}</span>
+            <span class="stock-kpi__label">
+                {label}
+                {hint.map(|hint| {
+                    view! {
+                        <Tooltip title=hint class="stock-kpi-tip">
+                            <span
+                                class="stock-kpi__tip"
+                                tabindex="0"
+                                aria-label=format!("{label}是什么意思")
+                            >
+                                {icons::icon(Icon::InfoCircle)}
+                            </span>
+                        </Tooltip>
+                    }
+                })}
+            </span>
             <span class=move || format!("stock-kpi__value {}", class.get())>
                 {move || value.get()}
             </span>
@@ -4665,9 +4691,6 @@ const MAX_STOCK_TAGS: usize = 20;
 /// 费用设置、标签与复盘模板都是**按账本**存的，放在这里与下单、复盘、统计同屏更顺手。
 /// 「保存」是费用表单与复盘模板各自的提交键，放在各自卡片头；标签的增删是即存即生效，
 /// 不在卡头里。
-///
-/// 这是原「应用设置 → 股票」整块迁进来的（它属于股票事务，不属于应用配置）：
-/// 费用设置、标签与复盘模板都是**按账本**存的，放在这里与下单、复盘、统计同屏更顺手。
 fn settings_view(sub: RwSignal<StockSub>) -> AnyView {
     let stores = AppStores::global();
 

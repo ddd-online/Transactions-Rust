@@ -340,6 +340,12 @@ Gently curved, consistent radii: 6px for tags and dropdown items, 8px for button
 
 - **The one blocking screen is the workspace picker** (no workspace open yet). It keeps the **whole app shell rendered behind it** — sidebar, page frame and empty states — so the user sees what they are configuring, and covers it with `--transactions-color-screen-scrim` (heavier than a modal mask, lighter than the lightbox scrim). That background layer is `inert`: no pointer, no keyboard focus, nothing in the accessibility tree; only the dialog is reachable. The screen has no dismiss affordance at all — no ×, no cancel, clicking the backdrop does nothing, and the shell refuses the window close request — the user must pick a directory (escape hatch: the tray menu's quit item). Everything else in the copy goes into the ⓘ tooltip: the title and one sentence are the whole text.
 
+### Help tooltips
+
+- **Trigger:** a 12px `Icon::InfoCircle` placed immediately after the label it explains — `--transactions-color-text-tertiary`, `cursor: help`, the same glyph the settings panels use for their fee notes. It is focusable, so the component's own `:focus-within` rule shows the bubble to keyboard users too; give it the standard 2px focus ring.
+- **Bubble:** the `Tooltip` component's CSS bubble, holding one sentence in the reader's own words. The wording lives next to the vocabulary it explains (`Metric::hint` in tr-draw), not in the page, so a renamed label and its explanation move together. No formulas here — the number's own sub-line carries the arithmetic.
+- **Width:** cap it from the trigger's own class (180–320px) whenever the trigger sits inside a grid, table or panel: `overflow: hidden` ancestors clip an over-wide bubble mid-sentence, and a truncated definition reads as a wrong one.
+
 ### Segmented / Switch
 
 - **Style:** Soft Gray track; selected segment lifts to Paper with shadow-sm and Clarity Blue text; switch is a full-radius pill, Clarity Blue when on.

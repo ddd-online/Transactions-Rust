@@ -518,7 +518,7 @@ pub struct StockStatisticsPointDto {
     /// 平均亏损（分，正数）
     #[serde(rename = "avgLoss")]
     pub avg_loss: i64,
-    /// 实际盈亏比（平均盈利 ÷ 平均亏损），尚无亏损样本时为 null
+    /// 盈亏比（平均盈利 ÷ 平均亏损），尚无亏损样本时为 null
     #[serde(rename = "pnlRatio")]
     pub pnl_ratio: Option<f64>,
     /// 期望值（分/笔）

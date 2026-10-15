@@ -1278,9 +1278,38 @@
   border-left: 1px solid var(--transactions-color-divider);
 }
 
+/* 指标名 + 那颗 ⓘ 排在同一行：释义跟着**名字**走，不跟数字走。
+ * 两者都在 12px 的 caption 上（`.icon` 是 1em，所以 ⓘ 正好是名字的字号）。 */
 .stock-kpi__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--transactions-space-xs);
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-secondary);
+}
+
+/* ⓘ 触发器：比名字再退一档（它不该跟指标名抢注意力），`cursor: help` 与设置页那颗同款。
+ * 可聚焦：键盘 Tab 到它时 `.ui-tooltip:focus-within` 让气泡显形，因此它也吃全站那条
+ * 2px 主色焦点环（与 `.ui-icon-btn` 同一条写法）—— 释义不能只有鼠标能读到。 */
+.stock-kpi__tip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--transactions-color-text-tertiary);
+  cursor: help;
+}
+
+.stock-kpi__tip:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+}
+
+/* 气泡上限 180px —— 这个数是算出来的，不是随手写的：
+ * 最右那一格（4 栏时是「最大回撤」，2 栏窄窗时是右列那两张）距面板右内边不到 100px，
+ * 而 `.stock-panel { overflow: hidden }` 会把越出的气泡**从中间裁掉**（"释义只剩半句"）。
+ * 居中展开时左右各占一半，180px 在最窄的 2 栏（窗口约 460px 逻辑宽）也仍在面板内；
+ * 最长的那两句会折成两行 —— 与费用设置那三条多行说明同一个表现。 */
+.stock-kpi-tip::after {
+  max-width: 180px;
 }
 
 .stock-kpi__value {
