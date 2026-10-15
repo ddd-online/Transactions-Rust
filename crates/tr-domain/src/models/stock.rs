@@ -178,6 +178,12 @@ pub struct StockPosition {
     /// 本轮复盘（持仓期间先写，清仓归档到轮次）
     #[serde(rename = "review")]
     pub review: String,
+    /// 本轮交易标签（持仓期间先写，清仓归档到轮次）。
+    ///
+    /// **空串 = 没设过**（老数据），不是"没有标签"：读出来按默认标签「分析」显示
+    /// （与清仓时 `close_round` 对空标签的处置同一口径）。
+    #[serde(rename = "tag")]
+    pub tag: String,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(rename = "updatedAt")]

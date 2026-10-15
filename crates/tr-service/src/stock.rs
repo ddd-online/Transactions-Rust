@@ -905,6 +905,8 @@ pub fn list_positions(
             item.round_cash_flow = flow.cash_flow;
             // 本轮建仓时定下的费用设置；没有记录（老数据）⇒ 省略 = 沿用系统配置
             item.round_fee = round_fees.get(&position.stock_code).cloned().flatten();
+            // 本轮标签：库里存空串 = 没设过 ⇒ 按默认「分析」显示（见 `effective_position_tag`）
+            item.tag = effective_position_tag(&position.tag);
             if let Some(quote) = quotes.get(&position.stock_code) {
                 if quote.latest_price > 0 {
                     item.latest_price = Some(quote.latest_price);
@@ -961,6 +963,78 @@ pub fn update_position_review(
     }
     tracing::info!("保存持仓复盘, ledger: {}, code: {}", ledger_id, stock_code);
     Ok(StockPositionDto::from(&position))
+}
+
+/// 持仓行上那一列标签的**生效值**：空串（没设过）按默认标签「分析」。
+///
+/// 持仓侧读它（[`list_positions`]）与清仓侧写轮次时读它（`stock::write::close_round`）是**同一个
+/// 函数** —— 否则会出现"持仓页写着分析、归档出来是别的标签"这种两边各说一句话的情况。
+fn effective_position_tag(raw: &str) -> String {
+    let tag = raw.trim();
+    if tag.is_empty() {
+        consts::STOCK_TAG_ANALYSIS.to_string()
+    } else {
+        tag.to_string()
+    }
+}
+
+/// 保存持仓中的「本轮交易标签」（必须是本账本可用标签之一；空串 = 回到默认「分析」）。
+///
+/// 与 [`update_position_review`] 同一个形状：**持仓期间**标签先写在持仓行上，清仓时随轮次归档
+/// （`close_round` 收的就是同一份），归档后由持仓侧清空，下一轮不继承。
+///
+/// 从前标签只属于已归档的轮次（那时才建轮次行），持仓页想显示它只能靠界面上那次会话选过的值
+/// —— 重启就没了；现在它是持仓行上的一列（迁移 `20261015_stock_position_tag`）。
+pub fn update_position_tag(
+    workspace: &Workspace,
+    ledger_id: &str,
+    stock_code: &str,
+    tag: &str,
+) -> ServiceResult<StockPositionDto> {
+    if ledger_id.is_empty() {
+        return Err(AppError::bad_request("ledger_id is required").into());
+    }
+    if stock_code.is_empty() {
+        return Err(AppError::bad_request("stock_code is required").into());
+    }
+    let tag = tag.trim();
+    // 空 = 回到默认（与 `update_round_tag` 同一口径）；非空必须是本账本可用标签之一
+    let tag = if tag.is_empty() {
+        consts::STOCK_TAG_ANALYSIS.to_string()
+    } else {
+        let available = get_trade_tags(workspace, ledger_id)?;
+        if !contains_tag(&available, tag) {
+            return Err(AppError::bad_request("无效的交易标签").into());
+        }
+        tag.to_string()
+    };
+
+    let conn = workspace.connection();
+    let mut position = match StockDao::get_position(&conn, ledger_id, stock_code) {
+        Ok(position) => position,
+        Err(error) if is_not_found(&error) => {
+            return Err(AppError::not_found("持仓不存在").into());
+        }
+        Err(error) => return Err(ServiceError::Database(error)),
+    };
+    // 0 手但本轮还没归档（减仓减到 0）时仍可改标签 —— 与持仓列表"还在列表里"同一口径
+    if position.quantity <= 0 && !stock_has_open_round(&conn, ledger_id, stock_code)? {
+        return Err(AppError::not_found("该股票已清仓，请在「交易历史」中改本轮标签").into());
+    }
+    position.tag = tag;
+    if let Err(error) = StockDao::update_position(&conn, &position) {
+        tracing::error!(
+            "保存持仓标签失败, ledger: {}, code: {}, err: {}",
+            ledger_id,
+            stock_code,
+            error
+        );
+        return Err(ServiceError::Database(error));
+    }
+    tracing::info!("保存持仓标签, ledger: {}, code: {}", ledger_id, stock_code);
+    let mut dto = StockPositionDto::from(&position);
+    dto.tag = effective_position_tag(&position.tag);
+    Ok(dto)
 }
 
 /// 为要显示的持仓请求行情（调用方已经筛过"哪几条要显示"）；一条都没有时返回空映射。
@@ -4206,6 +4280,159 @@ mod tests {
         assert_eq!(
             detail.rounds[0].opened_at, 1_700_000_000,
             "轮次的开始时间仍是建仓那一刻"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 持仓期间的「本轮标签」：它落在**持仓行**上（不是只活在界面上那次会话里），
+    /// 空串 = 回到默认「分析」、非法标签被拒；清仓时随轮次归档，持仓侧清空以免下一轮继承。
+    ///
+    /// 起因：标签从前只属于已归档的轮次（清仓那一刻才写），在建那一轮的成交 `round_id` 是空的
+    /// —— 于是"这一轮是什么标签"在库里没有落点，持仓页想显示它只能靠界面上的会话状态。
+    #[test]
+    fn position_tag_is_stored_while_holding_and_carried_into_the_round() {
+        let (workspace, dir) = workspace("position-tag");
+        seed_principal(&workspace, 10_000_000);
+        let read_raw_tag = || -> String {
+            workspace
+                .connection()
+                .query_row(
+                    "SELECT tag FROM tbl_billadm_stock_position \
+                     WHERE ledger_id = ?1 AND stock_code = ?2",
+                    [TEST_LEDGER_ID, TEST_CODE],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+
+        // 建仓不带标签（老数据 / 接口直接调）⇒ 库里是空串，列表 DTO 给的是**生效值**「分析」
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            100_000,
+            1,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+        assert!(read_raw_tag().is_empty(), "没设过就是空串");
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        assert_eq!(
+            positions[0].tag,
+            consts::STOCK_TAG_ANALYSIS,
+            "没设过的持仓显示默认「分析」，不是空白"
+        );
+
+        // 就着持仓改：落库，返回生效值
+        let updated = update_position_tag(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            consts::STOCK_TAG_DABAN,
+        )
+        .unwrap();
+        assert_eq!(updated.tag, consts::STOCK_TAG_DABAN);
+        assert_eq!(read_raw_tag(), consts::STOCK_TAG_DABAN);
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        assert_eq!(positions[0].tag, consts::STOCK_TAG_DABAN);
+
+        // 非法标签被拒且不落库；空串 = 回到默认
+        assert!(
+            update_position_tag(&workspace, TEST_LEDGER_ID, TEST_CODE, "不存在的标签").is_err()
+        );
+        assert_eq!(read_raw_tag(), consts::STOCK_TAG_DABAN, "被拒的标签没落库");
+        let cleared = update_position_tag(&workspace, TEST_LEDGER_ID, TEST_CODE, "   ").unwrap();
+        assert_eq!(cleared.tag, consts::STOCK_TAG_ANALYSIS);
+        assert_eq!(
+            read_raw_tag(),
+            consts::STOCK_TAG_ANALYSIS,
+            "空串 = 回到默认"
+        );
+
+        // 建仓时在下单弹窗里选的那个也写进持仓行（本轮之内一直看得见）
+        update_position_tag(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            consts::STOCK_TAG_XULI,
+        )
+        .unwrap();
+        // 加仓带着标签：同样落库（传空则不动既有值）
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_ADD,
+            110_000,
+            1,
+            1_700_000_100,
+            "",
+            consts::STOCK_TAG_DABAN,
+        )
+        .unwrap();
+        assert_eq!(read_raw_tag(), consts::STOCK_TAG_DABAN);
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_ADD,
+            110_000,
+            1,
+            1_700_000_150,
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            read_raw_tag(),
+            consts::STOCK_TAG_DABAN,
+            "传空不抹掉本轮标签"
+        );
+
+        // 清仓：标签随轮次归档，持仓侧清空（下一轮不继承）
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            120_000,
+            3,
+            1_700_000_200,
+            "",
+            consts::STOCK_TAG_DABAN,
+        )
+        .unwrap();
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(detail.rounds[0].tag, consts::STOCK_TAG_DABAN, "归档到轮次");
+        assert!(read_raw_tag().is_empty(), "归档后持仓侧清空");
+        // 已清仓的票不能在持仓侧改标签（改的地方是「记录」页那一轮）
+        assert!(
+            update_position_tag(
+                &workspace,
+                TEST_LEDGER_ID,
+                TEST_CODE,
+                consts::STOCK_TAG_DABAN
+            )
+            .is_err(),
+            "已清仓：持仓侧拒写"
+        );
+        assert!(
+            update_position_tag(
+                &workspace,
+                "other-ledger",
+                TEST_CODE,
+                consts::STOCK_TAG_DABAN
+            )
+            .is_err(),
+            "不存在的账本：拒写"
         );
 
         std::fs::remove_dir_all(&dir).ok();

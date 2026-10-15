@@ -32,8 +32,8 @@ use tr_domain::money::price_yuan_to_milli;
 use tr_domain::wire::{
     LedgerIdRequest, QueryNumber, StockAmountDateRequest, StockArchiveRequest,
     StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
-    StockReviewTemplateRequest, StockRoundReviewRequest, StockRoundTagRequest,
-    StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    StockPositionTagRequest, StockReviewTemplateRequest, StockRoundReviewRequest,
+    StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
     StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
     StockTradesRequest,
 };
@@ -289,6 +289,22 @@ pub fn stock_position_review(
         &req.ledger_id,
         &req.code,
         &req.review,
+    )?)
+}
+
+/// 保存持仓中的「本轮交易标签」（必须是本账本可用标签之一；空串 = 回到默认「分析」）。
+#[tauri::command]
+pub fn stock_position_tag(
+    state: State<'_, AppState>,
+    req: StockPositionTagRequest,
+) -> ApiResult<StockPositionDto> {
+    require_ledger_id(&req.ledger_id)?;
+    let workspace = state.workspace()?;
+    Ok(stock::update_position_tag(
+        &workspace,
+        &req.ledger_id,
+        &req.code,
+        &req.tag,
     )?)
 }
 

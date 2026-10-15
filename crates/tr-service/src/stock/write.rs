@@ -325,6 +325,12 @@ pub fn create_trade_order_with_round_fee(
             Err(error) => return Err(ServiceError::Database(error)),
         };
         position.stock_name = stock_name.to_string();
+        // 本轮标签：非清仓委托**只**把它带到本轮（落库到轮次要等清仓），但持仓期间也该看得见 ——
+        // 写进持仓行（迁移 `20261015_stock_position_tag`），持仓页的标签下拉读的就是它。
+        // 传空（老调用方 / 接口直接用）不动既有值，别把这一轮已经定下的标签抹掉。
+        if !tag.is_empty() {
+            position.tag = tag.to_string();
+        }
 
         // 本轮的费用设置：建仓时定下（请求里的，否则账本系统配置），本轮之内一律沿用
         let (fee_setting, round_fee) = resolve_round_fee(
@@ -435,8 +441,9 @@ pub fn create_trade_order_with_round_fee(
             for trade in trades.iter_mut() {
                 trade.round_id = round_id.clone();
             }
-            // 持仓期间先写的复盘已归档到本轮次，清空持仓上的草稿，避免下一轮继承
+            // 持仓期间先写的复盘与标签都已归档到本轮次，清空持仓上的草稿，避免下一轮继承
             position.review = String::new();
+            position.tag = String::new();
         }
 
         db(StockDao::update_position(conn, &position))?;
@@ -618,11 +625,9 @@ fn close_round(
     if opened_at == 0 {
         opened_at = closed_at;
     }
-    let tag = if tag.is_empty() {
-        consts::STOCK_TAG_ANALYSIS.to_string()
-    } else {
-        tag.to_string()
-    };
+    // 空标签 = 回到默认「分析」——**与持仓侧读它时同一个函数**（`effective_position_tag`），
+    // 否则会出现"持仓页写着分析、归档出来是别的标签"。
+    let tag = super::effective_position_tag(tag);
 
     let round = StockTradeRound {
         id: tr_store::util::new_uuid(),

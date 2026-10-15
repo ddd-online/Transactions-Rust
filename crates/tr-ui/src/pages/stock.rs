@@ -1168,6 +1168,39 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         });
     };
 
+    // 详情头的「本轮标签」下拉：与本轮复盘同一形状 —— 持仓期间先写在持仓行上，清仓时带进轮次。
+    // 标签是**本轮**的属性，从前只在清仓那一刻才落库（在建那一轮的成交 `round_id` 是空的），
+    // 持仓页想看它只能靠这次会话选过的值；现在它是一列真数据（迁移 `20261015_stock_position_tag`）。
+    let tag_saving = RwSignal::new(false);
+    let save_position_tag = move |tag: String| {
+        let ledger_id = stores.current_ledger_id.get_untracked();
+        let code = selected_code.get_untracked();
+        if ledger_id.is_empty() || code.is_empty() {
+            return;
+        }
+        tag_saving.set(true);
+        leptos::task::spawn_local(async move {
+            // 在飞与失败面走 change::submit（判据见 #34）；成功后的就地更新留在调用点
+            let saved = crate::change::submit(
+                Some(tag_saving),
+                "保存交易标签失败",
+                api::stock::position_tag(&ledger_id, &code, &tag),
+            )
+            .await;
+            if let Some(updated) = saved {
+                positions.update(|items| {
+                    if let Some(existing) = items
+                        .iter_mut()
+                        .find(|item| item.stock_code == updated.stock_code)
+                    {
+                        existing.tag = updated.tag.clone();
+                    }
+                });
+                Notifier::global().success(format!("本轮标签已改为「{}」", updated.tag), None);
+            }
+        });
+    };
+
     // 打开写作面：空复盘预填模板，已有复盘带原文
     let open_review = move |()| {
         let (text, identity) = current_position()
@@ -1244,12 +1277,29 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         )]);
         trade_date.set(today_ymd());
         // 「交易标签」是**本轮**的属性（落库在 `tbl_billadm_stock_trade_round.tag`，
-        // 清仓时写入）。所以这里不能每次都用账本默认值覆盖：
+        // 清仓时写入；持仓期间存在持仓行 `tag` 上）。所以这里不能每次都用账本默认值覆盖：
         // * 建仓 = 开新的一轮 → 回到默认标签；
-        // * 加仓 / 减仓 / 清仓 = 就着现有持仓 → 沿用这一轮已经选过的那个（没选过才用默认）。
+        // * 加仓 / 减仓 / 清仓 = 就着现有持仓 → 先读**持仓行上**这一轮已经定下的那个
+        //   （重启后也还在），没有才退回这次会话选过的值，最后才用默认。
         // 以前一律重置成默认值，于是"建仓时选了打板，清仓时又变回分析"。
-        if next_type == "open" || trade_tag.get_untracked().is_empty() {
+        if next_type == "open" {
             trade_tag.set(default_tag.get_untracked());
+        } else {
+            let carried = current_position()
+                .map(|item| item.tag)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let carried = if carried.is_empty() {
+                trade_tag.get_untracked()
+            } else {
+                carried
+            };
+            trade_tag.set(if carried.is_empty() {
+                default_tag.get_untracked()
+            } else {
+                carried
+            });
         }
         // 「本轮费用设置」也一样：**建仓**才回填（用系统配置），其它委托就着本轮那份（只读）。
         // 不回填就等于沿用上次的编辑结果 —— 那会让"建仓时定费率"变成"上次改过什么就是什么"。
@@ -1706,6 +1756,24 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                     <span class="stock-mono stock-detail__code">
                                         {position.stock_code.clone()}
                                     </span>
+                                    // 本轮标签：就地能看能改。值来自服务层的**生效值** ——
+                                    // 没设过的老持仓显示默认「分析」，不会是空的一项。
+                                    // 与「记录」页每一轮那个标签下拉是同一个组件、同一份选项。
+                                    <div class="stock-detail__tag">
+                                        <Select
+                                            value=RwSignal::new(position.tag.clone())
+                                            options={
+                                                tags.get()
+                                                    .into_iter()
+                                                    .map(SelectOption::same)
+                                                    .collect::<Vec<_>>()
+                                            }
+                                            disabled=Signal::derive(move || tag_saving.get())
+                                            on_change=UnsyncCallback::new(move |tag: String| {
+                                                save_position_tag(tag)
+                                            })
+                                        />
+                                    </div>
                                 </div>
                                 <div class="stock-detail__actions">
                                     // 清仓 = 结束这一轮（全是全仓卖出，减仓减到 0 手之后也点它归档）

@@ -564,6 +564,14 @@
   color: var(--transactions-color-text-secondary);
 }
 
+/* 本轮标签的下拉：宽度与「记录」页每一轮那个同款（`128px`，四字标签刚好放得下）。
+ * 身份区是按**文字基线**对齐的（名字大一档、代码小一档），而控件没有基线可对 ——
+ * 让它自己居中，别把名字顶上去。 */
+.stock-detail__tag {
+  width: 128px;
+  align-self: center;
+}
+
 .stock-detail__actions {
   display: flex;
   gap: var(--transactions-space-sm);

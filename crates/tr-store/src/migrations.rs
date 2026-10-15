@@ -98,6 +98,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20261015_stock_review_setting",
         apply: stock_review_setting,
     },
+    Migration {
+        id: "20261015_stock_position_tag",
+        apply: stock_position_tag,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -508,11 +512,39 @@ fn stock_review_setting(conn: &Connection) -> MigrateResult {
     Ok(())
 }
 
+/// `20261015_stock_position_tag` —— 持仓表加一列 `tag`：把「本轮交易标签」在**持仓期间**也存下来。
+///
+/// 起因：标签从前只属于**已归档的轮次**（`tbl_billadm_stock_trade_round.tag`，清仓那一刻才写），
+/// 而在建那一轮的成交 `round_id` 是空的、库里没有任何地方记着"这一轮是什么标签"。于是持仓页
+/// 想显示它只能靠界面上那次会话选过的值 —— 重启就没了。现在与「本轮复盘」同一个形状：持仓期间
+/// 先写在持仓行上，清仓时随轮次归档（`close_round` 照旧接收请求里的标签，持仓行随后清空）。
+///
+/// 默认 `''` = **没设过**（老数据）⇒ 服务层按默认标签「分析」显示，与清仓时对空标签的处置同一
+/// 口径；不回填、不回溯，升级前已有的持仓行为一字不变。
+///
+/// ⚠ 列定义必须与 `fixtures/schema/fresh.sql` 里持仓表那一列**逐字节相同**：
+/// `ADD COLUMN` 只能追加到列尾，所以基线里它也写在 `updated_at` 之后、`PRIMARY KEY` 之前。
+/// 幂等：先查 `PRAGMA table_info`（结构已在就跳过）。
+fn stock_position_tag(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_stock_position").map_err(stringify)? {
+        return Err("缺少数据表 tbl_billadm_stock_position".to_string());
+    }
+    if column_exists(conn, "tbl_billadm_stock_position", "tag").map_err(stringify)? {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE tbl_billadm_stock_position ADD COLUMN tag varchar(16) NOT NULL DEFAULT \"\"",
+    )
+    .map_err(stringify)?;
+    Ok(())
+}
+
 // ==================================================================== 小工具
 
 fn stringify(error: rusqlite::Error) -> String {
     error.to_string()
 }
+
 fn table_exists(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -1268,6 +1300,72 @@ mod tests {
         crate::schema::validate_current(&conn).unwrap();
 
         // 幂等：登记行已在 ⇒ 没有待应用迁移，也不会重复建表
+        assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `20261015_stock_position_tag`：持仓表加一列 `tag`（把「本轮交易标签」在持仓期间也存下来）。
+    ///
+    /// 判据四条：列到位；老持仓拿默认值（空串 = **没设过** ⇒ 服务层按默认「分析」显示，不是
+    /// 回填一个假的标签进去）；持仓表的建表 SQL 与新建库**逐字节一致**（`ADD COLUMN` 只能追加到
+    /// 列尾，所以基线里这一列也写在最后）；重复应用无副作用。
+    #[test]
+    fn position_tag_column_keeps_fresh_schema_identical() {
+        let dir = temp_dir("position-tag");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        // 降级成"还没有这一列"的格式（模拟更早格式）：删列 + 抹掉登记行
+        conn.execute_batch(
+            "ALTER TABLE tbl_billadm_stock_position DROP COLUMN tag;
+             DELETE FROM tbl_billadm_schema_migration WHERE id = '20261015_stock_position_tag';",
+        )
+        .unwrap();
+        // 老格式的一条持仓（没有 tag 列）
+        conn.execute(
+            "INSERT INTO tbl_billadm_stock_position \
+             (id, ledger_id, stock_code, stock_name, quantity, total_cost, realized_pnl, review, \
+              created_at, updated_at) \
+             VALUES ('p1', 'l1', '600519', '贵州茅台', 100, 1, 0, '老复盘', 5, 5)",
+            [],
+        )
+        .unwrap();
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(applied, vec!["20261015_stock_position_tag".to_string()]);
+        assert!(column_exists(&conn, "tbl_billadm_stock_position", "tag").unwrap());
+        // 老数据拿默认值：空串（**不是**回填「分析」—— 显示层的回落是服务层的事）
+        let (tag, review): (String, String) = conn
+            .query_row(
+                "SELECT tag, review FROM tbl_billadm_stock_position WHERE id = 'p1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(tag.is_empty(), "老持仓的标签是空串（没设过），实际 {tag:?}");
+        assert_eq!(review, "老复盘", "同一行的既有数据不许被碰");
+        crate::schema::validate_current(&conn).unwrap();
+
+        // 升级库与新建库不允许分叉：建表 SQL 逐字节一致
+        let migrated: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tbl_billadm_stock_position'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let fresh: String = fresh_conn()
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tbl_billadm_stock_position'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            migrated, fresh,
+            "持仓表的建表 SQL 与基线不一致\n迁移: {migrated}\n基线: {fresh}"
+        );
+
+        assert!(pending(&conn).unwrap().is_empty());
         assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }

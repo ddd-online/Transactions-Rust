@@ -1203,6 +1203,29 @@ try {
         Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
     Assert-True ([bool]$posRebuilt -and $posRebuilt.quantity -eq 300) "重建仓后持仓回到 300 股（实际 $(if ($posRebuilt) { $posRebuilt.quantity } else { 'n/a' })）"
 
+    # ---- 本轮标签：持仓详情头就地能看能改（落库在持仓行上，清仓时带进轮次）----
+    # 从前标签只在**清仓那一刻**才落库（在建那一轮的成交 `round_id` 是空的、库里没有轮次行），
+    # 持仓页想显示它只能靠这次会话选过的值 —— 重启就没了。现在它是持仓行上的一列真数据
+    # （迁移 `20261015_stock_position_tag`），详情头那个下拉读的就是它。
+    # 触发器与工具栏那几个下拉同款（`ui-select__trigger`、可访问名 = 当前值），所以直接复用
+    # `Find-StatsTrigger` / `Select-StatsDropdown`：它们本来就是按"类名 + 当前值"定位的。
+    Write-Host '  持仓详情头：本轮标签（显示 / 就地改 / 落库）'
+    Assert-True ([bool](Find-StatsTrigger -Window $window -Name $roundTag)) `
+        "详情头的标签下拉显示建仓时选的「$roundTag」"
+    Assert-True ($posRebuilt.tag -eq $roundTag) `
+        "建仓那一刻就把标签写进持仓行（实际 '$($posRebuilt.tag)'）"
+
+    $headerTag = '蓄力'
+    Assert-True (Select-StatsDropdown -Window $window -Name $roundTag -Value $headerTag) `
+        "在详情头把本轮标签改成「$headerTag」"
+    Start-Sleep -Milliseconds 800
+    $posTagged = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_position' -OutDir $OutDir |
+        Where-Object { $_.ledger_id -eq $ledgerId -and $_.stock_code -eq $code }) | Select-Object -First 1
+    Assert-True ($posTagged.tag -eq $headerTag) `
+        "改标签落在持仓行上（期望 '$headerTag'，实际 '$($posTagged.tag)'）"
+    # 人眼证据：这一格是"名字 + 代码 + 本轮标签 + 三个操作键"的一行，UIA 只能证明控件在树里
+    Save-Screenshot -Path (Join-Path $OutDir '05-持仓头-本轮标签.png')
+
     # ================= 5/13 减仓 → 清仓 =================
     # 详情区的「减仓/清仓」现在真的能点开了（见文件顶部那条缺陷说明）。
     Write-Host "`n[stock] 3/3 减仓 1 手 @ $reducePrice → 清仓 2 手 @ $closePrice"
@@ -1280,11 +1303,12 @@ try {
     $closeOpened = [bool](Wait-Element -Root $window -Name '委托清仓' -TimeoutSec 10)
     Assert-True $closeOpened '弹窗「委托清仓」已打开'
     if ($closeOpened) {
-        # 清仓弹窗的标签必须**沿用本轮在建仓时选的那个**：标签是本轮的属性，清仓时才落库。
+        # 清仓弹窗的标签必须**沿用本轮已经定下的那个**：标签是本轮的属性，持仓期间存在持仓行上
+        # （我们在详情头把它改成了「$headerTag」），清仓时才归档到轮次。
         # 这里以前一律被重置成账本默认值「分析」，于是"建仓选了打板、清仓落成分析"。
         $prefilledTag = Get-TradeTagValue -Window $window
-        Assert-True ($prefilledTag -eq $roundTag) `
-            "清仓弹窗沿用本轮标签「$roundTag」（实际 '$prefilledTag'）"
+        Assert-True ($prefilledTag -eq $headerTag) `
+            "清仓弹窗沿用本轮标签「$headerTag」（实际 '$prefilledTag'）"
         $lotsInput = Wait-EditLike -Root $window -Pattern '手数'
         $prefilled = Read-ElementValue $lotsInput
         Assert-True ($prefilled -eq '2') "清仓时手数预填剩余可卖手数 2（实际 '$prefilled'）"
@@ -1331,8 +1355,8 @@ try {
             }
             Assert-True ($newRound.round_no -eq ($roundsBefore.Count + 1)) `
                 "轮次序号 = $($roundsBefore.Count + 1)（实际 $($newRound.round_no)）"
-            Assert-True ($newRound.tag -eq $roundTag) `
-                "轮次的交易标签 = 清仓时用的「$roundTag」（实际 '$($newRound.tag)'）"
+            Assert-True ($newRound.tag -eq $headerTag) `
+                "轮次的交易标签 = 持仓头改成、清仓带过来的「$headerTag」（实际 '$($newRound.tag)'）"
             # 建仓 / 减仓 / 清仓 三笔都挂到这一轮（归档是"回填"未挂接的成交）
             foreach ($tradeId in @($openTrade.id, $reduceTrade.id, $closeTrade.id)) {
                 if (-not $tradeId) { continue }

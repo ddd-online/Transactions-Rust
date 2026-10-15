@@ -437,6 +437,17 @@ pub struct StockPositionReviewRequest {
     pub review: String,
 }
 
+/// 保存持仓中的「本轮交易标签」（必须是本账本可用标签之一；空串 = 回到默认「分析」）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockPositionTagRequest {
+    pub ledger_id: String,
+    /// 股票代码
+    pub code: String,
+    /// 交易标签；空串 = 回到默认标签「分析」
+    pub tag: String,
+}
+
 /// 某股交易列表 / 历史详情。
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]

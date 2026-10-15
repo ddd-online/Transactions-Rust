@@ -144,6 +144,10 @@ pub struct StockPositionDto {
     pub realized_pnl: i64,
     /// 本轮复盘
     pub review: String,
+    /// 本轮的交易标签（持仓期间就能改；清仓时带进轮次）。
+    ///
+    /// 服务层回填的是**生效值**：库里存空串（没设过）时给默认标签「分析」。
+    pub tag: String,
     /// **本轮**的费用设置（建仓时定下、本轮内不可改）；省略 = 沿用账本系统配置（老数据 / 空仓）
     #[serde(rename = "roundFee", skip_serializing_if = "Option::is_none")]
     pub round_fee: Option<RoundFee>,
@@ -170,6 +174,9 @@ impl From<&StockPosition> for StockPositionDto {
             round_cash_flow: 0,
             realized_pnl: position.realized_pnl,
             review: position.review.clone(),
+            // 库里存的是**原始值**（空串 = 没设过）；生效值（空 → 默认「分析」）由服务层回填，
+            // 与 `round_cash_flow` / `round_fee` 同一处（`tr-service::stock::list_positions`）。
+            tag: position.tag.clone(),
             round_fee: None,
             latest_price: None,
             prev_close: None,

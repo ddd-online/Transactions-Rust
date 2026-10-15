@@ -33,7 +33,7 @@ const REVIEW_SETTING_COLUMNS: &str = "id, ledger_id, template, created_at, updat
 const FUND_COLUMNS: &str = "id, ledger_id, record_date, event_type, event_text, amount_change, \
      cash_balance, net_pnl, remark, created_at";
 const POSITION_COLUMNS: &str = "id, ledger_id, stock_code, stock_name, quantity, total_cost, \
-     realized_pnl, review, created_at, updated_at";
+     realized_pnl, review, created_at, updated_at, tag";
 const TRADE_COLUMNS: &str =
     "id, ledger_id, stock_code, stock_name, trade_type, round_id, order_id, \
      order_seq, price, lots, shares, amount, fee, commission, stamp_duty, transfer_fee, \
@@ -505,8 +505,8 @@ impl StockDao {
         conn.execute(
             "INSERT INTO tbl_billadm_stock_position \
              (id, ledger_id, stock_code, stock_name, quantity, total_cost, realized_pnl, review, \
-              created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+              created_at, updated_at, tag) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)",
             params![
                 position.id,
                 position.ledger_id,
@@ -517,16 +517,19 @@ impl StockDao {
                 position.realized_pnl,
                 position.review,
                 now,
+                position.tag,
             ],
         )?;
         Ok(())
     }
 
-    /// 只更新派生字段（数量 / 成本 / 已实现盈亏 / 名称 / 复盘），不动 `ledger_id`、`stock_code`。
+    /// 只更新派生字段（数量 / 成本 / 已实现盈亏 / 名称 / 复盘 / 本轮标签），
+    /// 不动 `ledger_id`、`stock_code`。
     pub fn update_position(conn: &Connection, position: &StockPosition) -> rusqlite::Result<()> {
         conn.execute(
             "UPDATE tbl_billadm_stock_position SET quantity = ?2, total_cost = ?3, \
-             realized_pnl = ?4, stock_name = ?5, review = ?6, updated_at = ?7 WHERE id = ?1",
+             realized_pnl = ?4, stock_name = ?5, review = ?6, updated_at = ?7, tag = ?8 \
+             WHERE id = ?1",
             params![
                 position.id,
                 position.quantity,
@@ -535,6 +538,7 @@ impl StockDao {
                 position.stock_name,
                 position.review,
                 crate::util::now_unix(),
+                position.tag,
             ],
         )?;
         Ok(())
@@ -1279,6 +1283,8 @@ fn position_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockPosition>
         review: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
+        // 列在**列尾**（迁移是 `ADD COLUMN`，列序只能追加，见 `migrations.rs` 的注释）
+        tag: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
     })
 }
 

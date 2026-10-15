@@ -39,7 +39,7 @@ use tr_domain::dto::{
 use tr_domain::models::StockFeeSetting;
 use tr_domain::wire::{
     LedgerIdRequest, StockAmountDateRequest, StockArchiveRequest, StockFeeSettingsRequest,
-    StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
+    StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest, StockPositionTagRequest,
     StockReviewTemplateRequest, StockRoundReviewRequest, StockRoundTagRequest,
     StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
     StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
@@ -269,6 +269,23 @@ pub async fn position_review(
             ledger_id: ledger_id.to_string(),
             code: code.to_string(),
             review: review.to_string(),
+        },
+    )
+    .await
+}
+
+/// 保存持仓这一轮的「交易标签」（必须是本账本可用标签之一），返回更新后的持仓。
+pub async fn position_tag(
+    ledger_id: &str,
+    code: &str,
+    tag: &str,
+) -> Result<StockPositionDto, IpcError> {
+    ipc::call(
+        commands::STOCK_POSITION_TAG,
+        StockPositionTagRequest {
+            ledger_id: ledger_id.to_string(),
+            code: code.to_string(),
+            tag: tag.to_string(),
         },
     )
     .await

@@ -188,6 +188,8 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
             "review",
             "created_at",
             "updated_at",
+            // `ADD COLUMN` 追加到列尾（基线里也写在最后，见 `migrations.rs`）
+            "tag",
         ],
     ),
     (
