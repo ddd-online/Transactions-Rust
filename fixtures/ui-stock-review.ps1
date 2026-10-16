@@ -344,7 +344,12 @@ if (-not (Test-Path (Join-Path $ws 'transactions.db'))) {
 } | ConvertTo-Json | Set-Content -Path (Join-Path $smokeHome '.transactions.json') -Encoding UTF8
 
 $stockCode = '600519'
-$positionText = '持仓侧：回踩年线企稳，等放量确认'
+$positionText = ('持仓侧：回踩年线企稳后放量，先建一半仓位试错，冲高不追、回落不慌，跌破年线就认错走人；' +
+    '卖出理由：题材当天退潮、跟涨股只剩两三家，与其在山顶等反转不如先把仓位收回来；' +
+    '买点审视：低开后一小时量能始终在均量之下，价格在均线上方反复摩擦，当时应该再等一根确认量；' +
+    '交易心得：严格按止损执行，不要因为股价波动就心慌清仓，下一轮把仓位分成两笔。') * 2
+# 前 11 个字当定位记号：5/5 要按它找正文块（长文在 UIA 里可能被拆成多个节点，整段匹配不牢靠）
+$positionMarker = '持仓侧：回踩年线企稳后放量'
 $roundText = '轮次侧：减仓点位偏早，下次等回踩确认'
 $caretMarker = '光标落点'
 
@@ -498,7 +503,34 @@ try {
         Where-Object { [string]$_.review -eq $positionText })
     Assert-True ($savedPosition.Count -eq 1) "持仓侧 Ctrl+S 落库（库里 review = '$positionText' 的行数 $($savedPosition.Count)）"
     Assert-True (-not [bool](Find-Like -Root $window -Pattern '本轮复盘 · ')) '保存成功后弹窗自己关上'
-    Assert-True ([bool](Find-Like -Root $window -Pattern $positionText)) '保存后这块复盘在下文里摊开显示'
+    Assert-True ([bool](Find-Like -Root $window -Pattern $positionMarker)) '保存后这块复盘在下文里摊开显示'
+
+    # ---- 几何：复盘正文要在**宽度上**铺满容器 ----
+    # 曾经的回归：`stock.css` 给 `.stock-review__text` 封过 `max-width: 68ch`，正文只铺到面板的
+    # 六成宽、断行位置比上面那张成交表短一大截（用户截图报的就是这个）。UIA 看不见"窄了一截"
+    # （元素矩形照报出来），只能量：正文**最长一行**的右边界，跟同一内容盒里右对齐的锚
+    # （复盘头那颗「编辑」）比 —— 差的只有中英混排的断行余量（最多两个汉字），取 34 逻辑像素。
+    # 目标文本写成 ~340 字就是为了这段：短文本不换行就量不到面板宽度。
+    $reviewText = @(Get-Elements $window | Where-Object {
+            -not $_.Current.IsOffscreen -and (Test-Rect $_.Current.BoundingRectangle) -and
+            ([string]$_.Current.ClassName).Contains('stock-review__text')
+        }) | Select-Object -First 1
+    if (-not $reviewText) { $reviewText = Find-Like -Root $window -Pattern $positionMarker }
+    Assert-True ([bool]$reviewText) '找得到复盘正文块'
+    if ($reviewText) {
+        $reviewRect = $reviewText.Current.BoundingRectangle
+        $anchor = @(Find-All $window '编辑' | Where-Object {
+                -not $_.Current.IsOffscreen -and (Test-Rect $_.Current.BoundingRectangle) -and
+                ([string]$_.Current.ClassName).Contains('ui-btn') -and
+                ($_.Current.BoundingRectangle.Bottom -le $reviewRect.Top)
+            }) | Sort-Object { $_.Current.BoundingRectangle.Bottom } | Select-Object -Last 1
+        Assert-True ([bool]$anchor) '复盘头找到当锚的「编辑」按钮（与正文同一内容盒、右对齐）'
+        if ($anchor) {
+            $gap = [int](($anchor.Current.BoundingRectangle.Right - $reviewRect.Right) / $scale)
+            Assert-True ($gap -le 34) `
+                "复盘正文铺满容器：最长一行离内容盒右缘 $gap px ≤ 34px（正文块 $([int]($reviewRect.Width / $scale))px 宽）"
+        }
+    }
     Save-Screenshot -Path (Join-Path $OutDir "review-$Appearance-saved.png")
 
     # ---- 轮次侧：记录子功能里某一轮 ----

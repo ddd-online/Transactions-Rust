@@ -668,9 +668,10 @@
   margin: var(--transactions-space-sm) 0 0;
   white-space: pre-wrap;
   word-break: break-word;
-  /* 长正文的行宽与行距：复盘是成段的散文（不是数据行），一行铺满整块面板时
-   * 视线回行会丢掉起点 —— 68ch 是 DESIGN 的正文行宽上限区，1.8 是长正文那一档 */
-  max-width: 68ch;
+  /* 行距 1.8 是长正文那一档。**正文块不封行宽**：复盘是逐条对答（买入理由 / 卖点审视 …），
+   * 不是连续散文，正文的右边界要跟上面那张成交表对齐 —— 原先这里封了 68ch，于是在面板里
+   * 只铺到六成宽，断行位置比表格短一大截，看着像内容没填满。真要控行宽的是 Markdown 长文
+   * （`key_event.css` 的 75ch），那里才是连续段落。 */
   line-height: var(--transactions-height-relaxed);
   font-size: var(--transactions-size-text-body-sm);
   color: var(--transactions-color-text-major);

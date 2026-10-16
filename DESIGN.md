@@ -235,6 +235,8 @@ Eight natural tones give each ledger a stable identity: forest #4a8e70, amber #c
 
 **The Mono Money Rule.** Every monetary amount renders in JetBrains Mono with `font-variant-numeric: tabular-nums` and slightly negative letter-spacing. Never typeset money in the body face.
 
+**The Panel Measure Rule.** Body text inside a panel fills that panel: 复盘 and note fields are read as itemised lines ("买入理由：…"), so they keep the width of the table above them — no `ch` cap, which in a panel merely shortens the wrap point and reads as content that failed to fill. Only continuous long-form prose caps its measure (Markdown bodies, 75ch in `key_event.css`).
+
 ### Tracking tokens
 
 Letter-spacing is tokenised per role — `--transactions-tracking-display` (−0.015em, display/title text),
