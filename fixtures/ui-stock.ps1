@@ -41,6 +41,10 @@
 #     （四条几何判据）。原缺陷是"定宽容器 + `.ui-input` 的 `width: 100%` + `<input>` 的固有宽度
 #     当自动最小尺寸"⇒ 第二个字段溢出到「逐笔累计」底下、肉眼只剩「结束」两个字；UIA 看不见
 #     "被盖住"，所以这里既量矩形、也在它正中间按一次真实鼠标看焦点落在哪。
+#   * 结算点 → 记录页那一轮（跨子功能跳转）：明细分栏里「结算点」那一格是一颗按钮，
+#     点了切到「记录」、选中那只股票、把那一轮滚进视野、焦点落到轮头。判据是**焦点**
+#     （"真的到了那一轮"的唯一硬证据）+ 右栏摘要（是那只股票，不是列表第一只）+ 成交表
+#     （那一轮展开了）；落点的 1.6s 高亮是 CSS 类，树里看不见，只能靠截图给人眼。
 #
 # ⚠ 它顺带锁死一个**真实缺陷**（本轮才发现，"减仓/清仓按钮点不动"的真凶）：
 #   详情区那三个按钮（清仓/减仓/加仓）原来在 `on_click` 里先写 `selected_code.set(code)`
@@ -1708,6 +1712,73 @@ try {
         }
     }
 
+    # ---- 结算点 → 记录页那一轮（跨子功能跳转）----
+    # 这一段的每一环 UIA 都"看不见失败"，所以判据必须拆开：
+    #   * 落点**高亮**（`.is-arrived` 底色）是 CSS 类，树里没有任何痕迹 —— 只能靠截图给人眼；
+    #   * "没滚过去"它也不报错（元素还在树里，只是可能在 `.stock-rounds` 的滚动窗口外）；
+    #   * "选错股票"看起来同样像一个正常的记录页。
+    # 于是判据取三样能机器判的：**焦点**（跳完焦点必须落在那一轮的轮头上 —— 这是
+    # "真的到了那一轮"的唯一硬证据）、**右栏摘要**（写的是结算点点名的那只股票，不是
+    # "列表里的第一只"）、**成交表**（那一轮是展开的，收起时整张表不在树里）。
+    Write-Host '  结算点 → 记录：可访问名 / 切子功能 / 选中那只股票 / 焦点落在那一轮'
+    Assert-True (Switch-StatsTab -Window $Window -Name '明细') '切到「明细」找结算点'
+    Start-Sleep -Seconds 2
+    $pointButtons = @()
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $pointButtons = @(Get-Elements $window | Where-Object {
+                $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
+                -not $_.Current.IsOffscreen -and
+                ([string]$_.Current.Name) -match '^第 \d+ 笔 .+ 第 \d+ 轮，在「记录」里打开$' -and
+                (Test-Rect $_.Current.BoundingRectangle)
+            } | Sort-Object { $_.Current.BoundingRectangle.Y })
+        if ($pointButtons.Count -lt 1) { Start-Sleep -Milliseconds 400 }
+    } while ($pointButtons.Count -lt 1 -and (Get-Date) -lt $deadline)
+    Assert-True ($pointButtons.Count -ge 1) "结算点是按钮，名字写清第几笔 / 哪一轮 / 去哪儿（$($pointButtons.Count) 个）"
+    if ($pointButtons.Count -ge 1) {
+        $pointLabel = [string]$pointButtons[0].Current.Name
+        $pointMatch = [regex]::Match($pointLabel, '^第 \d+ 笔 (?<name>.+) 第 (?<no>\d+) 轮，在「记录」里打开$')
+        $pointName = $pointMatch.Groups['name'].Value
+        $pointRound = $pointMatch.Groups['no'].Value
+        Write-Host "    第一格：$pointLabel" -ForegroundColor DarkGray
+        $pointRect = $pointButtons[0].Current.BoundingRectangle
+        [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 300
+        [TrUia]::Click([int]($pointRect.X + $pointRect.Width / 2), [int]($pointRect.Y + $pointRect.Height / 2))
+        # 等落点：轮头（`第 N 轮，点击展开/收起`）拿到键盘焦点
+        $roundHead = $null
+        $deadline = (Get-Date).AddSeconds(25)
+        do {
+            foreach ($element in @(Get-Elements $window)) {
+                if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+                if ([string]$element.Current.Name -notlike "第 $pointRound 轮，点击*") { continue }
+                $focused = $false
+                try { $focused = [bool]$element.Current.HasKeyboardFocus } catch { $focused = $false }
+                if ($focused) { $roundHead = $element; break }
+            }
+            if (-not $roundHead) { Start-Sleep -Milliseconds 200 }
+        } while (-not $roundHead -and (Get-Date) -lt $deadline)
+        Assert-True ([bool]$roundHead) "点结算点后焦点落在「第 $pointRound 轮」的轮头上（跳转真的到了那一轮）"
+        Assert-True (-not [bool](Find-StatsTrigger -Window $window -Name '逐笔累计')) `
+            '已经离开统计子功能（工具栏的统计口径下拉不在了）'
+        $summarySeen = $false
+        $deadline = (Get-Date).AddSeconds(15)
+        do {
+            $names = @(Get-Elements $window | ForEach-Object { [string]$_.Current.Name } | Where-Object { $_ })
+            $summarySeen = @($names | Where-Object { $_ -like "*$pointName*" }).Count -gt 0
+            if (-not $summarySeen) { Start-Sleep -Milliseconds 400 }
+        } while (-not $summarySeen -and (Get-Date) -lt $deadline)
+        Assert-True $summarySeen "右栏是结算点点名的那只股票（$pointName）"
+        # ⚠ 这一条的判别力有限：这份数据里点名的那只恰好可能就是列表第一只（那就恒真）。
+        # 真正的判别点是"焦点落在哪一轮"（上面那条）+ 探针在另一份数据上验过的"选的是第 3 张卡片"。
+        # 这里留着它是因为它挡住的是另一种错法：整条跳转跑到了别的股票上（摘要里没有这个名字）。
+        Assert-True ([bool](Wait-Element -Root $window -Name '成交价' -TimeoutSec 10)) `
+            "「第 $pointRound 轮」是展开的（成交表在场）"
+        # 收尾：后面的步骤都假定停在统计子功能上
+        Assert-True (Switch-StockSub -Window $window -Name '统计') '跳转验证完切回「统计」'
+        Start-Sleep -Seconds 3
+    }
+
     # ================= 8/13 账户：利息归本（支取 / 利息归本 / 追加本金）+ 资金记录翻页 =================
     # 两条要求都落在这里：
     #   ① 「利息归本」按钮在「支取」与「追加本金」**中间**，金额要显示在账户页指标区；
@@ -2289,4 +2360,4 @@ try {
 }
 
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
-Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓（日期选择器选前天 → 选择器文案 / trade_time 本地日期 / 资金记录日期 / 账户页日期列 四处一致）→ 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 统计分栏页签、月份区间几何（等宽/够宽/不重叠/点得到）与统计口径（逐笔累计 / 分组统计 + 每组笔数，明细不受影响）→ 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 操作记录与回滚（预演不落库 + 撤销后本金/资金记录还原）→ 重置股票数据（不动记账数据）"
+Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓（日期选择器选前天 → 选择器文案 / trade_time 本地日期 / 资金记录日期 / 账户页日期列 四处一致）→ 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 统计分栏页签、月份区间几何（等宽/够宽/不重叠/点得到）、结算点跳转（定位到记录页那一轮）与统计口径（逐笔累计 / 分组统计 + 每组笔数，明细不受影响）→ 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 操作记录与回滚（预演不落库 + 撤销后本金/资金记录还原）→ 重置股票数据（不动记账数据）"

@@ -54,6 +54,7 @@
 //! 走 [`REVIEW_TEMPLATE_CACHE`] 那一个键）。写路径（下单 / 改成交 / 回滚 / 重置 / 归档）不走 module。
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use leptos::prelude::*;
 use leptos::tachys::view::any_view::{AnyView, IntoAny};
@@ -85,6 +86,7 @@ use crate::query::{Cache, OnError, Query};
 use crate::store::AppStores;
 use crate::time::{format_timestamp, today_ymd};
 use tr_draw::section::{section_state, SectionState};
+use tr_draw::stock_records::{history_node_id, round_head_node_id, round_node_id};
 use tr_draw::stock_rows::{group_trades, impact_summary, removed_rounds_text, TradeRow};
 use tr_draw::stock_stats::{point_span_label, Metric};
 use tr_draw::text::parse_rate;
@@ -380,19 +382,37 @@ struct StatsKey {
     group_size: Option<i64>,
 }
 
+/// 「统计页点某个结算点 → 记录页定位到那一轮」的**一次性请求**。
+///
+/// 建在 [`StockPage`]（两个子功能共同的父级）而不是任何一个子功能里：切子功能会把那一侧的
+/// 视图整个重建，信号跟着释放 —— 请求必须活过这次重建，否则"跳过去"之后没人在等它。
+/// 消费方（记录页）拿到就清空，因此它同时也是"只定位一次"的开关：用户随后自己折叠、
+/// 滚动、换股票，都不会被再拽回去。
+///
+/// 携带 **(股票代码, 轮号)** 而不是轮次 id：结算点的 DTO 里只有 `stockRoundNo`（它本来就不带
+/// 轮次 id），而"第几轮"在一只股票里唯一；记录页拿到详情后按轮号反查那一轮的 id
+/// （折叠状态是按 id 存的）。
+#[derive(Debug, Clone, PartialEq)]
+struct RoundLocate {
+    code: String,
+    round_no: i64,
+}
+
 /// 与记账页的 `AccountingPage` 同一套写法：五个子功能各自渲染一份 [`FeaturePage`]
 /// （含左侧图标条），切子功能即重建该子功能的视图（信号随组件 owner 一起释放），
 /// 因此来回切会重新拉数据 —— 与"切一个页面"的行为一致，不会留下一份隐形的旧状态。
 #[component]
 pub fn StockPage() -> impl IntoView {
     let sub = RwSignal::new(StockSub::Account);
+    // 「结算点 → 记录页那一轮」的落点请求：统计侧写、记录侧读并清空（见 [`RoundLocate`]）
+    let locate = RwSignal::new(None::<RoundLocate>);
     view! {
         {move || {
             match sub.get() {
                 StockSub::Account => account_view(sub),
                 StockSub::Position => position_view(sub),
-                StockSub::Trade => history_view(sub),
-                StockSub::Statistics => statistics_view(sub),
+                StockSub::Trade => history_view(sub, locate),
+                StockSub::Statistics => statistics_view(sub, locate),
                 StockSub::Setting => settings_view(sub),
             }
         }}
@@ -3090,11 +3110,22 @@ fn trade_row_view(
 
 // ==================================================================== 子功能三：记录（已清仓的轮次历史）
 
+/// 「从统计页跳过来」的落点标记亮多久（毫秒）。
+///
+/// 这一档不是过渡时长（它是"你到了"的一次提示，不是位移/淡入），所以不套 Motion 里
+/// 那三档节拍（150 / 200 / 320ms）：一闪而过等于没标。1.6s 是"看清了、又不至于
+/// 让人以为这是选中态"的一拍；底色靠 `transition` 淡出（见 `stock.css` 的 `.is-arrived`），
+/// 减少动态偏好下那条过渡被压成瞬时 —— 底色照样看得见，这正是那条偏好要的结果。
+const ROUND_ARRIVE_MS: u64 = 1600;
+
 /// 记录子功能：全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签。
 ///
 /// 本子功能没有页面级操作，所以**不给工具栏**（`FeaturePage` 不传 `toolbar`，
 /// 免得多出一条空发丝线）。行内「编辑/删除」在持仓子功能的详情区，不在这里。
-fn history_view(sub: RwSignal<StockSub>) -> AnyView {
+///
+/// `locate` 是统计页那一侧写下的落点请求（[`RoundLocate`]）：这里读完就清空，
+/// 落点靠 [`scroll_to_round`] 滚进视野、并把焦点放到那一轮的轮头。
+fn history_view(sub: RwSignal<StockSub>, locate: RwSignal<Option<RoundLocate>>) -> AnyView {
     let stores = AppStores::global();
     let selected_code = RwSignal::new(String::new());
 
@@ -3162,9 +3193,21 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
     let review_template = review_template_signal(review_template_query(stores));
     let tag_saving = RwSignal::new(false);
 
-    // 历史列表结果 → 同步选中股票（还在就留着，不在了就选第一只）
+    // 历史列表结果 → 同步选中股票（**刚跳过来的那只优先**，其次"还在就留着"，最后第一只）
     Effect::new(move |_| {
         let items = histories_q.value.get();
+        // 跳转请求优先：它指定的那只股票在这份列表里就选它。用户是从统计页点结算点过来的，
+        // 不能因为"此刻选中的是第一只"被顶掉 —— 落点就是他要看的那只。
+        let wanted = locate
+            .get()
+            .map(|target| target.code)
+            .unwrap_or_else(|| selected_code.get_untracked());
+        if !wanted.is_empty() && items.iter().any(|item| item.stock_code == wanted) {
+            if selected_code.get_untracked() != wanted {
+                selected_code.set(wanted);
+            }
+            return;
+        }
         let current = selected_code.get_untracked();
         if items.iter().any(|item| item.stock_code == current) {
             return;
@@ -3198,6 +3241,51 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
         collapsed_reviews.set(BTreeSet::new());
         // 详情由取数 module 按 key（账本 + 选中代码）重拉
         code
+    });
+
+    // ---- 「统计页点结算点 → 定位到那一轮」 ----
+    //
+    // 落点标记（值 = 被标的那一轮的 id）：卡片上因此多一层 `.is-arrived` 底色，1.6s 后摘掉。
+    // 它只是"你到了"的一次提示，**不是选中态** —— 记录页的选中态在左栏那张卡片上。
+    let arrived = RwSignal::new(None::<String>);
+    //
+    // 三步顺序不能反：① 先让"选中的股票"变成目标（上一条 Effect 优先照顾跳转请求）→
+    // 详情的 key 跟着变、开始飞；② 详情到位后才有那一轮的 DOM，这时才展开 + 滚动 + 放焦点。
+    // 清空请求放在滚动之前：用户随后自己折叠、滚动、换股票都不该被再拽回去
+    // （与日记页「定位到今天」同一条纪律，见 `pages/diary.rs`）。
+    Effect::new(move |_| {
+        let Some(target) = locate.get() else {
+            return;
+        };
+        // 详情可能是上一只股票的（或还在飞）：只有目标那只到位了才算数
+        let Some(data) = detail.get().filter(|data| data.stock_code == target.code) else {
+            return;
+        };
+        let Some(round) = data
+            .rounds
+            .iter()
+            .find(|round| round.round_no == target.round_no)
+        else {
+            // 那一轮不在了（例如刚被回滚）：请求到此为止，别留着等下一只股票
+            locate.set(None);
+            return;
+        };
+        let round_id = round.id.clone();
+        // 那一轮若被收起了，先展开 —— 落点要连它下面的成交表一起看得见
+        collapsed_rounds.update(|set| {
+            set.remove(&round_id);
+        });
+        locate.set(None);
+        arrived.set(Some(round_id));
+        // 到点摘掉标记。这里**不读** `arrived` 再决定摘不摘：信号跟着子功能视图走，
+        // 用户 1.6s 内切走的话它已经释放了，而 `set_timeout` 里"读回一个可能已释放的信号"
+        // 是本仓库没做过的动作（写回是既有手法，见 `settings.rs` 的导入复位）。
+        // 代价：1.6s 内连跳两次时，前一次的到点会把新标记提前熄掉 —— 少看半秒底色而已。
+        set_timeout(
+            move || arrived.set(None),
+            Duration::from_millis(ROUND_ARRIVE_MS),
+        );
+        scroll_to_round(target.code, target.round_no);
     });
 
     let save_round_review = move |round_id: String| {
@@ -3327,6 +3415,9 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                                                 type="button"
                                                 class="stock-history-card"
                                                 class:is-active=is_active
+                                                // 跳转落点之一：结算点跳过来时这张卡片也要滚进视野
+                                                // （股票多时它可能在列表外，见 `tr_draw::stock_records`）
+                                                id=history_node_id(&item.stock_code)
                                                 title=format!(
                                                     "累计已实现盈亏 {}",
                                                     format::signed_yuan(item.total_pnl),
@@ -3437,6 +3528,7 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                                     .map(|round| {
                                         round_card(
                                             round,
+                                            data.stock_code.clone(),
                                             format!("{} {}", data.stock_name, data.stock_code),
                                             review_template,
                                             collapsed_rounds,
@@ -3445,6 +3537,7 @@ fn history_view(sub: RwSignal<StockSub>) -> AnyView {
                                             review_draft,
                                             tag_saving,
                                             tags,
+                                            arrived,
                                             UnsyncCallback::new(move |(id, tag): (String, String)| {
                                                 save_round_tag((id, tag))
                                             }),
@@ -3507,10 +3600,61 @@ fn SummaryCell(
     }
 }
 
+/// 把「结算点 → 那一轮」的落点滚进视野，并把焦点放到那一轮的轮头。
+///
+/// 三处 DOM 各自 `scroll_into_view`（它滚的是**最近的滚动祖先**，两栏互不影响）：
+/// * 轮次卡片在 `.stock-rounds` 里（`max-height: 70vh`）—— 对齐取 **居中**：上下留出邻轮的
+///   上下文，与日记页「定位到今天」同一条取舍（顶对齐会把落点上面那一行一起滚出去）；
+/// * 左栏那张股票卡片在 `.stock-history__cards` 里 —— 取 `nearest`：够看见就行，
+///   别把整段列表推走（用户对左栏位置的记忆比右侧更值得保住）；
+/// * 轮头拿到焦点（那颗 `<button aria-expanded>`）：**键盘与读屏用户才算真的"到了"**，
+///   而且落点就在他们接下来要操作的那个控件上。鼠标点进来的那一下只会看到高亮标记 ——
+///   `:focus-visible` 在鼠标交互之后本来就不显形，这正是我们要的分别。
+///
+/// 滚卡片**先于**放焦点：`focus()` 自己也会滚（用 `nearest`），已经可见时才是空操作。
+/// 推到下一帧再滚：这一轮的卡片是详情异步到达后才挂上的，这一帧的 DOM 才算数。
+fn scroll_to_round(code: String, round_no: i64) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let callback = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+        let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+            return;
+        };
+        if let Some(card) = document.get_element_by_id(&round_node_id(&code, round_no)) {
+            let options = web_sys::ScrollIntoViewOptions::new();
+            options.set_block(web_sys::ScrollLogicalPosition::Center);
+            options.set_inline(web_sys::ScrollLogicalPosition::Nearest);
+            card.scroll_into_view_with_scroll_into_view_options(&options);
+        }
+        if let Some(head) = document
+            .get_element_by_id(&round_head_node_id(&code, round_no))
+            .and_then(|head| head.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = head.focus();
+        }
+        if let Some(history_card) = document.get_element_by_id(&history_node_id(&code)) {
+            let options = web_sys::ScrollIntoViewOptions::new();
+            options.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            options.set_inline(web_sys::ScrollLogicalPosition::Nearest);
+            history_card.scroll_into_view_with_scroll_into_view_options(&options);
+        }
+    });
+    let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+    // 回调只跑一次：句柄活到应用结束（界面进程即应用进程，与 `diary.rs` / `chart.rs` 同一手法）
+    callback.forget();
+}
+
 /// 一轮交易卡片（轮头 + 成交表 + 本轮复盘）。
+///
+/// 卡片与轮头各带一个落点 DOM id（[`tr_draw::stock_records`]）：统计页的结算点跳过来时，
+/// 靠它们把这一轮滚进视野、把焦点放到轮头。`arrived` 非空且等于本轮的 id 时，
+/// 卡片多一层 `.is-arrived` 底色（1.6s，见 [`ROUND_ARRIVE_MS`]）。
 #[allow(clippy::too_many_arguments)]
 fn round_card(
     round: StockTradeRoundDto,
+    // 卡片所属股票的代码：落点 id 的一半（另一半是轮号）
+    code: String,
     // 卡片所属股票的身份（`上海电影 601595`）：复盘弹窗的标题用它
     identity: String,
     // 这个账本生效的复盘模板：本轮还没写过复盘时拿它预填
@@ -3521,6 +3665,8 @@ fn round_card(
     review_draft: RwSignal<String>,
     tag_saving: RwSignal<bool>,
     tags: Signal<Vec<String>>,
+    // 「刚跳过来的那一轮」的标记（值 = 轮次 id）
+    arrived: RwSignal<Option<String>>,
     on_save_tag: UnsyncCallback<(String, String)>,
 ) -> AnyView {
     // 频繁复用的几个值放进 `StoredValue`（`Copy`）：
@@ -3531,6 +3677,8 @@ fn round_card(
     let has_review = StoredValue::new(!round.review.trim().is_empty());
     let collapsed = collapsed_rounds.get().contains(&round.id);
     let review_collapsed = collapsed_reviews.get().contains(&round.id);
+    let node_id = StoredValue::new(round_node_id(&code, round.round_no));
+    let head_id = StoredValue::new(round_head_node_id(&code, round.round_no));
     // 写作面在弹窗里（见 `review_modal`）：这一轮的身份与上下文在这里拼好
     let identity = StoredValue::new(identity);
     let context = StoredValue::new(format!(
@@ -3543,11 +3691,18 @@ fn round_card(
     let pnl_class = format::pnl_class(round.pnl);
 
     view! {
-        <div class="stock-round">
+        <div
+            class="stock-round"
+            class:is-arrived=move || {
+                arrived.get().is_some_and(|marked| marked == id.get_value())
+            }
+            id=move || node_id.get_value()
+        >
             <div class="stock-round__head">
                 <button
                     type="button"
                     class="stock-round__toggle"
+                    id=move || head_id.get_value()
                     aria-expanded=!collapsed
                     aria-label=if collapsed {
                         format!("第 {} 轮，点击展开", round.round_no)
@@ -3773,7 +3928,10 @@ const STATS_GROUP_SIZE_DEFAULT: &str = "5";
 ///
 /// 筛选组（区间 / 最近 N 笔 / 标签）是**页面级操作**，放工具栏右侧、两个分栏共用；
 /// 工具栏在三种内容态（加载中 / 空态 / 有数据）下都渲染 —— 否则空态会把筛选入口一起藏掉。
-fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
+///
+/// 明细分栏的**结算点**格子是一颗按钮（表格里其余的格子都是数据，它是"这一笔是谁 +
+/// 去哪儿看"）：点了写 [`RoundLocate`] 并切到记录子功能，由那边负责选中、滚动、落点高亮。
+fn statistics_view(sub: RwSignal<StockSub>, locate: RwSignal<Option<RoundLocate>>) -> AnyView {
     let stores = AppStores::global();
     let tab = RwSignal::new(STATS_TAB_SUMMARY.to_string());
     // 选中的指标：存的是 `Metric::key()`（**不是**文案 —— 文案随统计口径变）
@@ -4371,7 +4529,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                             .map(|point| {
                                                 let is_latest = latest_sequence
                                                     == Some(point.sequence);
-                                                statistics_detail_row(point, is_latest)
+                                                statistics_detail_row(point, is_latest, sub, locate)
                                             })
                                             .collect_view()
                                             .into_any()
@@ -4642,16 +4800,54 @@ fn chart_zoom_overlay(
 /// 一行展示的是**结算到该笔时的累计结果**（累计口径由服务端按整条时序算好，
 /// 见 `tr-service/src/stock_statistics.rs`），界面只负责排版与语义色。
 /// `is_latest` 标记当前集合的最后一笔（面板里那串大数的来源）。
-fn statistics_detail_row(point: StockStatisticsPointDto, is_latest: bool) -> AnyView {
+///
+/// **结算点那一格是入口**：整格一颗按钮 → 切到「记录」并把那一轮定位出来
+/// （选左栏卡片、滚进视野、焦点落在轮头，见 [`history_view`] 与 [`RoundLocate`]）。
+/// 表格里其余格子都是数据，这一格是"这一笔是谁 + 去哪儿看"，所以它带链接的长相
+/// （`.stock-stats-point__label` 那条常驻发丝下划线）。可访问名把两行与动作都写进去 ——
+/// 按钮的内容会被 AT 合成一个节点，"第几笔 / 哪一轮 / 按下去干嘛"三件事都得在里面
+/// （与标签芯片同一理由）。
+fn statistics_detail_row(
+    point: StockStatisticsPointDto,
+    is_latest: bool,
+    sub: RwSignal<StockSub>,
+    locate: RwSignal<Option<RoundLocate>>,
+) -> AnyView {
+    let code = point.stock_code.clone();
+    let round_no = point.stock_round_no;
+    // 属性里别写 `>`（会被当成标签结束符），所以这几句先在表达式里拼好。
+    // 名字里带上「第 N 笔」：按钮会把两个 span 合成**一个** UIA/AT 节点，
+    // 内容不再单独念得到 —— 而"这是第几笔结算"正是这一格的身份（实测：少了它就只剩轮号）。
+    let open_label = format!(
+        "第 {} 笔 {} 第 {} 轮，在「记录」里打开",
+        point.sequence, point.stock_name, round_no
+    );
     view! {
         <tr class:is-latest=is_latest>
             <td class="is-center">
-                <div class="stock-stats-point">
-                    <span>{format!("第 {} 笔", point.sequence)}</span>
-                    <span class="stock-stats-point__sub">
-                        {format!("{} 第 {} 轮", point.stock_name, point.stock_round_no)}
+                <button
+                    type="button"
+                    class="stock-stats-point"
+                    title=open_label.clone()
+                    aria-label=open_label
+                    on:click=move |_| {
+                        locate
+                            .set(
+                                Some(RoundLocate {
+                                    code: code.clone(),
+                                    round_no,
+                                }),
+                            );
+                        sub.set(StockSub::Trade);
+                    }
+                >
+                    <span class="stock-stats-point__label">
+                        {format!("第 {} 笔", point.sequence)}
                     </span>
-                </div>
+                    <span class="stock-stats-point__sub">
+                        {format!("{} 第 {} 轮", point.stock_name, round_no)}
+                    </span>
+                </button>
             </td>
             <td class="is-center stock-mono">
                 {format_timestamp(point.opened_at, "YYYY-MM-DD")}

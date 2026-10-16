@@ -18,6 +18,8 @@
 //! * [`text`]：用户输入文本 → 数值（金额文本 → 分、费率文本 → f64）。
 //! * [`list_order`]：拖拽重排 —— 新顺序是什么、哪些行需要落库。
 //! * [`stock_rows`]：成交流水的渲染行（按委托分组 + 加权均价）与影响预览文案。
+//! * [`stock_records`]：记录页（已清仓轮次）三处落点的 DOM id —— 统计页点结算点跳过去时，
+//!   渲染侧与定位侧共用这一份规则。
 //! * [`stock_stats`]：统计曲线的七档指标（取值 / Y 轴语义与边界 / 0 轴参考线）。
 //! * [`diary_tree`]：日记目录树（年 → 月 → 日分组 + 三种节点的 DOM id）。
 //! * [`heic`]：HEIC/HEIF（iPhone 照片）→ RGBA8 —— 界面侧解码，
@@ -43,6 +45,7 @@ pub mod paging;
 pub mod quadrant;
 pub mod query;
 pub mod section;
+pub mod stock_records;
 pub mod stock_rows;
 pub mod stock_stats;
 pub mod text;

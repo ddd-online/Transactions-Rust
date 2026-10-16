@@ -314,15 +314,57 @@
   color: var(--transactions-color-text-secondary);
 }
 
+/* 结算点：明细表里唯一**能点**的一格 —— 点了跳到「记录」里那一轮。
+ *
+ * 两行排版与从前一样（`第 N 笔` / `股票 第 N 轮`，居中由 `.stock-table .is-center` 决定，
+ * 所以这里 `text-align: inherit` 跟着格子走）；多出来的是"能点"这件事的长相：
+ * 「第 N 笔」常驻一条发丝下划线（悬停/键盘焦点转主色），副行跟着亮一档。
+ * 常驻而不是悬停才显形：表格里 15 行都长一样，悬停才出现的提示等于没有提示。 */
 .stock-stats-point {
+  /* 按钮复位：长相由上一条那句排版决定 */
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
   display: flex;
   flex-direction: column;
   line-height: 1.4;
 }
 
+.stock-stats-point__label {
+  text-decoration: underline;
+  text-decoration-color: var(--transactions-color-text-tertiary);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: color var(--transactions-transition-fast),
+    text-decoration-color var(--transactions-transition-fast);
+}
+
 .stock-stats-point__sub {
   font-size: var(--transactions-size-text-small);
   color: var(--transactions-color-text-tertiary);
+  transition: color var(--transactions-transition-fast);
+}
+
+.stock-stats-point:hover .stock-stats-point__label,
+.stock-stats-point:focus-visible .stock-stats-point__label {
+  color: var(--transactions-color-primary);
+  text-decoration-color: currentColor;
+}
+
+/* 副行只亮一档：它是"这一笔是谁"的上下文，不是链接本身 */
+.stock-stats-point:hover .stock-stats-point__sub,
+.stock-stats-point:focus-visible .stock-stats-point__sub {
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-stats-point:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+  border-radius: var(--transactions-radius-sm);
 }
 
 /* ---------------- 子功能一：账户 ---------------- */
@@ -1070,6 +1112,21 @@
 
 .stock-round + .stock-round {
   border-top: 1px solid var(--transactions-color-divider);
+}
+
+/* 「从统计页点结算点跳过来」的落点：卡片上一层 active-bg 底色，界面在 1.6s 后摘掉
+ * （时长与理由见 `pages/stock.rs` 的 `ROUND_ARRIVE_MS`）。
+ *
+ * 为什么是"状态 + 过渡"而不是 keyframes 动画：减少动态偏好下 `base.css` 把动画压成 0.01ms，
+ * 动画型的标记会**直接消失**（而"颜色与状态仍要落地"正是那条偏好的承诺）；
+ * 状态型的底色在那边只是"不淡出"，1.6s 里照样看得见。
+ * 摘掉走同一档 200ms：它不是"关门动画"（不等任何东西），只是别让底色"啪"地跳掉。 */
+.stock-round {
+  transition: background-color var(--transactions-transition-enter);
+}
+
+.stock-round.is-arrived {
+  background-color: var(--transactions-color-active-bg);
 }
 
 .stock-round__head {
