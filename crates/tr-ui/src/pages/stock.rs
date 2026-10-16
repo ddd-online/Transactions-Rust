@@ -3576,8 +3576,13 @@ fn round_card(
                     </span>
                 </button>
                 <div class="stock-round__meta">
-                    <div class="stock-round__tag" on:click=move |event| event.stop_propagation()>
+                    <div class="stock-round__tag" role="group" aria-label="本轮交易标签"
+                        on:click=move |event| event.stop_propagation()>
+                        // 与持仓详情头**同一枚芯片**（`ui-select--tag`）：这里从前是默认那套
+                        // 128px 描边字段，同一件事在两个页面上长得不一样。可访问名单独给一句 ——
+                        // 单念「分析」不知道说的是什么（同上）。
                         <Select
+                            class="ui-select--tag"
                             value=RwSignal::new(round.tag.clone())
                             options={
                                 tags.get()

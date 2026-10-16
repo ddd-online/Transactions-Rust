@@ -1106,10 +1106,6 @@
   gap: var(--transactions-space-sm);
 }
 
-.stock-round__tag {
-  width: 128px;
-}
-
 .stock-round__result {
   display: inline-flex;
   padding: 0 var(--transactions-space-sm);
@@ -1690,8 +1686,10 @@
  *    英文/数字摘要一长就把标题挤断；给标题 nowrap，把可收缩的部分让给摘要（它是 ellipsis 的）。
  * 2) 「编辑」原是无边框文字按钮，与右侧的下拉/标签并排时"没有形状"；补 1px 发丝描边，
  *    并固定不收缩 → 稳定右对齐。
- * 3) 轮次头部里「分析」下拉是 28px 台阶，而「盈利」标签只有 20px，并排高度不齐；
- *    统一到同一高度，标签内部改成 inline-flex 让文字垂直居中。
+ * 3) 轮次头部那颗「分析」下拉现在与持仓详情头是**同一枚标签芯片**（`ui-select--tag`）：当时把它
+ *    抬到 28px 是为了跟旁边的「盈利」徽标齐平，而它那时还是个表单下拉；芯片的高度（22px 起）是
+ *    它自己的口径，抬上去就不再是同一枚芯片了 —— 这一排剩下的都是 20px 上下的徽标与数字，
+ *    22px 的芯片反而更齐。所以 28px 不再套在下拉上。
  * ============================================ */
 
 .stock-review__toggle {
@@ -1712,7 +1710,25 @@
   border-radius: var(--transactions-radius-md);
 }
 
-.stock-round__head .ui-select__trigger,
+/* 轮次头的标签芯片：宽度贴内容（原来是 128px 定宽的字段，见上），面板**往左铺** ——
+ * 这枚芯片坐在右侧那串「标签 + 盈利徽标 + 金额 + 涨跌率」的最左端，默认那套 `left: 0` 会让面板
+ * 从芯片右缘继续往右长：既压在盈利与金额上，长标签（上限 8 字 ≈ 135px 的面板）在窄窗口里还会
+ * 顶出右缘被裁掉。改成往左铺，压的是这一轮的标题区，且不管标签多长都还在窗口里
+ * （持仓头那枚不必管：它在标题行的左端，往右铺正好）。实测：8 字标签下 135.3px 的面板，
+ * 右缘与芯片右缘只差 7 物理像素，左缘越过芯片左缘。 */
+.stock-round__tag {
+  flex-shrink: 0;
+}
+
+.stock-round__tag .ui-select {
+  width: auto;
+}
+
+.stock-round__tag .ui-select__panel {
+  left: auto;
+  right: 0;
+}
+
 .stock-round__head .ui-btn,
 .stock-round__head .ui-tag {
   height: var(--transactions-btn-height-sm);
