@@ -1469,11 +1469,21 @@ try {
     Assert-True ([bool]$detailFooter) "明细分栏页脚有「共 N 条」（实际 '$detailFooter'）"
     Assert-True ([bool](Wait-Element -Root $window -Name '下一页' -TimeoutSec 10)) `
         '明细分栏有分页控件（「下一页」）'
+    # 统计口径的时间轴 = **建仓时间**（明细表里两个日期都在：建仓日期是排序轴、清仓日期仍展示）。
+    # 顺序本身 UIA 看不见，由 `-p tr-service` 的
+    # `statistics_follow_the_open_time_when_a_later_round_closes_first` 锁；这里锁可见的口径字样。
+    Assert-True ([bool](Wait-Element -Root $window -Name '建仓日期' -TimeoutSec 10)) `
+        '明细表有「建仓日期」列（统计的排序轴）'
+    Assert-True ([bool](Wait-Element -Root $window -Name '清仓日期' -TimeoutSec 10)) `
+        '明细表同时保留「清仓日期」列'
+    Assert-True (-not [bool](Find-First $window '结算日期')) '旧的「结算日期」列名不再出现'
 
     Assert-True (Switch-StatsTab -Window $Window -Name '统计') '切回「统计」页签'
     Start-Sleep -Seconds 2
     Assert-True ([bool](Wait-Element -Root $window -Name '统计曲线' -TimeoutSec 15)) `
         '「统计」分栏出现「统计曲线」'
+    Assert-True ([bool](Find-Like -Root $window -Pattern '按建仓时间 · 截至')) `
+        '汇总行小字标明口径：按建仓时间 · 截至 …'
 
     # 统计口径（工具栏右侧那个下拉）：默认「逐笔累计」且**不显示**「每组笔数」；切成「分组统计」才出现它，
     # 指标文案同时从「累计盈亏」变成「分组盈亏」（分组点的值是**本组**的盈亏合计，不是自起点累计）。

@@ -3743,7 +3743,7 @@ const STATS_GROUP_SIZE_DEFAULT: &str = "5";
 /// 统计子功能：工具栏左侧两个分栏（**统计** / **明细**），右侧是**两个分栏共用**的筛选组。
 ///
 /// * **统计**：结算统计（已实现盈亏 + 6 个累计口径指标）+ 统计曲线。
-/// * **明细**：逐笔结算明细表，按结算日期倒序、分页。
+/// * **明细**：逐笔结算明细表，按**建仓日期**倒序、分页。
 ///
 /// ## 两个分栏都填满内容区（这一页不再整页滚动）
 ///
@@ -3980,8 +3980,8 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
 
     let latest_point = move || stats.get().and_then(|data| data.points.last().cloned());
 
-    // 明细表的数据源：结算点按日期**倒序**（最近一笔在最上面），再按页切片。
-    // "倒序"是为了让人一进明细分栏就先看到最近的结算 —— 曲线仍按**时序**画（正序）。
+    // 明细表的数据源：结算点按**建仓日期**倒序（最近建仓的在最上面），再按页切片。
+    // "倒序"是为了让人一进明细分栏就先看到最近做的那轮 —— 曲线仍按**时序**画（正序）。
     let detail_rows = move || {
         let mut points = stats.get().map(|data| data.points).unwrap_or_default();
         points.reverse();
@@ -4165,8 +4165,8 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                 )>{format::signed_yuan(latest.total_pnl)}</span>
                                 <span class="stock-stats-overview__sub">
                                     {format!(
-                                        "截至 {} · 第 {} 笔结算{}",
-                                        format_timestamp(latest.closed_at, "YYYY-MM-DD"),
+                                        "按建仓时间 · 截至 {} · 第 {} 笔结算{}",
+                                        format_timestamp(latest.opened_at, "YYYY-MM-DD"),
                                         latest.sequence,
                                         if filtered { "（筛选内）" } else { "" },
                                     )}
@@ -4319,7 +4319,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                     }
                         .into_any();
                 }
-                // 按结算日期**倒序**（最近一笔在最上面）；分页在界面侧切，
+                // 按**建仓日期**倒序（最近建仓的在最上面）；分页在界面侧切，
                 // 理由见 `statistics_view` 的文档注释（累计口径必须整条算出来）。
                 let rows = detail_page_rows();
                 let empty = rows.is_empty();
@@ -4334,7 +4334,8 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                 <thead>
                                     <tr>
                                         <th class="is-center">"结算点"</th>
-                                        <th class="is-center">"结算日期"</th>
+                                        <th class="is-center">"建仓日期"</th>
+                                        <th class="is-center">"清仓日期"</th>
                                         <th class="is-center">"标签"</th>
                                         <th class="is-center">"本笔盈亏"</th>
                                         <th class="is-center">"累计盈亏"</th>
@@ -4355,7 +4356,7 @@ fn statistics_view(sub: RwSignal<StockSub>) -> AnyView {
                                     {if empty {
                                         view! {
                                             <tr>
-                                                <td colspan="12">
+                                                <td colspan="13">
                                                     <Empty
                                                         title="当前筛选下暂无结算记录"
                                                         description="放宽时间区间、笔数或标签即可看到逐笔明细。"
@@ -4473,7 +4474,7 @@ fn metric_chart(
             format!(
                 "{} {}",
                 point_span_label(strategy, point.sequence, point.span),
-                format_timestamp(point.closed_at, "MM-DD"),
+                format_timestamp(point.opened_at, "MM-DD"),
             )
         })
         .collect::<Vec<_>>();
@@ -4651,6 +4652,9 @@ fn statistics_detail_row(point: StockStatisticsPointDto, is_latest: bool) -> Any
                         {format!("{} 第 {} 轮", point.stock_name, point.stock_round_no)}
                     </span>
                 </div>
+            </td>
+            <td class="is-center stock-mono">
+                {format_timestamp(point.opened_at, "YYYY-MM-DD")}
             </td>
             <td class="is-center stock-mono">
                 {format_timestamp(point.closed_at, "YYYY-MM-DD")}

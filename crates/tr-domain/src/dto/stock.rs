@@ -481,7 +481,7 @@ pub struct StockStatisticsDto {
     pub groups: Vec<StockStatisticsPointDto>,
 }
 
-/// 一个结算统计点：截至第 N 笔清仓的累计口径指标。
+/// 一个结算统计点：按**建仓时间**排序后，截至第 N 笔的累计口径指标。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StockStatisticsPointDto {
@@ -490,7 +490,10 @@ pub struct StockStatisticsPointDto {
     /// 本点覆盖的结算笔数：逐笔累计口径下 = `sequence`（自集合起点累计），分组口径下 = 该组笔数。
     /// 于是"本点覆盖第 `sequence - span + 1` ..= `sequence` 笔"两个口径都成立。
     pub span: i64,
-    /// 本统计点的结算时间（该笔清仓时间，Unix 秒）
+    /// 本统计点的**建仓时间**（该轮首次建仓的委托时间，Unix 秒）—— 统计页的时间轴就是它
+    #[serde(rename = "openedAt")]
+    pub opened_at: i64,
+    /// 本统计点的清仓时间（Unix 秒）；定顺序用的是 `opened_at`，这个只用于展示
     #[serde(rename = "closedAt")]
     pub closed_at: i64,
     #[serde(rename = "stockCode")]

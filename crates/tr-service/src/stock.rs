@@ -1888,24 +1888,27 @@ mod tests {
         .unwrap();
     }
 
-    /// 直接用时间戳造一轮干净结算，建仓比清仓早一分钟。
-    fn seed_clean_round_from(
+    /// 直接用时间戳造一轮干净结算；建仓与清仓**各给一个时间**。
+    ///
+    /// 两个时间必须能分开：统计页按**建仓时间**定轴，"后建仓的一轮先清仓"正是要验的那种数据
+    /// （见 `statistics_follow_the_open_time_when_a_later_round_closes_first`）。
+    /// 只想造"建仓比清仓早一分钟"的普通数据就用 [`seed_clean_round_from`]。
+    // 造数函数：价格两个、手数一个、时间两个，各是独立的轴，拆参数只会更难读
+    #[allow(clippy::too_many_arguments)]
+    fn seed_round_open_close(
         workspace: &Workspace,
         code: &str,
         name: &str,
         open_milli: i64,
         close_milli: i64,
         lots: i64,
-        close_at: i64,
+        opened_at: i64,
+        closed_at: i64,
     ) {
         let conn = workspace.connection();
         for (trade_type, price, at) in [
-            (
-                consts::STOCK_TRADE_OPEN,
-                open_milli,
-                close_at - if close_at > 60 { 60 } else { 0 },
-            ),
-            (consts::STOCK_TRADE_CLOSE, close_milli, close_at),
+            (consts::STOCK_TRADE_OPEN, open_milli, opened_at),
+            (consts::STOCK_TRADE_CLOSE, close_milli, closed_at),
         ] {
             let trade = StockTrade {
                 id: tr_store::util::new_uuid(),
@@ -1922,6 +1925,28 @@ mod tests {
             };
             StockDao::create_trade(&conn, &trade).unwrap();
         }
+    }
+
+    /// 造一轮"建仓比清仓早一分钟"的干净结算（大多数用例只需要这个）。
+    fn seed_clean_round_from(
+        workspace: &Workspace,
+        code: &str,
+        name: &str,
+        open_milli: i64,
+        close_milli: i64,
+        lots: i64,
+        closed_at: i64,
+    ) {
+        seed_round_open_close(
+            workspace,
+            code,
+            name,
+            open_milli,
+            close_milli,
+            lots,
+            closed_at - if closed_at > 60 { 60 } else { 0 },
+            closed_at,
+        );
     }
 
     /// 用 `YYYY-MM-DD HH:MM:SS` 的 UTC 时间造一轮结算（跨月/跨年造数用）。
@@ -1957,6 +1982,104 @@ mod tests {
             .unwrap()
             .and_utc()
             .timestamp()
+    }
+
+    /// **统计按建仓时间定轴**：后建仓的一轮先清仓时，顺序不能跟着清仓时间颠倒。
+    ///
+    /// 数据：A 6/20 建仓 → 7/20 清仓；B 7/10 建仓 → 7/15 清仓（后建仓、先清仓）。
+    /// 按清仓排会得到 B、A；按建仓排必须是 A、B；月份区间与「最近 N 笔」也跟着建仓时间走：
+    /// 7 月区间只剩 B（A 是 6 月建仓的，尽管它 7 月才清仓），最近 1 笔同理取 B。
+    #[test]
+    fn statistics_follow_the_open_time_when_a_later_round_closes_first() {
+        let (workspace, dir) = workspace("stats-open-axis");
+        seed_principal(&workspace, 10_000_000);
+        seed_round_open_close(
+            &workspace,
+            TEST_CODE,
+            TEST_NAME,
+            10_000,
+            11_000,
+            10,
+            utc_timestamp("2023-06-20 12:00:00"),
+            utc_timestamp("2023-07-20 12:00:00"),
+        );
+        seed_round_open_close(
+            &workspace,
+            TEST_CODE_B,
+            TEST_NAME_B,
+            10_000,
+            9_500,
+            10,
+            utc_timestamp("2023-07-10 12:00:00"),
+            utc_timestamp("2023-07-15 12:00:00"),
+        );
+
+        let stats = crate::stock_statistics::get_statistics(&workspace, TEST_LEDGER_ID).unwrap();
+        assert_eq!(stats.points.len(), 2);
+        assert_eq!(stats.points[0].stock_code, TEST_CODE, "先建仓的那轮排第 1");
+        assert_eq!(
+            stats.points[0].opened_at,
+            utc_timestamp("2023-06-20 12:00:00")
+        );
+        assert_eq!(
+            stats.points[0].closed_at,
+            utc_timestamp("2023-07-20 12:00:00")
+        );
+        assert_eq!(stats.points[0].sequence, 1);
+        assert_eq!(
+            stats.points[1].stock_code, TEST_CODE_B,
+            "后建仓、先清仓的那轮排第 2"
+        );
+        assert_eq!(stats.points[1].sequence, 2);
+        // 累计口径也按这个顺序走：A 先入账（+10 万分），B 之后（累计 +5 万分）
+        assert_eq!(stats.points[0].total_pnl, 100_000);
+        assert_eq!(stats.points[1].total_pnl, 50_000);
+
+        let july = crate::stock_statistics::get_statistics_range(
+            &workspace,
+            TEST_LEDGER_ID,
+            "2023-07",
+            "2023-07",
+            0,
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            july.points.len(),
+            1,
+            "7 月区间按建仓月份筛，只剩 7/10 建仓的 B"
+        );
+        assert_eq!(july.points[0].stock_code, TEST_CODE_B);
+        assert_eq!(july.points[0].sequence, 1, "筛选内从 1 起重新编号");
+
+        let june = crate::stock_statistics::get_statistics_range(
+            &workspace,
+            TEST_LEDGER_ID,
+            "2023-06",
+            "2023-06",
+            0,
+            "",
+        )
+        .unwrap();
+        assert_eq!(june.points.len(), 1, "6 月区间只剩 6/20 建仓的 A");
+        assert_eq!(june.points[0].stock_code, TEST_CODE);
+
+        let recent = crate::stock_statistics::get_statistics_range(
+            &workspace,
+            TEST_LEDGER_ID,
+            "",
+            "",
+            1,
+            "",
+        )
+        .unwrap();
+        assert_eq!(recent.points.len(), 1);
+        assert_eq!(
+            recent.points[0].stock_code, TEST_CODE_B,
+            "「最近 1 笔」取最近**建仓**的 B"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// 备注必须逐笔落库：**非零值字段参与 INSERT**

@@ -1,11 +1,17 @@
 //! 逐笔结算统计。
 //!
+//! **时间轴 = 建仓时间。** 一轮的锚点是它**首次建仓**的委托时间（`round.opened_at`）：排序、
+//! 月份区间与「最近 N 笔」的日期、资金事件（追加本金 / 支取）的插值时点、明细表与曲线上的日期，
+//! 用的都是它。为什么不用清仓时间定轴：**后建仓的一轮可能先清仓** —— 按清仓排会把两轮的先后
+//! 关系颠倒，统计（编号、分组切分、回撤、区间筛选）会跟着一起颠倒。清仓时间仍带在点上
+//! （`closed_at`），只是不再决定顺序。
+//!
 //! 统计口径：
 //! * 胜率 = 盈利笔数 ÷ 总笔数（**平局计入总笔数**，不计胜负）；
 //! * 平均盈利/亏损分别只按盈利笔与亏损笔求和取平均，亏损金额取正数；
 //! * 盈亏比 = 平均盈利 ÷ 平均亏损（**无亏损样本时为 null**）；
 //! * 期望值 = 胜率 × 平均盈利 − (1 − 胜率) × 平均亏损 = 累计盈亏 ÷ 总笔数；
-//! * 最大回撤按每笔结算时点的总资产曲线（当时的本金 + 累计已结算盈亏 − 当时累计支取）
+//! * 最大回撤按每轮**建仓时点**的总资产曲线（当时的本金 + 累计已结算盈亏 − 当时累计支取）
 //!   从高点跌落的幅度计算；本金追加/支取按记录日期参与时序，占本金比例使用**当时的本金**；
 //! * 带筛选（月份区间 / 最近 N 笔 / 标签）时，**区间内从 1 起重新编号**，
 //!   累计盈亏、胜率、平均盈亏、回撤全部按筛选集合独立重算；
@@ -121,6 +127,7 @@ impl GroupAcc {
         let mut point = StockStatisticsPointDto {
             sequence,
             span: self.count,
+            opened_at: anchor.round.opened_at,
             closed_at: anchor.round.closed_at,
             stock_code: anchor.round.stock_code.clone(),
             stock_name: anchor.stock_name.clone(),
@@ -268,11 +275,13 @@ fn statistics(
     if !tag.is_empty() {
         events.retain(|event| event.round.tag == tag);
     }
-    // 稳定排序：closed_at → created_at → id（保证同值时顺序确定）
+    // 稳定排序：**建仓时间** → 清仓时间 → created_at → id
+    // （后两档是同值兜底；「同日建仓」时先清仓的排前面，读起来仍是那一批的先后）
     events.sort_by(|left, right| {
         left.round
-            .closed_at
-            .cmp(&right.round.closed_at)
+            .opened_at
+            .cmp(&right.round.opened_at)
+            .then(left.round.closed_at.cmp(&right.round.closed_at))
             .then(left.round.created_at.cmp(&right.round.created_at))
             .then(left.round.id.cmp(&right.round.id))
     });
@@ -288,7 +297,7 @@ fn statistics(
     let total_events = events.len();
     let mut included_total = 0_i64;
     for (index, event) in events.iter().enumerate() {
-        let date = unix_to_date(event.round.closed_at);
+        let date = unix_to_date(event.round.opened_at);
         if include_statistics_event(&date, index, total_events, from_day, to_day, recent) {
             included_total += 1;
         }
@@ -314,6 +323,7 @@ fn statistics(
     let mut group_acc = GroupAcc::default();
 
     // 资金事件与结算事件按日期合成同一条时序，保证本金追加/支取在正确时点影响总资产峰值与回撤
+    // （结算事件落在**建仓日**上，见模块文档的"时间轴 = 建仓时间"）
     let mut actions: Vec<StatAction> = Vec::with_capacity(flows.len() + events.len());
     for (index, flow) in flows.iter().enumerate() {
         actions.push(StatAction {
@@ -325,7 +335,7 @@ fn statistics(
     }
     for (index, event) in events.iter().enumerate() {
         actions.push(StatAction {
-            date: unix_to_date(event.round.closed_at),
+            date: unix_to_date(event.round.opened_at),
             order: 1,
             flow_index: None,
             event_index: index,
@@ -380,7 +390,7 @@ fn statistics(
         }
 
         let event = &events[action.event_index];
-        let date = unix_to_date(event.round.closed_at);
+        let date = unix_to_date(event.round.opened_at);
         if !include_statistics_event(
             &date,
             action.event_index,
@@ -454,6 +464,7 @@ fn statistics(
             sequence,
             // 累计口径下"本点覆盖 1..=sequence 笔"（区间内重新编号后同样成立）
             span: sequence,
+            opened_at: event.round.opened_at,
             closed_at: event.round.closed_at,
             stock_code: event.round.stock_code.clone(),
             stock_name: event.stock_name.clone(),
@@ -507,7 +518,7 @@ fn statistics(
 }
 
 /// 判断某笔结算是否落入当前筛选：
-/// `recent > 0` 时取排序后最近 N 笔；`from_day` 非空时按清仓日期区间（含首尾日）判断。
+/// `recent > 0` 时取排序后最近 N 笔；`from_day` 非空时按**建仓日期**区间（含首尾日）判断。
 fn include_statistics_event(
     date: &str,
     index: usize,
