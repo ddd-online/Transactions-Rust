@@ -37,6 +37,10 @@
 #     会静默失败）；「明细」分栏渲染逐笔结算明细表 + 页脚的「共 N 条」与分页控件。
 #     这一页原来把「结算统计 + 曲线 + 逐笔明细」竖向摞在一屏（整页滚动），现在两个分栏
 #     各自填满内容区、明细走分页 —— 分栏切换与页脚这两条链路就锁在这里。
+#   * 统计工具栏「按时间」的两个月份字段：**等宽 / 够宽 / 不与后面的下拉重叠 / 真的点得到**
+#     （四条几何判据）。原缺陷是"定宽容器 + `.ui-input` 的 `width: 100%` + `<input>` 的固有宽度
+#     当自动最小尺寸"⇒ 第二个字段溢出到「逐笔累计」底下、肉眼只剩「结束」两个字；UIA 看不见
+#     "被盖住"，所以这里既量矩形、也在它正中间按一次真实鼠标看焦点落在哪。
 #
 # ⚠ 它顺带锁死一个**真实缺陷**（本轮才发现，"减仓/清仓按钮点不动"的真凶）：
 #   详情区那三个按钮（清仓/减仓/加仓）原来在 `on_click` 里先写 `selected_code.set(code)`
@@ -570,6 +574,21 @@ function Select-StatsDropdown { param($Window, [string]$Name, [string]$Value)
         if ([bool](Find-StatsTrigger -Window $Window -Name $Value)) { return $true }
     }
     return $false
+}
+# 点工具栏分段控件的一项（全部 / 按时间 / 最近 N 笔）：**真实鼠标点中心**，不走 InvokePattern ——
+# 分段项的激活语义就是"点一下"，而这一页的月份区间只有"真的点开了按时间"才会出现。
+function Click-SegmentedItem { param($Window, [string]$Name, [int]$TimeoutSec = 10)
+    $item = Wait-VisibleButton -Window $Window -Name $Name -TimeoutSec $TimeoutSec
+    if (-not $item) {
+        Write-Host "    找不到分段项「$Name」" -ForegroundColor DarkYellow
+        return $false
+    }
+    $rect = $item.Current.BoundingRectangle
+    [TrUia]::SetForegroundWindow([IntPtr]$Window.Current.NativeWindowHandle) | Out-Null
+    Start-Sleep -Milliseconds 200
+    [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2))
+    Start-Sleep -Milliseconds 600
+    return $true
 }
 # 读输入框当前值（UIA 的 ValuePattern，只读）。
 # 用来断言"清仓的手数被固定成全仓、且控件不可用"，而不是再去写它。
@@ -1485,6 +1504,55 @@ try {
     Assert-True ([bool](Find-Like -Root $window -Pattern '按建仓时间 · 截至')) `
         '汇总行小字标明口径：按建仓时间 · 截至 …'
 
+    # ---- 「按时间」的两个月份字段：几何 + 点得到 ----
+    # 锁的是一个真实缺陷（用户报的"页面的 UI 异常"）：`.stock-statistics__range` 原来定宽 260px，
+    # 而 `.ui-input` 是 `width: 100%`、`<input>` 的固有宽度（默认 `size=20`，这里 181px）就是它的
+    # **自动最小尺寸** —— 两个字段缩不进 260px，第二个直接溢出到「逐笔累计」下拉底下，
+    # 占位文案只剩「结束」两个字（肉眼看不见那个框，鼠标也点不进去）。
+    #
+    # UIA **看不见**"被盖住"：被压住的字段照报 181px 的完整矩形。所以判据取三层：
+    #   ① 几何：两个字段等宽，且第二个的**右缘**落在统计口径下拉的**左缘**左边（不重叠）；
+    #   ② 够宽：字段（内层 input = 字段宽 − 26）不比同排那个 136px 的下拉窄 ——
+    #      占位文案「开始月份 YYYY-MM」128px 只有在这个宽度里才塞得下；
+    #   ③ 真的点得到：在第二个字段**正中间**按一次真实鼠标，焦点必须落在它身上
+    #      （被盖住时那一击打在下拉上 ⇒ 焦点不在这儿）。这一条是人眼那条判据的机器版。
+    Write-Host '  月份区间：等宽 / 够宽 / 不重叠 / 点得到（「按时间」的两个月份字段）'
+    Assert-True (Click-SegmentedItem -Window $window -Name '按时间') '点「按时间」分段项'
+    $startMonth = Find-EditByName -Window $window -Name '开始月份 YYYY-MM' -TimeoutSec 10
+    $endMonth = Find-EditByName -Window $window -Name '结束月份 YYYY-MM' -TimeoutSec 10
+    Assert-True ([bool]$startMonth) '「按时间」下出现「开始月份」字段'
+    Assert-True ([bool]$endMonth) '「按时间」下出现「结束月份」字段'
+    if ($startMonth -and $endMonth) {
+        $r1 = $startMonth.Current.BoundingRectangle
+        $r2 = $endMonth.Current.BoundingRectangle
+        Assert-True ([Math]::Abs($r1.Width - $r2.Width) -le 4) `
+            "两个月份字段等宽（$([int]$r1.Width) vs $([int]$r2.Width) 物理像素）"
+        $strategyTrigger = Find-StatsTrigger -Window $window -Name '逐笔累计'
+        Assert-True ([bool]$strategyTrigger) '统计口径下拉在树上（拿它当"右边那个邻居"的锚点）'
+        if ($strategyTrigger) {
+            $rs = $strategyTrigger.Current.BoundingRectangle
+            Assert-True ($r1.Width -ge $rs.Width) `
+                "月份字段不比同排下拉窄（字段 $([int]$r1.Width) vs 下拉 $([int]$rs.Width)）—— 占位文案才不被截"
+            Assert-True (($r2.X + $r2.Width) -le $rs.X) `
+                ("「结束月份」的右缘不越过统计口径下拉的左缘（$([int]($r2.X + $r2.Width)) ≤ $([int]$rs.X)）" +
+                 '—— 定宽容器 + 不肯缩的输入框会让它溢出到下拉底下')
+        }
+        # 真实鼠标点第二个字段的正中间；被盖住时这一击落在那颗下拉上
+        [TrUia]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 300
+        [TrUia]::Click([int]($r2.X + $r2.Width / 2), [int]($r2.Y + $r2.Height / 2))
+        $focusedInEnd = $false
+        $deadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline -and -not $focusedInEnd) {
+            Start-Sleep -Milliseconds 200
+            try { $focusedInEnd = [bool]$endMonth.Current.HasKeyboardFocus } catch { $focusedInEnd = $false }
+        }
+        Assert-True $focusedInEnd '点「结束月份」正中间，焦点落在它身上（没被后面的下拉盖住）'
+    }
+    Assert-True (Click-SegmentedItem -Window $window -Name '全部') '把筛选切回「全部」（后面的断言按未筛选的状态走）'
+    Assert-True (-not [bool](Find-EditByName -Window $window -Name '开始月份 YYYY-MM' -TimeoutSec 1)) `
+        '切回「全部」后月份字段收起'
+
     # 统计口径（工具栏右侧那个下拉）：默认「逐笔累计」且**不显示**「每组笔数」；切成「分组统计」才出现它，
     # 指标文案同时从「累计盈亏」变成「分组盈亏」（分组点的值是**本组**的盈亏合计，不是自起点累计）。
     # 再锁一条：口径只换「统计」分栏画哪条序列 —— 「明细」仍是逐笔一行一笔结算，页脚条数不变。
@@ -2221,4 +2289,4 @@ try {
 }
 
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
-Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓（日期选择器选前天 → 选择器文案 / trade_time 本地日期 / 资金记录日期 / 账户页日期列 四处一致）→ 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 统计分栏页签与统计口径（逐笔累计 / 分组统计 + 每组笔数，明细不受影响）→ 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 操作记录与回滚（预演不落库 + 撤销后本金/资金记录还原）→ 重置股票数据（不动记账数据）"
+Show-TrSummary -Failures $failures -Tag 'stock' -SuccessMessage "[stock] 全部通过：建仓（日期选择器选前天 → 选择器文案 / trade_time 本地日期 / 资金记录日期 / 账户页日期列 四处一致）→ 编辑成交 → 删除委托 → 减仓/清仓（成本结转/已实现盈亏/资金链/清仓归档）→ 费用设置生效 → 统计分栏页签、月份区间几何（等宽/够宽/不重叠/点得到）与统计口径（逐笔累计 / 分组统计 + 每组笔数，明细不受影响）→ 账户利息归本（改本金口径外单独累计 + 计入可用现金）与资金记录翻页 → 操作记录与回滚（预演不落库 + 撤销后本金/资金记录还原）→ 重置股票数据（不动记账数据）"

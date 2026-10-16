@@ -1218,11 +1218,26 @@
   margin-left: auto;
 }
 
+/* 月份区间：两个输入框**各自定宽**，这一行由它们自己撑开。
+ *
+ * ⚠ 别写"给这一行定宽、让输入框自己缩"（原来就是 `width: 260px`）：`.ui-input` 是
+ * `width: 100%`，而 `<input>` 的固有宽度（默认 `size=20`，随字体约 180~207px）就是它的
+ * **自动最小尺寸**，flex 缩不到那个数以下 —— 260px 装不下两个字段，第二个字段溢出到
+ * 「逐笔累计」下拉底下（占位文案只剩「结束」两个字，鼠标也点不进去）。
+ * UIA **看不见**"被盖住"（它照报完整矩形），所以这条只能靠"两个矩形不许重叠"来判
+ * （见 `fixtures/ui-stock.ps1` 第 7 步）。
+ * 168px = 占位文案「开始月份 YYYY-MM」128 + 左右内边距 24 + 边框 2 + 余量。 */
 .stock-statistics__range {
   display: flex;
   align-items: center;
   gap: var(--transactions-space-xs);
-  width: 260px;
+}
+
+.stock-statistics__range > .ui-input {
+  flex: 0 0 168px;
+  /* 上面那条 `flex-basis` 只有配合这一条才生效：自动最小尺寸（= min-content ≈ 181px）
+   * 会把用到的宽度顶回去。 */
+  min-width: 0;
 }
 
 .stock-statistics__range-sep {
