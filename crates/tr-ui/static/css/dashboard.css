@@ -32,8 +32,7 @@
   display: grid;
   grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
   align-items: start;
-  /* 卡片之间 = 卡片四周（`.page-content` 的 16px 内边距）：一块网格里的间距只有一个数，
-     换成 32 会让"卡与卡"比"卡与窗口"更松，边界读起来忽宽忽窄 */
+  /* 卡片之间 = 卡片四周（`.page-content` 的 16px 内边距）：一块网格里的间距只有一个数 */
   gap: var(--transactions-space-lg);
   min-height: 0;
 }
@@ -46,121 +45,60 @@
 
 /* ------------------------------------------------------------ 期间控件 */
 
-/* **一根**控件，不是三个零件：一条 36px 高的发丝边框里装着「‹ 2026年10月 › │ 月 年」。
- * 之前是 28px 的描边小方块 + 裸文本 + 另一个 36px 的分段控件，三样既不同高也不成套；
- * 高度、圆角、焦点环都跟应用里的按钮对齐（DESIGN.md：36px 高、8px 圆角、2px 主色环）。 */
+/* 与「记录」页的 `TimeRangePicker` 同一套排法：粒度分段（36px）+ 两个翻页图标按钮
+ * （`IconButton`，36px）+ 一个期间字段。这一页不再自绘控件 —— 之前那根"一个框装三样"
+ * 的东西虽然自洽，但和页面里其它工具条不是一套语言。 */
 .dash-period {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 2px;
-  height: 36px;
-  padding: 0 var(--transactions-space-xs);
-  border: 1px solid var(--transactions-color-window-border);
-  border-radius: var(--transactions-radius-md);
-  background-color: var(--transactions-color-major-background);
+  gap: var(--transactions-space-sm);
+  height: var(--transactions-btn-height-md);
 }
 
+/* `IconButton` 默认 28px，在工具条里要和 36px 的分段、字段对齐 */
 .dash-period__step {
+  --ui-icon-btn-size: var(--transactions-btn-height-md);
+}
+
+/* 期间字段：外观照抄 `.ui-time__trigger`（36px / 6px 圆角 / 发丝边 / Paper 面），
+ * 点开是选择面板 —— 直接沿用 `.ui-time__*` 的面板与格子样式，和「记录」页一致。
+ * 外层只负责给面板做定位锚（`position: relative`）。 */
+.dash-period__field {
+  position: relative;
+  display: inline-flex;
+}
+
+.dash-period__trigger {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: none;
+  gap: var(--transactions-space-sm);
+  height: var(--transactions-btn-height-md);
+  min-width: 150px;
+  padding: 0 var(--transactions-space-sm);
+  border: 1px solid var(--transactions-color-window-border);
   border-radius: var(--transactions-radius-sm);
-  background: none;
-  color: var(--transactions-color-icon);
-  line-height: 1;
+  background-color: var(--transactions-color-major-background);
+  color: var(--transactions-color-text-major);
   cursor: pointer;
   transition:
-    background-color var(--transactions-transition-fast),
-    color var(--transactions-transition-fast);
+    border-color var(--transactions-transition-fast),
+    background-color var(--transactions-transition-fast);
 }
 
-/* 图标只描边不撑格：12px 与应用里其它翻页箭头一致 */
-.dash-period__step svg {
-  width: 12px;
-  height: 12px;
-}
-
-.dash-period__step:hover:not(:disabled) {
+.dash-period__trigger:hover {
+  border-color: var(--transactions-color-border-l2);
   background-color: var(--transactions-color-hover-bg);
-  color: var(--transactions-color-text-major);
 }
 
-.dash-period__step:active:not(:disabled) {
-  translate: 0 1px;
-}
-
-.dash-period__step:focus-visible {
+.dash-period__trigger:focus-visible {
   outline: 2px solid var(--transactions-color-primary);
   outline-offset: 1px;
 }
 
-.dash-period__step:disabled {
-  color: var(--transactions-color-text-disabled);
-  cursor: default;
-}
-
-.dash-period__label {
-  min-width: 104px;
-  padding: 0 var(--transactions-space-xs);
-  text-align: center;
+.dash-period__value {
   font-size: var(--transactions-size-text-body);
-  font-weight: 600;
-  color: var(--transactions-color-text-major);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-/* 竖线：把"翻到哪一期"和"按什么粒度翻"分开，但两者仍在同一个框里 */
-.dash-period__divider {
-  width: 1px;
-  height: 18px;
-  margin: 0 var(--transactions-space-2xs);
-  background-color: var(--transactions-color-divider);
-}
-
-.dash-period__modes {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.dash-period__mode {
-  height: 26px;
-  padding: 0 var(--transactions-space-md);
-  border: none;
-  border-radius: var(--transactions-radius-sm);
-  background: none;
-  color: var(--transactions-color-text-secondary);
-  font-size: var(--transactions-size-text-body-sm);
-  cursor: pointer;
-  transition:
-    background-color var(--transactions-transition-fast),
-    color var(--transactions-transition-fast);
-}
-
-.dash-period__mode:hover:not(.is-active) {
-  background-color: var(--transactions-color-hover-bg);
-  color: var(--transactions-color-text-major);
-}
-
-.dash-period__mode:active:not(.is-active) {
-  translate: 0 1px;
-}
-
-.dash-period__mode:focus-visible {
-  outline: 2px solid var(--transactions-color-primary);
-  outline-offset: 1px;
-}
-
-/* 选中档：与应用里的分段控件同一套语言（主色文字 + 10% 主色底） */
-.dash-period__mode.is-active {
-  background-color: var(--transactions-color-active-bg);
-  color: var(--transactions-color-primary);
-  font-weight: 600;
 }
 
 /* ------------------------------------------------------------ 收支卡 */
@@ -257,6 +195,30 @@
   height: 100%;
   border-radius: inherit;
   background: var(--transactions-color-primary);
+  /* 数据自己画出来：条形从左侧抽出。用 clip-path 不用 width —— 不触发布局，
+     圆角也由裁剪边推进而不是被拉伸；没有 fill-mode，动画没跑成条形就是满的。 */
+  animation: dash-bar-draw var(--transactions-transition-settle) var(--transactions-ease-out-expo)
+    120ms;
+}
+
+/* 这一拍是"内容落位（320ms）之后，数据再落定"：延迟 120ms 让两拍错开，
+   总时长 440ms 仍在一次入场之内（DESIGN.md 的「Draw the data」那一拍，
+   折线删掉之后由构成条形继承）。 */
+@keyframes dash-bar-draw {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/* 关掉位移类动画时这条也关掉：数据在终态直接出现，不做"先藏后画" */
+@media (prefers-reduced-motion: reduce) {
+  .dash-mix__bar-fill {
+    animation: none;
+  }
 }
 
 .dash-mix__amount {

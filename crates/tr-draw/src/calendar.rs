@@ -57,6 +57,43 @@ pub fn parse_year_month(input: &str) -> Option<(i32, u32)> {
     Some((year, month))
 }
 
+/// 解析**只有年月**的 `YYYY-MM`（看板的期间键就是这个形状）。
+///
+/// 与 [`parse_year_month`] 的分工：那个要求「带日」的区间端点（时间范围选择器用），
+/// 这个只认两段。两者不能互相顶替 —— 拿 `2026-10` 去喂 `parse_year_month` 会得到 `None`，
+/// 而看板翻页时把 `None` 当成"保持原样"，表现就是**点了箭头没反应**。
+pub fn parse_month(input: &str) -> Option<(i32, u32)> {
+    let trimmed = input.trim();
+    let mut parts = trimmed.split('-');
+    let year: i32 = parts.next()?.parse().ok()?;
+    let month: u32 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&month) {
+        return None;
+    }
+    Some((year, month))
+}
+
+/// 期间键按粒度前后翻：`month` 走 `YYYY-MM`，`year` 走 `YYYY`。
+///
+/// 解析不了就**原样返回**（调用方据此不改变期间）：宁可不动，也不要把 1970 这类
+/// 猜出来的期间塞给用户。返回 `(新键, 是否真的翻了)` 之外没有别的信号通道，
+/// 所以调用方用"新旧键是否相同"判断有没有翻动。
+pub fn shift_period_key(key: &str, mode: &str, delta: i32) -> String {
+    if mode == "year" {
+        let Ok(year) = key.trim().parse::<i32>() else {
+            return key.to_string();
+        };
+        return (year + delta).to_string();
+    }
+    match parse_month(key) {
+        Some((year, month)) => {
+            let (year, month) = add_months(year, month, delta);
+            format!("{year}-{month:02}")
+        }
+        None => key.to_string(),
+    }
+}
+
 /// `YYYY-MM-DD` → `2026年6月19日`（解析失败原样返回）。
 pub fn format_ymd_cn(input: &str) -> String {
     match parse_ymd(input) {
@@ -295,6 +332,42 @@ pub fn shift_period(start: &str, end: &str, mode: &str, direction: i32) -> (Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 期间键的两种形状：`YYYY-MM`（月）与 `YYYY`（年）。
+    ///
+    /// 这条测试是为一个真实 bug 补的：看板原来拿 `2026-10` 去喂 `parse_year_month`
+    /// （那个函数要求带"日"的区间端点），解析失败后"原样返回"，于是**点箭头没任何反应**，
+    /// 而且因为返回值等于输入，连"没变"都看不出来。
+    #[test]
+    fn period_keys_shift_by_month_and_year() {
+        assert_eq!(shift_period_key("2026-10", "month", -1), "2026-09");
+        assert_eq!(shift_period_key("2026-10", "month", 1), "2026-11");
+        assert_eq!(shift_period_key("2026-01", "month", -1), "2025-12");
+        assert_eq!(shift_period_key("2026-12", "month", 1), "2027-01");
+        assert_eq!(shift_period_key("2026", "year", -1), "2025");
+        assert_eq!(shift_period_key("2026", "year", 1), "2027");
+        // 解析不了就原样返回，不猜一个 1970 出来
+        assert_eq!(shift_period_key("", "month", -1), "");
+        assert_eq!(shift_period_key("不是日期", "month", -1), "不是日期");
+        assert_eq!(shift_period_key("2026-13", "month", -1), "2026-13");
+        assert_eq!(shift_period_key("2026-10-18", "month", -1), "2026-10-18");
+        assert_eq!(shift_period_key("2026-10", "year", 1), "2026-10");
+    }
+
+    /// `parse_month` 只认两段，`parse_year_month` 要求至少三段 —— 两者的边界写死在这里。
+    #[test]
+    fn parse_month_accepts_exactly_year_and_month() {
+        assert_eq!(parse_month("2026-10"), Some((2026, 10)));
+        assert_eq!(parse_month(" 2026-10 "), Some((2026, 10)));
+        assert_eq!(parse_month("2026-13"), None);
+        assert_eq!(parse_month("2026-00"), None);
+        assert_eq!(parse_month("2026"), None);
+        assert_eq!(parse_month("2026-10-18"), None);
+        assert_eq!(parse_month("abc"), None);
+        // 对照：同一个字符串，两个函数的分工
+        assert_eq!(parse_year_month("2026-10"), None);
+        assert_eq!(parse_year_month("2026-10-18"), Some((2026, 10)));
+    }
 
     /// 月长：闰年规则四条分支都要走到（含"百年不闰、四百年又闰"）。
     #[test]

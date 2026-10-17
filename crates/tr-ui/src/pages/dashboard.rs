@@ -24,7 +24,7 @@ use tr_draw::calendar;
 use tr_draw::section::{section_state, SectionState};
 
 use crate::api;
-use crate::components::ui::{Card, Empty, FeaturePage};
+use crate::components::ui::{Card, Empty, FeaturePage, IconButton, Segmented, SegmentedOption};
 use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::Icon;
@@ -41,6 +41,8 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
     // 期间：kind（month / year）+ 锚点（空串 = 当期，由服务端按今天定）
     let kind = RwSignal::new("month".to_string());
     let anchor = RwSignal::new(String::new());
+    // 期间字段的展开态：`change_kind` 也要能收起它，所以提到最前面来声明
+    let picker_open = RwSignal::new(false);
 
     let data = RwSignal::new(Option::<AccountingOverviewDto>::None);
     let loading = RwSignal::new(false);
@@ -84,12 +86,13 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
             return;
         };
         let period_kind = kind.get_untracked();
-        let next = shift_key(&reply.period.key, &period_kind, delta);
+        let next = calendar::shift_period_key(&reply.period.key, &period_kind, delta);
         anchor.set(next);
     };
 
     // 换粒度就回到当期：从「2026年10月」按年翻会得到「2019年」这种没人要的期间
     let change_kind = move |value: String| {
+        picker_open.set(false);
         anchor.set(String::new());
         kind.set(value);
     };
@@ -105,49 +108,145 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
             .unwrap_or_default()
     };
 
-    // 月 / 年：同一根控件里的两个档位，不另起一个分段控件（那会变成"框里再套一个框"）
-    let mode = move |value: &'static str, label: &'static str| {
-        let is_active = move || kind.get() == value;
-        view! {
-            <button
-                type="button"
-                class="dash-period__mode"
-                class:is-active=is_active
-                aria-pressed=move || if is_active() { "true" } else { "false" }
-                on:click=move |_| change_kind(value.to_string())
-            >
-                {label}
-            </button>
+    // 期间字段可以点开：翻到很早的月份时，一次点选比连按十几下箭头省事。
+    // 面板直接沿用「记录」页时间范围面板的类名（`.ui-time__*`），外观与那套完全一致。
+    let picker_year = RwSignal::new(1970_i32);
+    let current_key = move || data.get().map(|reply| reply.period.key).unwrap_or_default();
+    let open_picker = move |_| {
+        let year = current_key()
+            .get(0..4)
+            .and_then(|text| text.parse::<i32>().ok())
+            .unwrap_or(1970);
+        picker_year.set(year);
+        picker_open.update(|open| *open = !*open);
+    };
+    // 选完就收面板：这是一个"一次点选"的控件，不是需要确认的表单
+    let pick = move |key: String| {
+        picker_open.set(false);
+        anchor.set(key);
+    };
+
+    let picker_panel = move || {
+        let year = picker_year.get();
+        let selected = current_key();
+        if kind.get() == "year" {
+            let decade = year.div_euclid(10) * 10;
+            let cells = (decade..decade + 10)
+                .map(|year| {
+                    let key = format!("{year:04}");
+                    let is_selected = selected == key;
+                    let pick_key = key.clone();
+                    view! {
+                        <button
+                            type="button"
+                            class="ui-time__cell"
+                            class:is-start=is_selected
+                            on:click=move |_| pick(pick_key.clone())
+                        >
+                            {format!("{year} 年")}
+                        </button>
+                    }
+                })
+                .collect_view();
+            view! {
+                <div class="ui-time__panel-head">
+                    {panel_nav("上一个十年", Icon::Left, -10, picker_year)}
+                    <span class="ui-time__panel-title">
+                        {format!("{decade} – {}", decade + 9)}
+                    </span>
+                    {panel_nav("下一个十年", Icon::Right, 10, picker_year)}
+                </div>
+                <div class="ui-time__grid ui-time__grid--year">{cells}</div>
+            }
+            .into_any()
+        } else {
+            let cells = (1..=12u32)
+                .map(|month| {
+                    let key = format!("{year:04}-{month:02}");
+                    let is_selected = selected == key;
+                    let pick_key = key.clone();
+                    view! {
+                        <button
+                            type="button"
+                            class="ui-time__cell"
+                            class:is-start=is_selected
+                            on:click=move |_| pick(pick_key.clone())
+                        >
+                            {format!("{month} 月")}
+                        </button>
+                    }
+                })
+                .collect_view();
+            view! {
+                <div class="ui-time__panel-head">
+                    {panel_nav("上一年", Icon::Left, -1, picker_year)}
+                    <span class="ui-time__panel-title">{format!("{year} 年")}</span>
+                    {panel_nav("下一年", Icon::Right, 1, picker_year)}
+                </div>
+                <div class="ui-time__grid ui-time__grid--month">{cells}</div>
+            }
+            .into_any()
         }
     };
 
+    // 期间控件：与「记录」页的 `TimeRangePicker` 同一套排法 —— 粒度分段 + 两个翻页图标
+    // 按钮 + 一个期间字段。自绘那套（自定义档位按钮 + 分隔线）与页面里其它工具条对不上。
     let toolbar = view! {
         <div class="dash-period">
-            <button
-                type="button"
-                class="dash-period__step"
-                title="上一期"
-                aria-label="上一期"
-                on:click=move |_| step(-1)
+            <Segmented
+                value=kind
+                options=vec![
+                    SegmentedOption::new("month", "月"),
+                    SegmentedOption::new("year", "年"),
+                ]
+                on_change=change_kind
+            />
+            <IconButton
+                class="ui-icon-btn--bordered dash-period__step"
+                label="上一期"
+                on_click=UnsyncCallback::new(move |()| step(-1))
             >
-                {crate::icons::icon(Icon::ChevronLeft)}
-            </button>
-            <span class="dash-period__label">{period_label}</span>
-            <button
-                type="button"
-                class="dash-period__step"
-                title="下一期"
-                aria-label="下一期"
-                disabled=is_current
-                on:click=move |_| step(1)
+                {crate::icons::icon(Icon::Left)}
+            </IconButton>
+            <div
+                class="dash-period__field"
+                on:keydown=move |event: leptos::ev::KeyboardEvent| {
+                    if event.key() == "Escape" {
+                        picker_open.set(false);
+                    }
+                }
             >
-                {crate::icons::icon(Icon::ChevronRight)}
-            </button>
-            <span class="dash-period__divider"></span>
-            <div class="dash-period__modes" role="group" aria-label="期间粒度">
-                {mode("month", "月")}
-                {mode("year", "年")}
+                <button
+                    type="button"
+                    class="dash-period__trigger"
+                    aria-haspopup="dialog"
+                    aria-expanded=move || if picker_open.get() { "true" } else { "false" }
+                    on:click=open_picker
+                >
+                    <span class="ui-date-picker__icon">
+                        {crate::icons::icon(Icon::ClockCircle)}
+                    </span>
+                    <span class="dash-period__value" aria-live="polite">
+                        {period_label}
+                    </span>
+                </button>
+                <Show when=move || picker_open.get()>
+                    {crate::components::ui::backdrop(UnsyncCallback::new(move |()| {
+                        picker_open.set(false)
+                    }))}
+                    <div class="ui-time__panel" role="dialog" aria-label="选择期间">
+                        {picker_panel}
+                    </div>
+                </Show>
             </div>
+            <IconButton
+                class="ui-icon-btn--bordered dash-period__step"
+                label="下一期"
+                disabled=Signal::derive(is_current)
+                on_click=UnsyncCallback::new(move |()| step(1))
+            >
+                {crate::icons::icon(Icon::Right)}
+            </IconButton>
         </div>
     }
     .into_any();
@@ -317,17 +416,17 @@ fn composition_card(by_category: Vec<OverviewSliceDto>) -> AnyView {
     .into_any()
 }
 
-/// 期间加减：`2026-10` 减一月是 `2026-09`，`2026` 减一年是 `2025`。
-fn shift_key(key: &str, period_kind: &str, delta: i32) -> String {
-    if period_kind == "year" {
-        let year: i32 = key.parse().unwrap_or(1970);
-        return (year + delta).to_string();
+/// 期间面板头部的翻页按钮：与「记录」页时间范围面板同一颗（`ui-icon-btn--bordered`），
+/// 按 `delta` 加减面板里正在看的年份（月面板一年、年面板十年）。
+fn panel_nav(label: &'static str, icon: Icon, delta: i32, year: RwSignal<i32>) -> AnyView {
+    view! {
+        <IconButton
+            class="ui-icon-btn--bordered"
+            label=label
+            on_click=UnsyncCallback::new(move |()| year.update(|value| *value += delta))
+        >
+            {crate::icons::icon(icon)}
+        </IconButton>
     }
-    match calendar::parse_year_month(key) {
-        Some((year, month)) => {
-            let (year, month) = calendar::add_months(year, month, delta);
-            format!("{year}-{month:02}")
-        }
-        None => key.to_string(),
-    }
+    .into_any()
 }
