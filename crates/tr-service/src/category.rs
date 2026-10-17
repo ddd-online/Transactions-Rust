@@ -101,7 +101,6 @@ pub fn seed_default_data(workspace: &Workspace, ledger_id: &str) -> ServiceResul
                 name: (*category_name).to_string(),
                 transaction_type: (*transaction_type).to_string(),
                 sort_order: 0,
-                is_fixed: false,
             };
             CategoryDao::create(&conn, &category).map_err(|error| {
                 tracing::error!("创建分类失败: {}", error);
@@ -139,24 +138,6 @@ pub fn query_category(
         .map_err(ServiceError::from)
 }
 
-/// 改「固定支出」标记（看板按它把支出拆成固定 / 日常两档）。
-pub fn set_category_fixed(
-    workspace: &Workspace,
-    ledger_id: &str,
-    name: &str,
-    transaction_type: &str,
-    fixed: bool,
-) -> ServiceResult<()> {
-    CategoryDao::set_fixed(
-        &workspace.connection(),
-        ledger_id,
-        name,
-        transaction_type,
-        fixed,
-    )
-    .map_err(ServiceError::from)
-}
-
 /// 新建分类：排序号取当前最大值 + 1。
 pub fn create_category(
     workspace: &Workspace,
@@ -177,7 +158,6 @@ pub fn create_category(
         name: name.to_string(),
         transaction_type: transaction_type.to_string(),
         sort_order: max_sort_order + 1,
-        is_fixed: false,
     };
 
     CategoryDao::create(&conn, &category).map_err(|error| {

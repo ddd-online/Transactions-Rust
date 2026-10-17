@@ -135,8 +135,6 @@ const ERR_DELETE_TAG: &str = "删除标签失败";
 const ERR_SORT_CATEGORY: &str = "更新分类排序失败";
 /// 错误前缀：标签排序
 const ERR_SORT_TAG: &str = "更新标签排序失败";
-/// 错误前缀：切换「固定支出」
-const ERR_SET_FIXED: &str = "更新固定支出标记失败";
 
 /// 删除确认弹窗的目标类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -485,28 +483,6 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
         });
     };
 
-    // 改「固定支出」标记：看板的日常 / 固定两档靠它分组，改完立刻重拉分类
-    // （记录条数不变，但勾选状态要跟手）。
-    let toggle_fixed = move |name: String, fixed: bool| {
-        let ledger_id = stores.current_ledger_id.get_untracked();
-        let transaction_type = active_type.get_untracked();
-        if ledger_id.is_empty() {
-            return;
-        }
-        leptos::task::spawn_local(async move {
-            if crate::change::submit(
-                None,
-                ERR_SET_FIXED,
-                api::category::set_fixed(&ledger_id, &name, &transaction_type, fixed),
-            )
-            .await
-            .is_some()
-            {
-                reload_categories();
-            }
-        });
-    };
-
     let reorder_tags = move |from: usize, to: usize| {
         let ledger_id = stores.current_ledger_id.get_untracked();
         let category = selected_category.get_untracked();
@@ -648,10 +624,6 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
                     .map(|(index, category)| {
                         let name = category.name;
                         let record_count = category.record_count;
-                        let fixed_flag = category.is_fixed;
-                        let fixed_name = name.clone();
-                        // 「固定支出」只对支出分类有意义（收入/转账行的同名开关会误导）
-                        let shows_fixed = active_type.get_untracked() == "expense";
 
                         // 选中态 / 点击选中
                         let is_active_name = name.clone();
@@ -673,26 +645,6 @@ pub fn TagSub(sub: RwSignal<super::accounting::SubFunction>) -> impl IntoView {
                                     </span>
                                     <div class="ct-item-main">
                                         <span class="ct-item-name">{name}</span>
-                                        {shows_fixed
-                                            .then(|| {
-                                                view! {
-                                                    <button
-                                                        type="button"
-                                                        class="ct-fixed-toggle"
-                                                        class:is-on=move || fixed_flag
-                                                        title="固定支出：看板把它从「日常支出」里剥出来"
-                                                        aria-pressed=move || {
-                                                            if fixed_flag { "true" } else { "false" }
-                                                        }
-                                                        on:click=move |ev| {
-                                                            ev.stop_propagation();
-                                                            toggle_fixed(fixed_name.clone(), !fixed_flag)
-                                                        }
-                                                    >
-                                                        "固定"
-                                                    </button>
-                                                }
-                                            })}
                                         <Show when=move || record_count != 0>
                                             <span class="ct-item-badge">{record_count}</span>
                                         </Show>

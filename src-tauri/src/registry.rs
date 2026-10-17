@@ -107,7 +107,6 @@ app_commands! {
     tr_ipc::commands::category_create,
     tr_ipc::commands::category_delete,
     tr_ipc::commands::category_update_sort,
-    tr_ipc::commands::category_set_fixed,
     tr_ipc::commands::category_initialize,
     tr_ipc::commands::tag_list,
     tr_ipc::commands::tag_create,

@@ -106,6 +106,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20261018_category_fixed_flag",
         apply: category_fixed_flag,
     },
+    Migration {
+        id: "20261019_category_drop_fixed_flag",
+        apply: category_drop_fixed_flag,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -552,6 +556,9 @@ fn stock_position_tag(conn: &Connection) -> MigrateResult {
 /// ⚠ 列定义必须与 `fixtures/schema/fresh.sql` 里分类表那一列**逐字节相同**：
 /// `ADD COLUMN` 只能追加到列尾，所以基线里它也写在 `sort_order` 之后。
 /// 幂等：先查 `PRAGMA table_info`（结构已在就跳过）。
+///
+/// 这一列**已废弃**：看板不再分固定 / 日常之后，`20261019_category_drop_fixed_flag`
+/// 会把它删掉。本迁移保留是因为它已经发布过（0.19.0），登记表里可能记着它的 id。
 fn category_fixed_flag(conn: &Connection) -> MigrateResult {
     if !table_exists(conn, "tbl_billadm_category").map_err(stringify)? {
         return Err("缺少数据表 tbl_billadm_category".to_string());
@@ -563,6 +570,22 @@ fn category_fixed_flag(conn: &Connection) -> MigrateResult {
         "ALTER TABLE tbl_billadm_category ADD COLUMN is_fixed integer NOT NULL DEFAULT 0",
     )
     .map_err(stringify)?;
+    Ok(())
+}
+
+/// `20261018` 加的那一列 `is_fixed` 已经没有任何读者（看板不再分固定 / 日常），删掉它。
+///
+/// 这是**减法迁移**：数据的值本身是记号，删列不会丢用户记的东西。幂等：列不在了就跳过
+/// （新建库的基线里本来就没有这一列，直接跑也不会出错）。
+fn category_drop_fixed_flag(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_category").map_err(stringify)? {
+        return Err("缺少数据表 tbl_billadm_category".to_string());
+    }
+    if !column_exists(conn, "tbl_billadm_category", "is_fixed").map_err(stringify)? {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE tbl_billadm_category DROP COLUMN is_fixed")
+        .map_err(stringify)?;
     Ok(())
 }
 
@@ -1505,41 +1528,50 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// `20261018_category_fixed_flag`：分类表加一列 `is_fixed`（看板的「固定支出」靠它分组）。
+    /// 分类表的 `is_fixed` 是 `20261018` 加进来、`20261019` 又删掉的：看板不再分
+    /// 固定 / 日常之后，这一列再没有读者，结构里不该留着一块死数据。
     ///
-    /// 判据四条：列到位；老分类一律是 0 = 日常（**不猜**哪几个是固定的，猜错比空着更难纠正）；
-    /// 同一行的既有数据不被碰；升级库与新建库的建表 SQL 逐字节一致。
+    /// 起点造的是 0.19.0 的形态（列在、`20261018` 已登记、`20261019` 还没跑）。
+    /// 判据：列被删掉；同一行其它数据一字不差；升级库与新建库的建表 SQL 逐字节一致；
+    /// 再跑一遍无事可做，且校验器认这个库。
     #[test]
-    fn category_fixed_flag_keeps_fresh_schema_identical() {
-        let dir = temp_dir("category-fixed");
+    fn category_drop_fixed_flag_keeps_fresh_schema_identical() {
+        let dir = temp_dir("category-drop-fixed");
         let mut conn = fresh_conn();
         insert_ledger(&conn, "l1", "账本", 1);
-        // 降级成"还没有这一列"的更早格式：删列 + 抹掉登记行
         conn.execute_batch(
-            "ALTER TABLE tbl_billadm_category DROP COLUMN is_fixed;
-             DELETE FROM tbl_billadm_schema_migration \
-              WHERE id = '20261018_category_fixed_flag';",
+            "ALTER TABLE tbl_billadm_category ADD COLUMN is_fixed integer NOT NULL DEFAULT 0;
+             DELETE FROM tbl_billadm_schema_migration
+              WHERE id = '20261019_category_drop_fixed_flag';",
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO tbl_billadm_category (ledger_id, name, transaction_type, sort_order) \
-             VALUES ('l1', '房产房贷', 'expense', 7)",
+            "INSERT INTO tbl_billadm_category \
+             (ledger_id, name, transaction_type, sort_order, is_fixed) \
+             VALUES ('l1', '房产房贷', 'expense', 7, 1)",
             [],
         )
         .unwrap();
 
         let applied = apply_all(&mut conn, &dir).unwrap();
-        assert_eq!(applied, vec!["20261018_category_fixed_flag".to_string()]);
-        assert!(column_exists(&conn, "tbl_billadm_category", "is_fixed").unwrap());
-        let (sort_order, is_fixed): (i32, i64) = conn
+        assert_eq!(
+            applied,
+            vec!["20261019_category_drop_fixed_flag".to_string()]
+        );
+        assert!(
+            !column_exists(&conn, "tbl_billadm_category", "is_fixed").unwrap(),
+            "看板不再读它，这一列必须删掉"
+        );
+        let (sort_order, transaction_type): (i32, String) = conn
             .query_row(
-                "SELECT sort_order, is_fixed FROM tbl_billadm_category WHERE name = '房产房贷'",
+                "SELECT sort_order, transaction_type FROM tbl_billadm_category \
+                 WHERE name = '房产房贷'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
         assert_eq!(sort_order, 7, "同一行的既有数据不许被碰");
-        assert_eq!(is_fixed, 0, "老分类一律不是固定支出");
+        assert_eq!(transaction_type, "expense");
         crate::schema::validate_current(&conn).unwrap();
 
         // 升级库与新建库不允许分叉：建表 SQL 逐字节一致
