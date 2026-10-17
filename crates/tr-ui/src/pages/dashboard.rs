@@ -24,7 +24,7 @@ use tr_draw::calendar;
 use tr_draw::section::{section_state, SectionState};
 
 use crate::api;
-use crate::components::ui::{Card, Empty, FeaturePage, Segmented, SegmentedOption};
+use crate::components::ui::{Card, Empty, FeaturePage};
 use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::Icon;
@@ -105,6 +105,22 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
             .unwrap_or_default()
     };
 
+    // 月 / 年：同一根控件里的两个档位，不另起一个分段控件（那会变成"框里再套一个框"）
+    let mode = move |value: &'static str, label: &'static str| {
+        let is_active = move || kind.get() == value;
+        view! {
+            <button
+                type="button"
+                class="dash-period__mode"
+                class:is-active=is_active
+                aria-pressed=move || if is_active() { "true" } else { "false" }
+                on:click=move |_| change_kind(value.to_string())
+            >
+                {label}
+            </button>
+        }
+    };
+
     let toolbar = view! {
         <div class="dash-period">
             <button
@@ -114,7 +130,7 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
                 aria-label="上一期"
                 on:click=move |_| step(-1)
             >
-                "‹"
+                {crate::icons::icon(Icon::ChevronLeft)}
             </button>
             <span class="dash-period__label">{period_label}</span>
             <button
@@ -125,16 +141,13 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
                 disabled=is_current
                 on:click=move |_| step(1)
             >
-                "›"
+                {crate::icons::icon(Icon::ChevronRight)}
             </button>
-            <Segmented
-                value=kind
-                options=vec![
-                    SegmentedOption::new("month", "月"),
-                    SegmentedOption::new("year", "年"),
-                ]
-                on_change=change_kind
-            />
+            <span class="dash-period__divider"></span>
+            <div class="dash-period__modes" role="group" aria-label="期间粒度">
+                {mode("month", "月")}
+                {mode("year", "年")}
+            </div>
         </div>
     }
     .into_any();
@@ -287,7 +300,7 @@ fn composition_card(by_category: Vec<OverviewSliceDto>) -> AnyView {
                         <span class="dash-mix__bar">
                             <span class="dash-mix__bar-fill" style=width></span>
                         </span>
-                        <span class="dash-mix__amount">{format::amount(slice.amount)}</span>
+                        <span class="dash-mix__amount">{format::grouped_amount(slice.amount)}</span>
                         <span class="dash-mix__percent">{percent_text}</span>
                     </li>
                 }

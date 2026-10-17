@@ -32,9 +32,9 @@
   display: grid;
   grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
   align-items: start;
-  /* 卡片之间要比卡片内边距更松（24 + 24 = 48 的内边距已经够紧）：间距等于内边距时，
-     两张卡会读成一张卡的两个区段 */
-  gap: var(--transactions-space-2xl);
+  /* 卡片之间 = 卡片四周（`.page-content` 的 16px 内边距）：一块网格里的间距只有一个数，
+     换成 32 会让"卡与卡"比"卡与窗口"更松，边界读起来忽宽忽窄 */
+  gap: var(--transactions-space-lg);
   min-height: 0;
 }
 
@@ -46,30 +46,56 @@
 
 /* ------------------------------------------------------------ 期间控件 */
 
+/* **一根**控件，不是三个零件：一条 36px 高的发丝边框里装着「‹ 2026年10月 › │ 月 年」。
+ * 之前是 28px 的描边小方块 + 裸文本 + 另一个 36px 的分段控件，三样既不同高也不成套；
+ * 高度、圆角、焦点环都跟应用里的按钮对齐（DESIGN.md：36px 高、8px 圆角、2px 主色环）。 */
 .dash-period {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: var(--transactions-space-sm);
+  gap: 2px;
+  height: 36px;
+  padding: 0 var(--transactions-space-xs);
+  border: 1px solid var(--transactions-color-window-border);
+  border-radius: var(--transactions-radius-md);
+  background-color: var(--transactions-color-major-background);
 }
 
 .dash-period__step {
-  width: 28px;
-  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--transactions-color-border-l1);
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
   border-radius: var(--transactions-radius-sm);
-  background: var(--transactions-color-card-surface);
-  color: var(--transactions-color-text-secondary);
-  font-size: var(--transactions-size-text-section);
+  background: none;
+  color: var(--transactions-color-icon);
   line-height: 1;
   cursor: pointer;
+  transition:
+    background-color var(--transactions-transition-fast),
+    color var(--transactions-transition-fast);
+}
+
+/* 图标只描边不撑格：12px 与应用里其它翻页箭头一致 */
+.dash-period__step svg {
+  width: 12px;
+  height: 12px;
 }
 
 .dash-period__step:hover:not(:disabled) {
+  background-color: var(--transactions-color-hover-bg);
   color: var(--transactions-color-text-major);
-  border-color: var(--transactions-color-border-l3);
+}
+
+.dash-period__step:active:not(:disabled) {
+  translate: 0 1px;
+}
+
+.dash-period__step:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 1px;
 }
 
 .dash-period__step:disabled {
@@ -78,12 +104,63 @@
 }
 
 .dash-period__label {
-  min-width: 96px;
+  min-width: 104px;
+  padding: 0 var(--transactions-space-xs);
   text-align: center;
   font-size: var(--transactions-size-text-body);
   font-weight: 600;
   color: var(--transactions-color-text-major);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 竖线：把"翻到哪一期"和"按什么粒度翻"分开，但两者仍在同一个框里 */
+.dash-period__divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 var(--transactions-space-2xs);
+  background-color: var(--transactions-color-divider);
+}
+
+.dash-period__modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.dash-period__mode {
+  height: 26px;
+  padding: 0 var(--transactions-space-md);
+  border: none;
+  border-radius: var(--transactions-radius-sm);
+  background: none;
+  color: var(--transactions-color-text-secondary);
+  font-size: var(--transactions-size-text-body-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--transactions-transition-fast),
+    color var(--transactions-transition-fast);
+}
+
+.dash-period__mode:hover:not(.is-active) {
+  background-color: var(--transactions-color-hover-bg);
+  color: var(--transactions-color-text-major);
+}
+
+.dash-period__mode:active:not(.is-active) {
+  translate: 0 1px;
+}
+
+.dash-period__mode:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 1px;
+}
+
+/* 选中档：与应用里的分段控件同一套语言（主色文字 + 10% 主色底） */
+.dash-period__mode.is-active {
+  background-color: var(--transactions-color-active-bg);
+  color: var(--transactions-color-primary);
+  font-weight: 600;
 }
 
 /* ------------------------------------------------------------ 收支卡 */
@@ -196,7 +273,8 @@
   font-family: var(--transactions-font-mono);
   font-size: var(--transactions-size-text-caption);
   font-variant-numeric: tabular-nums;
-  color: var(--transactions-color-text-tertiary);
+  /* 次要色而非三级色：12px 的占比是正文级信息，三级色在白底上只有 3.4:1 */
+  color: var(--transactions-color-text-secondary);
   text-align: right;
   white-space: nowrap;
 }
@@ -217,7 +295,7 @@
   padding: var(--transactions-space-3xl);
   text-align: center;
   font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-tertiary);
+  color: var(--transactions-color-text-secondary);
 }
 
 .dash-empty {
@@ -226,7 +304,7 @@
   align-items: center;
   min-height: 96px;
   font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-tertiary);
+  color: var(--transactions-color-text-secondary);
 }
 
 /* ------------------------------------------------------------ 窄窗 */
