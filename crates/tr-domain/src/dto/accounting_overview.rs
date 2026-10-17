@@ -2,12 +2,11 @@
 //!
 //! ## 口径（改字段前先读）
 //!
-//! * **日常支出** = 支出里除「固定支出」以外的部分 —— 看板的主指标；
-//! * **固定支出** = 分类上标了 `is_fixed` 的支出（房贷、贷款还款这类按月重复的）；
+//! * **支出** = `expense` 合计（全部支出，不分类别）；
 //! * **收入** = `income` 合计（本人记的是税后净额）；
-//! * **结余** = 收入 − 日常 − 固定，**转账不参与**（没有对手方，既不是收入也不是支出）。
+//! * **结余** = 收入 − 支出，**转账不参与**（没有对手方，既不是收入也不是支出）。
 //!
-//! 「日常 + 固定 = 支出合计」是硬等式，任何一侧改了另一侧必须跟着改。
+//! 「支出构成」是支出的下钻，两档合计都等于本期支出。
 //!
 //! ## 为什么卡片值都是 `Option`
 //!
@@ -39,8 +38,8 @@ pub struct AccountingOverviewRequest {
 pub struct AccountingOverviewDto {
     pub period: OverviewPeriodDto,
     pub cards: OverviewCardsDto,
-    pub series: OverviewSeriesDto,
-    pub composition: OverviewCompositionDto,
+    /// 支出按分类的构成（金额降序，合计等于 `cards.expense`）
+    pub categories: Vec<OverviewSliceDto>,
 }
 
 /// 这一期是什么、走到哪了。
@@ -63,27 +62,23 @@ pub struct OverviewPeriodDto {
     pub is_current_year: bool,
 }
 
-/// 四张卡。金额单位都是**分**。
+/// 收支卡上的三个数。金额单位都是**分**。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct OverviewCardsDto {
-    /// 日常支出（本期）
-    pub daily_expense: Option<i64>,
-    /// 固定支出（本期）
-    pub fixed_expense: Option<i64>,
+    /// 支出（本期）
+    pub expense: Option<i64>,
     /// 收入（本期）
     pub income: Option<i64>,
     /// 结余（今年至今，不是本期 —— 半个月的结余是伪指标）
     pub balance_ytd: Option<i64>,
-    /// 去年同期：日常支出（按同期日数截断；去年那条为 `None` = 去年这个月没有记录）
-    pub daily_expense_last_year: Option<i64>,
+    /// 去年同期：支出（按同期日数截断；`None` = 去年这个月没有记录）
+    pub expense_last_year: Option<i64>,
     /// 去年同期：收入
     pub income_last_year: Option<i64>,
-    /// 固定支出的分类构成（房贷 / 还款 …），金额降序
-    pub fixed_breakdown: Vec<OverviewSliceDto>,
 }
 
-/// 构成里的一片：分类或标签。
+/// 构成里的一片：一个分类的金额与笔数。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct OverviewSliceDto {
@@ -93,29 +88,4 @@ pub struct OverviewSliceDto {
     /// 是不是尾部合并出来的「其他」（界面据此弱化，别拿 `label == "其他"` 判 ——
     /// 真的有分类叫「其他」时会被误伤）
     pub is_other: bool,
-}
-
-/// 折线的两段数据，下标一一对应。
-///
-/// 月视图 `mode = "daily"`：`labels` 是 `1..=31`，两段都是**日累计**；
-/// 年视图 `mode = "monthly"`：`labels` 是 `1月..12月`，两段是当月发生额之和。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct OverviewSeriesDto {
-    pub labels: Vec<String>,
-    /// 本期（单位：分，交给 `LineChart` 的 f64 序列）
-    pub current: Vec<f64>,
-    /// 去年同期（同样的横轴；长度与 `current` 一致）
-    pub last_year: Vec<f64>,
-    pub mode: String,
-}
-
-/// 支出构成两档：分类 / 标签（界面一个两档切换）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct OverviewCompositionDto {
-    /// 日常支出按分类（Top N + 「其他」由服务层合并）
-    pub by_category: Vec<OverviewSliceDto>,
-    /// 日常支出按标签（同一笔记录挂多个标签时**会各算一次** —— 标签档的百分比以这一档合计为分母）
-    pub by_tag: Vec<OverviewSliceDto>,
 }

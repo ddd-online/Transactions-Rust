@@ -3,7 +3,7 @@
 //! ## 它和「分析」的区别（别把它做成第二个分析页）
 //!
 //! * 分析：**提问式** —— 自己配曲线条件、选区间，由图表回答；
-//! * 看板：**结论式** —— 固定四张卡 + 折线 + 构成，翻到哪一期就读哪一期。
+//! * 看板：**结论式** —— 收支卡 + 支出构成卡，翻到哪一期就读哪一期。
 //!
 //! 所以这里**没有**曲线条件、没有区间选择器、没有图表管理：只有一个「‹ 期间 ›」
 //! 与「月 / 年」两档。多一个配置项，这个页就退化成分析页。
@@ -12,22 +12,21 @@
 //!
 //! 日常 / 固定 / 结余的算法与同比截断只实现一份，在
 //! `tr_service::accounting_overview`（native 单测覆盖）。本页只负责排版与格式化，
-//! 不在界面层重算任何一个数字 —— 否则卡片上的数和图上的线会各说各话。
+//! 不在界面层重算任何一个数字 —— 否则卡片上的数和清单里的数会各说各话。
 //!
 //! ## 空态
 //!
 //! 一期没有记录时四张卡都显示 `—`（不是 `¥0`）：「花了 0」和「没记账」不是一回事。
 
 use leptos::prelude::*;
-use tr_domain::dto::{AccountingOverviewDto, OverviewPeriodDto, OverviewSliceDto};
+use tr_domain::dto::{
+    AccountingOverviewDto, OverviewCardsDto, OverviewPeriodDto, OverviewSliceDto,
+};
 use tr_draw::calendar;
 use tr_draw::section::{section_state, SectionState};
 
 use crate::api;
-use crate::components::ui::{
-    series_color, ChartConfig, ChartSeries, Empty, FeaturePage, LineChart, Segmented,
-    SegmentedOption,
-};
+use crate::components::ui::{Card, Empty, FeaturePage, Segmented, SegmentedOption};
 use crate::error_handler::notify_error;
 use crate::format;
 use crate::icons::Icon;
@@ -44,7 +43,6 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
     // 期间：kind（month / year）+ 锚点（空串 = 当期，由服务端按今天定）
     let kind = RwSignal::new("month".to_string());
     let anchor = RwSignal::new(String::new());
-    let tab = RwSignal::new("category".to_string());
 
     let data = RwSignal::new(Option::<AccountingOverviewDto>::None);
     let loading = RwSignal::new(false);
@@ -170,7 +168,7 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
                         view! {
                             <Empty
                                 title="这个账本还没有记录"
-                                description="记下第一笔之后，这里会长出四张卡和两条线"
+                                description="记下第一笔之后，这里会长出收支和支出构成两张卡"
                                 icon=Icon::Inbox
                             />
                         }
@@ -178,7 +176,7 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
                     }
                     SectionState::Ready => data
                         .get()
-                        .map(|reply| dashboard_body(reply, tab))
+                        .map(dashboard_body)
                         .unwrap_or_else(|| ().into_any()),
                 }
             }}
@@ -197,59 +195,64 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
     }
 }
 
-/// 主指标 + 三个支撑指标 + 折线 + 构成。
+/// 一屏两张卡：收支 + 支出构成。
 ///
-/// 版式照「股票 · 账户 / 统计」那两张页：**不套盒子**，靠留白、字号阶梯与一条竖直发丝线
-/// 分组。一屏里四个数字如果都装在同样大小的卡里，就没有主角 —— 日常支出才是这一页要回答
-/// 的问题，它拿 hero 位，另外三个退成支撑行。
-fn dashboard_body(reply: AccountingOverviewDto, tab: RwSignal<String>) -> AnyView {
-    let lead = view! {
-        <section class="dash-lead">
-            <div class="dash-lead__main">
-                <p class="dash-label">"日常支出"</p>
-                <p class="dash-lead__value">{amount_text(reply.cards.daily_expense)}</p>
-                <p class="dash-note">
-                    {yoy_note(reply.cards.daily_expense, reply.cards.daily_expense_last_year)}
-                </p>
-            </div>
-            <div class="dash-support">
-                {metric(
-                    "固定支出",
-                    reply.cards.fixed_expense,
-                    fixed_note(&reply.cards.fixed_breakdown),
-                    "is-muted",
-                )}
-                {metric(
-                    "收入",
-                    reply.cards.income,
-                    yoy_note(reply.cards.income, reply.cards.income_last_year),
+/// 左窄右宽的两栏（`.dash-flow` 是 grid）：左边是"对账单"，右边是排行榜。两栏都贴住版心
+/// 左右边缘 —— 卡片按内容定宽时整块会缩在左上角，页面像没画完；两栏等高不必，底边参差
+/// 本来就是瀑布该有的样子。
+fn dashboard_body(reply: AccountingOverviewDto) -> AnyView {
+    let figures = figures_card(reply.cards, reply.period);
+    let composition = composition_card(reply.categories);
+    view! {
+        <div class="dash-flow">
+            {figures}
+            {composition}
+        </div>
+    }
+    .into_any()
+}
+
+/// 收支卡：三行"标签 + 金额"，说明另起一行贴右。
+///
+/// 说明不再挤在同一行：结余那句「今年至今：收入 − 支出（转账不计入）」在窄栏里会被截成
+/// 半句话，而它就是结余为什么是年度口径的唯一解释。
+fn figures_card(cards: OverviewCardsDto, period: OverviewPeriodDto) -> AnyView {
+    view! {
+        <Card title="收支".to_string() class="dash-card">
+            <dl class="dash-statement">
+                {figure(
+                    "支出",
+                    cards.expense,
+                    yoy_note(cards.expense, cards.expense_last_year),
                     "",
                 )}
-                {metric(
-                    "结余",
-                    reply.cards.balance_ytd,
-                    balance_note(&reply.period),
-                    signed_class(reply.cards.balance_ytd),
+                {figure(
+                    "收入",
+                    cards.income,
+                    yoy_note(cards.income, cards.income_last_year),
+                    "",
                 )}
-            </div>
-        </section>
+                {figure(
+                    "结余",
+                    cards.balance_ytd,
+                    balance_note(&period),
+                    signed_class(cards.balance_ytd),
+                )}
+            </dl>
+        </Card>
     }
-    .into_any();
+    .into_any()
+}
 
-    let chart = chart_panel(&reply);
-    let composition = composition_panel(
-        reply.composition.by_category.clone(),
-        reply.composition.by_tag.clone(),
-        tab,
-    );
-
-    // 三块竖着排：主指标 → 折线（吃掉剩余高度）→ 构成（横线之上的一条清单）。
-    // 折线与构成并排会让两边都只填一半高度：18 个点的折线被拉成一条细带，
-    // 构成的六行却只占一条竖缝。
+/// 收支卡里的一行。`class` 只给结余用（正负着色），支出与收入不上色。
+fn figure(label: &str, value: Option<i64>, note: String, class: &str) -> AnyView {
+    let value_class = format!("dash-statement__value {class}");
     view! {
-        {lead}
-        {chart}
-        {composition}
+        <div class="dash-statement__row">
+            <dt class="dash-statement__label">{label.to_string()}</dt>
+            <dd class=value_class>{amount_text(value)}</dd>
+            <dd class="dash-statement__note">{note}</dd>
+        </div>
     }
     .into_any()
 }
@@ -268,20 +271,6 @@ fn signed_class(value: Option<i64>) -> &'static str {
         Some(amount) if amount < 0 => "is-negative",
         _ => "",
     }
-}
-
-/// 一个支撑指标：标签 / 金额 / 一行说明。
-fn metric(label: &str, value: Option<i64>, note: String, class: &str) -> AnyView {
-    let class = format!("dash-metric {class}");
-    let title = note.clone();
-    view! {
-        <div class=class>
-            <p class="dash-label">{label.to_string()}</p>
-            <p class="dash-metric__value">{amount_text(value)}</p>
-            <p class="dash-note" title=title>{note}</p>
-        </div>
-    }
-    .into_any()
 }
 
 /// 结余卡的范围文案。
@@ -314,83 +303,12 @@ fn yoy_note(current: Option<i64>, last_year: Option<i64>) -> String {
     }
 }
 
-/// 固定支出卡片的副标：它自己的构成（房贷 / 还款 …）。
-fn fixed_note(breakdown: &[OverviewSliceDto]) -> String {
-    if breakdown.is_empty() {
-        return "未标记（到「标签」页勾选）".to_string();
-    }
-    breakdown
-        .iter()
-        .map(|slice| format!("{} {}", slice.label, format::grouped_amount(slice.amount)))
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-
-fn chart_panel(reply: &AccountingOverviewDto) -> AnyView {
-    let labels = reply.series.labels.clone();
-    let current = reply.series.current.clone();
-    let last_year = reply.series.last_year.clone();
-    let (title, hint) = if reply.series.mode == "monthly" {
-        ("每月支出（日常）", "与去年同月逐月对比")
+fn composition_card(by_category: Vec<OverviewSliceDto>) -> AnyView {
+    let total: i64 = by_category.iter().map(|slice| slice.amount).sum();
+    let rows = if total == 0 {
+        view! { <div class="dash-empty">"本期没有支出"</div> }.into_any()
     } else {
-        ("累计支出（日常）", "去年同期按同样的天数比")
-    };
-    let has_data =
-        current.iter().any(|value| *value != 0.0) || last_year.iter().any(|value| *value != 0.0);
-
-    let categories = Signal::derive(move || labels.clone());
-    let series = Signal::derive(move || {
-        vec![
-            ChartSeries::new("本期", series_color(0), current.clone()),
-            ChartSeries::new("去年同期", series_color(1), last_year.clone()),
-        ]
-    });
-
-    view! {
-        <section class="dash-section dash-section--chart">
-            <header class="dash-section__head">
-                <h2 class="dash-section__title">{title}</h2>
-                <span class="dash-section__hint">{hint}</span>
-            </header>
-            <Show
-                when=move || has_data
-                fallback=|| {
-                    view! { <div class="dash-empty">"本期还没有记录"</div> }
-                }
-            >
-                // 图表按容器实测尺寸画，所以这里必须包一层**定高**容器：
-                // 直接挂在 section 上会让它吃掉网格行高（900px 的折线图读不出来）
-                <div class="dash-chart">
-                    <LineChart
-                        categories=categories
-                        series=series
-                        config=ChartConfig::default().height(300)
-                    />
-                </div>
-            </Show>
-        </section>
-    }
-    .into_any()
-}
-
-fn composition_panel(
-    by_category: Vec<OverviewSliceDto>,
-    by_tag: Vec<OverviewSliceDto>,
-    tab: RwSignal<String>,
-) -> AnyView {
-    // 两档数据都在手上，切换只是换一份切片 —— 所以这里用闭包读 `tab`，
-    // 不再在渲染时 `get_untracked()`（那样点「标签」不会有任何反应）。
-    let rows = move || {
-        let slices = if tab.get() == "tag" {
-            by_tag.clone()
-        } else {
-            by_category.clone()
-        };
-        let total: i64 = slices.iter().map(|slice| slice.amount).sum();
-        if total == 0 {
-            return view! { <div class="dash-empty">"本期没有日常支出"</div> }.into_any();
-        }
-        let rows = slices
+        let rows = by_category
             .into_iter()
             .map(|slice| {
                 let percent = slice.amount as f64 / total as f64 * 100.0;
@@ -426,19 +344,9 @@ fn composition_panel(
     };
 
     view! {
-        <section class="dash-section dash-section--mix">
-            <header class="dash-section__head">
-                <h2 class="dash-section__title">"支出构成"</h2>
-                <Segmented
-                    value=tab
-                    options=vec![
-                        SegmentedOption::new("category", "分类"),
-                        SegmentedOption::new("tag", "标签"),
-                    ]
-                />
-            </header>
+        <Card title="支出构成".to_string() class="dash-card">
             {rows}
-        </section>
+        </Card>
     }
     .into_any()
 }

@@ -1,17 +1,19 @@
-/* 记账 · 看板（结论式回顾）
+/* 记账 · 看板（瀑布式卡片流）
  *
- * 版式与「股票 · 账户 / 统计」同源：**不套盒子**。一个数字的权重由字号阶梯和位置给，
- * 不由边框给 —— 四个同样大小的卡并排时，四个数字就没有主角。所以这里只有：
- * 一个 hero 指标、一行支撑指标、两块内容，用留白和一条竖直发丝线分组。
+ * 每一块内容都是通用组件 `.ui-card`（三段式：标题 / 可选按钮行 / 内容，样式在 `ui.css`）。
+ * 这一页只管三件事：
  *
- * 层级只靠发丝线与留白（DESIGN.md：不要用阴影造层级）；金额一律等宽 + tabular-nums，
- * 否则同比的加减号会让数字左右跳动。 */
+ * 1. `.dash-flow` —— 两栏：左边"对账单"（窄），右边排行榜（宽）；
+ * 2. `.dash-statement` —— 收支卡里的三行数字；
+ * 3. `.dash-mix` —— 支出构成清单。
+ *
+ * 卡片内部不再套盒子（DESIGN.md：层级靠发丝线与留白，不靠第二层边框）。 */
 
 .dashboard-page .page-content {
   display: flex;
   flex-direction: column;
   /* 内容内边距只有一个来源（DESIGN.md：版心铺满、内边距交给页面容器）：
-     少了这一圈，右侧的百分比会贴着窗口边框，看起来像被裁掉 */
+     少了这一圈，卡片会贴着窗口边框，看起来像被裁掉 */
   padding: var(--transactions-space-lg);
   min-height: 0;
 }
@@ -20,8 +22,26 @@
   display: flex;
   flex: 1;
   flex-direction: column;
+  min-height: 0;
+}
+
+/* 两栏：左边窄、右边宽。两栏都贴住版心边缘 —— 卡片按内容定宽会让整块缩在左上角，
+ * 右边空出一条 260px 的边，页面像没画完。高度不等（`align-items: start`）是对的：
+ * 底边参差本来就是瀑布该有的样子。 */
+.dash-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
+  align-items: start;
+  /* 卡片之间要比卡片内边距更松（24 + 24 = 48 的内边距已经够紧）：间距等于内边距时，
+     两张卡会读成一张卡的两个区段 */
   gap: var(--transactions-space-2xl);
   min-height: 0;
+}
+
+/* 卡片默认贴内容宽度（`ui.css` 的 `.ui-card`）；在这一页它撑满自己那一栏。
+ * 页面钩子用 `.dash-card` 而不是改 `.ui-card`：组件默认行为留给别的页面。 */
+.dash-card {
+  width: 100%;
 }
 
 /* ------------------------------------------------------------ 期间控件 */
@@ -66,152 +86,76 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ------------------------------------------------------------ 主指标 + 支撑指标 */
+/* ------------------------------------------------------------ 收支卡 */
 
-.dash-lead {
+/* 一行 = 标签 + 金额（两端），说明另起一行贴右。
+ * 说明不跟金额挤同一行：结余那句「今年至今：收入 − 支出（转账不计入）」是它为什么是
+ * 年度口径的唯一解释，被截成半句等于没有。 */
+.dash-statement {
+  margin: 0;
+}
+
+.dash-statement__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-  gap: var(--transactions-space-2xl);
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--transactions-space-md);
+  row-gap: 2px;
+  padding: var(--transactions-space-md) 0;
 }
 
-.dash-lead__main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--transactions-space-2xs);
-  min-width: 0;
-}
-
-.dash-label {
-  margin: 0;
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-secondary);
-}
-
-/* hero 金额沿用股票页的 `.stock-amount--large`：display 档 + −0.03em */
-.dash-lead__value {
-  margin: 0;
-  font-family: var(--transactions-font-mono);
-  font-size: var(--transactions-size-text-display);
-  font-weight: var(--transactions-weight-semibold, 600);
-  font-variant-numeric: tabular-nums;
-  line-height: var(--transactions-height-tight, 1.15);
-  letter-spacing: var(--transactions-tracking-amount-xl);
-  color: var(--transactions-color-text-major);
-}
-
-.dash-note {
-  margin: 0;
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.dash-support {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--transactions-space-lg);
-}
-
-.dash-metric {
-  display: flex;
-  flex-direction: column;
-  gap: var(--transactions-space-2xs);
-  min-width: 0;
-}
-
-.dash-metric__value {
-  margin: 0;
-  font-family: var(--transactions-font-mono);
-  font-size: var(--transactions-size-text-title-sm);
-  font-weight: var(--transactions-weight-medium, 500);
-  font-variant-numeric: tabular-nums;
-  line-height: var(--transactions-height-snug, 1.3);
-  letter-spacing: var(--transactions-tracking-amount-lg);
-  color: var(--transactions-color-text-major);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* 固定支出不受当月行为影响，弱化一档，别和"日常"抢注意力 */
-.dash-metric.is-muted .dash-metric__value {
-  color: var(--transactions-color-text-secondary);
-}
-
-.dash-metric.is-positive .dash-metric__value {
-  color: var(--transactions-color-income);
-}
-
-.dash-metric.is-negative .dash-metric__value {
-  color: var(--transactions-color-expense);
-}
-
-/* ------------------------------------------------------------ 折线 + 构成 */
-
-.dash-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--transactions-space-lg);
-  min-width: 0;
-  min-height: 0;
-}
-
-/* 折线定高：让它吃掉剩余高度，窗口一高就会在折线与构成之间裂出一条空带 */
-.dash-section--chart {
-  flex: 0 0 auto;
-}
-
-/* 构成是最后一条：横线之上，宽度收到 760px（条形太长反而不好比） */
-.dash-section--mix {
-  padding-top: var(--transactions-space-xl);
+/* 行间发丝线：三行数字读成一张对账单，而不是三行飘着的字 */
+.dash-statement__row + .dash-statement__row {
   border-top: 1px solid var(--transactions-color-border-l1);
 }
 
-.dash-section__head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--transactions-space-md);
-  min-height: 28px;
+.dash-statement__row:first-child {
+  padding-top: 0;
 }
 
-/* 构成那一栏的控件贴右 —— 且与清单同宽，不飘到窗口边上去 */
-.dash-section--mix .dash-section__head {
-  justify-content: space-between;
-  max-width: 640px;
+.dash-statement__row:last-child {
+  padding-bottom: 0;
 }
 
-.dash-section__title {
+.dash-statement__label {
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-secondary);
+}
+
+.dash-statement__value {
   margin: 0;
-  font-size: var(--transactions-size-text-section);
-  font-weight: var(--transactions-weight-semibold, 600);
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-title);
+  font-weight: var(--transactions-weight-medium, 500);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--transactions-tracking-amount-lg);
   color: var(--transactions-color-text-major);
+  white-space: nowrap;
 }
 
-.dash-section__hint {
+/* 只有结余上色：花得多不是"错"，赚得多也不是"对"，支出与收入保持中性 */
+.dash-statement__value.is-positive {
+  color: var(--transactions-color-income);
+}
+
+.dash-statement__value.is-negative {
+  color: var(--transactions-color-expense);
+}
+
+.dash-statement__note {
+  margin: 0;
+  grid-column: 1 / -1;
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-tertiary);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* 图表按容器实测尺寸渲染（`.chart` 是 height:100%），所以这里给确定高度：
-   300 起步、最多 420 —— 再高就成了一条贴着零轴的细带 */
-.dash-chart {
-  height: 360px;
-}
+/* ------------------------------------------------------------ 支出构成清单 */
 
-.dash-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 160px;
-  font-size: var(--transactions-size-text-body-sm);
-  color: var(--transactions-color-text-tertiary);
-}
-
-/* ------------------------------------------------------------ 构成清单 */
-
+/* 清单吃满卡片：右栏的宽度本来就是给它画条形用的 */
 .dash-mix {
   margin: 0;
   padding: 0;
@@ -219,16 +163,14 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  /* 条形再长也不会更好比；一行 760 已经能一眼看出比例差 */
-  max-width: 640px;
 }
 
 .dash-mix__row {
   display: grid;
-  grid-template-columns: minmax(0, 88px) minmax(0, 1fr) auto 42px;
+  grid-template-columns: minmax(0, 104px) minmax(0, 1fr) auto 44px;
   align-items: center;
-  gap: var(--transactions-space-sm);
-  padding: 6px 0;
+  gap: var(--transactions-space-md);
+  padding: 8px 0;
 }
 
 .dash-mix__label {
@@ -240,7 +182,7 @@
 }
 
 .dash-mix__bar {
-  height: 6px;
+  height: 8px;
   border-radius: var(--transactions-radius-full);
   background: var(--transactions-color-minor-background);
   overflow: hidden;
@@ -291,16 +233,20 @@
   color: var(--transactions-color-text-tertiary);
 }
 
+.dash-empty {
+  /* 贴左而不是居中：空态属于这张卡的内容，居中会飘到卡片中间、离标题很远 */
+  display: flex;
+  align-items: center;
+  min-height: 96px;
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-tertiary);
+}
+
 /* ------------------------------------------------------------ 窄窗 */
 
 @media (max-width: 1080px) {
-  .dash-lead {
+  /* 一栏：两张卡上下排，宽度都交给版心 */
+  .dash-flow {
     grid-template-columns: minmax(0, 1fr);
-    gap: var(--transactions-space-xl);
-    align-items: start;
-  }
-
-  .dash-chart {
-    min-height: 260px;
   }
 }

@@ -2,26 +2,23 @@
 //!
 //! ## 口径（唯一实现，别再在界面侧算一遍）
 //!
-//! * 日常支出 = 支出 − 固定支出；
-//! * 固定支出 = 分类上标了 `is_fixed` 的支出；
+//! * 支出 = `expense` 合计（全部支出，分类不参与切分）；
 //! * 收入 = `income` 合计（记的是税后净额）；
 //! * 结余 = 收入 − 支出，**转账不参与**（没有对手方，既不是收入也不是支出）。
 //!
-//! 于是「日常 + 固定 = 支出」是硬等式，任何一侧改了另一侧跟着改。
+//! 支出构成是支出的下钻：两档合计都等于本期支出，不再有"排除固定"这一层。
 //!
-//! ## 两处容易写错的地方
+//! ## 容易写错的一处
 //!
-//! 1. **同比不是"比上一个整月"**：本期还没走完时，去年只取到**同一个号数**
+//! **同比不是"比上一个整月"**：本期还没走完时，去年只取到**同一个号数**
 //!    （10/1–10/16 vs 去年 10/1–10/16）。拿半个月比整月，会得到"少花了 40%"这种假信号。
-//! 2. **年视图画的是每月发生额，不是累计**：累计线一年只有一个峰，看不出"哪个月花爆了"。
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone};
 
 use tr_domain::dto::{
-    AccountingOverviewDto, AccountingOverviewRequest, OverviewCardsDto, OverviewCompositionDto,
-    OverviewPeriodDto, OverviewSeriesDto, OverviewSliceDto,
+    AccountingOverviewDto, AccountingOverviewRequest, OverviewCardsDto, OverviewPeriodDto,
+    OverviewSliceDto,
 };
-use tr_store::dao::category::CategoryDao;
 use tr_store::dao::transaction_record::TransactionRecordDao;
 use tr_store::Workspace;
 
@@ -46,83 +43,33 @@ pub fn overview(
 
     let period = resolve_period(request);
     let compare = last_year_window(&period);
-    let fixed_categories = CategoryDao::fixed_names(&conn, ledger_id).map_err(db)?;
 
-    // ---- 四张卡：本期三档 + 今年至今的结余 ----
+    // ---- 收支卡：本期两档 + 今年至今的结余 ----
     let stats =
         TransactionRecordDao::query_statistics(&conn, ledger_id, &period.range()).map_err(db)?;
-    let fixed_expense = TransactionRecordDao::sum_expense_by_categories(
-        &conn,
-        ledger_id,
-        &period.range(),
-        &fixed_categories,
-        false,
-    )
-    .map_err(db)?;
     let last_year_stats =
         TransactionRecordDao::query_statistics(&conn, ledger_id, &compare.range()).map_err(db)?;
-    let last_year_fixed = TransactionRecordDao::sum_expense_by_categories(
-        &conn,
-        ledger_id,
-        &compare.range(),
-        &fixed_categories,
-        false,
-    )
-    .map_err(db)?;
 
-    // 一期里一条记录都没有 ⇒ 四张卡都是 `None`（界面显示 `—`）。
+    // 一期里一条记录都没有 ⇒ 三个数都是 `None`（界面显示 `—`）。
     // 「花了 ¥0」和「没记账」是两件事，不能长得一样。
     let empty = stats.income == 0 && stats.expense == 0 && stats.transfer == 0;
     let cards = if empty {
         OverviewCardsDto::default()
     } else {
         OverviewCardsDto {
-            daily_expense: Some(stats.expense - fixed_expense),
-            fixed_expense: Some(fixed_expense),
+            expense: Some(stats.expense),
             income: Some(stats.income),
             balance_ytd: year_to_date_balance(&conn, ledger_id, &period)?,
             // 去年同月同期一条记录都没有 ⇒ `None`，界面显示「无可比数据」
-            daily_expense_last_year: (last_year_stats.expense > 0)
-                .then_some(last_year_stats.expense - last_year_fixed),
+            expense_last_year: (last_year_stats.expense > 0).then_some(last_year_stats.expense),
             income_last_year: (last_year_stats.income > 0).then_some(last_year_stats.income),
-            fixed_breakdown: slices(
-                TransactionRecordDao::sum_expense_by_category(
-                    &conn,
-                    ledger_id,
-                    &period.range(),
-                    &fixed_categories,
-                    false,
-                )
-                .map_err(db)?,
-                usize::MAX,
-            ),
         }
     };
 
-    // ---- 折线：本期 vs 去年同期（同期截断） ----
-    let series = build_series(&conn, ledger_id, &period, &compare, &fixed_categories)?;
-
-    // ---- 构成：日常支出（固定项在卡片上有自己的构成） ----
-    let by_category = slices(
-        TransactionRecordDao::sum_expense_by_category(
-            &conn,
-            ledger_id,
-            &period.range(),
-            &fixed_categories,
-            true,
-        )
-        .map_err(db)?,
-        TOP_SLICES,
-    );
-    let by_tag = slices(
-        TransactionRecordDao::sum_expense_by_tag(
-            &conn,
-            ledger_id,
-            &period.range(),
-            &fixed_categories,
-            true,
-        )
-        .map_err(db)?,
+    // ---- 构成：本期支出按分类的下钻（全部支出，不分类别） ----
+    let categories = slices(
+        TransactionRecordDao::sum_expense_by_category(&conn, ledger_id, &period.range())
+            .map_err(db)?,
         TOP_SLICES,
     );
 
@@ -137,11 +84,7 @@ pub fn overview(
             is_current_year: period.year == Local::now().year(),
         },
         cards,
-        series,
-        composition: OverviewCompositionDto {
-            by_category,
-            by_tag,
-        },
+        categories,
     })
 }
 
@@ -160,7 +103,7 @@ struct Period {
     through_day: Option<i32>,
     start: i64,
     end: i64,
-    /// 画几个点：月视图 = 天数，年视图 = 月数。
+    /// 这一期截止到第几天（月视图）/ 第几个月（年视图）—— 用来定 `end`。
     points: u32,
 }
 
@@ -345,98 +288,6 @@ fn year_to_date_balance(
     Ok(Some(stats.income - stats.expense))
 }
 
-// ==================================================================== 折线
-
-fn build_series(
-    conn: &rusqlite::Connection,
-    ledger_id: &str,
-    period: &Period,
-    compare: &Period,
-    fixed_categories: &[String],
-) -> ServiceResult<OverviewSeriesDto> {
-    if period.kind == KIND_YEAR {
-        return Ok(OverviewSeriesDto {
-            labels: (1..=period.points).map(|m| format!("{m}月")).collect(),
-            current: monthly_values(conn, ledger_id, period, fixed_categories)?,
-            last_year: monthly_values(conn, ledger_id, compare, fixed_categories)?,
-            mode: "monthly".to_string(),
-        });
-    }
-
-    let labels: Vec<String> = (1..=period.points).map(|d| d.to_string()).collect();
-    let current = daily_cumulative(conn, ledger_id, period, fixed_categories)?;
-    let mut last_year = daily_cumulative(conn, ledger_id, compare, fixed_categories)?;
-    // 去年二月只有 28 天、今年二月 29 天时，去年那条线要**补齐到同样的长度**：
-    // 用最后一天的累计值填尾（累计线不能凭空掉回 0），否则第 29 天会断崖。
-    if last_year.len() < labels.len() {
-        let tail = last_year.last().copied().unwrap_or(0.0);
-        last_year.resize(labels.len(), tail);
-    }
-    Ok(OverviewSeriesDto {
-        labels,
-        current,
-        last_year,
-        mode: "daily".to_string(),
-    })
-}
-
-/// 日累计（月视图）：第 n 个点 = 1 日到 n 日的和，缺的天补 0。
-fn daily_cumulative(
-    conn: &rusqlite::Connection,
-    ledger_id: &str,
-    period: &Period,
-    fixed_categories: &[String],
-) -> ServiceResult<Vec<f64>> {
-    let rows = TransactionRecordDao::sum_expense_buckets(
-        conn,
-        ledger_id,
-        &period.range(),
-        "%Y-%m-%d",
-        fixed_categories,
-        true,
-    )
-    .map_err(db)?;
-    let by_day: std::collections::BTreeMap<String, i64> = rows.into_iter().collect();
-
-    let mut running = 0_i64;
-    let mut out = Vec::with_capacity(period.points as usize);
-    for day in 1..=period.points {
-        running += by_day
-            .get(&format!("{}-{:02}-{:02}", period.year, period.month, day))
-            .copied()
-            .unwrap_or(0);
-        out.push(running as f64);
-    }
-    Ok(out)
-}
-
-/// 每月发生额（年视图）：1 月 .. 第 n 月，没数据的月份补 0。
-fn monthly_values(
-    conn: &rusqlite::Connection,
-    ledger_id: &str,
-    period: &Period,
-    fixed_categories: &[String],
-) -> ServiceResult<Vec<f64>> {
-    let rows = TransactionRecordDao::sum_expense_buckets(
-        conn,
-        ledger_id,
-        &period.range(),
-        "%Y-%m",
-        fixed_categories,
-        true,
-    )
-    .map_err(db)?;
-    let by_month: std::collections::BTreeMap<String, i64> = rows.into_iter().collect();
-    Ok((1..=period.points)
-        .map(|month| {
-            by_month
-                .get(&format!("{}-{month:02}", period.year))
-                .copied()
-                .unwrap_or(0) as f64
-        })
-        .collect())
-}
-
 // ==================================================================== 构成
 
 /// 金额降序取前 `limit` 项，其余并成「其他」（数量不超过 `limit + 1`）。
@@ -480,8 +331,6 @@ fn db(error: rusqlite::Error) -> crate::ServiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tr_domain::models::Category;
-    use tr_store::dao::category::CategoryDao;
 
     /// 把 `YYYY-MM-DD` 写成"本地 12:00"的 Unix 秒（与真实写入路径一致）。
     fn at(ymd: &str) -> i64 {
@@ -506,32 +355,6 @@ mod tests {
             .unwrap();
     }
 
-    fn tag(ws: &Workspace, id: &str, name: &str) {
-        ws.connection()
-            .execute(
-                "INSERT INTO tbl_billadm_transaction_record_tag (ledger_id, transaction_id, tag) \
-                 VALUES ('l1', ?1, ?2)",
-                rusqlite::params![id, name],
-            )
-            .unwrap();
-    }
-
-    fn mark_fixed(ws: &Workspace, name: &str) {
-        let conn = ws.connection();
-        CategoryDao::create(
-            &conn,
-            &Category {
-                ledger_id: "l1".to_string(),
-                name: name.to_string(),
-                transaction_type: "expense".to_string(),
-                sort_order: 0,
-                is_fixed: false,
-            },
-        )
-        .unwrap();
-        CategoryDao::set_fixed(&conn, "l1", name, "expense", true).unwrap();
-    }
-
     fn ask(ws: &Workspace, kind: &str, key: &str) -> AccountingOverviewDto {
         overview(
             ws,
@@ -544,11 +367,10 @@ mod tests {
         .unwrap()
     }
 
-    /// 口径的硬等式：日常 + 固定 = 支出；转账三张卡都不沾；结余是年度口径。
+    /// 口径：支出算**全部**支出（分类不参与切分）；转账哪一档都不沾；结余是年度口径。
     #[test]
-    fn daily_plus_fixed_equals_expense_and_transfer_is_not_money_out() {
+    fn expense_counts_every_category_and_transfer_is_not_money_out() {
         let (ws, dir) = crate::test_support::workspace("overview-caliber");
-        mark_fixed(&ws, "房产房贷");
         record(&ws, "i1", "2025-03-10", "income", "工资奖金", 100_000);
         record(&ws, "f1", "2025-03-01", "expense", "房产房贷", 50_000);
         record(&ws, "d1", "2025-03-05", "expense", "餐饮美食", 2_000);
@@ -557,48 +379,20 @@ mod tests {
 
         let reply = ask(&ws, "month", "2025-03");
         let cards = &reply.cards;
-        assert_eq!(cards.daily_expense, Some(5_000));
-        assert_eq!(cards.fixed_expense, Some(50_000));
-        assert_eq!(
-            cards.daily_expense.unwrap() + cards.fixed_expense.unwrap(),
-            55_000,
-            "日常 + 固定必须等于支出合计"
-        );
+        assert_eq!(cards.expense, Some(55_000), "支出不分固定/日常，全算");
         assert_eq!(cards.income, Some(100_000));
         // 结余 = 100000 − 55000；那 1000 的转账不参与（工资记的是净额）
         assert_eq!(cards.balance_ytd, Some(45_000));
-        // 固定项自己有一份构成
-        assert_eq!(cards.fixed_breakdown.len(), 1);
-        assert_eq!(cards.fixed_breakdown[0].label, "房产房贷");
-        // 构成只算日常：转账、固定都不在里头
+
+        // 构成的每个分类都在，合计正好等于卡上的支出
         let labels: Vec<&str> = reply
-            .composition
-            .by_category
+            .categories
             .iter()
             .map(|item| item.label.as_str())
             .collect();
-        assert_eq!(labels, vec!["购物消费", "餐饮美食"]);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// **一个分类都没标「固定」时**：固定支出是 0、日常支出等于全部支出。
-    ///
-    /// 这是最容易写错的一处：空集合若被当成"不过滤"，固定支出会等于整期支出、
-    /// 日常支出变成 0 —— 而「日常 + 固定 = 支出」仍然成立，等式型断言发现不了。
-    #[test]
-    fn no_fixed_category_means_zero_fixed_not_everything() {
-        let (ws, dir) = crate::test_support::workspace("overview-no-fixed");
-        record(&ws, "d1", "2025-03-05", "expense", "餐饮美食", 2_000);
-        record(&ws, "d2", "2025-03-06", "expense", "购物消费", 3_000);
-
-        let reply = ask(&ws, "month", "2025-03");
-        assert_eq!(reply.cards.fixed_expense, Some(0), "没标固定就只能算出 0");
-        assert_eq!(reply.cards.daily_expense, Some(5_000), "全部支出都是日常");
-        // 固定项自己的构成也必须是空的
-        assert!(reply.cards.fixed_breakdown.is_empty());
-        // 构成里两项都在（固定档没把整期的支出吞掉）
-        assert_eq!(reply.composition.by_category.len(), 2);
+        assert_eq!(labels, vec!["房产房贷", "购物消费", "餐饮美食"]);
+        let total: i64 = reply.categories.iter().map(|s| s.amount).sum();
+        assert_eq!(Some(total), cards.expense, "构成是支出的下钻，合计必须相等");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -610,15 +404,13 @@ mod tests {
         record(&ws, "d1", "2025-03-05", "expense", "餐饮美食", 2_000);
 
         let reply = ask(&ws, "month", "2025-03");
-        assert_eq!(reply.cards.daily_expense_last_year, None);
+        assert_eq!(reply.cards.expense_last_year, None);
         assert_eq!(reply.cards.income_last_year, None);
-        assert_eq!(reply.series.last_year.len(), reply.series.current.len());
-        assert!(reply.series.last_year.iter().all(|value| *value == 0.0));
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 一期里没有任何记录 ⇒ 四张卡全是 `None`（「花了 0」和「没记账」不是一回事）。
+    /// 一期里没有任何记录 ⇒ 三个数全是 `None`（「花了 0」和「没记账」不是一回事）。
     #[test]
     fn an_empty_period_has_no_cards_at_all() {
         let (ws, dir) = crate::test_support::workspace("overview-empty");
@@ -626,55 +418,10 @@ mod tests {
 
         let reply = ask(&ws, "month", "2019-07");
         let cards = &reply.cards;
-        assert_eq!(cards.daily_expense, None);
-        assert_eq!(cards.fixed_expense, None);
+        assert_eq!(cards.expense, None);
         assert_eq!(cards.income, None);
         assert_eq!(cards.balance_ytd, None);
-        assert!(reply.composition.by_category.is_empty());
-        assert!(reply.composition.by_tag.is_empty());
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// 月视图是**累计**：第 n 个点 = 1..n 的和，没记的日子不跳变。
-    #[test]
-    fn month_series_accumulates_day_by_day() {
-        let (ws, dir) = crate::test_support::workspace("overview-cumulative");
-        record(&ws, "d1", "2025-03-01", "expense", "餐饮美食", 1_000);
-        record(&ws, "d2", "2025-03-03", "expense", "餐饮美食", 2_000);
-        record(&ws, "d3", "2025-03-31", "expense", "餐饮美食", 4_000);
-
-        let reply = ask(&ws, "month", "2025-03");
-        assert_eq!(reply.period.through_day, None, "历史月不截断");
-        assert_eq!(reply.series.mode, "daily");
-        assert_eq!(reply.series.labels.len(), 31);
-        let current = &reply.series.current;
-        assert_eq!(current[0], 1_000.0);
-        assert_eq!(current[1], 1_000.0, "3/2 没花钱，累计不动");
-        assert_eq!(current[2], 3_000.0);
-        assert_eq!(current[30], 7_000.0);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// 年视图画**每月发生额**，不是累计（累计线一年只有一个峰，看不出哪个月花爆了）。
-    #[test]
-    fn year_series_is_monthly_not_cumulative() {
-        let (ws, dir) = crate::test_support::workspace("overview-year");
-        record(&ws, "d1", "2025-01-10", "expense", "餐饮美食", 1_000);
-        record(&ws, "d2", "2025-03-10", "expense", "餐饮美食", 3_000);
-
-        let reply = ask(&ws, "year", "2025");
-        assert_eq!(reply.period.kind, "year");
-        assert_eq!(reply.series.mode, "monthly");
-        assert_eq!(reply.series.labels.len(), 12);
-        assert_eq!(reply.series.labels[0], "1月");
-        assert_eq!(reply.series.current[0], 1_000.0);
-        assert_eq!(reply.series.current[1], 0.0);
-        assert_eq!(
-            reply.series.current[2], 3_000.0,
-            "3 月就是 3 月，不叠加上 1 月"
-        );
+        assert!(reply.categories.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -695,32 +442,11 @@ mod tests {
         }
 
         let reply = ask(&ws, "month", "2025-03");
-        let slices = &reply.composition.by_category;
+        let slices = &reply.categories;
         assert_eq!(slices.len(), TOP_SLICES + 1);
         assert_eq!(slices.last().unwrap().label, OTHER_LABEL);
         let total: i64 = slices.iter().map(|item| item.amount).sum();
         assert_eq!(total, 10_000, "合并只能换标签，不能改合计");
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// 标签档：一笔记录挂两个标签就各算一次（所以它那档的合计不等于支出合计）。
-    #[test]
-    fn tag_composition_counts_a_record_once_per_tag() {
-        let (ws, dir) = crate::test_support::workspace("overview-tags");
-        record(&ws, "d1", "2025-03-05", "expense", "餐饮美食", 1_000);
-        tag(&ws, "d1", "三餐");
-        tag(&ws, "d1", "外卖");
-        record(&ws, "d2", "2025-03-06", "expense", "餐饮美食", 500);
-        tag(&ws, "d2", "三餐");
-
-        let reply = ask(&ws, "month", "2025-03");
-        let by_tag = &reply.composition.by_tag;
-        assert_eq!(by_tag.len(), 2);
-        assert_eq!(by_tag[0].label, "三餐");
-        assert_eq!(by_tag[0].amount, 1_500);
-        assert_eq!(by_tag[1].label, "外卖");
-        assert_eq!(by_tag[1].amount, 1_000);
 
         std::fs::remove_dir_all(&dir).ok();
     }

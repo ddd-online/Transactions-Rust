@@ -2412,3 +2412,60 @@
   color: var(--transactions-color-text-tertiary);
   text-align: right;
 }
+
+/* ============================================
+ * 卡片（通用组件 `Card`）
+ *
+ * 三段式：标题（上）/ 可选按钮行（中）/ 内容（下）。
+ *
+ * **宽度由内容决定**（`fit-content`，上限一行），高度随内容长 —— 放进
+ * `flex-wrap; align-items: flex-start` 的容器就是高低不齐的卡片流，
+ * 调用方不必为每张卡挑一个宽度档。
+ *
+ * 外观按 DESIGN.md：Paper 面 + 1px 发丝线 + 12px 圆角 + 静止态轻阴影。
+ * 卡片里**不再套第二层边框**：层级靠留白与字号，不靠盒子套盒子。
+ * ============================================ */
+
+.ui-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-md);
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  padding: var(--transactions-space-xl);
+  background: var(--transactions-color-card-surface);
+  border: 1px solid var(--transactions-color-border-l1);
+  border-radius: var(--transactions-radius-lg);
+  box-shadow: var(--transactions-shadow-sm);
+}
+
+/* 标题行：只有标题，永远贴卡片左上角 —— 中段有没有按钮都不改变它的位置 */
+.ui-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-md);
+  min-height: 22px;
+}
+
+.ui-card__title {
+  margin: 0;
+  font-size: var(--transactions-size-text-section);
+  font-weight: var(--transactions-weight-semibold, 600);
+  letter-spacing: var(--transactions-tracking-display);
+  color: var(--transactions-color-text-major);
+}
+
+/* 中段：这张卡自己的操作区（分段切换 / 更多），随内容出现或消失，整段不渲染时不留空 */
+.ui-card__tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--transactions-space-sm);
+  min-width: 0;
+}
+
+.ui-card__body {
+  min-width: 0;
+}
+
