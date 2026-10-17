@@ -28,19 +28,20 @@
 //!
 //! ## 覆盖范围
 //!
-//! **应用里每一条 IPC 命令都在这儿**（共 115 条）：21 条外壳命令（`src-tauri/src/commands.rs`）、
-//! 5 条更新命令（`src-tauri/src/updater.rs`）、89 条业务命令（`tr-ipc`）。
-//! 清单按模块分成三组（[`SHELL_COMMANDS`] 21 / [`UPDATE_COMMANDS`] 5 / [`BUSINESS_COMMANDS`] 89），
+//! **应用里每一条 IPC 命令都在这儿**（共 117 条）：21 条外壳命令（`src-tauri/src/commands.rs`）、
+//! 5 条更新命令（`src-tauri/src/updater.rs`）、91 条业务命令（`tr-ipc`）。
+//! 清单按模块分成三组（[`SHELL_COMMANDS`] 21 / [`UPDATE_COMMANDS`] 5 / [`BUSINESS_COMMANDS`] 91），
 //! 于是"注册表里的这一段 == 清单里的这一组"可以逐组比对 —— 注册表的路径前缀与分组一一对应，
 //! 不需要什么人去记"哪条命令归谁"（`src-tauri/src/registry.rs` 的 `SEGMENTS` 就是这张对应表）。
 
 use std::marker::PhantomData;
 
 use crate::dto::{
-    CategoryDto, ChartDto, ChartQueryRequest, ChartQueryResponse, CreateCategoryRequest,
-    CreateChartRequest, CreateTagRequest, DiaryExportRequest, DiaryExportResult, DiaryScanResponse,
-    DiaryUpsertRequest, InitializeCategoriesResponse, LedgerDto, StockFundRecordPage, StockNameDto,
-    StockOperationDto, StockOperationRollbackDto, StockOperationRollbackPreviewDto,
+    AccountingOverviewDto, AccountingOverviewRequest, CategoryDto, ChartDto, ChartQueryRequest,
+    ChartQueryResponse, CreateCategoryRequest, CreateChartRequest, CreateTagRequest,
+    DiaryExportRequest, DiaryExportResult, DiaryScanResponse, DiaryUpsertRequest,
+    InitializeCategoriesResponse, LedgerDto, SetCategoryFixedRequest, StockFundRecordPage,
+    StockNameDto, StockOperationDto, StockOperationRollbackDto, StockOperationRollbackPreviewDto,
     StockOverviewDto, StockPositionDto, StockReviewSettingDto, StockStatisticsDto, StockTradeDto,
     StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
     StockTradeImpactDto, StockTradeTagSettingDto, TagDto, TodoCardDto, TodoHistoryDto, TodoItemDto,
@@ -189,6 +190,7 @@ command_catalog! {
     TR_LINK = "tr_link": LinkRequest => String,
     TR_UNLINK = "tr_unlink": UnlinkRequest => String,
     TR_LINKED_BY_DATE = "tr_linked_by_date": LinkedByDateRequest => Vec<TransactionRecordDto>,
+    ACCOUNTING_OVERVIEW = "accounting_overview": AccountingOverviewRequest => AccountingOverviewDto,
 
     // ---- 日记 ----
     DIARY_LIST_DATES = "diary_list_dates": DiaryLedgerRequest => Vec<DiaryDateItem>,
@@ -204,6 +206,7 @@ command_catalog! {
     CATEGORY_CREATE = "category_create": CreateCategoryRequest => (),
     CATEGORY_DELETE = "category_delete": CategoryDeleteRequest => (),
     CATEGORY_UPDATE_SORT = "category_update_sort": UpdateCategorySortRequest => (),
+    CATEGORY_SET_FIXED = "category_set_fixed": SetCategoryFixedRequest => (),
     CATEGORY_INITIALIZE = "category_initialize": InitializeCategoriesRequest => InitializeCategoriesResponse,
 
     // ---- 标签 ----
@@ -319,6 +322,7 @@ mod tests {
 
     /// 命令名以域前缀开头（`<域>_<动作>`，见 `tr-ipc` 的模块注释）。
     const DOMAINS: &[&str] = &[
+        "accounting",
         "ledger",
         "tr",
         "diary",
@@ -362,14 +366,14 @@ mod tests {
     fn the_table_covers_every_command() {
         assert_eq!(SHELL_COMMANDS.len(), 21);
         assert_eq!(UPDATE_COMMANDS.len(), 5);
-        assert_eq!(BUSINESS_COMMANDS.len(), 89);
+        assert_eq!(BUSINESS_COMMANDS.len(), 91);
         assert_eq!(COMMAND_GROUPS.len(), 3);
         assert_eq!(
             COMMAND_GROUPS
                 .iter()
                 .map(|group| group.len())
                 .sum::<usize>(),
-            115
+            117
         );
     }
 

@@ -79,6 +79,9 @@ pub struct Category {
     pub transaction_type: String,
     #[serde(rename = "sort_order")]
     pub sort_order: i32,
+    /// 固定支出标记（看板把它从「日常支出」里剥出来）。
+    #[serde(rename = "is_fixed")]
+    pub is_fixed: bool,
 }
 
 /// 标签。表 `tbl_billadm_tag`。`category_transaction_type` 形如 `餐饮美食:expense`。

@@ -10,6 +10,7 @@
 //!
 //! 另外：`proxy` 是**进程级代理设置**（行情与外壳的更新器共用；探测系统代理）。
 
+pub mod accounting_overview;
 pub mod assets;
 pub mod category;
 pub mod chart;

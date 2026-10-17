@@ -5,11 +5,14 @@
 //! * `category_create` / `category_update_sort` 用请求体字段名 `transactionType`
 //! * `ledgerId` 一律 camelCase
 //!
+//! `category_set_fixed` 用的是请求体字段名 `transactionType` + `fixed`（布尔，`true` = 固定支出）。
+//!
 //! `type` 为空串或 `"all"` 表示不过滤。
 
 use tr_domain::commands;
 use tr_domain::dto::{
-    CategoryDto, CreateCategoryRequest, InitializeCategoriesResponse, UpdateCategorySortRequest,
+    CategoryDto, CreateCategoryRequest, InitializeCategoriesResponse, SetCategoryFixedRequest,
+    UpdateCategorySortRequest,
 };
 use tr_domain::wire::{CategoryDeleteRequest, CategoryListRequest, InitializeCategoriesRequest};
 
@@ -71,6 +74,25 @@ pub async fn update_sort(
             name: name.to_string(),
             transaction_type: transaction_type.to_string(),
             sort_order,
+        },
+    )
+    .await
+}
+
+/// 改「固定支出」标记（看板按它把支出拆成固定 / 日常两档）。
+pub async fn set_fixed(
+    ledger_id: &str,
+    name: &str,
+    transaction_type: &str,
+    fixed: bool,
+) -> Result<(), IpcError> {
+    ipc::call_void(
+        commands::CATEGORY_SET_FIXED,
+        SetCategoryFixedRequest {
+            ledger_id: ledger_id.to_string(),
+            name: name.to_string(),
+            transaction_type: transaction_type.to_string(),
+            fixed,
         },
     )
     .await

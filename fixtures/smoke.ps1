@@ -250,8 +250,8 @@ if ($Case -in @('all', 'first-run')) {
         Assert-True ($null -ne $uiaWindow) '拿到主窗口的 UIA 元素'
         Assert-True ($null -ne (Wait-Element $uiaWindow '选择目录…' 20)) `
             '选择屏叠在主窗口里（「选择目录…」可查到）'
-        Assert-True (@(Find-All $uiaWindow '记一笔').Count -eq 0) `
-            '背景那层 inert（内容区的「记一笔」不在辅助功能树里）'
+        Assert-True (@(Find-All $uiaWindow '上一期').Count -eq 0) `
+            '背景那层 inert（内容区的「上一期」不在辅助功能树里）'
 
         # 这个窗口关不掉：给它发 WM_CLOSE（= Alt+F4 / 点关闭），
         # 窗口和进程都必须还在（用户必须先选定工作空间；逃生门是托盘菜单的「关闭程序」）。

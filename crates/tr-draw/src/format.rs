@@ -35,6 +35,29 @@ pub fn amount(cents: i64) -> String {
     cents_to_yuan(cents)
 }
 
+/// 千分位金额（看板卡片用）：`grouped_amount(1_234_567)` → `"¥12,345.67"`。
+///
+/// 负号写在 `¥` **之前**（`-¥12,345.67`），不写成 `¥-12,345.67`。
+/// 与 [`amount`] 的区别只有这一条：整数部分加千分位。看板一屏要同时读四个五六位数，
+/// 不加分隔符时 `¥248630.59` 与 `¥24863.59` 得靠数位才分得清。
+pub fn grouped_amount(cents: i64) -> String {
+    // 换元只走 `cents_to_yuan`（本 crate 的金额换算唯一入口），这里只负责插分隔符
+    let text = cents_to_yuan(cents);
+    let (sign, body) = match text.strip_prefix('-') {
+        Some(rest) => ("-", rest.to_string()),
+        None => ("", text),
+    };
+    let (integer, fraction) = body.split_once('.').unwrap_or((body.as_str(), "00"));
+    let mut grouped = String::with_capacity(integer.len() + integer.len() / 3);
+    for (index, ch) in integer.chars().enumerate() {
+        if index > 0 && (integer.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    format!("{sign}¥{grouped}.{fraction}")
+}
+
 /// 带符号金额：支出前缀 `-`、收入前缀 `+`、转账不加符号。
 ///
 /// 符号由**交易类型**决定，而不是由金额正负决定（与 [`signed_yuan`] 相反）。
@@ -119,6 +142,14 @@ pub fn signed_percent(percent: f64) -> String {
 pub fn optional_signed_percent(percent: Option<f64>) -> String {
     match percent {
         Some(value) => signed_percent(value),
+        None => "—".to_string(),
+    }
+}
+
+/// 可选百分比（**不带正号**）：`None` → `"—"`（仓位这类"分母可能不存在"的指标）。
+pub fn optional_rate_text(percent: Option<f64>) -> String {
+    match percent {
+        Some(value) => rate_text(value),
         None => "—".to_string(),
     }
 }
@@ -304,6 +335,18 @@ mod tests {
         assert_eq!(amount(5), "0.05");
     }
 
+    /// 千分位只改"分组"，不改小数位；负号在 `¥` 之前。
+    #[test]
+    fn grouped_amount_adds_thousands_separators() {
+        assert_eq!(grouped_amount(0), "¥0.00");
+        assert_eq!(grouped_amount(100), "¥1.00");
+        assert_eq!(grouped_amount(99), "¥0.99");
+        assert_eq!(grouped_amount(100_000), "¥1,000.00");
+        assert_eq!(grouped_amount(123_456_789), "¥1,234,567.89");
+        assert_eq!(grouped_amount(-123_456_789), "-¥1,234,567.89");
+        assert_eq!(grouped_amount(-1), "-¥0.01");
+    }
+
     /// 符号由**交易类型**决定（不是金额正负）：支出 `-`、收入 `+`、转账与未知不加。
     #[test]
     fn signed_amount_follows_the_transaction_type() {
@@ -395,6 +438,10 @@ mod tests {
         assert_eq!(signed_percent(f64::NAN), "0.00%");
         assert_eq!(optional_signed_percent(None), "—");
         assert_eq!(optional_signed_percent(Some(1.5)), "+1.50%");
+        // 仓位不带正号：0.281 → "0.28%"、无分母 → "—"
+        assert_eq!(optional_rate_text(Some(0.281)), "0.28%");
+        assert_eq!(optional_rate_text(Some(0.0)), "0.00%");
+        assert_eq!(optional_rate_text(None), "—");
     }
 
     /// 盈亏比：没有亏损样本（`None`）与"亏得没法算"（非有限）都是 `∞`。

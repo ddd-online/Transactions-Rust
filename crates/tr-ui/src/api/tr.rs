@@ -15,7 +15,8 @@
 
 use tr_domain::commands;
 use tr_domain::dto::{
-    ChartQueryRequest, ChartQueryResponse, TrQueryCondition, TrQueryResult, TransactionRecordDto,
+    AccountingOverviewDto, AccountingOverviewRequest, ChartQueryRequest, ChartQueryResponse,
+    TrQueryCondition, TrQueryResult, TransactionRecordDto,
 };
 use tr_domain::wire::{IdRequest, LinkRequest, LinkedByDateRequest, UnlinkRequest};
 
@@ -36,6 +37,25 @@ pub fn default_condition(ledger_id: &str, page: i32, page_size: i32) -> TrQueryC
         items: Vec::new(),
         sort_fields: Vec::new(),
     }
+}
+
+/// 记账 · 看板：一期的四张卡 + 折线 + 构成。
+///
+/// `period_key` 传空串 = 当期（今天所在的月 / 年）；口径全在服务端。
+pub async fn overview(
+    ledger_id: &str,
+    period_kind: &str,
+    period_key: &str,
+) -> Result<AccountingOverviewDto, IpcError> {
+    ipc::call(
+        commands::ACCOUNTING_OVERVIEW,
+        AccountingOverviewRequest {
+            ledger_id: ledger_id.to_string(),
+            period_kind: period_kind.to_string(),
+            period_key: period_key.to_string(),
+        },
+    )
+    .await
 }
 
 /// 条件查询。条件项之间 OR，项内 AND；`trStatistics` 覆盖**全部**命中记录而非当前页。

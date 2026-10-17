@@ -18,7 +18,7 @@ use tr_domain::models::Category;
 
 pub struct CategoryDao;
 
-const COLUMNS: &str = "ledger_id, name, transaction_type, sort_order";
+const COLUMNS: &str = "ledger_id, name, transaction_type, sort_order, is_fixed";
 
 impl CategoryDao {
     /// 按账本查询分类；`transaction_type` 为空或 `all` 时不过滤。
@@ -58,16 +58,48 @@ impl CategoryDao {
     /// 新建分类。
     pub fn create(conn: &Connection, category: &Category) -> rusqlite::Result<()> {
         conn.execute(
-            "INSERT INTO tbl_billadm_category (ledger_id, name, transaction_type, sort_order) \
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO tbl_billadm_category \
+             (ledger_id, name, transaction_type, sort_order, is_fixed) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 category.ledger_id,
                 category.name,
                 category.transaction_type,
-                category.sort_order
+                category.sort_order,
+                category.is_fixed
             ],
         )?;
         Ok(())
+    }
+
+    /// 改「固定支出」标记（看板的分组依据；不存在的分类视为成功，幂等）。
+    pub fn set_fixed(
+        conn: &Connection,
+        ledger_id: &str,
+        name: &str,
+        transaction_type: &str,
+        fixed: bool,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE tbl_billadm_category SET is_fixed = ?4 \
+             WHERE ledger_id = ?1 AND name = ?2 AND transaction_type = ?3",
+            params![ledger_id, name, transaction_type, fixed],
+        )?;
+        Ok(())
+    }
+
+    /// 该账本里被标成「固定支出」的**支出**分类名（空集 = 一个都没标）。
+    ///
+    /// 只认 `transaction_type = 'expense'`：看板的固定 / 日常只切分支出，同名收入分类
+    /// （比如有人把「工资奖金」也点上）不该混进来。
+    pub fn fixed_names(conn: &Connection, ledger_id: &str) -> rusqlite::Result<Vec<String>> {
+        let mut statement = conn.prepare(
+            "SELECT name FROM tbl_billadm_category \
+             WHERE ledger_id = ?1 AND transaction_type = 'expense' AND is_fixed = 1 \
+             ORDER BY sort_order ASC, name DESC",
+        )?;
+        let rows = statement.query_map(params![ledger_id], |row| row.get::<_, String>(0))?;
+        rows.collect()
     }
 
     /// 删除单个分类（不存在的记录视为成功，删除是幂等的）。
@@ -151,6 +183,7 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Category> {
         name: row.get(1)?,
         transaction_type: row.get(2)?,
         sort_order: row.get(3)?,
+        is_fixed: row.get(4)?,
     })
 }
 
@@ -164,6 +197,7 @@ mod tests {
             name: name.to_string(),
             transaction_type: transaction_type.to_string(),
             sort_order,
+            is_fixed: false,
         }
     }
 
@@ -286,6 +320,45 @@ mod tests {
         assert!(CategoryDao::count_records_by_categories(&conn, "l1", &[])
             .unwrap()
             .is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fixed_flag_round_trips_and_is_scoped_to_the_ledger() {
+        let (workspace, dir) = crate::dao::test_workspace("category-dao");
+        let conn = workspace.connection();
+
+        CategoryDao::create(&conn, &category("l1", "房产房贷", "expense", 1)).unwrap();
+        CategoryDao::create(&conn, &category("l1", "餐饮美食", "expense", 2)).unwrap();
+        CategoryDao::create(&conn, &category("l2", "房产房贷", "expense", 1)).unwrap();
+
+        // 默认不是固定支出
+        assert!(CategoryDao::fixed_names(&conn, "l1").unwrap().is_empty());
+
+        CategoryDao::set_fixed(&conn, "l1", "房产房贷", "expense", true).unwrap();
+        assert_eq!(
+            CategoryDao::fixed_names(&conn, "l1").unwrap(),
+            vec!["房产房贷".to_string()]
+        );
+        // 只动这一条：同账本的其它分类不受影响
+        let loaded = CategoryDao::query_by_ledger(&conn, "l1", "expense").unwrap();
+        assert!(
+            !loaded
+                .iter()
+                .find(|c| c.name == "餐饮美食")
+                .unwrap()
+                .is_fixed
+        );
+        // 另一个账本的同名分类不被连带改
+        assert!(CategoryDao::fixed_names(&conn, "l2").unwrap().is_empty());
+
+        // 取消标记
+        CategoryDao::set_fixed(&conn, "l1", "房产房贷", "expense", false).unwrap();
+        assert!(CategoryDao::fixed_names(&conn, "l1").unwrap().is_empty());
+
+        // 不存在的分类：幂等成功
+        CategoryDao::set_fixed(&conn, "l1", "不存在", "expense", true).unwrap();
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -308,3 +308,31 @@
     transition: none;
   }
 }
+
+/* 「固定支出」标记：看板把标了它的分类从「日常支出」里剥出来。
+ * 常驻显示（不是一个 hover 才出现的动作）：它是**每行一个勾**，不 hover 也要看得出
+ * 哪几个分类是固定的，也要看得出"这里可以标"。 */
+.ct-fixed-toggle {
+  flex-shrink: 0;
+  height: 18px;
+  padding: 0 var(--transactions-space-xs);
+  font-size: var(--transactions-size-text-small);
+  line-height: 16px;
+  color: var(--transactions-color-text-disabled);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--transactions-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ct-fixed-toggle:hover {
+  color: var(--transactions-color-text-secondary);
+  border-color: var(--transactions-color-border-l2);
+}
+
+.ct-fixed-toggle.is-on {
+  color: var(--transactions-color-primary);
+  background-color: var(--transactions-color-primary-tint);
+  border-color: var(--transactions-color-primary-200);
+}

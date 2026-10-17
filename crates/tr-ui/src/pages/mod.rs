@@ -1,6 +1,7 @@
 //! 页面层。
 //!
-//! * [`accounting`]：**记账**（顶级功能，含 记录 / 分析 / 标签 / 模板 四个子功能 + 左侧子功能图标条）
+//! * [`accounting`]：**记账**（顶级功能，含 看板 / 记录 / 分析 / 标签 / 模板 五个子功能 + 左侧子功能图标条）
+//! * [`dashboard`]：记账 · 看板子功能（四张卡 + 折线 + 构成；结论式回顾，不做配置）
 //! * [`transactions`]：记账 · 记录子功能（列表 + 记一笔/编辑/删除/关联 + 筛选 + 排序）
 //! * [`data_analysis`]：记账 · 分析子功能（图表列表 + 新建/删除 + 曲线条件 + 自绘 SVG 渲染）
 //! * [`category_tag`]：记账 · 标签子功能（分类 / 标签两栏联动 + 拖拽排序）
@@ -13,6 +14,7 @@
 
 pub mod accounting;
 pub mod category_tag;
+pub mod dashboard;
 pub mod data_analysis;
 pub mod diary;
 pub mod key_event;

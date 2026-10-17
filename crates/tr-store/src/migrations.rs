@@ -102,6 +102,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20261015_stock_position_tag",
         apply: stock_position_tag,
     },
+    Migration {
+        id: "20261018_category_fixed_flag",
+        apply: category_fixed_flag,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -539,8 +543,30 @@ fn stock_position_tag(conn: &Connection) -> MigrateResult {
     Ok(())
 }
 
-// ==================================================================== 小工具
+/// 看板的「固定支出」靠分类上的一个标记分组：房贷、贷款还款这类按月重复、
+/// 不受当月行为影响的支出标 1，其余（含没标过的老数据）一律 0 = 日常。
+///
+/// 默认 0 意味着**老库升级后所有分类都是日常**，看板会先显示"固定支出 ¥0"，
+/// 由使用者在标签页自己勾——不回填、不猜，猜错比空着更难纠正。
+///
+/// ⚠ 列定义必须与 `fixtures/schema/fresh.sql` 里分类表那一列**逐字节相同**：
+/// `ADD COLUMN` 只能追加到列尾，所以基线里它也写在 `sort_order` 之后。
+/// 幂等：先查 `PRAGMA table_info`（结构已在就跳过）。
+fn category_fixed_flag(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_category").map_err(stringify)? {
+        return Err("缺少数据表 tbl_billadm_category".to_string());
+    }
+    if column_exists(conn, "tbl_billadm_category", "is_fixed").map_err(stringify)? {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE tbl_billadm_category ADD COLUMN is_fixed integer NOT NULL DEFAULT 0",
+    )
+    .map_err(stringify)?;
+    Ok(())
+}
 
+// ==================================================================== 小工具
 fn stringify(error: rusqlite::Error) -> String {
     error.to_string()
 }
@@ -1476,6 +1502,68 @@ mod tests {
         );
         assert!(message.contains("缺少列 order_id"), "{message}");
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `20261018_category_fixed_flag`：分类表加一列 `is_fixed`（看板的「固定支出」靠它分组）。
+    ///
+    /// 判据四条：列到位；老分类一律是 0 = 日常（**不猜**哪几个是固定的，猜错比空着更难纠正）；
+    /// 同一行的既有数据不被碰；升级库与新建库的建表 SQL 逐字节一致。
+    #[test]
+    fn category_fixed_flag_keeps_fresh_schema_identical() {
+        let dir = temp_dir("category-fixed");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        // 降级成"还没有这一列"的更早格式：删列 + 抹掉登记行
+        conn.execute_batch(
+            "ALTER TABLE tbl_billadm_category DROP COLUMN is_fixed;
+             DELETE FROM tbl_billadm_schema_migration \
+              WHERE id = '20261018_category_fixed_flag';",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tbl_billadm_category (ledger_id, name, transaction_type, sort_order) \
+             VALUES ('l1', '房产房贷', 'expense', 7)",
+            [],
+        )
+        .unwrap();
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(applied, vec!["20261018_category_fixed_flag".to_string()]);
+        assert!(column_exists(&conn, "tbl_billadm_category", "is_fixed").unwrap());
+        let (sort_order, is_fixed): (i32, i64) = conn
+            .query_row(
+                "SELECT sort_order, is_fixed FROM tbl_billadm_category WHERE name = '房产房贷'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(sort_order, 7, "同一行的既有数据不许被碰");
+        assert_eq!(is_fixed, 0, "老分类一律不是固定支出");
+        crate::schema::validate_current(&conn).unwrap();
+
+        // 升级库与新建库不允许分叉：建表 SQL 逐字节一致
+        let migrated: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tbl_billadm_category'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let fresh: String = fresh_conn()
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tbl_billadm_category'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            migrated, fresh,
+            "分类表的建表 SQL 与基线不一致\n迁移: {migrated}\n基线: {fresh}"
+        );
+
+        assert!(pending(&conn).unwrap().is_empty());
+        assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

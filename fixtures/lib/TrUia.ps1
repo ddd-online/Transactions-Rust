@@ -455,6 +455,12 @@ function Set-InputByPaste { param($Window, [string]$Name, [string]$Text, [int]$R
 # 于是**点了个空**：弹窗一直开着、记录没落库，表现为 `ui-link-event` 在第一步就红
 # （`Add-Record` 返回 false）。同名按钮可能有多个（别的页/隐藏面板），只点**可见且在窗口内**的最后一个。
 function Add-Record { param($Window, [string]$Description, [string]$Amount)
+    # 记账页默认落「看板」（结论式回顾），「记一笔」在「记录」子功能里 —— 不在就先切过去。
+    # 放在这里而不是每个调用点：凡是走 Add-Record 的脚本都该自动落到记录页。
+    if (@(Find-All $Window '记一笔').Count -eq 0) {
+        Invoke-SubFunction -Window $Window -Name '记录' | Out-Null
+        Start-Sleep -Milliseconds 800
+    }
     if (-not (Invoke-Element (Wait-Element -Root $Window -Name '记一笔'))) { return $false }
     Start-Sleep -Seconds 2
     $okDesc = Set-InputByPaste -Window $Window -Name '描述消费内容' -Text $Description

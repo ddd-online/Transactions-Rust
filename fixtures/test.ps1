@@ -205,6 +205,8 @@ $PathMap = @(
     @{ Re='^crates/tr-service/src/key_event\.rs$';        Groups=@('key-event') }
     @{ Re='^crates/tr-service/src/(category|tag|chart)\.rs$'; Groups=@('category-tag', 'analysis') }
     @{ Re='^crates/tr-service/src/transaction_record\.rs$';    Groups=@('accounting') }
+    # 看板的聚合口径（日常 / 固定 / 结余 / 同比截断）只在这里实现一份，界面上是记账页的子功能
+    @{ Re='^crates/tr-service/src/accounting_overview\.rs$';   Groups=@('accounting', 'service') }
     @{ Re='^crates/tr-service/src/transaction_template\.rs$';  Groups=@('templates') }
     @{ Re='^crates/tr-service/src/assets\.rs$';           Groups=@('assets') }
     @{ Re='^crates/tr-service/src/proxy\.rs$';            Groups=@('settings') }
@@ -233,7 +235,7 @@ $PathMap = @(
     @{ Re='^crates/tr-ui/src/pages/category_tag\.rs$';    Groups=@('category-tag') }
     @{ Re='^crates/tr-ui/src/pages/data_analysis\.rs$';   Groups=@('analysis') }
     @{ Re='^crates/tr-ui/src/pages/templates\.rs$';       Groups=@('templates') }
-    @{ Re='^crates/tr-ui/src/pages/(transactions|accounting)\.rs$'; Groups=@('accounting') }
+    @{ Re='^crates/tr-ui/src/pages/(transactions|accounting|dashboard)\.rs$'; Groups=@('accounting') }
     @{ Re='^crates/tr-ui/src/components/ui/';             Groups=@('ui-kit') }
     # 功能开关：界面侧的权威状态（默认 + 按账本 → 生效那份的派生）在 `store.rs`，
     # 侧栏过滤与账本切换在 `shell.rs` —— 这两处的改动只有 `ui-features` 那条端到端能验

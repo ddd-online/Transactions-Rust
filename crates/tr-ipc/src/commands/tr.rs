@@ -6,10 +6,12 @@
 use tauri::State;
 
 use tr_domain::dto::{
-    ChartQueryRequest, ChartQueryResponse, TrQueryCondition, TrQueryResult, TransactionRecordDto,
+    AccountingOverviewDto, AccountingOverviewRequest, ChartQueryRequest, ChartQueryResponse,
+    TrQueryCondition, TrQueryResult, TransactionRecordDto,
 };
 use tr_domain::error::AppError;
 use tr_domain::wire::{IdRequest, LinkRequest, LinkedByDateRequest, UnlinkRequest};
+use tr_service::accounting_overview;
 use tr_service::transaction_record;
 
 use crate::error::{ApiError, ApiResult};
@@ -31,6 +33,20 @@ pub fn tr_query(state: State<'_, AppState>, req: TrQueryCondition) -> ApiResult<
     Ok(transaction_record::query_trs_on_condition(
         &workspace, &req,
     )?)
+}
+
+/// 记账 · 看板：一期的四张卡 + 折线 + 构成，一次取完。
+///
+/// 口径（日常 / 固定 / 结余、同比按同期截断）只在 `tr_service::accounting_overview`
+/// 里实现一份，界面侧不重算 —— 否则"卡片上的数"和"图上的线"会各说各话。
+#[tauri::command]
+pub fn accounting_overview(
+    state: State<'_, AppState>,
+    req: AccountingOverviewRequest,
+) -> ApiResult<AccountingOverviewDto> {
+    require_ledger_id(&req.ledger_id)?;
+    let workspace = state.workspace()?;
+    Ok(accounting_overview::overview(&workspace, &req)?)
 }
 
 /// 图表逐曲线分桶数据。

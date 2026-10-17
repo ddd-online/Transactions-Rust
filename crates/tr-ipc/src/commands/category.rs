@@ -5,6 +5,8 @@
 //! * `category_create`：请求体直接用 [`CreateCategoryRequest`]（`ledgerId, name, transactionType, sortOrder`）
 //! * `category_delete { name, type, ledgerId }`
 //! * `category_update_sort { ledgerId, name, transactionType, sortOrder }`：`name` 与其余字段同在一个 `req` 里
+//! * `category_set_fixed { ledgerId, name, transactionType, fixed }`：`fixed` 为 `true` 表示固定支出
+//!   （看板按它把支出拆成固定 / 日常两档；只对 `expense` 分类有意义）
 //! * `category_initialize { ledgerId }`
 //!
 //! 兼容性说明：分类的删除/列表用参数名 `type`，而创建/排序的请求体字段名是
@@ -18,7 +20,8 @@
 use tauri::State;
 
 use tr_domain::dto::{
-    CategoryDto, CreateCategoryRequest, InitializeCategoriesResponse, UpdateCategorySortRequest,
+    CategoryDto, CreateCategoryRequest, InitializeCategoriesResponse, SetCategoryFixedRequest,
+    UpdateCategorySortRequest,
 };
 use tr_domain::error::AppError;
 use tr_domain::wire::{CategoryDeleteRequest, CategoryListRequest, InitializeCategoriesRequest};
@@ -91,6 +94,28 @@ pub fn category_update_sort(
         &req.name,
         &req.transaction_type,
         req.sort_order,
+    )?;
+    Ok(())
+}
+
+/// 改分类的「固定支出」标记（看板的口径依据）。
+#[tauri::command]
+pub fn category_set_fixed(
+    state: State<'_, AppState>,
+    req: SetCategoryFixedRequest,
+) -> ApiResult<()> {
+    if req.ledger_id.is_empty() || req.name.is_empty() || req.transaction_type.is_empty() {
+        return Err(ApiError::from(AppError::bad_request(
+            "missing required parameters",
+        )));
+    }
+    let workspace = state.workspace()?;
+    category::set_category_fixed(
+        &workspace,
+        &req.ledger_id,
+        &req.name,
+        &req.transaction_type,
+        req.fixed,
     )?;
     Ok(())
 }

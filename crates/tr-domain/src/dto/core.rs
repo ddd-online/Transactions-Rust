@@ -60,6 +60,9 @@ pub struct CategoryDto {
     /// 该分类下的记录数（由服务层批量统计后填充）
     #[serde(rename = "recordCount")]
     pub record_count: i32,
+    /// 固定支出标记：看板把标了它的分类从「日常支出」里剥出来
+    #[serde(rename = "isFixed")]
+    pub is_fixed: bool,
 }
 
 impl From<&Category> for CategoryDto {
@@ -70,6 +73,7 @@ impl From<&Category> for CategoryDto {
             transaction_type: category.transaction_type.clone(),
             sort_order: category.sort_order,
             record_count: 0,
+            is_fixed: category.is_fixed,
         }
     }
 }
@@ -98,6 +102,20 @@ pub struct UpdateCategorySortRequest {
     pub transaction_type: String,
     #[serde(rename = "sortOrder")]
     pub sort_order: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SetCategoryFixedRequest {
+    #[serde(rename = "ledgerId")]
+    pub ledger_id: String,
+    #[serde(rename = "name")]
+    pub name: String,
+    #[serde(rename = "transactionType")]
+    pub transaction_type: String,
+    /// `true` = 固定支出（看板把它从「日常支出」里剥出来）
+    #[serde(rename = "fixed")]
+    pub fixed: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

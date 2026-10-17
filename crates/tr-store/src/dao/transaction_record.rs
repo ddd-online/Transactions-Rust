@@ -9,6 +9,10 @@
 //! * 统计口径与列表**同源**：账本 + 时间范围 + 条件项（不含分页与排序）——
 //!   筛出来的就是底部统计条算出来的
 //! * 图表分桶用 `strftime(<格式>, transaction_at, 'unixepoch')`，缺省排除 outlier
+//! * **看板桶（`sum_expense_buckets`）是本地时间**（`'unixepoch', 'localtime'`）：
+//!   看板的期间边界（当月 1 号 00:00 … 今天 23:59）本身按本地日历算，桶必须落在同一本
+//!   日历上才能和卡片合计对上。记录存的是"本地 12:00"，UTC 桶在 UTC+8 下与本地桶等价，
+//!   但在更东/更西的时区会把一条记录挪到隔壁那一天 —— 所以这里不用图表那条口径。
 
 use rusqlite::types::Value;
 use rusqlite::{params_from_iter, Connection};
@@ -288,6 +292,162 @@ impl TransactionRecordDao {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(points)
     }
+
+    // -------------------------------------------------------------- 看板聚合
+    //
+    // 下面几条只服务「记账 · 看板」：它要按**分类集合**切分（固定 / 日常）、
+    // 按分类或标签分组、按日或按月分桶 —— 前三条现有查询都做不到。
+    //
+    // 共同的垃圾进垃圾出约定：`ts_range` 必须是 `[起, 止]` 两个端点（服务层负责
+    // 算出本地的当月/当年边界）；`categories` 为空时"只算这些"得到 0、"排除这些"
+    // 等于不排除（调用方给空集合就说明这个账本一个固定分类都没标）。
+
+    /// 支出合计，按分类集合**取子集**（`exclude = false`）或**排除**（`exclude = true`）。
+    pub fn sum_expense_by_categories(
+        conn: &Connection,
+        ledger_id: &str,
+        ts_range: &[i64],
+        categories: &[String],
+        exclude: bool,
+    ) -> rusqlite::Result<i64> {
+        let mut sql = String::from(
+            "SELECT COALESCE(SUM(price), 0) FROM tbl_billadm_transaction_record \
+             WHERE ledger_id = ? AND transaction_type = 'expense' \
+               AND transaction_at >= ? AND transaction_at <= ?",
+        );
+        let mut args = range_args(ledger_id, ts_range);
+        push_category_filter(&mut sql, false, categories, exclude, &mut args);
+        conn.query_row(&sql, params_from_iter(args), |row| row.get(0))
+    }
+
+    /// 支出按分类分组（金额降序），同样可按分类集合取子集或排除。
+    ///
+    /// 返回 `(分类名, 金额, 笔数)`。
+    pub fn sum_expense_by_category(
+        conn: &Connection,
+        ledger_id: &str,
+        ts_range: &[i64],
+        categories: &[String],
+        exclude: bool,
+    ) -> rusqlite::Result<Vec<(String, i64, i64)>> {
+        let mut sql = String::from(
+            "SELECT category, SUM(price), COUNT(*) FROM tbl_billadm_transaction_record \
+             WHERE ledger_id = ? AND transaction_type = 'expense' \
+               AND transaction_at >= ? AND transaction_at <= ?",
+        );
+        let mut args = range_args(ledger_id, ts_range);
+        push_category_filter(&mut sql, false, categories, exclude, &mut args);
+        sql.push_str(" GROUP BY category ORDER BY 2 DESC, 1 ASC");
+
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(args), |row| {
+            Ok((row.get(0)?, row.get::<_, i64>(1)?, row.get(2)?))
+        })?;
+        rows.collect()
+    }
+
+    /// 支出按标签分组（金额降序），同样可按分类集合取子集或排除。
+    ///
+    /// 一笔记录挂多个标签时**每个标签各算一次** —— 标签维度的合计本来就不等于
+    /// 支出合计，界面那档的百分比以标签档自己的合计为分母。
+    pub fn sum_expense_by_tag(
+        conn: &Connection,
+        ledger_id: &str,
+        ts_range: &[i64],
+        categories: &[String],
+        exclude: bool,
+    ) -> rusqlite::Result<Vec<(String, i64, i64)>> {
+        let mut sql = String::from(
+            "SELECT t.tag, SUM(r.price), COUNT(*) \
+             FROM tbl_billadm_transaction_record_tag t \
+             JOIN tbl_billadm_transaction_record r ON r.transaction_id = t.transaction_id \
+             WHERE r.ledger_id = ? AND r.transaction_type = 'expense' \
+               AND r.transaction_at >= ? AND r.transaction_at <= ?",
+        );
+        let mut args = range_args(ledger_id, ts_range);
+        // 分类过滤落在记录表上，所以列名要带别名 r.
+        push_category_filter(&mut sql, true, categories, exclude, &mut args);
+        sql.push_str(" GROUP BY t.tag ORDER BY 2 DESC, 1 ASC");
+
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(args), |row| {
+            Ok((row.get(0)?, row.get::<_, i64>(1)?, row.get(2)?))
+        })?;
+        rows.collect()
+    }
+
+    /// 支出按日 / 按月分桶（`format` 只接受 `"%Y-%m-%d"` 或 `"%Y-%m"`），金额升序。
+    ///
+    /// 分桶用**本地时间**（记录存的是本地 12:00 的 Unix 秒），与看板的"当月/当年"
+    /// 边界同一个时区，跨时区不会把一条记录挪到前一桶。
+    pub fn sum_expense_buckets(
+        conn: &Connection,
+        ledger_id: &str,
+        ts_range: &[i64],
+        format: &str,
+        categories: &[String],
+        exclude: bool,
+    ) -> rusqlite::Result<Vec<(String, i64)>> {
+        debug_assert!(format == "%Y-%m-%d" || format == "%Y-%m");
+        let mut sql = String::from(
+            "SELECT strftime(?, transaction_at, 'unixepoch', 'localtime') AS bucket, SUM(price) \
+             FROM tbl_billadm_transaction_record \
+             WHERE ledger_id = ? AND transaction_type = 'expense' \
+               AND transaction_at >= ? AND transaction_at <= ?",
+        );
+        let mut args = vec![Value::Text(format.to_string())];
+        args.extend(range_args(ledger_id, ts_range));
+        push_category_filter(&mut sql, false, categories, exclude, &mut args);
+        sql.push_str(" GROUP BY bucket ORDER BY bucket ASC");
+
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(args), |row| {
+            Ok((row.get(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.collect()
+    }
+}
+
+/// `[账本, 起, 止]` 三个参数（看板聚合的公共前缀）。
+fn range_args(ledger_id: &str, ts_range: &[i64]) -> Vec<Value> {
+    vec![
+        Value::Text(ledger_id.to_string()),
+        Value::Integer(ts_range.first().copied().unwrap_or(0)),
+        Value::Integer(ts_range.get(1).copied().unwrap_or(0)),
+    ]
+}
+
+/// 往 SQL 追加分类集合过滤（占位符数量跟着 `categories` 走，值一律绑参）。
+///
+/// `qualified` = 分类列要不要带表别名 `r.`（JOIN 到标签表时记录表是 `r`）。
+///
+/// **空集合不是"不过滤"**（这是本文件最容易写错的一处）：
+/// * `exclude = true`（排除这些）→ 什么都不排除，等于不加条件；
+/// * `exclude = false`（只算这些）→ **一行都不该命中**（`AND 1 = 0`）。
+///
+/// 后者漏掉时，`is_fixed` 一个都没标的账本（迁移不回填，升级后到处是这种账本）会让
+/// 「固定支出」等于整期支出、「日常支出」变成 0 —— 而且 `日常 + 固定 = 支出` 仍然成立，
+/// 单测也发现不了。
+fn push_category_filter(
+    sql: &mut String,
+    qualified: bool,
+    categories: &[String],
+    exclude: bool,
+    args: &mut Vec<Value>,
+) {
+    if categories.is_empty() {
+        if !exclude {
+            sql.push_str(" AND 1 = 0");
+        }
+        return;
+    }
+    let placeholders = std::iter::repeat_n("?", categories.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let operator = if exclude { "NOT IN" } else { "IN" };
+    let column = if qualified { "r.category" } else { "category" };
+    sql.push_str(&format!(" AND {column} {operator} ({placeholders})"));
+    args.extend(categories.iter().map(|name| Value::Text(name.clone())));
 }
 
 /// 组装 WHERE 子句（账本 + 可选时间范围 + 条件项）。

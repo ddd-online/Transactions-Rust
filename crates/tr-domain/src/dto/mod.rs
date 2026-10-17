@@ -6,11 +6,13 @@
 //! 与模型的区别：模型对应数据库行，DTO 对应 IPC 出入参。转换函数（`From*`）与
 //! 校验函数（`validate`）的错误文案是用户可见文案（改动即破坏契约）。
 
+pub mod accounting_overview;
 pub mod core;
 pub mod diary;
 pub mod stock;
 pub mod todo;
 
+pub use accounting_overview::*;
 pub use core::*;
 pub use diary::*;
 pub use stock::*;
