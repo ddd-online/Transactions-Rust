@@ -6,12 +6,13 @@
 //! * 收入 = `income` 合计（记的是税后净额）；
 //! * 结余 = 收入 − 支出，**转账不参与**（没有对手方，既不是收入也不是支出）。
 //!
-//! 支出构成是支出的下钻：两档合计都等于本期支出，不再有"排除固定"这一层。
+//! 支出构成是支出的下钻：合计等于本期支出，不再有"排除固定"这一层。
 //!
-//! ## 容易写错的一处
+//! ## 结余为什么是年度口径
 //!
-//! **同比不是"比上一个整月"**：本期还没走完时，去年只取到**同一个号数**
-//!    （10/1–10/16 vs 去年 10/1–10/16）。拿半个月比整月，会得到"少花了 40%"这种假信号。
+//! 半个月的结余是伪指标（房租、房贷都记在月初），所以 `balance_ytd` 永远从当年 1 月 1 日
+//! 算到这一期的终点 —— 选「月」时它也不是当月的结余，界面因此不给它配任何说明文字
+//! （说明会和顶部的期间控件打架）。
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone};
 
@@ -42,13 +43,10 @@ pub fn overview(
     let ledger_id = request.ledger_id.as_str();
 
     let period = resolve_period(request);
-    let compare = last_year_window(&period);
 
     // ---- 收支卡：本期两档 + 今年至今的结余 ----
     let stats =
         TransactionRecordDao::query_statistics(&conn, ledger_id, &period.range()).map_err(db)?;
-    let last_year_stats =
-        TransactionRecordDao::query_statistics(&conn, ledger_id, &compare.range()).map_err(db)?;
 
     // 一期里一条记录都没有 ⇒ 三个数都是 `None`（界面显示 `—`）。
     // 「花了 ¥0」和「没记账」是两件事，不能长得一样。
@@ -60,9 +58,6 @@ pub fn overview(
             expense: Some(stats.expense),
             income: Some(stats.income),
             balance_ytd: year_to_date_balance(&conn, ledger_id, &period)?,
-            // 去年同月同期一条记录都没有 ⇒ `None`，界面显示「无可比数据」
-            expense_last_year: (last_year_stats.expense > 0).then_some(last_year_stats.expense),
-            income_last_year: (last_year_stats.income > 0).then_some(last_year_stats.income),
         }
     };
 
@@ -81,7 +76,6 @@ pub fn overview(
             is_current: period.is_current,
             through_day: period.through_day,
             year: period.year,
-            is_current_year: period.year == Local::now().year(),
         },
         cards,
         categories,
@@ -94,8 +88,6 @@ pub fn overview(
 struct Period {
     kind: &'static str,
     year: i32,
-    /// 年视图固定为 1。
-    month: u32,
     key: String,
     label: String,
     is_current: bool,
@@ -103,8 +95,6 @@ struct Period {
     through_day: Option<i32>,
     start: i64,
     end: i64,
-    /// 这一期截止到第几天（月视图）/ 第几个月（年视图）—— 用来定 `end`。
-    points: u32,
 }
 
 impl Period {
@@ -133,8 +123,6 @@ fn resolve_period(request: &AccountingOverviewRequest) -> Period {
 
     if kind == KIND_YEAR {
         let is_current = first_day.year() == today.year();
-        // 当年画到本月；往年画满 12 个月
-        let points = if is_current { today.month() } else { 12 };
         let end_date = if is_current {
             today
         } else {
@@ -143,14 +131,12 @@ fn resolve_period(request: &AccountingOverviewRequest) -> Period {
         return Period {
             kind,
             year: first_day.year(),
-            month: 1,
             key: format!("{}", first_day.year()),
             label: format!("{}年", first_day.year()),
             is_current,
             through_day: None,
             start: local_start(first_day),
             end: local_end(end_date),
-            points,
         };
     }
 
@@ -158,71 +144,19 @@ fn resolve_period(request: &AccountingOverviewRequest) -> Period {
     let days_in = days_in_month(first_day.year(), first_day.month());
     let through_day = is_current.then_some(today.day() as i32);
     // 正在走的那期截到今天，历史月整月
-    let points = if is_current { today.day() } else { days_in };
+    let last_day = if is_current { today.day() } else { days_in };
     Period {
         kind,
         year: first_day.year(),
-        month: first_day.month(),
         key: format!("{}-{:02}", first_day.year(), first_day.month()),
         label: format!("{}年{}月", first_day.year(), first_day.month()),
         is_current,
         through_day,
         start: local_start(first_day),
         end: local_end(
-            NaiveDate::from_ymd_opt(first_day.year(), first_day.month(), points)
+            NaiveDate::from_ymd_opt(first_day.year(), first_day.month(), last_day)
                 .expect("本期最后一天合法"),
         ),
-        points,
-    }
-}
-
-/// 去年同期：同一个号数截止（本期没走完就只取到同一天）。
-///
-/// 去年二月只有 28 天、本期走到 31 号时，按当月最后一天截断 —— 宁可少比三天，
-/// 也不能把"不存在的日子"算成 0。
-fn last_year_window(period: &Period) -> Period {
-    if period.kind == KIND_YEAR {
-        let year = period.year - 1;
-        let months = period.points;
-        // 当年比到**同一个号数**（今天 10/18 ⇒ 去年 10/18），往年整年比整年。
-        // 不这么做的话，10 月同比会拿"今年 18 天"去比"去年 31 天"。
-        let day = if period.is_current {
-            Local::now().day().clamp(1, days_in_month(year, months))
-        } else {
-            days_in_month(year, months)
-        };
-        return Period {
-            kind: KIND_YEAR,
-            year,
-            month: 1,
-            key: format!("{year}"),
-            label: format!("{year}年"),
-            is_current: false,
-            through_day: None,
-            start: local_start(NaiveDate::from_ymd_opt(year, 1, 1).expect("1 月 1 日合法")),
-            end: local_end(NaiveDate::from_ymd_opt(year, months, day).expect("对比截止日合法")),
-            points: months,
-        };
-    }
-
-    let year = period.year - 1;
-    let month = period.month;
-    let days_in = days_in_month(year, month);
-    let day = period
-        .through_day
-        .unwrap_or(days_in as i32)
-        .clamp(1, days_in as i32) as u32;
-    Period {
-        kind: KIND_MONTH,
-        year,
-        month,
-        key: format!("{year}-{month:02}"),
-        label: format!("{year}年{month}月"),
-        is_current: false,
-        through_day: None,
-        start: local_start(NaiveDate::from_ymd_opt(year, month, 1).expect("当月 1 日合法")),
-        end: local_end(NaiveDate::from_ymd_opt(year, month, day).expect("合法")),
-        points: day,
     }
 }
 
@@ -397,19 +331,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 去年同月一条记录都没有 ⇒ 同比为 `None`（界面显示「无可比数据」，不是 0）。
-    #[test]
-    fn missing_last_year_is_none_not_zero() {
-        let (ws, dir) = crate::test_support::workspace("overview-no-compare");
-        record(&ws, "d1", "2025-03-05", "expense", "餐饮美食", 2_000);
-
-        let reply = ask(&ws, "month", "2025-03");
-        assert_eq!(reply.cards.expense_last_year, None);
-        assert_eq!(reply.cards.income_last_year, None);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
     /// 一期里没有任何记录 ⇒ 三个数全是 `None`（「花了 0」和「没记账」不是一回事）。
     #[test]
     fn an_empty_period_has_no_cards_at_all() {
@@ -449,57 +370,6 @@ mod tests {
         assert_eq!(total, 10_000, "合并只能换标签，不能改合计");
 
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// 同期截断：本期走到 16 号，去年也只比到 16 号 —— 半个月不能比整月。
-    #[test]
-    fn comparison_stops_at_the_same_day_of_last_year() {
-        let period = Period {
-            kind: KIND_MONTH,
-            year: 2026,
-            month: 10,
-            key: "2026-10".to_string(),
-            label: "2026年10月".to_string(),
-            is_current: true,
-            through_day: Some(16),
-            start: local_start(NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()),
-            end: local_end(NaiveDate::from_ymd_opt(2026, 10, 16).unwrap()),
-            points: 16,
-        };
-
-        let compare = last_year_window(&period);
-        assert_eq!(compare.year, 2025);
-        assert_eq!(compare.month, 10);
-        assert_eq!(compare.points, 16);
-        assert_eq!(
-            compare.end,
-            local_end(NaiveDate::from_ymd_opt(2025, 10, 16).unwrap())
-        );
-    }
-
-    /// 去年二月只有 28 天：本期走到 31 号时，去年截到月末，不能凭空"补三天 0"。
-    #[test]
-    fn comparison_clamps_to_a_shorter_month() {
-        let period = Period {
-            kind: KIND_MONTH,
-            year: 2024,
-            month: 2,
-            key: "2024-02".to_string(),
-            label: "2024年2月".to_string(),
-            is_current: false,
-            through_day: None,
-            start: local_start(NaiveDate::from_ymd_opt(2024, 2, 1).unwrap()),
-            end: local_end(NaiveDate::from_ymd_opt(2024, 2, 29).unwrap()),
-            points: 29,
-        };
-
-        let compare = last_year_window(&period);
-        assert_eq!(compare.year, 2023);
-        assert_eq!(compare.points, 28, "2023 年 2 月只有 28 天");
-        assert_eq!(
-            compare.end,
-            local_end(NaiveDate::from_ymd_opt(2023, 2, 28).unwrap())
-        );
     }
 
     /// 没填期间 → 落在今天所在的月；填了非法值也回落当期（不报错、不猜）。

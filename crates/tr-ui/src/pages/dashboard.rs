@@ -19,9 +19,7 @@
 //! 一期没有记录时四张卡都显示 `—`（不是 `¥0`）：「花了 0」和「没记账」不是一回事。
 
 use leptos::prelude::*;
-use tr_domain::dto::{
-    AccountingOverviewDto, OverviewCardsDto, OverviewPeriodDto, OverviewSliceDto,
-};
+use tr_domain::dto::{AccountingOverviewDto, OverviewCardsDto, OverviewSliceDto};
 use tr_draw::calendar;
 use tr_draw::section::{section_state, SectionState};
 
@@ -201,7 +199,7 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
 /// 左右边缘 —— 卡片按内容定宽时整块会缩在左上角，页面像没画完；两栏等高不必，底边参差
 /// 本来就是瀑布该有的样子。
 fn dashboard_body(reply: AccountingOverviewDto) -> AnyView {
-    let figures = figures_card(reply.cards, reply.period);
+    let figures = figures_card(reply.cards);
     let composition = composition_card(reply.categories);
     view! {
         <div class="dash-flow">
@@ -212,32 +210,18 @@ fn dashboard_body(reply: AccountingOverviewDto) -> AnyView {
     .into_any()
 }
 
-/// 收支卡：三行"标签 + 金额"，说明另起一行贴右。
+/// 收支卡：三行"标签 + 金额"。
 ///
-/// 说明不再挤在同一行：结余那句「今年至今：收入 − 支出（转账不计入）」在窄栏里会被截成
-/// 半句话，而它就是结余为什么是年度口径的唯一解释。
-fn figures_card(cards: OverviewCardsDto, period: OverviewPeriodDto) -> AnyView {
+/// 卡上只有数字，没有脚注：同比需要先解释"和哪一段比"才不算误读，而在一个期间可以
+/// 按月/按年切换的页面上，任何一句标注都会和顶部的期间控件打架（结余尤其 —— 它永远是
+/// 年度口径，选「月」的时候也一样）。
+fn figures_card(cards: OverviewCardsDto) -> AnyView {
     view! {
         <Card title="收支".to_string() class="dash-card">
             <dl class="dash-statement">
-                {figure(
-                    "支出",
-                    cards.expense,
-                    yoy_note(cards.expense, cards.expense_last_year),
-                    "",
-                )}
-                {figure(
-                    "收入",
-                    cards.income,
-                    yoy_note(cards.income, cards.income_last_year),
-                    "",
-                )}
-                {figure(
-                    "结余",
-                    cards.balance_ytd,
-                    balance_note(&period),
-                    signed_class(cards.balance_ytd),
-                )}
+                {figure("支出", cards.expense, "")}
+                {figure("收入", cards.income, "")}
+                {figure("结余", cards.balance_ytd, signed_class(cards.balance_ytd))}
             </dl>
         </Card>
     }
@@ -245,13 +229,12 @@ fn figures_card(cards: OverviewCardsDto, period: OverviewPeriodDto) -> AnyView {
 }
 
 /// 收支卡里的一行。`class` 只给结余用（正负着色），支出与收入不上色。
-fn figure(label: &str, value: Option<i64>, note: String, class: &str) -> AnyView {
+fn figure(label: &str, value: Option<i64>, class: &str) -> AnyView {
     let value_class = format!("dash-statement__value {class}");
     view! {
         <div class="dash-statement__row">
             <dt class="dash-statement__label">{label.to_string()}</dt>
             <dd class=value_class>{amount_text(value)}</dd>
-            <dd class="dash-statement__note">{note}</dd>
         </div>
     }
     .into_any()
@@ -270,36 +253,6 @@ fn signed_class(value: Option<i64>) -> &'static str {
         Some(amount) if amount > 0 => "is-positive",
         Some(amount) if amount < 0 => "is-negative",
         _ => "",
-    }
-}
-
-/// 结余卡的范围文案。
-///
-/// 结余是**年度口径**（收入 − 支出，转账不计入），所以范围要跟着这一期所在的年份走：
-/// 翻到 2025 年 3 月时写「2025 年 1 月至今」，不能写「今年」—— 那会把去年的数说成今年的。
-fn balance_note(period: &OverviewPeriodDto) -> String {
-    let scope = if period.kind == "year" {
-        if period.is_current_year {
-            "本年".to_string()
-        } else {
-            format!("{} 年", period.year)
-        }
-    } else if period.is_current_year {
-        "今年至今".to_string()
-    } else {
-        format!("{} 年 1 月至今", period.year)
-    };
-    format!("{scope}：收入 − 支出（转账不计入）")
-}
-
-/// 同比文案：去年同月同期没有记录时给「无可比数据」，不写 `0%`。
-fn yoy_note(current: Option<i64>, last_year: Option<i64>) -> String {
-    match (current, last_year) {
-        (Some(current), Some(previous)) if previous > 0 => {
-            let percent = (current - previous) as f64 / previous as f64 * 100.0;
-            format!("同比 {}", format::optional_signed_percent(Some(percent)))
-        }
-        _ => "去年同期无可比数据".to_string(),
     }
 }
 

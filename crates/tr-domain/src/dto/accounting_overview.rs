@@ -56,10 +56,8 @@ pub struct OverviewPeriodDto {
     pub is_current: bool,
     /// 月视图：这一期走到第几天（`None` = 已走完的月，或年视图）
     pub through_day: Option<i32>,
-    /// 这一期属于哪一年（界面用它给"结余"标注范围：今年 / 某一年）
+    /// 这一期属于哪一年
     pub year: i32,
-    /// 是不是**今年**（决定结余卡写「今年至今」还是「2025 年」）
-    pub is_current_year: bool,
 }
 
 /// 收支卡上的三个数。金额单位都是**分**。
@@ -72,10 +70,6 @@ pub struct OverviewCardsDto {
     pub income: Option<i64>,
     /// 结余（今年至今，不是本期 —— 半个月的结余是伪指标）
     pub balance_ytd: Option<i64>,
-    /// 去年同期：支出（按同期日数截断；`None` = 去年这个月没有记录）
-    pub expense_last_year: Option<i64>,
-    /// 去年同期：收入
-    pub income_last_year: Option<i64>,
 }
 
 /// 构成里的一片：一个分类的金额与笔数。

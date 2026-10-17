@@ -88,9 +88,8 @@
 
 /* ------------------------------------------------------------ 收支卡 */
 
-/* 一行 = 标签 + 金额（两端），说明另起一行贴右。
- * 说明不跟金额挤同一行：结余那句「今年至今：收入 − 支出（转账不计入）」是它为什么是
- * 年度口径的唯一解释，被截成半句等于没有。 */
+/* 一行 = 标签 + 金额（两端对齐）。卡上只有数字，不配脚注：脚注会和顶部的期间控件
+ * 打架（结余永远是年度口径，选「月」时也一样）。 */
 .dash-statement {
   margin: 0;
 }
@@ -100,7 +99,6 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
   column-gap: var(--transactions-space-md);
-  row-gap: 2px;
   padding: var(--transactions-space-md) 0;
 }
 
@@ -140,17 +138,6 @@
 
 .dash-statement__value.is-negative {
   color: var(--transactions-color-expense);
-}
-
-.dash-statement__note {
-  margin: 0;
-  grid-column: 1 / -1;
-  font-size: var(--transactions-size-text-caption);
-  color: var(--transactions-color-text-tertiary);
-  text-align: right;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* ------------------------------------------------------------ 支出构成清单 */
