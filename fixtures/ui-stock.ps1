@@ -264,15 +264,16 @@ function Format-Price { param([int64]$Milli)
     return ('{0}{1}.{2:d3}' -f $sign, [Math]::Floor([double]$value / 1000), ($value % 1000))
 }
 
-# 按服务层口径从**库**里算账户指标：可用现金 = 本金 + 累计利息归本 + 已实现盈亏 − 累计支取 − 持仓成本。
+# 按服务层口径从**库**里算账户指标：可用现金 = 本金 + 累计利息归本 + 全部卖出净额 − 累计支取 − 持仓成本。
+# 这里的"卖出净额"含未清仓轮次里的减仓（现金口径），**不是**界面上「已实现盈亏」（只算已清仓轮次）。
 # 断言先落在这里，界面那边只负责证明"这两个数字确实显示在指标区里"。
 function Get-ExpectedAccount { param([string]$LedgerId)
-    $interest = 0; $withdrawn = 0; $realized = 0
+    $interest = 0; $withdrawn = 0; $sellNet = 0
     foreach ($record in (Get-FundRecords -LedgerId $LedgerId)) {
         switch ([string]$record.event_type) {
             'interest_principal' { $interest += [int64]$record.amount_change }
             'withdraw' { $withdrawn += -[int64]$record.amount_change }
-            default { if ($null -ne $record.net_pnl) { $realized += [int64]$record.net_pnl } }
+            default { if ($null -ne $record.net_pnl) { $sellNet += [int64]$record.net_pnl } }
         }
     }
     $account = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_account' -OutDir $OutDir |
@@ -287,9 +288,9 @@ function Get-ExpectedAccount { param([string]$LedgerId)
         Principal    = $principal
         Interest     = $interest
         Withdrawn    = $withdrawn
-        Realized     = $realized
+        SellNet      = $sellNet
         PositionCost = $positionCost
-        Available    = $principal + $interest + $realized - $withdrawn - $positionCost
+        Available    = $principal + $interest + $sellNet - $withdrawn - $positionCost
     }
 }
 

@@ -254,30 +254,46 @@ pub fn get_overview(
     let account = get_or_create_account(workspace, ledger_id)?;
     let conn = workspace.connection();
 
-    // 已实现总盈亏：Σ 卖出净盈亏（未实现盈亏不计入）
-    let realized_pnl = db(StockDao::sum_net_pnl(&conn, ledger_id))?;
+    // 现金口径的「卖出净额」：Σ 卖出记录的净盈亏（**含**未清仓轮次里已经减掉的部分）。
+    // 它只用来推可用现金，不是界面上的「已实现盈亏」—— 两者口径不同，别互换。
+    let sell_net_pnl = db(StockDao::sum_net_pnl(&conn, ledger_id))?;
     // 累计支取：Σ 支取事件金额
     let withdrawn_total = db(StockDao::sum_withdrawn(&conn, ledger_id))?;
     // 累计利息归本：Σ 利息归本事件金额（本金不变，只进可用现金）
     let interest_total = db(StockDao::sum_interest_principal(&conn, ledger_id))?;
-    // 现金余额 = 本金 + 累计利息归本 + 已实现总盈亏 − 累计支取 − 持仓成本（与资金链一致）
+    // 现金余额 = 本金 + 累计利息归本 + 卖出净额 − 累计支取 − 持仓成本（与资金链一致）
     let position_cost = db(StockDao::sum_position_cost(&conn, ledger_id))?;
     let available_cash =
-        account.principal + interest_total + realized_pnl - withdrawn_total - position_cost;
+        account.principal + interest_total + sell_net_pnl - withdrawn_total - position_cost;
+
+    // 未清仓的持仓行（还有股数，或 0 手但本轮没归档）；已归档的整行不再请求行情
+    let positions = db(StockDao::list_positions(&conn, ledger_id))?;
+    let by_code = trades_by_code(&conn, ledger_id)?;
+    let held_positions: Vec<StockPosition> = positions
+        .into_iter()
+        .filter(|position| position.quantity > 0 || has_open_round(&by_code, &position.stock_code))
+        .collect();
+
+    // 已实现盈亏 = 已清仓（归档）轮次的盈亏合计 —— 与交易历史页同一口径。
+    // 未清仓轮次里减仓的已实现部分留在浮动盈亏里（见 `compute_held_market_value`），
+    // 否则「已实现 + 浮动」会把同一笔算两遍，对不上「总资产 − 本金」。
+    let realized_pnl: i64 = by_code
+        .values()
+        .map(|trades| tr_domain::stock::settled_pnl(trades))
+        .sum();
 
     // 持仓市值与浮动盈亏：最新价 × 股数 + 本轮资金变动；行情缺失的股票按持仓成本计入并计数
-    let held_positions = db(StockDao::list_positions(&conn, ledger_id))?;
     let quotes = fetch_held_quotes(fetcher, &held_positions);
-    let flows = round_flows(&conn, ledger_id)?;
+    let flows = round_flows_of(by_code);
     let (position_market_value, unrealized_pnl, quote_failed_count) =
         compute_held_market_value(&held_positions, &quotes, &flows);
 
     // 总资产 = 可用现金 + 持仓市值（行情全部缺失时市值=成本）
     let total_assets = available_cash + position_market_value;
 
-    // 总盈亏占本金百分比，本金为 0 时按 0 处理（防除零）
+    // 总盈亏（已实现 + 浮动）占本金百分比，本金为 0 时按 0 处理（防除零）
     let total_pnl_percent = if account.principal > 0 {
-        percent_of(realized_pnl, account.principal)
+        percent_of(realized_pnl + unrealized_pnl, account.principal)
     } else {
         0.0
     };
@@ -1080,6 +1096,10 @@ fn attach_history_quotes(fetcher: &dyn StockQuoteFetcher, items: &mut [StockTrad
 /// 浮动盈亏按**本轮**口径 = 持仓市值 + 本轮资金变动合计（[`RoundFlow`]）：
 /// 减仓的回款直接冲抵建立仓位的成本，所以它是"清仓能拿到多少 − 这一轮投进去多少"，
 /// 与交易历史的轮次盈亏（`round_pnl`）同一个公式 —— 未清仓时市值代替卖出净额。
+///
+/// 0 手但**本轮没归档**的票也在 `held` 里：市值是 0，盈亏就是本轮资金变动（减仓卖光的
+/// 那一轮），不能因为 `quantity == 0` 就跳过 —— 它的盈亏既不在已实现（没清仓）里，
+/// 跳过就从总资产口径里整段消失。
 fn compute_held_market_value(
     held: &[StockPosition],
     quotes: &HashMap<String, tr_domain::dto::StockQuoteDto>,
@@ -1089,10 +1109,11 @@ fn compute_held_market_value(
     let mut unrealized_pnl = 0_i64;
     let mut quote_failed_count = 0_i64;
     for position in held {
+        let flow = flow_of(flows, position);
         if position.quantity <= 0 {
+            unrealized_pnl += flow.cash_flow;
             continue;
         }
-        let flow = flow_of(flows, position);
         let value = match quotes.get(&position.stock_code) {
             // 最新价是**厘**/股，市值是**分**：折这一次的口径在 `tr_domain::stock::amount_of`
             Some(quote) if quote.latest_price > 0 => {
@@ -1170,14 +1191,6 @@ fn stock_has_open_round(
 ) -> ServiceResult<bool> {
     let trades = db(StockDao::list_trades_asc(conn, ledger_id, stock_code))?;
     Ok(!tr_domain::stock::current_round_trades(&trades).is_empty())
-}
-
-/// 整个账本按股票切出本轮资金口径。
-fn round_flows(
-    conn: &rusqlite::Connection,
-    ledger_id: &str,
-) -> ServiceResult<HashMap<String, RoundFlow>> {
-    Ok(round_flows_of(trades_by_code(conn, ledger_id)?))
 }
 
 /// 某持仓的本轮资金口径；查不到成交（异常数据）时退回剩余成本，
@@ -3966,6 +3979,127 @@ mod tests {
             overview.unrealized_pnl,
             market_value - position.total_cost,
             "不能再是「市值 − 剩余持仓成本」的老口径（那会把本轮减仓的盈亏漏掉）"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 总览的「已实现盈亏」与交易历史同一口径：**只算已清仓（归档）的轮次**。
+    ///
+    /// 用户报的（2026-10-16 的账户）：总览显示 −94.41，交易历史（股票页）显示 +86.54。
+    /// 差的 180.95 正是"未清仓那一轮里的两次减仓"—— `sum_net_pnl` 把本轮已卖出的部分
+    /// 也算进了已实现，而浮动盈亏（= 市值 + 本轮资金变动）里又含同一笔，于是
+    /// `已实现 + 浮动 ≠ 总资产 − 本金`（−253.14 vs −72.19）。
+    ///
+    /// 造数与用户账户同形：一轮已清仓（+67.36）+ 一轮"建仓 7 手 → 减 3 手 → 减 3 手 → 加 2 手"
+    /// （未清仓，两次减仓合计 −180.88）。
+    #[test]
+    fn overview_realized_counts_settled_rounds_only() {
+        let (workspace, dir) = workspace("realized-settled-rounds");
+        seed_principal(&workspace, 800_000);
+
+        // 已清仓的一轮：建仓 15.35 ×2 手 → 减仓 15.67 ×1 手 → 清仓 15.87 ×1 手
+        // 卖出净额 314239 − 买入成本 307503 = +6736
+        for (trade_type, price, lots, at) in [
+            (consts::STOCK_TRADE_OPEN, 15_350, 2, 1_700_000_000),
+            (consts::STOCK_TRADE_REDUCE, 15_670, 1, 1_700_000_100),
+            (consts::STOCK_TRADE_CLOSE, 15_870, 1, 1_700_000_200),
+        ] {
+            create_trade(
+                &workspace,
+                TEST_LEDGER_ID,
+                TEST_CODE,
+                TEST_NAME,
+                trade_type,
+                price,
+                lots,
+                at,
+                "",
+                "",
+            )
+            .unwrap();
+        }
+
+        // 未清仓的一轮（深市：无过户费）：两次减仓合计已实现 −18088，还持有 3 手
+        for (trade_type, price, lots, at) in [
+            (consts::STOCK_TRADE_OPEN, 5_560, 7, 1_700_000_300),
+            (consts::STOCK_TRADE_REDUCE, 5_390, 3, 1_700_000_400),
+            (consts::STOCK_TRADE_REDUCE, 5_180, 3, 1_700_000_500),
+            (consts::STOCK_TRADE_ADD, 5_140, 2, 1_700_000_600),
+        ] {
+            create_trade(
+                &workspace,
+                TEST_LEDGER_ID,
+                TEST_CODE_B,
+                TEST_NAME_B,
+                trade_type,
+                price,
+                lots,
+                at,
+                "",
+                "",
+            )
+            .unwrap();
+        }
+
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        let summary = get_trade_history_summary(&workspace, TEST_LEDGER_ID).unwrap();
+
+        assert_eq!(summary.total_pnl, 6_736, "已清仓那一轮的盈亏");
+        assert_eq!(
+            overview.realized_pnl, summary.total_pnl,
+            "总览的已实现盈亏必须与交易历史同口径（只算已清仓轮次）"
+        );
+        assert_eq!(
+            overview.unrealized_pnl, -18_088,
+            "未清仓那一轮减仓的已实现部分属于浮动盈亏（本轮口径），不能重复算进已实现"
+        );
+        assert_eq!(
+            overview.realized_pnl + overview.unrealized_pnl,
+            overview.total_assets - overview.principal,
+            "无支取 / 利息时：已实现 + 浮动 = 总资产 − 本金"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 减仓减到 0 手但本轮**没点清仓**（还在持仓列表里）：它的盈亏属于浮动盈亏，
+    /// 不能因为 `quantity == 0` 就从总览里消失。
+    #[test]
+    fn overview_keeps_flat_open_round_pnl_in_floating() {
+        let (workspace, dir) = workspace("flat-open-round");
+        seed_principal(&workspace, 1_000_000);
+
+        for (trade_type, price, at) in [
+            (consts::STOCK_TRADE_OPEN, 10_000, 1_700_000_000),
+            (consts::STOCK_TRADE_REDUCE, 11_000, 1_700_000_100),
+        ] {
+            create_trade(
+                &workspace,
+                TEST_LEDGER_ID,
+                TEST_CODE,
+                TEST_NAME,
+                trade_type,
+                price,
+                2,
+                at,
+                "",
+                "",
+            )
+            .unwrap();
+        }
+
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        // 建仓 2 手 @10.00：成本 200000 + 佣金 500 + 过户费 2 = 200502
+        // 减仓 2 手 @11.00：净额 220000 − 佣金 500 − 印花税 110 − 过户费 2 = 219388
+        assert_eq!(overview.realized_pnl, 0, "没清仓就没有已实现盈亏");
+        assert_eq!(
+            overview.unrealized_pnl, 18_886,
+            "0 手但本轮未归档的盈亏要留在浮动盈亏里"
+        );
+        assert_eq!(
+            overview.realized_pnl + overview.unrealized_pnl,
+            overview.total_assets - overview.principal,
         );
 
         std::fs::remove_dir_all(&dir).ok();

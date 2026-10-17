@@ -53,7 +53,11 @@ fn production_quotes() -> TencentStockQuoteFetcher {
 
 // ---------- 账户 / 费用设置 ----------
 
-/// 股票账户总览（可用现金 = 本金 + 已实现盈亏 − 累计支取 − 持仓成本）。
+/// 股票账户总览。
+///
+/// 两个「盈亏」口径**不是**同一件事（别互换）：`realized_pnl` 只算已清仓轮次，
+/// `unrealized_pnl` 是本轮口径（含未清仓轮次里已减仓部分）；可用现金里用的是
+/// **全部**卖出净额（含未清仓轮次的减仓），所以它不能拿这两个字段直接加出来。
 #[tauri::command]
 pub fn stock_overview(
     state: State<'_, AppState>,

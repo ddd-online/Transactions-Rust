@@ -114,6 +114,37 @@ pub fn round_flow(trades_asc: &[StockTrade]) -> RoundFlow {
     flow
 }
 
+/// 已结算（已清仓归档）轮次的盈亏合计 —— 与交易历史的「已实现盈亏」同一口径。
+///
+/// 一轮 = 一次建仓到它对应的清仓：`Σ(卖出成交额 − 费用) − Σ(买入成交额 + 费用)`
+/// （与 [`crate::dto::round_pnl`] 同一个公式）；清仓之后清零，下一轮的建仓重新累计。
+///
+/// **还没清仓的在建轮次不计入**：它的盈亏（含已经减掉那一部分的回款）算在浮动盈亏里
+/// （[`round_flow`] + 持仓市值），两边不能重复算 —— 否则
+/// `已实现 + 浮动 ≠ 总资产 − 本金`。用户真实数据上差的正是未清仓轮次里两次减仓的 −180.95。
+pub fn settled_pnl(trades_asc: &[StockTrade]) -> i64 {
+    let mut total = 0_i64;
+    let mut buy_cost = 0_i64;
+    let mut sell_net = 0_i64;
+    for trade in trades_asc {
+        match trade.trade_type.as_str() {
+            consts::STOCK_TRADE_OPEN | consts::STOCK_TRADE_ADD => {
+                buy_cost += trade.amount + trade.fee;
+            }
+            consts::STOCK_TRADE_REDUCE | consts::STOCK_TRADE_CLOSE => {
+                sell_net += trade.amount - trade.fee;
+            }
+            _ => continue,
+        }
+        if trade.trade_type == consts::STOCK_TRADE_CLOSE {
+            total += sell_net - buy_cost;
+            buy_cost = 0;
+            sell_net = 0;
+        }
+    }
+    total
+}
+
 /// 当前轮次（最近一次清仓之后）**建仓时定下的费用设置**；没记录（老数据）返回 `None`
 /// ⇒ 调用方按账本系统配置处理。
 ///
@@ -347,6 +378,43 @@ mod tests {
     #[test]
     fn an_empty_stream_has_no_current_round() {
         assert!(current_round_trades(&[]).is_empty());
+    }
+
+    /// 已结算轮次盈亏：只算"建仓 → 清仓"闭合的轮次；在建轮次（哪怕已经减过仓）不计。
+    #[test]
+    fn settled_pnl_counts_only_closed_rounds() {
+        let trades = vec![
+            money_trade(consts::STOCK_TRADE_OPEN, 200, 100_000, 500),
+            money_trade(consts::STOCK_TRADE_CLOSE, 200, 120_000, 600),
+            // 第二轮还没清仓：减仓的回款先落在浮动盈亏里，不能算成已实现
+            money_trade(consts::STOCK_TRADE_OPEN, 400, 200_000, 500),
+            money_trade(consts::STOCK_TRADE_REDUCE, 200, 90_000, 500),
+        ];
+        assert_eq!(settled_pnl(&trades), 120_000 - 600 - (100_000 + 500));
+    }
+
+    /// 减仓减到 0 手、再用 0 手清仓"只归档"：这一轮照样算已结算。
+    #[test]
+    fn settled_pnl_counts_a_round_archived_after_reducing_to_zero() {
+        let trades = vec![
+            money_trade(consts::STOCK_TRADE_OPEN, 200, 100_000, 500),
+            money_trade(consts::STOCK_TRADE_REDUCE, 200, 90_000, 500),
+            money_trade(consts::STOCK_TRADE_CLOSE, 0, 0, 0),
+        ];
+        assert_eq!(settled_pnl(&trades), 90_000 - 500 - (100_000 + 500));
+    }
+
+    #[test]
+    fn settled_pnl_is_zero_without_a_closed_round() {
+        assert_eq!(settled_pnl(&[]), 0);
+        assert_eq!(
+            settled_pnl(&[
+                money_trade(consts::STOCK_TRADE_OPEN, 100, 50_000, 500),
+                money_trade(consts::STOCK_TRADE_REDUCE, 100, 60_000, 500),
+            ]),
+            0,
+            "买过又减过、但没清仓的轮次还没有结算"
+        );
     }
 
     #[test]

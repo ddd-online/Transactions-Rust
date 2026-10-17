@@ -731,7 +731,7 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
                                 "已实现盈亏",
                                 format::signed_yuan(data.realized_pnl),
                                 format::pnl_class(data.realized_pnl),
-                                "已实现盈亏为卖出净盈亏合计；不含持仓浮动盈亏",
+                                "已实现盈亏 = 已清仓轮次的盈亏合计（与「交易历史」同一口径）；未清仓轮次的盈亏（含本轮已减仓部分）算在浮动盈亏里",
                             ),
                             (
                                 "累计支取",
@@ -749,7 +749,7 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
                                 "可用现金",
                                 format!("¥{}", format::amount(data.available_cash)),
                                 "",
-                                "可用现金为账户实际现金余额 = 本金 + 累计利息归本 + 已实现盈亏 − 累计支取 − 持仓成本（等于总资产 − 持仓市值，行情缺失部分按成本计入）",
+                                "可用现金为账户实际现金余额，与「资金变化记录」最新一条的余额一致 = 本金 + 累计利息归本 + 全部卖出净额 − 累计支取 − 持仓成本（未清仓轮次的减仓回款也在其中）",
                             ),
                         ];
                         cards

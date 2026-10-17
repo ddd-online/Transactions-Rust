@@ -29,16 +29,16 @@ pub struct StockOverviewDto {
     /// 总资产 = 可用现金 + 持仓市值
     #[serde(rename = "totalAssets")]
     pub total_assets: i64,
-    /// 已实现总盈亏（Σ 卖出净盈亏，分）
+    /// 已实现盈亏（**已清仓轮次**的盈亏合计，分；与交易历史页同一口径）
     #[serde(rename = "realizedPnl")]
     pub realized_pnl: i64,
-    /// 浮动盈亏（分）= Σ（持仓市值 + 本轮资金变动），行情缺失的持仓按持仓成本计入市值
+    /// 浮动盈亏（分）= Σ（持仓市值 + 本轮资金变动）；含未清仓轮次里已减仓部分的盈亏
     #[serde(rename = "unrealizedPnl")]
     pub unrealized_pnl: i64,
     /// 本次行情获取失败的持仓数量
     #[serde(rename = "quoteFailedCount")]
     pub quote_failed_count: i64,
-    /// 总盈亏占本金百分比（%）
+    /// 总盈亏（已实现 + 浮动）占本金百分比（%）
     #[serde(rename = "totalPnlPercent")]
     pub total_pnl_percent: f64,
 }
