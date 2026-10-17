@@ -197,86 +197,89 @@ pub fn DashboardSub(sub: RwSignal<SubFunction>) -> impl IntoView {
     }
 }
 
-/// 四张卡 + 折线 + 构成。
+/// 主指标 + 三个支撑指标 + 折线 + 构成。
+///
+/// 版式照「股票 · 账户 / 统计」那两张页：**不套盒子**，靠留白、字号阶梯与一条竖直发丝线
+/// 分组。一屏里四个数字如果都装在同样大小的卡里，就没有主角 —— 日常支出才是这一页要回答
+/// 的问题，它拿 hero 位，另外三个退成支撑行。
 fn dashboard_body(reply: AccountingOverviewDto, tab: RwSignal<String>) -> AnyView {
-    let cards = view! {
-        <div class="dash-cards">
-            {card(
-                "日常支出",
-                reply.cards.daily_expense,
-                yoy_note(reply.cards.daily_expense, reply.cards.daily_expense_last_year),
-                Tone::Normal,
-            )}
-            {card(
-                "固定支出",
-                reply.cards.fixed_expense,
-                fixed_note(&reply.cards.fixed_breakdown),
-                Tone::Muted,
-            )}
-            {card(
-                "收入",
-                reply.cards.income,
-                yoy_note(reply.cards.income, reply.cards.income_last_year),
-                Tone::Normal,
-            )}
-            {card(
-                "结余",
-                reply.cards.balance_ytd,
-                balance_note(&reply.period),
-                Tone::Signed(reply.cards.balance_ytd),
-            )}
-        </div>
+    let lead = view! {
+        <section class="dash-lead">
+            <div class="dash-lead__main">
+                <p class="dash-label">"日常支出"</p>
+                <p class="dash-lead__value">{amount_text(reply.cards.daily_expense)}</p>
+                <p class="dash-note">
+                    {yoy_note(reply.cards.daily_expense, reply.cards.daily_expense_last_year)}
+                </p>
+            </div>
+            <div class="dash-support">
+                {metric(
+                    "固定支出",
+                    reply.cards.fixed_expense,
+                    fixed_note(&reply.cards.fixed_breakdown),
+                    "is-muted",
+                )}
+                {metric(
+                    "收入",
+                    reply.cards.income,
+                    yoy_note(reply.cards.income, reply.cards.income_last_year),
+                    "",
+                )}
+                {metric(
+                    "结余",
+                    reply.cards.balance_ytd,
+                    balance_note(&reply.period),
+                    signed_class(reply.cards.balance_ytd),
+                )}
+            </div>
+        </section>
     }
     .into_any();
 
     let chart = chart_panel(&reply);
-
     let composition = composition_panel(
         reply.composition.by_category.clone(),
         reply.composition.by_tag.clone(),
         tab,
     );
 
-    // 外层 `.dash` 由 `content` 提供（它才是吃掉整页高度的那个 flex 列），
-    // 这里不再套一层 —— 两层 `.dash` 会让内层的 `flex: 1` 失去参照。
+    // 三块竖着排：主指标 → 折线（吃掉剩余高度）→ 构成（横线之上的一条清单）。
+    // 折线与构成并排会让两边都只填一半高度：18 个点的折线被拉成一条细带，
+    // 构成的六行却只占一条竖缝。
     view! {
-        {cards}
-        <div class="dash-body">
-            {chart}
-            {composition}
-        </div>
+        {lead}
+        {chart}
+        {composition}
     }
     .into_any()
 }
 
-/// 卡片色调：金额的正负要不要上色。
-enum Tone {
-    /// 支出/收入：不上色（支出大不是"错"，收入大也不是"对"）
-    Normal,
-    /// 固定支出：整体弱化（它不受当月行为影响）
-    Muted,
-    /// 结余：按正负上色
-    Signed(Option<i64>),
+/// 金额文字：没有数据时给 `—`（「花了 ¥0」和「没记账」不是一回事）。
+fn amount_text(value: Option<i64>) -> String {
+    value
+        .map(format::grouped_amount)
+        .unwrap_or_else(|| "—".to_string())
 }
 
-fn card(label: &str, value: Option<i64>, note: String, tone: Tone) -> AnyView {
-    let text = value
-        .map(format::grouped_amount)
-        .unwrap_or_else(|| "—".to_string());
-    let tone_class = match tone {
-        Tone::Normal => "",
-        Tone::Muted => " dash-card--muted",
-        Tone::Signed(Some(amount)) if amount > 0 => " dash-card--positive",
-        Tone::Signed(Some(amount)) if amount < 0 => " dash-card--negative",
-        Tone::Signed(_) => "",
-    };
-    let class = format!("dash-card{tone_class}");
+/// 结余的正负着色（支出 / 收入不上色：花得多不是"错"，赚得多也不是"对"）。
+fn signed_class(value: Option<i64>) -> &'static str {
+    match value {
+        Some(amount) if amount > 0 => "is-positive",
+        Some(amount) if amount < 0 => "is-negative",
+        _ => "",
+    }
+}
+
+/// 一个支撑指标：标签 / 金额 / 一行说明。
+fn metric(label: &str, value: Option<i64>, note: String, class: &str) -> AnyView {
+    let class = format!("dash-metric {class}");
+    let title = note.clone();
     view! {
-        <article class=class>
-            <p class="dash-card__label">{label.to_string()}</p>
-            <p class="dash-card__value">{text}</p>
-            <p class="dash-card__note">{note}</p>
-        </article>
+        <div class=class>
+            <p class="dash-label">{label.to_string()}</p>
+            <p class="dash-metric__value">{amount_text(value)}</p>
+            <p class="dash-note" title=title>{note}</p>
+        </div>
     }
     .into_any()
 }
@@ -344,22 +347,26 @@ fn chart_panel(reply: &AccountingOverviewDto) -> AnyView {
     });
 
     view! {
-        <section class="dash-panel dash-panel--chart">
-            <header class="dash-panel__head">
-                <h2 class="dash-panel__title">{title}</h2>
-                <span class="dash-panel__hint">{hint}</span>
+        <section class="dash-section dash-section--chart">
+            <header class="dash-section__head">
+                <h2 class="dash-section__title">{title}</h2>
+                <span class="dash-section__hint">{hint}</span>
             </header>
             <Show
                 when=move || has_data
                 fallback=|| {
-                    view! { <div class="dash-panel__empty">"本期还没有记录"</div> }
+                    view! { <div class="dash-empty">"本期还没有记录"</div> }
                 }
             >
-                <LineChart
-                    categories=categories
-                    series=series
-                    config=ChartConfig::default().height(240)
-                />
+                // 图表按容器实测尺寸画，所以这里必须包一层**定高**容器：
+                // 直接挂在 section 上会让它吃掉网格行高（900px 的折线图读不出来）
+                <div class="dash-chart">
+                    <LineChart
+                        categories=categories
+                        series=series
+                        config=ChartConfig::default().height(300)
+                    />
+                </div>
             </Show>
         </section>
     }
@@ -381,7 +388,7 @@ fn composition_panel(
         };
         let total: i64 = slices.iter().map(|slice| slice.amount).sum();
         if total == 0 {
-            return view! { <div class="dash-panel__empty">"本期没有日常支出"</div> }.into_any();
+            return view! { <div class="dash-empty">"本期没有日常支出"</div> }.into_any();
         }
         let rows = slices
             .into_iter()
@@ -419,9 +426,9 @@ fn composition_panel(
     };
 
     view! {
-        <section class="dash-panel dash-panel--mix">
-            <header class="dash-panel__head">
-                <h2 class="dash-panel__title">"支出构成"</h2>
+        <section class="dash-section dash-section--mix">
+            <header class="dash-section__head">
+                <h2 class="dash-section__title">"支出构成"</h2>
                 <Segmented
                     value=tab
                     options=vec![
