@@ -66,12 +66,12 @@ Write-Success "自检通过：与其它 $($otherTags.Count) 个 release 的资�
 Write-Step "创建/更新 Release $tag"
 
 # Release 正文 = `build\release_notes.md`（四节无序列表，骨架见 `build\release_template.md`）。
-# 从前这里取 CHANGELOG 的 `## [版本]` 那一节，正文是长篇 prose —— 应用内「更新说明」显示的就是
-# 它，太长没人读。现在发布说明单独一份短列表，CHANGELOG 继续留详细正文，两者不再互相绑。
-# 合规判据只有一处：`fixtures/static-guards.ps1` 第 9 项（节名与顺序 / 无序列表 / 每项字数 /
+# 这是版本变动的唯一记录：应用内「更新说明」显示的就是它，所以每项只写"变了什么"，
+# 根因与判据放进当次提交的正文。
+# 合规判据只有一处：`fixtures/static-guards.ps1` 第 8 项（节名与顺序 / 无序列表 / 每项字数 /
 # 空节不许留标题 / 同一项不许跨节重复 / 版本号对得上 tauri.conf.json）。这里把它整份跑一遍，
 # 不抄第二份规则 —— 顺带保证"护栏全绿才发"。
-Write-Step "发布前护栏：发布说明必须合模板（判据在 fixtures/static-guards.ps1 第 9 项）"
+Write-Step "发布前护栏：发布说明必须合模板（判据在 fixtures/static-guards.ps1 第 8 项）"
 $notesPath = Join-Path $projectRoot 'build\release_notes.md'
 if (-not (Test-Path $notesPath)) {
     Fail "找不到 $notesPath —— 当次发布说明写在这儿（骨架见 build\release_template.md）"

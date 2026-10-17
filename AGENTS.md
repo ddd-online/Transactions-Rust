@@ -226,16 +226,15 @@ release 的 `tag_name` 与首个 `.exe` 资产的 `digest`；许可证以仓库�
 
 `clean.ps1` 会连 `target\` 一起删，而护栏的工作空间与产物都在 `target\tests\` 下：各脚本自己会
 重新播种（缺 `transactions.db` 就跑 `cargo -q xtask seed`），所以 clean 之后可以直接跑 `-All`，
-只是会变慢。`CHANGELOG.md` 一律用编辑工具改，别用 PowerShell 字符串替换（`### 修复` 在文件里
-出现多次，替换会把新小节塞进每个历史版本；标题粘连有 `static-guards` 兜底，"塞错位置"没有）。
+只是会变慢。
 `.gitignore` 已排除 `/target`、`/crates/tr-ui/dist`、`*.db(-wal|-shm)`、`/fixtures/private/` 等，
 **真实工作空间数据绝不入库**，提交前 `git status --short` 核一眼。
 
 **Release 正文取自 `build/release_notes.md`**（四节无序列表：新增 / 修改 / 调整 / 优化，一节没有
 变更就整节不出现，每项 50 字以内）—— 应用内「更新说明」显示的就是它。骨架与怎么归属写在
-`build/release_template.md`，机器判据在 `fixtures/static-guards.ps1` 第 9 项（版本号对不上
+`build/release_template.md`，机器判据在 `fixtures/static-guards.ps1` 第 8 项（版本号对不上
 `tauri.conf.json` 就是拿上一版说明发新版，`release.ps1` 会先跑一遍护栏、不合规直接不发）。
-`CHANGELOG.md` 继续留详细正文（根因 / 判据 / 实测数字），两者不再互相绑。
+版本变动只写在这份短说明里；根因 / 判据 / 实测数字写进当次提交的正文，仓库不再维护长期 changelog。
 
 ## AI 工具（DSH）
 

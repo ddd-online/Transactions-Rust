@@ -72,7 +72,7 @@ $Steps = [ordered]@{
     'clippy'            = @{ Title='cargo clippy --all-targets -D warnings';         Kind='cargo'; Args=@('clippy','--all-targets','--','-D','warnings'); Needs='none' }
     'design-audit'      = @{ Title='设计令牌审计（tokens.css 之外的硬编码色）';      Kind='pwsh';  Script='fixtures\design-audit.ps1'; Needs='none' }
     # 跨文件的静态护栏（端口一致 / 滚动条禁令 / 构建纪律 / wasm-bindgen 版本 / tr-domain 分层 /
-    # markup 类名有规则 / CHANGELOG 标题）—— 检查项与理由在脚本头注释里，别在这儿抄第二份。
+    # markup 类名有规则 / 文档引用 / 发布说明 / 版本号一致）—— 检查项与理由在脚本头注释里，别在这儿抄第二份。
     'static-guards'     = @{ Title='跨文件静态护栏（端口 / 滚动条 / 构建 / 分层 / 类名）'; Kind='pwsh'; Script='fixtures\static-guards.ps1'; Needs='none' }
 
     # ---- Rust 单元测试（按包）----

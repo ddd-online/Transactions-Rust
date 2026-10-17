@@ -175,7 +175,7 @@ fn agent(timeout: Duration) -> ureq::Agent {
 /// 一进门 `CheckStarted`、拿到结果 `CheckFinished` —— 与下载那几条一样，这里是**唯一**
 /// 推进"检查"这段状态的地方。从前界面自己 apply 这两步，外壳的状态机只被下载喂过，
 /// 于是 `update_download_status` 返回的永远是 idle：检查出「已是最新 / 有新版本」之后
-/// 换页再切回「关于软件」会把结果抹掉（实测确认过，见 CHANGELOG 的 0.15.0 一节）。
+/// 换页再切回「关于软件」会把结果抹掉（0.15.0 实测确认过）。
 #[tauri::command]
 pub async fn update_check(
     app: AppHandle,

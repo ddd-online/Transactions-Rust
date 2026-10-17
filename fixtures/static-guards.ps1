@@ -21,14 +21,13 @@
 #   5. 分层：`tr-domain` 的依赖树里不许有 I/O 依赖（它同时被 native 与 wasm 依赖）；
 #   6. 界面 markup 里写出来的类名必须在 CSS 里有规则（"删了规则忘了改调用点"是静默失效：
 #      从前 `.st-pane` 被删、`<div class="st-pane st-about">` 还在，居中就没了）；
-#   7. CHANGELOG 的小节标题不许被字符串替换弄成粘连（`### 修复**…**`）；
-#   8. 文档里的引用不烂：反引号引用的仓库内路径必须存在、发布资产名不许写死版本号、
+#   7. 文档里的引用不烂：反引号引用的仓库内路径必须存在、发布资产名不许写死版本号、
 #      "`AGENTS.md` 的「小节」"这类引用要对得上真实标题；
-#   9. 发布说明（`build/release_notes.md`，骨架见 `build/release_template.md`）合不合模板：
+#   8. 发布说明（`build/release_notes.md`，骨架见 `build/release_template.md`）合不合模板：
 #      版本标题必须等于 `tauri.conf.json` 的版本（对不上 = 拿上一次的说明发新版）、
 #      四节（新增 / 修改 / 调整 / 优化）顺序固定且不许出现别的节、必须是无序列表、
 #      每项 ≤50 字、空节不许留标题、同一项不许跨节重复；
-#  10. 版本号三处一致：`tauri.conf.json` / `Cargo.toml` 的 `[workspace.package]` /
+#   9. 版本号三处一致：`tauri.conf.json` / `Cargo.toml` 的 `[workspace.package]` /
 #      `src-tauri/Cargo.toml` 的 `[package]`。这条从前只写在文档里，而它**看不出来**
 #      （关于页与安装包自报的版本都来自 `tauri.conf.json`，Cargo.toml 漂了照报正确版本），
 #      所以必须是断言。`Cargo.lock` 刻意不查 —— 理由见那一项自己的注释。
@@ -60,7 +59,7 @@ function Read-Text([string]$relative) {
 }
 
 # ---------------------------------------------------------------- 1. 开发端口
-Write-Host '[static-guards] 1/10 开发端口一致性' -ForegroundColor Cyan
+Write-Host '[static-guards] 1/9 开发端口一致性' -ForegroundColor Cyan
 $portSources = [ordered]@{}
 $portSources['crates/tr-ui/Trunk.toml'] = @(
     [regex]::Matches((Read-Text 'crates/tr-ui/Trunk.toml'), '(?m)^\s*port\s*=\s*(\d+)') |
@@ -93,7 +92,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 2. 滚动条禁令
-Write-Host '[static-guards] 2/10 自定义滚动条禁令' -ForegroundColor Cyan
+Write-Host '[static-guards] 2/9 自定义滚动条禁令' -ForegroundColor Cyan
 $cssFiles = Get-ChildItem (Join-Path $repo 'crates/tr-ui/static/css') -Filter *.css -File
 $scrollHits = New-Object System.Collections.Generic.List[string]
 foreach ($file in $cssFiles) {
@@ -113,7 +112,7 @@ else {
 }
 
 # ---------------------------------------------------------------- 3. 构建 / 发布纪律
-Write-Host '[static-guards] 3/10 构建与发布纪律' -ForegroundColor Cyan
+Write-Host '[static-guards] 3/9 构建与发布纪律' -ForegroundColor Cyan
 $tauriConf = Read-Text 'src-tauri/tauri.conf.json'
 if ($tauriConf -match '"beforeBuildCommand"\s*:\s*\{[^}]*"script"\s*:\s*"([^"]+)"') {
     $beforeBuild = $Matches[1]
@@ -161,7 +160,7 @@ if ($testPs1 -match "'build-app'[\s\S]{0,400}?tauri/custom-protocol" -and $testP
 else { Fail 'test.ps1 的 build-app 步骤必须带 --release 与 --features tauri/custom-protocol（界面护栏用的就是这种产物）' }
 
 # ---------------------------------------------------------------- 4. wasm-bindgen 版本
-Write-Host '[static-guards] 4/10 wasm-bindgen CLI 版本' -ForegroundColor Cyan
+Write-Host '[static-guards] 4/9 wasm-bindgen CLI 版本' -ForegroundColor Cyan
 $lock = Read-Text 'Cargo.lock'
 if ($lock -match '(?m)^name = "wasm-bindgen"\r?\nversion = "([^"]+)"') {
     $lockVersion = $Matches[1]
@@ -178,7 +177,7 @@ if ($lock -match '(?m)^name = "wasm-bindgen"\r?\nversion = "([^"]+)"') {
 else { Fail 'Cargo.lock 里读不到 wasm-bindgen 的版本' }
 
 # ---------------------------------------------------------------- 5. 分层：tr-domain 无 I/O
-Write-Host '[static-guards] 5/10 tr-domain 的依赖树（不许有 I/O）' -ForegroundColor Cyan
+Write-Host '[static-guards] 5/9 tr-domain 的依赖树（不许有 I/O）' -ForegroundColor Cyan
 $treeFile = Join-Path ([System.IO.Path]::GetTempPath()) "tr-tree-$([guid]::NewGuid().ToString('N')).txt"
 try {
     cargo tree -p tr-domain -e normal --prefix none *> $treeFile
@@ -191,7 +190,7 @@ try {
 finally { Remove-Item $treeFile -Force -ErrorAction SilentlyContinue }
 
 # ---------------------------------------------------------------- 6. markup 类名 → CSS 规则
-Write-Host '[static-guards] 6/10 markup 里的类名都有 CSS 规则' -ForegroundColor Cyan
+Write-Host '[static-guards] 6/9 markup 里的类名都有 CSS 规则' -ForegroundColor Cyan
 # 例外：**刻意**留着的钩子/块名（每条都在这里给理由，不写进文档）
 $classAllow = @{
     'ui-popconfirm--end'    = '意图标记：贴哪条边对齐由组件算（popconfirm.rs 的 align_end），见 ui.css 注释'
@@ -236,27 +235,9 @@ else {
     Fail "有 $($undefined.Count) 个类名在 CSS 里没有规则 —— 要么补规则、要么删掉这个类名；刻意留的钩子加进本脚本的 `$classAllow"
 }
 
-# ---------------------------------------------------------------- 7. CHANGELOG 标题
-Write-Host '[static-guards] 7/10 CHANGELOG 小节标题' -ForegroundColor Cyan
-$badHeadings = New-Object System.Collections.Generic.List[string]
-$changelogLines = Get-Content (Join-Path $repo 'CHANGELOG.md')
-for ($i = 0; $i -lt $changelogLines.Count; $i++) {
-    if ($changelogLines[$i] -notmatch '^#{2,3}\s+(.*)$') { continue }
-    $text = $Matches[1]
-    # 事故现场：`### 修复**更新状态只有一个持有者…**` —— 新小节被粘到了标题后面
-    if ($text -match '\*\*' -or $text -match '`' -or $text -match '^(新增|修复|调整|移除|文档|优化|安全)\S') {
-        $badHeadings.Add("CHANGELOG.md:$($i + 1)  $($changelogLines[$i])")
-    }
-}
-if ($badHeadings.Count -eq 0) { Pass '标题没有粘连/加粗（每个小节标题都是干净的一行）' }
-else {
-    foreach ($hit in $badHeadings) { Write-Host "      $hit" -ForegroundColor DarkGray }
-    Fail "有 $($badHeadings.Count) 个标题被粘住了 —— 改 CHANGELOG 请用编辑工具，别用字符串替换"
-}
-
-# ---------------------------------------------------------------- 8. 文档引用
-Write-Host '[static-guards] 8/10 文档引用（路径 / 版本号 / 小节）' -ForegroundColor Cyan
-# 只查**还在维护的**文档。不查的三种：CHANGELOG.md 是历史记录；`docs/adr/` 记录的是当时的决策
+# ---------------------------------------------------------------- 7. 文档引用
+Write-Host '[static-guards] 7/9 文档引用（路径 / 版本号 / 小节）' -ForegroundColor Cyan
+# 只查**还在维护的**文档。不查的两种：`docs/adr/` 记录的是当时的决策
 # （里面提到后来被删掉的文件正是它该有的样子）；`docs/agents/` 与 `fixtures/heic/README.md`
 # 描述的是别处的口径（skill 的通用约定、上游仓库的目录结构）。
 # 发布说明那两份也算维护中的文档：模板里写的路径烂了，下次发布就照着一份错的说明抄。
@@ -292,7 +273,7 @@ foreach ($doc in $docPaths) {
         $candidate = $m.Groups[1].Value.Trim().TrimEnd('/')
         if ($candidate.Length -lt 3) { continue }
         if ($candidate -match '[<>{}*?$|~]' -or $candidate -match '://' -or $candidate -match '\s') { continue }
-        if ($candidate -notmatch '[/\\]') { continue }              # 单文件名（CHANGELOG.md 之类）不查
+        if ($candidate -notmatch '[/\\]') { continue }              # 单文件名（LICENSE 之类）不查
         # 只认"看起来是文件"的：末段带扩展名。`Move/ButtonDown/ButtonUp`、`try/catch` 这类
         # 方法名清单与 `build/` 这类泛指都靠这条挡掉。
         if ($candidate -notmatch '\.[A-Za-z0-9]{1,6}$') { continue }
@@ -302,7 +283,7 @@ foreach ($doc in $docPaths) {
         if (@($files | Where-Object { $_.EndsWith("/$candidate") }).Count -gt 0) { continue }
         $badRefs.Add(('{0}: 引用了不存在的路径 —— {1}' -f $doc, $candidate))
     }
-    # 8b. 发布资产名的具体版本号只允许出现在 CHANGELOG.md
+    # 8b. 发布资产名不许写死版本号（版本号只有 tauri.conf.json 一处）
     if ($text -match 'Transactions-x64-v\d') { $badRefs.Add(('{0}: 写死了资产名的版本号（写 <版本>；版本号只有 tauri.conf.json 一处）' -f $doc)) }
     # 8c. "AGENTS.md 的「小节」" 这类引用要对得上真实标题
     foreach ($m in [regex]::Matches($prose, '`?([A-Za-z0-9_./-]+\.md)`?\s*的\s*「([^」]{3,})」')) {
@@ -319,10 +300,10 @@ else {
     Fail "文档里有 $($badRefs.Count) 处过期引用 —— 改了脚本/小节/版本号，记得回头改文档"
 }
 
-# ---------------------------------------------------------------- 9. 发布说明
-Write-Host '[static-guards] 9/10 发布说明（build/release_notes.md）' -ForegroundColor Cyan
+# ---------------------------------------------------------------- 8. 发布说明
+Write-Host '[static-guards] 8/9 发布说明（build/release_notes.md）' -ForegroundColor Cyan
 # 这份说明就是 Release 正文（`build/release.ps1` 取它），也就是应用内「更新说明」显示的文字。
-# 骨架是 `build/release_template.md`；逐条判据见本文件头注释第 9 条。
+# 骨架是 `build/release_template.md`；逐条判据见本文件头注释第 8 条。
 $notesRel = 'build/release_notes.md'
 $notesPath = Join-Path $repo $notesRel
 if (-not (Test-Path $notesPath)) {
@@ -416,8 +397,8 @@ else {
     }
 }
 
-# ---------------------------------------------------------------- 10. 版本号一致
-Write-Host '[static-guards] 10/10 版本号（tauri.conf.json / 两处 Cargo.toml）' -ForegroundColor Cyan
+# ---------------------------------------------------------------- 9. 版本号一致
+Write-Host '[static-guards] 9/9 版本号（tauri.conf.json / 两处 Cargo.toml）' -ForegroundColor Cyan
 # AGENTS.md 写着"版本号唯一来源是 `src-tauri/tauri.conf.json`，`Cargo.toml` 的 workspace 与
 # src-tauri 两处也要同步"—— 但从前没有任何东西在查它，而它**看不出来**：
 #   * 关于页显示的版本来自 `app.package_info()`，也就是 tauri.conf.json，Cargo.toml 漂了照报正确；
