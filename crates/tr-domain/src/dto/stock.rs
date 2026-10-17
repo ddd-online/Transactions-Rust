@@ -41,6 +41,11 @@ pub struct StockOverviewDto {
     /// 总盈亏（已实现 + 浮动）占本金百分比（%）
     #[serde(rename = "totalPnlPercent")]
     pub total_pnl_percent: f64,
+    /// 仓位（%）=（本金 + 已实现盈亏 + 利息归本 − 累计支取 − 可用现金）
+    /// ÷（本金 + 已实现盈亏 + 利息归本 − 累计支取）；
+    /// 分母 ≤ 0（没有可算比例的资金）时为 `None`，界面显示 `—`
+    #[serde(rename = "positionRatio")]
+    pub position_ratio: Option<f64>,
 }
 
 /// 资金变化记录。
@@ -622,6 +627,7 @@ mod tests {
         assert!(value.get("availableCash").is_some());
         assert!(value.get("totalPnlPercent").is_some());
         assert!(value.get("interestTotal").is_some());
+        assert!(value.get("positionRatio").is_some());
     }
 
     #[test]

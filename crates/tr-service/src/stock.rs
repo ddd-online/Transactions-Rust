@@ -298,6 +298,18 @@ pub fn get_overview(
         0.0
     };
 
+    // 仓位 = 还压在股票上的资金 ÷ 账户资金（都不含浮动）：
+    //   分子 = 账户资金 − 可用现金（净投入；卖出回款已超过买入支出时按 0，不显示负仓位）
+    //   分母 = 本金 + 已实现盈亏 + 利息归本 − 累计支取
+    // 分母 ≤ 0（钱都取走了）时没有比例可言 ⇒ None（界面显示 —）。
+    let capital_base = account.principal + realized_pnl + interest_total - withdrawn_total;
+    let position_ratio = if capital_base > 0 {
+        let invested = (capital_base - available_cash).max(0);
+        Some((invested as f64 / capital_base as f64 * 10_000.0).round() / 100.0)
+    } else {
+        None
+    };
+
     Ok(StockOverviewDto {
         principal: account.principal,
         available_cash,
@@ -309,6 +321,7 @@ pub fn get_overview(
         unrealized_pnl,
         quote_failed_count,
         total_pnl_percent,
+        position_ratio,
     })
 }
 
@@ -4101,6 +4114,65 @@ mod tests {
             overview.realized_pnl + overview.unrealized_pnl,
             overview.total_assets - overview.principal,
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 仓位 =（本金 + 已实现 + 利息 − 支取 − 可用现金）÷（本金 + 已实现 + 利息 − 支取）。
+    #[test]
+    fn position_ratio_is_invested_over_capital_base() {
+        let (workspace, dir) = workspace("position-ratio");
+        seed_principal(&workspace, 1_000_000);
+
+        // 建仓 2 手 @10.00：成本 200502 → 可用现金 799498，仓位 20.05%
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            10_000,
+            2,
+            1_700_000_000,
+            "",
+            "",
+        )
+        .unwrap();
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        assert_eq!(overview.available_cash, 1_000_000 - 200_502);
+        assert_eq!(overview.position_ratio, Some(20.05));
+
+        // 清仓 2 手 @11.00：钱回到现金，仓位归零（已实现盈亏不再算进仓位）
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            11_000,
+            2,
+            1_700_000_100,
+            "",
+            "",
+        )
+        .unwrap();
+        let closed = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        assert_eq!(closed.realized_pnl, 18_886);
+        assert_eq!(closed.position_ratio, Some(0.0), "清仓后没有仓位");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 本息都取走（账户资金 ≤ 0）时仓位没有分母：`None`（界面显示 —），不返回 NaN / 负数。
+    #[test]
+    fn position_ratio_is_none_when_capital_base_is_gone() {
+        let (workspace, dir) = workspace("position-ratio-none");
+        seed_principal(&workspace, 500_000);
+        add_withdraw(&workspace, TEST_LEDGER_ID, 500_000, &no_quotes()).unwrap();
+
+        let overview = get_overview(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        assert_eq!(overview.available_cash, 0);
+        assert_eq!(overview.position_ratio, None);
 
         std::fs::remove_dir_all(&dir).ok();
     }

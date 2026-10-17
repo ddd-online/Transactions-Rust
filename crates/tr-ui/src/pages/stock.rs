@@ -751,6 +751,12 @@ fn account_view(sub: RwSignal<StockSub>) -> AnyView {
                                 "",
                                 "可用现金为账户实际现金余额，与「资金变化记录」最新一条的余额一致 = 本金 + 累计利息归本 + 全部卖出净额 − 累计支取 − 持仓成本（未清仓轮次的减仓回款也在其中）",
                             ),
+                            (
+                                "仓位",
+                                format::optional_rate_text(data.position_ratio),
+                                "",
+                                "仓位 = 已投入资金 ÷ 账户资金（都不含浮动）=（本金 + 已实现盈亏 + 利息归本 − 累计支取 − 可用现金）÷（本金 + 已实现盈亏 + 利息归本 − 累计支取）；资金总额 ≤ 0 时显示 —",
+                            ),
                         ];
                         cards
                             .into_iter()
@@ -3482,41 +3488,35 @@ fn history_view(sub: RwSignal<StockSub>, locate: RwSignal<Option<RoundLocate>>) 
                                 .into_any();
                         };
                         view! {
-                            <div class="stock-summary-bar">
-                                <span class="stock-summary-bar__title">
-                                    {format!("{} {}", data.stock_name, data.stock_code)}
-                                </span>
-                                <div class="stock-summary-bar__cells">
-                                    <SummaryCell
-                                        label="已实现盈亏".to_string()
-                                        value=Signal::derive(move || format::signed_yuan(data.total_pnl))
-                                        class=Signal::derive(move || {
-                                            format::pnl_class(data.total_pnl).to_string()
-                                        })
-                                    />
-                                    <SummaryCell
-                                        label="累计盈亏率".to_string()
-                                        value=Signal::derive(move || {
-                                            format::signed_percent(data.total_pnl_rate)
-                                        })
-                                        class=Signal::derive(move || {
-                                            format::pnl_class(data.total_pnl).to_string()
-                                        })
-                                    />
-                                    <SummaryCell
-                                        label="胜负轮次".to_string()
-                                        value=Signal::derive(move || {
-                                            format!("{} 胜 · {} 负", data.win_count, data.loss_count)
-                                        })
-                                        class=Signal::derive(String::new)
-                                    />
-                                    <SummaryCell
-                                        label="已完成轮次".to_string()
-                                        value=Signal::derive(move || {
-                                            format!("{} 轮", data.round_count)
-                                        })
-                                        class=Signal::derive(String::new)
-                                    />
+                            <div class="stock-detail-head">
+                                <div class="stock-detail-head__id">
+                                    <span class="stock-detail-head__name">
+                                        {data.stock_name.clone()}
+                                    </span>
+                                    <span class="stock-detail-head__code">{data.stock_code.clone()}</span>
+                                </div>
+                                <div class="stock-detail-head__stats">
+                                    <span class="stock-detail-head__pnl">
+                                        <span class="stock-detail-head__label">"已实现盈亏"</span>
+                                        <span class=format!(
+                                            "stock-detail-head__amount {}",
+                                            format::pnl_class(data.total_pnl),
+                                        )>{format::signed_yuan(data.total_pnl)}</span>
+                                        <span
+                                            class="stock-detail-head__rate"
+                                            title="累计盈亏率"
+                                        >
+                                            {format::signed_percent(data.total_pnl_rate)}
+                                        </span>
+                                    </span>
+                                    <span class="stock-detail-head__meta">
+                                        {format!(
+                                            "{} 胜 {} 负 · {} 轮",
+                                            data.win_count,
+                                            data.loss_count,
+                                            data.round_count,
+                                        )}
+                                    </span>
                                 </div>
                             </div>
 

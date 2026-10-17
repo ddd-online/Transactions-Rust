@@ -971,12 +971,6 @@
   border-bottom: 1px solid var(--transactions-color-divider);
 }
 
-.stock-summary-bar__title {
-  font-size: var(--transactions-size-text-body-sm);
-  font-weight: var(--transactions-weight-semibold);
-  color: var(--transactions-color-text-major);
-}
-
 .stock-summary-bar__cells {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1914,24 +1908,99 @@
 }
 
 /* ============================================
- * 轮次详情（记录子功能右侧）：标题独占一行，指标另起一行
+ * 记录 · 详情卡的开场带：一行"账本题注"
  *
- * 原先标题（中国巨石 600176）与四个指标挤在同一行 —— 标题看起来像指标的附属。
- * 这里把这一段的汇总条改成**纵向堆叠**：标题一行、指标一行；
- * 两者的分隔直接用 `.stock-detail__head` **本来就有**的那条 `border-bottom` 发丝线，
- * 不新增线条。内边距改为下放到各段自己，避免堆叠后出现双份留白。
- * 只作用于记录子功能（结构选择器，不影响统计子功能的同名结构）。
+ * 上一版把标题与四个指标并成一条，却用 `space-between` 把指标推到卡片两端 ——
+ * 1500px 窗口下名字与数字之间空出六百多像素，读起来像两段不相干的东西，
+ * 指标之间也各自成列，像在卡片里又开了一张指标表。
+ *
+ * 这一版把它还原成**一句题注**（左对齐、一条基线读完）：
+ *   贵州茅台 600519   已实现盈亏 +168001.17 +47.11%   1 胜 0 负 · 1 轮
+ * 数字是这一个标的的注脚，不是第二张统计表 —— 横向空间留给下面的成交表，
+ * 不再横在名字与数字中间。标签只留「已实现盈亏」：胜负与轮次自带量词。
+ * 高度 133 → 46px，与下方轮次列表只隔一条发丝线。
  * ============================================ */
 
-.stock-history__grid > *:last-child .stock-summary-bar {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0;
-  padding: 0;
+.stock-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-xl);
+  row-gap: var(--transactions-space-xs);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  padding: var(--transactions-space-md) var(--transactions-space-lg);
+  border-bottom: 1px solid var(--transactions-color-divider);
 }
 
-.stock-history__grid > *:last-child .stock-summary-bar__cells {
-  padding: var(--transactions-space-md);
+.stock-detail-head__id {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-sm);
+  min-width: 0;
+}
+
+.stock-detail-head__name {
+  font-size: var(--transactions-size-text-section);
+  font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-snug);
+  color: var(--transactions-color-text-major);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stock-detail-head__code {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  letter-spacing: var(--transactions-tracking-amount);
+  color: var(--transactions-color-text-tertiary);
+}
+
+.stock-detail-head__stats {
+  display: flex;
+  align-items: baseline;
+  gap: var(--transactions-space-lg);
+  row-gap: var(--transactions-space-2xs);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.stock-detail-head__pnl {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--transactions-space-xs);
+}
+
+.stock-detail-head__label {
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+/* 题注里的主数字：比正文高一档、语义色，但仍与名字同一基线 */
+.stock-detail-head__amount {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--transactions-size-text-section);
+  font-weight: var(--transactions-weight-semibold);
+  line-height: var(--transactions-height-tight);
+  letter-spacing: var(--transactions-tracking-amount-lg);
+}
+
+.stock-detail-head__rate {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--transactions-size-text-caption);
+  letter-spacing: var(--transactions-tracking-amount);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-detail-head__meta {
+  font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--transactions-size-text-body-sm);
+  letter-spacing: var(--transactions-tracking-amount);
+  color: var(--transactions-color-text-secondary);
+  white-space: nowrap;
 }
 
 /* ============================================
@@ -2031,24 +2100,15 @@
  * 修正为三级节奏：
  *   ① 区域之间（轨道 ↔ 浮起的详情卡）  24px（`space-xl`）—— 让卡的阴影有呼吸，
  *      也让"导航"与"主体"一眼分开；
- *   ② 容器与内容之间（卡内文字 ↔ 卡边框）16px（`space-lg`）—— 内容不贴边框；
- *   ③ 内容内部（标题 ↔ 数据 ↔ 每轮交易）12px + 既有的 1px 发丝线分段。
+ *   ② 容器与内容之间（卡内文字 ↔ 卡边框）16px 左右 / 12px 上下
+ *      —— 内边距住在 `.stock-detail-head` 自己身上，内容不贴边框；
+ *   ③ 内容内部（开场带 ↔ 每轮交易）12px + 既有的 1px 发丝线分段。
  * 只作用于记录子功能的这一张卡。
  * ============================================ */
 
 /* ① 区域之间：16px → 24px */
 .stock-history > .stock-history__grid {
   column-gap: var(--transactions-space-xl);
-}
-
-/* ② 卡内：标题与指标都退到 16px，不贴卡边框 */
-.stock-history__grid > *:last-child .stock-summary-bar__title {
-  display: block;
-  padding: var(--transactions-space-lg) var(--transactions-space-lg) var(--transactions-space-md);
-}
-
-.stock-history__grid > *:last-child .stock-summary-bar__cells {
-  padding: var(--transactions-space-md) var(--transactions-space-lg) var(--transactions-space-lg);
 }
 
 /* ============================================
