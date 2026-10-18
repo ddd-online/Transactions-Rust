@@ -1990,7 +1990,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                             {icons::icon(Icon::CaretRight)}
                                         </span>
                                         <span class="stock-review__title">"每日复盘"</span>
-                                        <Show when=move || (day_review_count() > 0)>
+                                        <Show when=move || { day_review_count() > 0 }>
                                             <span class="stock-review__summary">
                                                 {move || format!("{} 篇", day_review_count())}
                                             </span>
@@ -4001,7 +4001,7 @@ fn round_card(
                     </table>
                 </div>
 
-                <Show when=move || (day_count > 0)>
+                <Show when=move || { day_count > 0 }>
                     <div class="stock-review stock-day-review">
                         <div class="stock-review__head">
                             <button
