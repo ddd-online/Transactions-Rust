@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::consts;
-use crate::models::{RoundFee, StockFundRecord, StockPosition, StockTrade};
+use crate::models::{RoundFee, StockDayReview, StockFundRecord, StockPosition, StockTrade};
 
 /// 股票账户总览。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -110,6 +110,26 @@ pub struct StockReviewSettingDto {
     pub template: String,
 }
 
+/// 一天的一篇每日复盘。`date` 是本地日 `YYYY-MM-DD`；`review` 是正文（500 字以内）。
+///
+/// 只给界面展示 / 回填用：归属（轮次 id）与时间戳不进 DTO —— 界面永远只读写**当前轮**，
+/// 归档后的那一份由「记录」页按轮次读。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockDayReviewDto {
+    pub date: String,
+    pub review: String,
+}
+
+impl From<&StockDayReview> for StockDayReviewDto {
+    fn from(row: &StockDayReview) -> Self {
+        Self {
+            date: row.review_date.clone(),
+            review: row.review.clone(),
+        }
+    }
+}
+
 /// 资金变化记录分页结果。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -153,6 +173,14 @@ pub struct StockPositionDto {
     ///
     /// 服务层回填的是**生效值**：库里存空串（没设过）时给默认标签「分析」。
     pub tag: String,
+    /// 本轮建仓日（本地 `YYYY-MM-DD`；空串 = 没有进行中的轮次）—— 每日复盘日历的起点。
+    ///
+    /// 由服务层按**本轮首笔成交**的 `trade_time` 算出来，不是持仓行的 `created_at`。
+    #[serde(rename = "roundOpenedDate")]
+    pub round_opened_date: String,
+    /// 当前轮已写的每日复盘（按日期升序；清仓后为空 —— 那时它们挂在轮次上）
+    #[serde(rename = "dayReviews")]
+    pub day_reviews: Vec<StockDayReviewDto>,
     /// **本轮**的费用设置（建仓时定下、本轮内不可改）；省略 = 沿用账本系统配置（老数据 / 空仓）
     #[serde(rename = "roundFee", skip_serializing_if = "Option::is_none")]
     pub round_fee: Option<RoundFee>,
@@ -182,6 +210,9 @@ impl From<&StockPosition> for StockPositionDto {
             // 库里存的是**原始值**（空串 = 没设过）；生效值（空 → 默认「分析」）由服务层回填，
             // 与 `round_cash_flow` / `round_fee` 同一处（`tr-service::stock::list_positions`）。
             tag: position.tag.clone(),
+            // 建仓日与当前轮的每日复盘同样由服务层回填（它们要看成交与复盘表）
+            round_opened_date: String::new(),
+            day_reviews: Vec::new(),
             round_fee: None,
             latest_price: None,
             prev_close: None,
@@ -299,6 +330,9 @@ pub struct StockTradeImpactRoundDto {
     pub tag: String,
     #[serde(rename = "hasReview")]
     pub has_review: bool,
+    /// 该轮的每日复盘条数（> 0 = 轮次不再成立时这些也一并丢失）
+    #[serde(rename = "dayReviewCount")]
+    pub day_review_count: i64,
 }
 
 /// 交易编辑/删除前的影响预演结果。
@@ -372,6 +406,9 @@ pub struct StockTradeRoundDto {
     pub pnl_rate: f64,
     #[serde(rename = "tradeCount")]
     pub trade_count: i64,
+    /// 该轮归档的每日复盘（按日期升序）。清仓后只读 —— 界面在「记录」页按轮展示。
+    #[serde(rename = "dayReviews")]
+    pub day_reviews: Vec<StockDayReviewDto>,
     pub trades: Vec<StockTradeDto>,
 }
 
@@ -658,5 +695,41 @@ mod tests {
     fn fund_record_keeps_nullable_net_pnl() {
         let value = serde_json::to_value(StockFundRecordDto::default()).unwrap();
         assert!(value["netPnl"].is_null());
+    }
+
+    /// 每日复盘的线上形状：DTO 只有 `date` / `review`；持仓与轮次都带 `dayReviews`，
+    /// 持仓还带日历起点 `roundOpenedDate`；影响预演带 `dayReviewCount`。
+    #[test]
+    fn day_review_keys_are_camel_case_on_every_carrier() {
+        let review = serde_json::to_value(StockDayReviewDto {
+            date: "2026-10-16".to_string(),
+            review: "盘前计划".to_string(),
+        })
+        .unwrap();
+        assert_eq!(review["date"], "2026-10-16");
+        assert_eq!(review["review"], "盘前计划");
+
+        let position = serde_json::to_value(StockPositionDto::default()).unwrap();
+        assert_eq!(position["roundOpenedDate"], "");
+        assert!(position["dayReviews"].is_array());
+
+        let round = serde_json::to_value(StockTradeRoundDto::default()).unwrap();
+        assert!(round["dayReviews"].is_array());
+
+        let impact = serde_json::to_value(StockTradeImpactRoundDto::default()).unwrap();
+        assert_eq!(impact["dayReviewCount"], 0);
+    }
+
+    #[test]
+    fn day_review_dto_converts_from_the_row() {
+        let row = crate::models::StockDayReview {
+            stock_code: "600000".to_string(),
+            review_date: "2026-10-16".to_string(),
+            review: "正文".to_string(),
+            ..crate::models::StockDayReview::default()
+        };
+        let dto = StockDayReviewDto::from(&row);
+        assert_eq!(dto.date, "2026-10-16");
+        assert_eq!(dto.review, "正文");
     }
 }

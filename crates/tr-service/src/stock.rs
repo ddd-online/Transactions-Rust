@@ -25,21 +25,27 @@
 //!    因此**幂等**且不丢复盘。现金链的余额同样是派生值：按 (日期 → 创建时间 → ID) 链序逐条累加
 //!    （`write::recalculate_cash_chain` → `tr_domain::fund::cash_chain`），
 //!    所以**倒填**的日期只是让那一行排到它该在的位置，金额不会被跳过（`#48`）。
+//!
+//! **每日复盘**（`update_day_review`）沿用成交的归属 idiom：持仓期间写在
+//! `tbl_billadm_stock_day_review` 的 `round_id = ''` 上，清仓归档时由 `close_round` 挂到轮次 id
+//! 上；轮次不再成立时连同每日复盘一起删。因此它既能扛住重放（轮次行复用、ID 稳定），
+//! 也不需要按日期区间反推归属。
 
 use std::collections::HashMap;
 
 use chrono::Datelike;
 use tr_domain::consts;
 use tr_domain::dto::{
-    round_pnl, StockFundRecordDto, StockFundRecordPage, StockNameDto, StockOperationDto,
-    StockOverviewDto, StockPositionDto, StockTradeDto, StockTradeHistoryDetailDto,
-    StockTradeHistoryDto, StockTradeHistorySummaryDto, StockTradeTagSettingDto,
+    round_pnl, StockDayReviewDto, StockFundRecordDto, StockFundRecordPage, StockNameDto,
+    StockOperationDto, StockOverviewDto, StockPositionDto, StockTradeDto,
+    StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
+    StockTradeTagSettingDto,
 };
 use tr_domain::error::AppError;
 use tr_domain::models::{
-    Ledger, RoundFee, StockAccount, StockFeeSetting, StockFundRecord, StockOperation,
-    StockPosition, StockReviewSetting, StockTrade, StockTradeHistory, StockTradeRound,
-    StockTradeTagSetting,
+    Ledger, RoundFee, StockAccount, StockDayReview, StockFeeSetting, StockFundRecord,
+    StockOperation, StockPosition, StockReviewSetting, StockTrade, StockTradeHistory,
+    StockTradeRound, StockTradeTagSetting,
 };
 use tr_store::dao::is_not_found;
 use tr_store::dao::ledger::LedgerDao;
@@ -925,6 +931,8 @@ pub fn list_positions(
     let quotes = fetch_held_quotes(fetcher, &held);
     let flows = round_flows_of(by_code.clone());
     let round_fees = round_fees_of(&by_code);
+    // 当前轮（`round_id = ''`）的每日复盘：一次取全账本，按股票分组（避免逐股查库）
+    let day_reviews = day_reviews_by_code(&conn, ledger_id)?;
 
     Ok(held
         .iter()
@@ -932,6 +940,12 @@ pub fn list_positions(
             let mut item = StockPositionDto::from(position);
             let flow = flow_of(&flows, position);
             item.round_cash_flow = flow.cash_flow;
+            // 本轮建仓日 = 本轮首笔成交的本地日期（每日复盘日历的起点）
+            item.round_opened_date = round_opened_on(&by_code, &position.stock_code);
+            item.day_reviews = day_reviews
+                .get(&position.stock_code)
+                .cloned()
+                .unwrap_or_default();
             // 本轮建仓时定下的费用设置；没有记录（老数据）⇒ 省略 = 沿用系统配置
             item.round_fee = round_fees.get(&position.stock_code).cloned().flatten();
             // 本轮标签：库里存空串 = 没设过 ⇒ 按默认「分析」显示（见 `effective_position_tag`）
@@ -992,6 +1006,96 @@ pub fn update_position_review(
     }
     tracing::info!("保存持仓复盘, ledger: {}, code: {}", ledger_id, stock_code);
     Ok(StockPositionDto::from(&position))
+}
+
+/// 保存当前轮某一天的「每日复盘」（500 字以内；正文空串 = 删掉这一天的记录）。
+///
+/// 口径：
+/// * 只能写**当前轮**（最近一次清仓之后；减仓减到 0 手但还没点清仓也算），清仓归档后一律只读；
+/// * 日期必须落在 `[本轮建仓日, 今天]`：建仓日 = 本轮**首笔成交**的本地日期（与界面上日历的
+///   起点同一个口径），不是持仓行的 `created_at`；
+/// * 每轮每天最多一条（表上有唯一键），再写就是覆盖；空正文删行，不留空记录；
+/// * 归属沿用成交的 idiom：持仓期间 `round_id = ''`，清仓归档时由 `close_round` 挂到轮次上；
+///   重放只负责保留（轮次行复用）与删除（轮次不再成立），**不挂接**未挂接的行 ——
+///   那种行永远属于"当前还没归档的那一轮"（见 `stock/write.rs` 的 `rebuild_trades`）。
+///
+/// 返回该股当前轮的每日复盘（按日期升序），界面据此就地刷新日历上的标记。
+pub fn update_day_review(
+    workspace: &Workspace,
+    ledger_id: &str,
+    stock_code: &str,
+    date: &str,
+    review: &str,
+) -> ServiceResult<Vec<StockDayReviewDto>> {
+    if ledger_id.is_empty() {
+        return Err(AppError::bad_request("ledger_id is required").into());
+    }
+    if stock_code.is_empty() {
+        return Err(AppError::bad_request("stock_code is required").into());
+    }
+    let date = date.trim();
+    if parse_strict_date(date).is_none() {
+        return Err(AppError::bad_request("日期格式应为 YYYY-MM-DD").into());
+    }
+    let today = today();
+    if date > today.as_str() {
+        return Err(AppError::bad_request("每日复盘只能写到当天").into());
+    }
+
+    let conn = workspace.connection();
+    let trades = db(StockDao::list_trades_asc(&conn, ledger_id, stock_code))?;
+    let current_round = tr_domain::stock::current_round_trades(&trades);
+    let Some(first) = current_round.first() else {
+        return Err(AppError::not_found("该股票已清仓，每日复盘不可再编辑").into());
+    };
+    let opened_on = unix_to_date(first.trade_time);
+    if date < opened_on.as_str() {
+        return Err(
+            AppError::bad_request(format!("每日复盘不能早于本轮建仓日（{opened_on}）")).into(),
+        );
+    }
+    let review = review.trim();
+    if review.chars().count() > 500 {
+        return Err(AppError::bad_request("每日复盘不能超过 500 字").into());
+    }
+
+    if review.is_empty() {
+        db(StockDao::delete_day_review(
+            &conn, ledger_id, stock_code, "", date,
+        ))?;
+    } else {
+        match StockDao::get_day_review(&conn, ledger_id, stock_code, "", date) {
+            Ok(_) => db(StockDao::update_day_review(
+                &conn, ledger_id, stock_code, "", date, review,
+            ))?,
+            Err(error) if is_not_found(&error) => {
+                let row = StockDayReview {
+                    id: tr_store::util::new_uuid(),
+                    ledger_id: ledger_id.to_string(),
+                    stock_code: stock_code.to_string(),
+                    // 空串 = 当前轮（清仓时挂到轮次 id 上）
+                    round_id: String::new(),
+                    review_date: date.to_string(),
+                    review: review.to_string(),
+                    created_at: 0,
+                    updated_at: 0,
+                };
+                db(StockDao::create_day_review(&conn, &row))?;
+            }
+            Err(error) => return Err(ServiceError::Database(error)),
+        }
+    }
+    tracing::info!(
+        "保存每日复盘, ledger: {}, code: {}, date: {}",
+        ledger_id,
+        stock_code,
+        date
+    );
+
+    let rows = db(StockDao::list_unattached_day_reviews_by_stock(
+        &conn, ledger_id, stock_code,
+    ))?;
+    Ok(rows.iter().map(StockDayReviewDto::from).collect())
 }
 
 /// 持仓行上那一列标签的**生效值**：空串（没设过）按默认标签「分析」。
@@ -1204,6 +1308,39 @@ fn stock_has_open_round(
 ) -> ServiceResult<bool> {
     let trades = db(StockDao::list_trades_asc(conn, ledger_id, stock_code))?;
     Ok(!tr_domain::stock::current_round_trades(&trades).is_empty())
+}
+
+/// 本轮建仓日（本地 `YYYY-MM-DD`）：本轮**首笔成交**的日期。没有未归档的轮次时为空串。
+///
+/// 与每日复盘日历的起点同一个口径（服务层的 `update_day_review` 也用它做下界判断）：
+/// 不用持仓行的 `created_at`（它是"第一次建仓这个代码"的时间；减仓到 0 再买、甚至清仓后再建仓
+/// 都不会重置它）。
+fn round_opened_on(by_code: &HashMap<String, Vec<StockTrade>>, stock_code: &str) -> String {
+    by_code
+        .get(stock_code)
+        .and_then(|trades| {
+            tr_domain::stock::current_round_trades(trades)
+                .first()
+                .map(|trade| trade.trade_time)
+        })
+        .map(unix_to_date)
+        .unwrap_or_default()
+}
+
+/// 当前轮（`round_id = ''`）的每日复盘：一次取全账本，按股票分组。
+fn day_reviews_by_code(
+    conn: &rusqlite::Connection,
+    ledger_id: &str,
+) -> ServiceResult<HashMap<String, Vec<StockDayReviewDto>>> {
+    let rows = db(StockDao::list_unattached_day_reviews(conn, ledger_id))?;
+    let mut grouped: HashMap<String, Vec<StockDayReviewDto>> = HashMap::new();
+    for row in rows {
+        grouped
+            .entry(row.stock_code.clone())
+            .or_default()
+            .push(StockDayReviewDto::from(&row));
+    }
+    Ok(grouped)
 }
 
 /// 某持仓的本轮资金口径；查不到成交（异常数据）时退回剩余成本，
@@ -1466,6 +1603,20 @@ pub fn get_trade_history_detail(
     let rounds = db(StockDao::list_trade_rounds_by_stock(
         &conn, ledger_id, stock_code,
     ))?;
+    // 各轮归档的每日复盘：一次取全股，按 round_id 分组（当前轮那种 `round_id = ''` 不在此列）
+    let day_rows = db(StockDao::list_day_reviews_by_stock(
+        &conn, ledger_id, stock_code,
+    ))?;
+    let mut day_by_round: HashMap<&str, Vec<StockDayReviewDto>> = HashMap::new();
+    for row in &day_rows {
+        if row.round_id.is_empty() {
+            continue;
+        }
+        day_by_round
+            .entry(row.round_id.as_str())
+            .or_default()
+            .push(StockDayReviewDto::from(row));
+    }
 
     let mut detail = StockTradeHistoryDetailDto {
         id: history.id.clone(),
@@ -1505,6 +1656,10 @@ pub fn get_trade_history_detail(
             pnl,
             pnl_rate,
             trade_count: trades.len() as i64,
+            day_reviews: day_by_round
+                .get(round.id.as_str())
+                .cloned()
+                .unwrap_or_default(),
             trades: trades.iter().map(StockTradeDto::from).collect(),
         });
     }
@@ -8079,6 +8234,383 @@ mod tests {
             "建仓",
             "栈里只剩「建仓」"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---------- 每日复盘 ----------
+
+    /// 在 `date` 上加减天数（`YYYY-MM-DD`；用例造"建仓日之前 / 明天"这类日期用）。
+    fn day_offset(date: &str, offset: i64) -> String {
+        let base = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
+        (base + chrono::Duration::days(offset))
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
+    /// 造一个**还在持仓**的轮次，返回本轮建仓日（本地日期）。
+    fn seed_open_position(workspace: &Workspace, code: &str, name: &str, lots: i64) -> String {
+        let opened_at = tr_store::util::now_unix() - 2 * 86_400;
+        create_trade(
+            workspace,
+            TEST_LEDGER_ID,
+            code,
+            name,
+            consts::STOCK_TRADE_OPEN,
+            10_000,
+            lots,
+            opened_at,
+            "",
+            "",
+        )
+        .unwrap();
+        unix_to_date(opened_at)
+    }
+
+    /// 每日复盘只能写当前轮 [建仓日, 今天] 内的日期；同一天覆盖、空正文删行；
+    /// 持仓 DTO 同时带出建仓日与当前轮的复盘列表。
+    #[test]
+    fn day_review_only_within_the_open_round() {
+        let (workspace, dir) = workspace("stock-day-review-window");
+        let opened_on = seed_open_position(&workspace, TEST_CODE, TEST_NAME, 10);
+        let today = today();
+
+        // 建仓日当天与今天都可写
+        update_day_review(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            &opened_on,
+            "建仓当天",
+        )
+        .unwrap();
+        let rows = update_day_review(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            &today,
+            "  今天的观察  ",
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].date, opened_on, "按日期升序");
+        assert_eq!(rows[1].date, today);
+        assert_eq!(rows[1].review, "今天的观察", "首尾空白被去掉");
+
+        // 同一天再写 = 覆盖（不是新增）
+        let rows =
+            update_day_review(&workspace, TEST_LEDGER_ID, TEST_CODE, &today, "改过的观察").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].review, "改过的观察");
+
+        // 建仓日之前不合法
+        let before = day_offset(&opened_on, -1);
+        let error = update_day_review(&workspace, TEST_LEDGER_ID, TEST_CODE, &before, "早于建仓")
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("每日复盘不能早于本轮建仓日（{opened_on}）")),
+            "{error}"
+        );
+        // 明天不合法
+        let tomorrow = day_offset(&today, 1);
+        let error = update_day_review(&workspace, TEST_LEDGER_ID, TEST_CODE, &tomorrow, "未来")
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("每日复盘只能写到当天"),
+            "{error}"
+        );
+        // 格式不合法
+        let error = update_day_review(&workspace, TEST_LEDGER_ID, TEST_CODE, "2026/10/18", "x")
+            .unwrap_err();
+        assert!(error.to_string().contains("日期格式应为 YYYY-MM-DD"));
+        // 超长
+        let error = update_day_review(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            &today,
+            &"复".repeat(501),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("每日复盘不能超过 500 字"));
+        // 恰好 500 字通过
+        update_day_review(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            &today,
+            &"复".repeat(500),
+        )
+        .unwrap();
+
+        // 持仓 DTO：建仓日 + 当前轮的复盘（按日期升序）
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        let position = positions
+            .iter()
+            .find(|item| item.stock_code == TEST_CODE)
+            .expect("还在持仓");
+        assert_eq!(position.round_opened_date, opened_on);
+        assert_eq!(position.day_reviews.len(), 2);
+        assert_eq!(position.day_reviews[1].date, today);
+
+        // 空正文 = 删掉这一天（不留空行）
+        let rows =
+            update_day_review(&workspace, TEST_LEDGER_ID, TEST_CODE, &opened_on, "   ").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, today);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 清仓：当前轮的每日复盘随轮次归档，此后不可再写；同一只票再建仓是干净的新一轮。
+    #[test]
+    fn day_reviews_ride_into_the_round_on_close() {
+        let (workspace, dir) = workspace("stock-day-review-close");
+        seed_principal(&workspace, 10_000_000);
+        let opened_on = seed_open_position(&workspace, TEST_CODE, TEST_NAME, 10);
+        let today = today();
+        update_day_review(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            &opened_on,
+            "建仓当天",
+        )
+        .unwrap();
+        update_day_review(&workspace, TEST_LEDGER_ID, TEST_CODE, &today, "清仓前").unwrap();
+
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            12_000,
+            10,
+            tr_store::util::now_unix(),
+            "",
+            "",
+        )
+        .unwrap();
+
+        // 持仓列表不再有它；再写 = 404
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        assert!(positions.iter().all(|item| item.stock_code != TEST_CODE));
+        let error =
+            update_day_review(&workspace, TEST_LEDGER_ID, TEST_CODE, &today, "清仓后").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("该股票已清仓，每日复盘不可再编辑"),
+            "{error}"
+        );
+
+        // 历史详情：两篇挂在那一轮上
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(detail.rounds.len(), 1);
+        let round = &detail.rounds[0];
+        assert_eq!(round.day_reviews.len(), 2);
+        assert_eq!(round.day_reviews[0].date, opened_on);
+        assert_eq!(round.day_reviews[1].review, "清仓前");
+
+        // 再建仓 = 新一轮：日历从新起点开始，旧轮的复盘不跟过来。
+        // 隔一秒再写：成交排序是 (trade_time → created_at → …)，同一天的两笔 trade_time 相同
+        // （界面只选到日、落本地 00:00），同一秒里建的话顺序会落到随机 id 上。
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            13_000,
+            10,
+            tr_store::util::now_unix(),
+            "",
+            "",
+        )
+        .unwrap();
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        let position = positions
+            .iter()
+            .find(|item| item.stock_code == TEST_CODE)
+            .expect("新一轮还在持仓");
+        assert!(position.day_reviews.is_empty(), "新一轮从空日历开始");
+        assert_eq!(position.round_opened_date, today);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 重放：改成交价后每日复盘仍挂在同一轮；轮次不再成立时它跟着删；影响预演说得出条数。
+    #[test]
+    fn day_reviews_follow_the_round_through_replay() {
+        let (workspace, dir) = workspace("stock-day-review-replay");
+        seed_principal(&workspace, 10_000_000);
+        let opened_on = seed_open_position(&workspace, TEST_CODE, TEST_NAME, 10);
+        update_day_review(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            &opened_on,
+            "盘前计划",
+        )
+        .unwrap();
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            12_000,
+            10,
+            tr_store::util::now_unix(),
+            "",
+            "",
+        )
+        .unwrap();
+
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        let round_id = detail.rounds[0].id.clone();
+        assert_eq!(detail.rounds[0].day_reviews.len(), 1);
+
+        // 改清仓成交价 → 重放复用同一轮次，每日复盘原样保留
+        let close_trade = detail.rounds[0]
+            .trades
+            .iter()
+            .find(|trade| trade.trade_type == consts::STOCK_TRADE_CLOSE)
+            .expect("有清仓成交")
+            .clone();
+        update_trade_fill(
+            &workspace,
+            TEST_LEDGER_ID,
+            &close_trade.id,
+            12_500,
+            10,
+            close_trade.trade_time,
+        )
+        .unwrap();
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(detail.rounds[0].id, round_id, "轮次 id 稳定");
+        assert_eq!(detail.rounds[0].day_reviews.len(), 1);
+        assert_eq!(detail.rounds[0].day_reviews[0].review, "盘前计划");
+
+        // 删除清仓委托 → 该轮不再成立：每日复盘与轮次一起消失；预演先说清楚
+        let preview = preview_trade_change(
+            &workspace,
+            TEST_LEDGER_ID,
+            "delete_order",
+            "",
+            &close_trade.order_id,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(preview.removed_rounds.len(), 1);
+        assert_eq!(
+            preview.removed_rounds[0].day_review_count, 1,
+            "影响预演要说出这一轮有几篇每日复盘（文案在 tr-draw 的 removed_rounds_text）"
+        );
+
+        delete_trade_order(&workspace, TEST_LEDGER_ID, &close_trade.order_id).unwrap();
+        assert!(get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).is_err());
+        assert!(
+            db(StockDao::list_day_reviews_by_stock(
+                &workspace.connection(),
+                TEST_LEDGER_ID,
+                TEST_CODE
+            ))
+            .unwrap()
+            .is_empty(),
+            "轮次没了，它的每日复盘也要删掉（不能留孤儿）"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 重放绝不能把**持仓中**那一轮的每日复盘错挂到历史轮次上。
+    ///
+    /// 未挂接（`round_id = ''`）的行只属于"当前还没归档的那一轮"；历史上被结束的轮次在当初
+    /// 清仓时就已经挂接过了。重放若无条件挂接，会把持仓期的复盘搬进老轮次（曾经的实现错）。
+    #[test]
+    fn replay_never_steals_the_open_rounds_day_reviews() {
+        let (workspace, dir) = workspace("stock-day-review-replay-steal");
+        seed_principal(&workspace, 10_000_000);
+        // 第一轮：建仓 → 写每日复盘 → 清仓（此时挂到第一轮）
+        let first_opened_on = seed_open_position(&workspace, TEST_CODE, TEST_NAME, 10);
+        update_day_review(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            &first_opened_on,
+            "第一轮的复盘",
+        )
+        .unwrap();
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_CLOSE,
+            12_000,
+            10,
+            tr_store::util::now_unix() - 86_400,
+            "",
+            "",
+        )
+        .unwrap();
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(detail.rounds[0].day_reviews.len(), 1);
+
+        // 第二轮（当前持仓）：写今天的每日复盘
+        create_trade(
+            &workspace,
+            TEST_LEDGER_ID,
+            TEST_CODE,
+            TEST_NAME,
+            consts::STOCK_TRADE_OPEN,
+            13_000,
+            10,
+            tr_store::util::now_unix(),
+            "",
+            "",
+        )
+        .unwrap();
+        let today = today();
+        update_day_review(&workspace, TEST_LEDGER_ID, TEST_CODE, &today, "第二轮今天").unwrap();
+
+        // 改第一轮清仓成交价 → 重放（会重建轮次与资金记录）
+        let close_trade = detail.rounds[0]
+            .trades
+            .iter()
+            .find(|trade| trade.trade_type == consts::STOCK_TRADE_CLOSE)
+            .expect("有清仓成交")
+            .clone();
+        update_trade_fill(
+            &workspace,
+            TEST_LEDGER_ID,
+            &close_trade.id,
+            12_500,
+            10,
+            close_trade.trade_time,
+        )
+        .unwrap();
+
+        // 第一轮还是只有自己那一篇；当前轮的今天那篇仍属于当前轮
+        let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
+        assert_eq!(detail.rounds.len(), 1);
+        assert_eq!(detail.rounds[0].day_reviews.len(), 1);
+        assert_eq!(detail.rounds[0].day_reviews[0].review, "第一轮的复盘");
+        let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
+        let position = positions
+            .iter()
+            .find(|item| item.stock_code == TEST_CODE)
+            .expect("第二轮还在持仓");
+        assert_eq!(position.day_reviews.len(), 1);
+        assert_eq!(position.day_reviews[0].date, today);
+        assert_eq!(position.day_reviews[0].review, "第二轮今天");
 
         std::fs::remove_dir_all(&dir).ok();
     }

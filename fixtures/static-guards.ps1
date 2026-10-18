@@ -196,6 +196,7 @@ $classAllow = @{
     'ui-popconfirm--end'    = '意图标记：贴哪条边对齐由组件算（popconfirm.rs 的 align_end），见 ui.css 注释'
     'todo-quadrant__ground' = 'BEM 块名：规则挂在四个 --now/--plan/--delegate/--less 修饰符上'
     'stock-trade-edit'      = 'BEM 块名：规则挂在 __head / __name 上'
+    'stock-day-review'      = 'BEM 块名：规则挂在 __hint / __calendar / __list / __entry / __date / __text 上'
     'todo-page'             = 'FeaturePage 的页面级样式钩子（class 插槽），当前没有页面级规则'
     'key-event-markdown'    = 'Markdown 组件的 class 插槽（与 md-body 叠加），当前没有额外规则'
 }

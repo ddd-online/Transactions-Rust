@@ -109,6 +109,9 @@ pub fn group_trades(trades: &[StockTradeDto]) -> Vec<TradeRow> {
 ///
 /// 两个调用点共用同一份文案：编辑/删除成交的影响预演（[`impact_summary`]）与
 /// 回滚确认框（回滚清仓/减仓会让轮次不再成立，该轮的复盘与标签随之丢失）。
+///
+/// 轮次上的「每日复盘」同样随轮次消失（服务层删轮次时一起删），所以只要这一轮有本轮复盘
+/// **或**任何一篇每日复盘，就要说"复盘（含每日复盘）会丢"。
 pub fn removed_rounds_text(removed_rounds: &[StockTradeImpactRoundDto]) -> String {
     if removed_rounds.is_empty() {
         return "不会影响任何一轮的复盘。".to_string();
@@ -118,9 +121,11 @@ pub fn removed_rounds_text(removed_rounds: &[StockTradeImpactRoundDto]) -> Strin
         .map(|round| round.round_no.to_string())
         .collect::<Vec<_>>()
         .join("、");
-    let loses_review = removed_rounds.iter().any(|round| round.has_review);
+    let loses_review = removed_rounds
+        .iter()
+        .any(|round| round.has_review || round.day_review_count > 0);
     if loses_review {
-        format!("第 {numbers} 轮不再成立，该轮复盘会一并丢失。")
+        format!("第 {numbers} 轮不再成立，该轮复盘（含每日复盘）会一并丢失。")
     } else {
         format!("第 {numbers} 轮不再成立。")
     }
@@ -252,7 +257,7 @@ mod tests {
         assert!(group_trades(&[]).is_empty());
     }
 
-    /// 影响预览的两段文案：没有失效轮次、有失效轮次（其中一轮带复盘）。
+    /// 影响预览的两段文案：没有失效轮次、有失效轮次（本轮复盘或每日复盘任一存在就要提示会丢）。
     #[test]
     fn removed_rounds_copy_says_whether_a_review_is_lost() {
         assert_eq!(
@@ -279,7 +284,18 @@ mod tests {
         ];
         assert_eq!(
             removed_rounds_text(&with_review),
-            "第 3、5 轮不再成立，该轮复盘会一并丢失。"
+            "第 3、5 轮不再成立，该轮复盘（含每日复盘）会一并丢失。"
+        );
+        // 只有每日复盘、没写本轮复盘：同样要说会丢
+        let with_day_review = [StockTradeImpactRoundDto {
+            round_no: 2,
+            has_review: false,
+            day_review_count: 3,
+            ..StockTradeImpactRoundDto::default()
+        }];
+        assert_eq!(
+            removed_rounds_text(&with_day_review),
+            "第 2 轮不再成立，该轮复盘（含每日复盘）会一并丢失。"
         );
     }
 

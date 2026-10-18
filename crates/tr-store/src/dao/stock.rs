@@ -19,8 +19,9 @@ use rusqlite::{params, params_from_iter, Connection};
 
 use tr_domain::consts;
 use tr_domain::models::{
-    RoundFee, StockAccount, StockFeeSetting, StockFundRecord, StockOperation, StockPosition,
-    StockReviewSetting, StockTrade, StockTradeHistory, StockTradeRound, StockTradeTagSetting,
+    RoundFee, StockAccount, StockDayReview, StockFeeSetting, StockFundRecord, StockOperation,
+    StockPosition, StockReviewSetting, StockTrade, StockTradeHistory, StockTradeRound,
+    StockTradeTagSetting,
 };
 
 pub struct StockDao;
@@ -44,6 +45,8 @@ const ROUND_COLUMNS: &str =
     "id, ledger_id, stock_code, history_id, round_no, opened_at, closed_at, \
      tag, review, created_at";
 const OPERATION_COLUMNS: &str = "id, ledger_id, kind, action, detail, target_id, created_at";
+const DAY_REVIEW_COLUMNS: &str =
+    "id, ledger_id, stock_code, round_id, review_date, review, created_at, updated_at";
 
 /// 每个账本保留的操作记录条数上限（超出的最旧记录在写入时丢弃）。
 pub const STOCK_OPERATION_LIMIT: i64 = 10;
@@ -52,7 +55,7 @@ pub const STOCK_OPERATION_LIMIT: i64 = 10;
 const UNATTACHED_ROUND_SQL: &str = "(round_id = '' OR round_id IS NULL)";
 
 /// 重置时清空的股票表（这个顺序是有意的：避免外键/触发器顺序差异）。
-const STOCK_TABLES: [&str; 10] = [
+const STOCK_TABLES: [&str; 11] = [
     "tbl_billadm_stock_fund_record",
     "tbl_billadm_stock_fee_setting",
     "tbl_billadm_stock_trade_tag_setting",
@@ -60,17 +63,19 @@ const STOCK_TABLES: [&str; 10] = [
     "tbl_billadm_stock_trade",
     "tbl_billadm_stock_trade_round",
     "tbl_billadm_stock_trade_history",
+    "tbl_billadm_stock_day_review",
     "tbl_billadm_stock_position",
     "tbl_billadm_stock_operation",
     "tbl_billadm_stock_account",
 ];
 
 /// 归档时**搬走**的股票表（`STOCK_TABLES` 去掉三张配置表与只会被清空的操作记录）。
-const STOCK_DATA_TABLES: [&str; 6] = [
+const STOCK_DATA_TABLES: [&str; 7] = [
     "tbl_billadm_stock_fund_record",
     "tbl_billadm_stock_trade",
     "tbl_billadm_stock_trade_round",
     "tbl_billadm_stock_trade_history",
+    "tbl_billadm_stock_day_review",
     "tbl_billadm_stock_position",
     "tbl_billadm_stock_account",
 ];
@@ -1072,6 +1077,177 @@ impl StockDao {
         }
     }
 
+    // ---------- 每日复盘 ----------
+
+    /// 取某轮某天的每日复盘；不存在返回 `QueryReturnedNoRows`。
+    pub fn get_day_review(
+        conn: &Connection,
+        ledger_id: &str,
+        stock_code: &str,
+        round_id: &str,
+        review_date: &str,
+    ) -> rusqlite::Result<StockDayReview> {
+        conn.query_row(
+            &format!(
+                "SELECT {DAY_REVIEW_COLUMNS} FROM tbl_billadm_stock_day_review \
+                 WHERE ledger_id = ?1 AND stock_code = ?2 AND round_id = ?3 AND review_date = ?4 \
+                 ORDER BY id LIMIT 1"
+            ),
+            params![ledger_id, stock_code, round_id, review_date],
+            day_review_from_row,
+        )
+    }
+
+    /// 新建一条每日复盘（时间戳由 DAO 补齐）。
+    pub fn create_day_review(conn: &Connection, row: &StockDayReview) -> rusqlite::Result<()> {
+        let now = crate::util::now_unix();
+        conn.execute(
+            "INSERT INTO tbl_billadm_stock_day_review \
+             (id, ledger_id, stock_code, round_id, review_date, review, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+            params![
+                row.id,
+                row.ledger_id,
+                row.stock_code,
+                row.round_id,
+                row.review_date,
+                row.review,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 改某一天的正文字（唯一键定位，时间戳跟着更新）。
+    pub fn update_day_review(
+        conn: &Connection,
+        ledger_id: &str,
+        stock_code: &str,
+        round_id: &str,
+        review_date: &str,
+        review: &str,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE tbl_billadm_stock_day_review SET review = ?5, updated_at = ?6 \
+             WHERE ledger_id = ?1 AND stock_code = ?2 AND round_id = ?3 AND review_date = ?4",
+            params![
+                ledger_id,
+                stock_code,
+                round_id,
+                review_date,
+                review,
+                crate::util::now_unix(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 删某一天的每日复盘（正文清空时用它：不留空行，日历上的标记也跟着消失）。
+    pub fn delete_day_review(
+        conn: &Connection,
+        ledger_id: &str,
+        stock_code: &str,
+        round_id: &str,
+        review_date: &str,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM tbl_billadm_stock_day_review \
+             WHERE ledger_id = ?1 AND stock_code = ?2 AND round_id = ?3 AND review_date = ?4",
+            params![ledger_id, stock_code, round_id, review_date],
+        )?;
+        Ok(())
+    }
+
+    /// 某账本**当前轮**（`round_id = ''`）的全部每日复盘：`stock_code`, `review_date` 升序。
+    ///
+    /// 持仓列表一次取全账本，避免逐股查库；调用方按 `stock_code` 分组。
+    pub fn list_unattached_day_reviews(
+        conn: &Connection,
+        ledger_id: &str,
+    ) -> rusqlite::Result<Vec<StockDayReview>> {
+        let mut statement = conn.prepare(&format!(
+            "SELECT {DAY_REVIEW_COLUMNS} FROM tbl_billadm_stock_day_review \
+             WHERE ledger_id = ?1 AND round_id = '' ORDER BY stock_code ASC, review_date ASC"
+        ))?;
+        let rows = statement
+            .query_map([ledger_id], day_review_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 某股当前轮的每日复盘：`review_date` 升序。
+    pub fn list_unattached_day_reviews_by_stock(
+        conn: &Connection,
+        ledger_id: &str,
+        stock_code: &str,
+    ) -> rusqlite::Result<Vec<StockDayReview>> {
+        let mut statement = conn.prepare(&format!(
+            "SELECT {DAY_REVIEW_COLUMNS} FROM tbl_billadm_stock_day_review \
+             WHERE ledger_id = ?1 AND stock_code = ?2 AND round_id = '' ORDER BY review_date ASC"
+        ))?;
+        let rows = statement
+            .query_map(params![ledger_id, stock_code], day_review_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 某股**全部轮次**的每日复盘（历史详情按 `round_id` 分组用）：
+    /// `round_id`, `review_date` 升序。当前轮的行（`round_id = ''`）也在结果里，
+    /// 调用方按轮次 id 取用时会自然忽略它们。
+    pub fn list_day_reviews_by_stock(
+        conn: &Connection,
+        ledger_id: &str,
+        stock_code: &str,
+    ) -> rusqlite::Result<Vec<StockDayReview>> {
+        let mut statement = conn.prepare(&format!(
+            "SELECT {DAY_REVIEW_COLUMNS} FROM tbl_billadm_stock_day_review \
+             WHERE ledger_id = ?1 AND stock_code = ?2 ORDER BY round_id ASC, review_date ASC"
+        ))?;
+        let rows = statement
+            .query_map(params![ledger_id, stock_code], day_review_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 每个轮次的每日复盘条数（`round_id` 非空）：给影响预演判断"这一轮有没有东西会丢"。
+    pub fn count_day_reviews_by_rounds(
+        conn: &Connection,
+        ledger_id: &str,
+    ) -> rusqlite::Result<Vec<(String, i64)>> {
+        let mut statement = conn.prepare(
+            "SELECT round_id, COUNT(*) FROM tbl_billadm_stock_day_review \
+             WHERE ledger_id = ?1 AND round_id <> '' GROUP BY round_id",
+        )?;
+        let rows = statement
+            .query_map([ledger_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 清仓归档：把该股当前轮（`round_id = ''`）的每日复盘挂到刚建（或重放复用）的轮次上。
+    pub fn attach_unattached_day_reviews(
+        conn: &Connection,
+        ledger_id: &str,
+        stock_code: &str,
+        round_id: &str,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE tbl_billadm_stock_day_review SET round_id = ?3 \
+             WHERE ledger_id = ?1 AND stock_code = ?2 AND round_id = ''",
+            params![ledger_id, stock_code, round_id],
+        )?;
+        Ok(())
+    }
+
+    /// 轮次不再成立（重放删掉了它）时，该轮的每日复盘一起删掉 —— 与轮次复盘同命。
+    pub fn delete_day_reviews_by_round(conn: &Connection, round_id: &str) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM tbl_billadm_stock_day_review WHERE round_id = ?1",
+            [round_id],
+        )?;
+        Ok(())
+    }
+
     // ---------- 操作记录（回滚用） ----------
 
     /// 新增一条操作记录，并把该账本裁剪到最近 [`STOCK_OPERATION_LIMIT`] 条。
@@ -1241,6 +1417,19 @@ fn review_setting_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockRev
         template: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
         created_at: row.get(3)?,
         updated_at: row.get(4)?,
+    })
+}
+
+fn day_review_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StockDayReview> {
+    Ok(StockDayReview {
+        id: row.get(0)?,
+        ledger_id: row.get(1)?,
+        stock_code: row.get(2)?,
+        round_id: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        review_date: row.get(4)?,
+        review: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
     })
 }
 
@@ -1970,6 +2159,111 @@ mod tests {
         assert_eq!(
             StockDao::get_review_setting(&conn, "l1").unwrap().template,
             ""
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 每日复盘：同键覆盖、不同天分开、清空删除、归档挂接、删轮次连带删。
+    #[test]
+    fn day_review_upsert_attach_and_delete_by_round() {
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-day-review");
+        let conn = workspace.connection();
+
+        let row = |id: &str, day: &str, review: &str| StockDayReview {
+            id: id.to_string(),
+            ledger_id: "l1".to_string(),
+            stock_code: "600000".to_string(),
+            round_id: String::new(),
+            review_date: day.to_string(),
+            review: review.to_string(),
+            ..StockDayReview::default()
+        };
+        StockDao::create_day_review(&conn, &row("d1", "2026-10-14", "建仓当天")).unwrap();
+        StockDao::create_day_review(&conn, &row("d2", "2026-10-15", "第二天")).unwrap();
+
+        // 唯一键覆盖：同一天再写不是新增
+        StockDao::update_day_review(&conn, "l1", "600000", "", "2026-10-14", "改过的正文").unwrap();
+        let rows = StockDao::list_unattached_day_reviews_by_stock(&conn, "l1", "600000").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].review_date, "2026-10-14");
+        assert_eq!(rows[0].review, "改过的正文");
+        assert_eq!(rows[1].review_date, "2026-10-15");
+        assert!(rows[0].created_at > 0 && rows[0].updated_at > 0);
+
+        // 归档挂接：本轮的行挂到轮次 id 上，逐轮读得到
+        StockDao::attach_unattached_day_reviews(&conn, "l1", "600000", "r1").unwrap();
+        assert!(StockDao::list_unattached_day_reviews(&conn, "l1")
+            .unwrap()
+            .is_empty());
+        let by_stock = StockDao::list_day_reviews_by_stock(&conn, "l1", "600000").unwrap();
+        assert_eq!(by_stock.len(), 2);
+        assert!(by_stock.iter().all(|item| item.round_id == "r1"));
+        assert_eq!(
+            StockDao::count_day_reviews_by_rounds(&conn, "l1").unwrap(),
+            vec![("r1".to_string(), 2)]
+        );
+
+        // 清空正文 = 删行
+        StockDao::delete_day_review(&conn, "l1", "600000", "r1", "2026-10-14").unwrap();
+        assert_eq!(
+            StockDao::list_day_reviews_by_stock(&conn, "l1", "600000")
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // 轮次不再成立：该轮的每日复盘一起删
+        StockDao::delete_day_reviews_by_round(&conn, "r1").unwrap();
+        assert!(StockDao::list_day_reviews_by_stock(&conn, "l1", "600000")
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 重置与归档都要认这张新表：重置清空、归档改挂账本。
+    #[test]
+    fn day_review_follows_reset_and_archive() {
+        let (workspace, dir) = crate::dao::test_workspace("dao-stock-day-review-move");
+        let conn = workspace.connection();
+
+        let row = |id: &str, ledger: &str| StockDayReview {
+            id: id.to_string(),
+            ledger_id: ledger.to_string(),
+            stock_code: "600000".to_string(),
+            round_id: "r1".to_string(),
+            review_date: "2026-10-14".to_string(),
+            review: "正文".to_string(),
+            ..StockDayReview::default()
+        };
+        StockDao::create_day_review(&conn, &row("d1", "l1")).unwrap();
+        StockDao::create_day_review(&conn, &row("d2", "l2")).unwrap();
+
+        StockDao::move_to_ledger(&conn, "l2", "l3").unwrap();
+        assert_eq!(
+            StockDao::list_day_reviews_by_stock(&conn, "l2", "600000")
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            StockDao::list_day_reviews_by_stock(&conn, "l3", "600000")
+                .unwrap()
+                .len(),
+            1
+        );
+
+        StockDao::reset_by_ledger_id(&conn, "l1").unwrap();
+        assert!(StockDao::list_day_reviews_by_stock(&conn, "l1", "600000")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            StockDao::list_day_reviews_by_stock(&conn, "l3", "600000")
+                .unwrap()
+                .len(),
+            1,
+            "重置只清自己的账本"
         );
 
         std::fs::remove_dir_all(&dir).ok();

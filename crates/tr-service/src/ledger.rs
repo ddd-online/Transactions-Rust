@@ -186,6 +186,9 @@ mod tests {
              VALUES (?2, ?1, '600519', ?2, 1, 1, 2, '分析', '', 1)",
             "INSERT INTO tbl_billadm_stock_trade_history \
              (id, ledger_id, stock_code, stock_name, created_at, updated_at) VALUES (?2, ?1, '600519', '贵州茅台', 1, 1)",
+            "INSERT INTO tbl_billadm_stock_day_review \
+             (id, ledger_id, stock_code, round_id, review_date, review, created_at, updated_at) \
+             VALUES (?2, ?1, '600519', '', '2026-01-01', '当天复盘', 1, 1)",
             "INSERT INTO tbl_billadm_stock_position \
              (id, ledger_id, stock_code, stock_name, quantity, total_cost, realized_pnl, review, created_at, updated_at) \
              VALUES (?2, ?1, '600519', '贵州茅台', 100, 10000, 0, '', 1, 1)",

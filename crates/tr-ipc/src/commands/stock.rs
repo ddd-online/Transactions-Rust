@@ -21,21 +21,22 @@
 use tauri::State;
 
 use tr_domain::dto::{
-    StockFundRecordPage, StockNameDto, StockOperationDto, StockOperationRollbackDto,
-    StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockReviewSettingDto,
-    StockStatisticsDto, StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto,
-    StockTradeHistorySummaryDto, StockTradeImpactDto, StockTradeTagSettingDto,
+    StockDayReviewDto, StockFundRecordPage, StockNameDto, StockOperationDto,
+    StockOperationRollbackDto, StockOperationRollbackPreviewDto, StockOverviewDto,
+    StockPositionDto, StockReviewSettingDto, StockStatisticsDto, StockTradeDto,
+    StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
+    StockTradeImpactDto, StockTradeTagSettingDto,
 };
 use tr_domain::error::AppError;
 use tr_domain::models::{RoundFee, StockFeeSetting};
 use tr_domain::money::price_yuan_to_milli;
 use tr_domain::wire::{
     LedgerIdRequest, QueryNumber, StockAmountDateRequest, StockArchiveRequest,
-    StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
-    StockPositionTagRequest, StockReviewTemplateRequest, StockRoundReviewRequest,
-    StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
-    StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
-    StockTradesRequest,
+    StockDayReviewRequest, StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest,
+    StockPositionReviewRequest, StockPositionTagRequest, StockReviewTemplateRequest,
+    StockRoundReviewRequest, StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest,
+    StockTradeCreateRequest, StockTradeImpactRequest, StockTradeOrderDeleteRequest,
+    StockTradeUpdateRequest, StockTradesRequest,
 };
 use tr_service::quote::TencentStockQuoteFetcher;
 use tr_service::stock::{self, TradeFill};
@@ -292,6 +293,23 @@ pub fn stock_position_review(
         &workspace,
         &req.ledger_id,
         &req.code,
+        &req.review,
+    )?)
+}
+
+/// 保存当前轮某一天的「每日复盘」（500 字以内；空串删除这一天的记录），返回当前轮的复盘列表。
+#[tauri::command]
+pub fn stock_day_review(
+    state: State<'_, AppState>,
+    req: StockDayReviewRequest,
+) -> ApiResult<Vec<StockDayReviewDto>> {
+    require_ledger_id(&req.ledger_id)?;
+    let workspace = state.workspace()?;
+    Ok(stock::update_day_review(
+        &workspace,
+        &req.ledger_id,
+        &req.code,
+        &req.date,
         &req.review,
     )?)
 }

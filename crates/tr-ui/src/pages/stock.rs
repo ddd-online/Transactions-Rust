@@ -11,9 +11,9 @@
 //! | [`StockPage`] | 只决定"当前是哪个子功能"（定义见 [`StockSub`]） |
 //! | [`StockSubRail`] | 子功能图标条（`FeaturePage` 的 `rail` 插槽内容） |
 //! | [`account_view`] | 总资产卡 + 资金记录分页；工具栏 = 支取 / 利息归本 / 追加本金 |
-//! | [`position_view`] | 持仓卡片 + 行情面板 + 本轮复盘 + 下单弹窗 + 成交表 + 影响预演；工具栏 = 建仓 |
+//! | [`position_view`] | 持仓卡片 + 行情面板 + 每日复盘（月历）+ 本轮复盘 + 下单弹窗 + 成交表 + 影响预演；工具栏 = 建仓 |
 //! | [`edit_modal`] / [`impact_modal`] | 编辑成交 / 删除委托 + 影响预演确认 |
-//! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 轮次复盘/标签（无工具栏） |
+//! | [`history_view`] | 全局汇总 + 已清仓股票列表 + 轮次 + 成交表 + 每日复盘（只读列表）+ 轮次复盘/标签（无工具栏） |
 //! | [`statistics_view`] | 结算统计 + 自绘 SVG 曲线（统计）/ 逐笔结算明细分页（明细）；工具栏 = 分栏页签 + 区间/笔数/标签筛选 + 统计口径下拉 |
 //! | [`settings_view`] | 交易标签 + 本轮复盘模板 + 交易费用设置 + 操作记录（查看 / 回滚）+ 归档到新账本 + 重置股票数据 |
 //! | 状态组织 | 本文件直接持有信号（不引入 store；与其余页面一致） |
@@ -74,9 +74,9 @@ use wasm_bindgen::JsCast;
 use crate::api;
 use crate::components::ui::{
     close_button, is_mask_self_click, Button, ButtonSize, ButtonVariant, ChartConfig, ChartSeries,
-    DatePicker, Empty, FeaturePage, Form, FormItem, FormLayout, IconButton, Input, LineChart,
-    Modal, ModalSize, Pagination, Segmented, SegmentedOption, Select, SelectOption, TabItem,
-    TabPane, Tabs, Textarea, Tooltip,
+    DatePicker, DayCalendar, Empty, FeaturePage, Form, FormItem, FormLayout, IconButton, Input,
+    LineChart, Modal, ModalSize, Pagination, Segmented, SegmentedOption, Select, SelectOption,
+    TabItem, TabPane, Tabs, Textarea, Tooltip,
 };
 use crate::error_handler::notify_error;
 use crate::format::{self, lots_of};
@@ -90,6 +90,8 @@ use tr_draw::stock_records::{history_node_id, round_head_node_id, round_node_id}
 use tr_draw::stock_rows::{group_trades, impact_summary, removed_rounds_text, TradeRow};
 use tr_draw::stock_stats::{point_span_label, Metric};
 use tr_draw::text::parse_rate;
+
+use tr_draw::calendar::parse_ymd;
 
 /// 页面标题（固定文案，改动即影响界面）。侧栏条目名也用这一个来源。
 pub const PAGE_TITLE: &str = "股票";
@@ -158,7 +160,16 @@ const FUND_PAGE_SIZE: i64 = 10;
 const REVIEW_TEMPLATE_CACHE: &str = "stock.review-template";
 
 /// 复盘占位文案（固定文案，改动即影响界面）。
-const REVIEW_PLACEHOLDER: &str = "写下本轮的操作依据、得失与可改进之处（500 字以内）";
+///
+/// 作用域中性：同一张写作面既写「本轮复盘」也写「每日复盘」，占位符不再写死"本轮"。
+const REVIEW_PLACEHOLDER: &str = "写下操作依据、得失与可改进之处（500 字以内）";
+
+/// 今天所在月（`(年, 月)`）—— 每日复盘日历的初始月。
+fn month_of_today() -> (i32, u32) {
+    parse_ymd(&today_ymd())
+        .map(|date| (date.year, date.month))
+        .unwrap_or((1970, 1))
+}
 
 /// 「本轮复盘模板」的取数声明（设置页 / 持仓页 / 记录页共用同一份跨视图缓存）。
 ///
@@ -1072,6 +1083,11 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     // 模板按账本存（在「设置」子功能里改）这里是读；打开复盘时拿它预填
     let review_template = review_template_signal(review_template_query(stores));
 
+    // 每日复盘：默认收起（展开是一张月历）。日历的可见月份由页面持有 ——
+    // 详情子树会被 `positions` 的每次刷新重建，月视图放在组件里会一刷新就跳回本月。
+    let day_open = RwSignal::new(false);
+    let day_visible = RwSignal::new(month_of_today());
+
     // 下单弹窗
     let trade_open = RwSignal::new(false);
     let trade_type = RwSignal::new("open".to_string());
@@ -1121,6 +1137,24 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
             .find(|position| position.stock_code == code)
     };
 
+    // 每日复盘的三个派生值：条数（收起时的摘要）、今天是否已写（按钮文案）、
+    // 今天能不能写（建仓日在今天之后 / 没有建仓日时禁用「写今日」）。
+    let day_review_count = move || {
+        current_position()
+            .map(|item| item.day_reviews.len())
+            .unwrap_or(0)
+    };
+    let today_reviewed = move || {
+        let today = today_ymd();
+        current_position().is_some_and(|item| item.day_reviews.iter().any(|row| row.date == today))
+    };
+    let can_write_today = move || {
+        let today = today_ymd();
+        current_position().is_some_and(|item| {
+            !item.round_opened_date.is_empty() && item.round_opened_date.as_str() <= today.as_str()
+        })
+    };
+
     // 持仓结果 → 同步选中代码：还在就留着，不在了（或刚清空）就选第一只。
     // 点卡片 = 换 key，下一轮持仓请求由 module 自己发（"选中即刷新该股行情"）。
     Effect::new(move |_| {
@@ -1155,11 +1189,13 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         review_target.set(None);
         review_open.set(true);
         review_draft.set(String::new());
+        // 每日复盘保持用户的展开/收起选择，但月视图回到本月（新股票的时间区间可能完全不同）
+        day_visible.set(month_of_today());
         // 成交由取数 module 按 key（账本 + 选中代码）重拉，这里不再手写
         code
     });
 
-    // ---- 本轮复盘保存 ----
+    // ---- 复盘保存：本轮复盘与每日复盘共用一个写作面，落哪条写路径看 `review_target` ----
     let save_review = move || {
         let ledger_id = stores.current_ledger_id.get_untracked();
         let code = selected_code.get_untracked();
@@ -1167,29 +1203,59 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
             return;
         }
         let review = review_draft.get_untracked();
+        let Some(scope) = review_target.get_untracked().map(|target| target.scope) else {
+            return;
+        };
         review_saving.set(true);
         leptos::task::spawn_local(async move {
-            // 在飞与失败面走 change::submit（判据见 #34）；成功后的就地更新留在调用点
-            let saved = crate::change::submit(
-                Some(review_saving),
-                "保存本轮复盘失败",
-                api::stock::position_review(&ledger_id, &code, &review),
-            )
-            .await;
-            if let Some(updated) = saved {
-                positions.update(|items| {
-                    if let Some(existing) = items
-                        .iter_mut()
-                        .find(|item| item.stock_code == updated.stock_code)
-                    {
-                        existing.review = updated.review.clone();
+            match scope {
+                ReviewScope::Position => {
+                    // 在飞与失败面走 change::submit（判据见 #34）；成功后的就地更新留在调用点
+                    let saved = crate::change::submit(
+                        Some(review_saving),
+                        "保存本轮复盘失败",
+                        api::stock::position_review(&ledger_id, &code, &review),
+                    )
+                    .await;
+                    if let Some(updated) = saved {
+                        positions.update(|items| {
+                            if let Some(existing) = items
+                                .iter_mut()
+                                .find(|item| item.stock_code == updated.stock_code)
+                            {
+                                existing.review = updated.review.clone();
+                            }
+                        });
+                        // 关掉弹窗并把这块复盘摊开：让用户当场看到它落下了（toast 只是旁证）
+                        review_target.set(None);
+                        review_open.set(true);
+                        review_draft.set(String::new());
+                        Notifier::global().success("本轮复盘已保存".to_string(), None);
                     }
-                });
-                // 关掉弹窗并把这块复盘摊开：让用户当场看到它落下了（toast 只是旁证）
-                review_target.set(None);
-                review_open.set(true);
-                review_draft.set(String::new());
-                Notifier::global().success("本轮复盘已保存".to_string(), None);
+                }
+                ReviewScope::Day(date) => {
+                    let saved = crate::change::submit(
+                        Some(review_saving),
+                        "保存每日复盘失败",
+                        api::stock::day_review(&ledger_id, &code, &date, &review),
+                    )
+                    .await;
+                    if let Some(rows) = saved {
+                        // 服务层返回**当前轮**的全部每日复盘：整块换掉，日历上的标记随之刷新
+                        positions.update(|items| {
+                            if let Some(existing) =
+                                items.iter_mut().find(|item| item.stock_code == code)
+                            {
+                                existing.day_reviews = rows;
+                            }
+                        });
+                        review_target.set(None);
+                        review_draft.set(String::new());
+                        Notifier::global().success("每日复盘已保存".to_string(), None);
+                    }
+                }
+                // 已归档轮次的复盘走 `history_view` 的 `save_round_review`，到不了这里
+                ReviewScope::Round(_) => {}
             }
         });
     };
@@ -1245,11 +1311,39 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
         });
         review_target.set(Some(ReviewTarget {
             scope: ReviewScope::Position,
-            identity,
+            title: format!("本轮复盘 · {identity}"),
             // 持仓这一轮还没归档：清仓时这份复盘会随轮次走（服务层已断言）
             context: "持仓中 · 清仓时随这一轮归档".to_string(),
         }));
         review_open.set(true);
+    };
+
+    // 打开某一天的每日复盘：已有正文带原文，没有就预填模板（与本轮复盘同一个写作面）
+    let open_day_review = move |date: String| {
+        let Some(position) = current_position() else {
+            return;
+        };
+        let existing = position
+            .day_reviews
+            .iter()
+            .find(|row| row.date == date)
+            .map(|row| row.review.clone())
+            .unwrap_or_default();
+        review_draft.set(if existing.is_empty() {
+            review_template.get_untracked()
+        } else {
+            existing
+        });
+        let opened_on = if position.round_opened_date.is_empty() {
+            "—".to_string()
+        } else {
+            position.round_opened_date.clone()
+        };
+        review_target.set(Some(ReviewTarget {
+            scope: ReviewScope::Day(date.clone()),
+            title: format!("每日复盘 · {} {}", position.stock_name, position.stock_code),
+            context: format!("{date} · 持仓中 · 本轮建仓 {opened_on}"),
+        }));
     };
 
     // ---- 下单 ----
@@ -1837,6 +1931,8 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                 </div>
                             </div>
 
+                            // 详情正文：头部固定，以下内容自己滚（展开每日复盘日历后会长过面板）
+                            <div class="stock-detail__body">
                             {if has_quote {
                                 view! {
                                     <div class="stock-quote">
@@ -1881,6 +1977,96 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                 }
                                     .into_any()
                             }}
+
+                            // 每日复盘：默认收起，展开是一张「建仓日 → 今天」的月历。
+                            // 写作面与本轮复盘是同一个弹窗（`open_day_review` → `review_modal`）。
+                            <div class="stock-review stock-day-review">
+                                <div class="stock-review__head">
+                                    <button
+                                        type="button"
+                                        class="stock-review__toggle"
+                                        aria-expanded=move || day_open.get()
+                                        on:click=move |_| day_open.update(|value| *value = !*value)
+                                    >
+                                        <span
+                                            class="diary-tree__caret"
+                                            class:is-open=move || day_open.get()
+                                        >
+                                            {icons::icon(Icon::CaretRight)}
+                                        </span>
+                                        <span class="stock-review__title">"每日复盘"</span>
+                                        <Show when=move || (!day_open.get() && day_review_count() > 0)>
+                                            <span class="stock-review__summary">
+                                                {move || format!("已写 {} 篇", day_review_count())}
+                                            </span>
+                                        </Show>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="ui-btn ui-btn--text ui-btn--sm"
+                                        disabled=move || !can_write_today()
+                                        on:click=move |_| open_day_review(today_ymd())
+                                    >
+                                        <span class="ui-btn__icon">{icons::icon(Icon::Edit)}</span>
+                                        {move || if today_reviewed() { "改今日" } else { "写今日" }}
+                                    </button>
+                                </div>
+                                <Show when=move || day_open.get()>
+                                    {move || {
+                                        let Some(position) = current_position() else {
+                                            return ().into_any();
+                                        };
+                                        let today = today_ymd();
+                                        if position.round_opened_date.is_empty() {
+                                            return view! {
+                                                <p class="stock-day-review__hint">
+                                                    "本轮还没有建仓日期，暂时不能写每日复盘。"
+                                                </p>
+                                            }
+                                                .into_any();
+                                        }
+                                        if position.round_opened_date > today {
+                                            return view! {
+                                                <p class="stock-day-review__hint">
+                                                    "建仓日期在今天之后，暂时还不能写每日复盘。"
+                                                </p>
+                                            }
+                                                .into_any();
+                                        }
+                                        view! {
+                                            <p class="stock-day-review__hint">
+                                                {format!(
+                                                    "每天一篇，从建仓日 {} 到今天。",
+                                                    position.round_opened_date,
+                                                )}
+                                            </p>
+                                            <div class="stock-day-review__calendar">
+                                                <DayCalendar
+                                                    visible=day_visible
+                                                    from=Signal::derive(move || {
+                                                        current_position()
+                                                            .map(|item| item.round_opened_date)
+                                                            .unwrap_or_default()
+                                                    })
+                                                    to=Signal::derive(today_ymd)
+                                                    marked=Signal::derive(move || {
+                                                        current_position()
+                                                            .map(|item| {
+                                                                item.day_reviews
+                                                                    .into_iter()
+                                                                    .map(|row| row.date)
+                                                                    .collect::<Vec<_>>()
+                                                            })
+                                                            .unwrap_or_default()
+                                                    })
+                                                    on_pick=UnsyncCallback::new(open_day_review)
+                                                />
+                                            </div>
+                                        }
+                                            .into_any()
+                                    }}
+                                </Show>
+                            </div>
 
                             <div class="stock-review">
                                 <div class="stock-review__head">
@@ -1980,6 +2166,7 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
                                     </table>
                                 </div>
                             </div>
+                            </div>
                         }
                             .into_any()
                     }}
@@ -2067,35 +2254,42 @@ fn position_view(sub: RwSignal<StockSub>) -> AnyView {
     .into_any()
 }
 
-/// 复盘能写多少字：与服务层同一口径（`tr-service` 的两个 `update_*_review` 数码点判 500）。
+/// 复盘能写多少字：与服务层同一口径（`tr-service` 的 `update_position_review` /
+/// `update_day_review` / `update_round_review` 都数码点判 500）。
 ///
 /// 已知的近似：`maxlength` 数的是 UTF-16 码元、计数行与后端数码点，纯 emoji 时界面更严一档
 /// （一个 emoji 占两个码元）—— 宁可严不可松，权威仍是后端那句校验。
 const REVIEW_MAX_CHARS: usize = 500;
 
-/// 「本轮复盘」写在哪一处：进行中的持仓，或某个已归档的轮次。
+/// 「复盘」写在哪一处：进行中的持仓、某个已归档的轮次，或持仓中的某一天。
 ///
-/// 存储是两根字段（持仓表 / 轮次表各一根 `review`），界面却是同一张纸 ——
-/// 所以写作面只有一个，落哪条写路径由它决定。
+/// 存储是三根字段（持仓表 / 轮次表各一根 `review`，每日复盘表按 `(轮次, 日期)` 一行），
+/// 界面却是同一张纸 —— 所以写作面只有一个，落哪条写路径由它决定。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReviewScope {
     /// 持仓侧：清仓时这份复盘随这一轮归档（服务层的 `position_review_carries_into_closed_round` 已断言）
     Position,
     /// 已归档的轮次（存轮次 id）
     Round(String),
+    /// 持仓期间某一天的每日复盘（存 `YYYY-MM-DD`；清仓归档后不再可写）
+    Day(String),
 }
 
 /// 一次复盘编辑的上下文（`None` = 弹窗关着）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReviewTarget {
     scope: ReviewScope,
-    /// 标题里的身份：`上海电影 601595`
-    identity: String,
+    /// 弹窗标题（`本轮复盘 · 上海电影 601595` / `每日复盘 · …`）
+    title: String,
     /// 正文首行的上下文：`第 1 轮 · 2026-10-13 00:00 → 2026-10-14 00:00`
     context: String,
 }
 
-/// 「本轮复盘」写作面弹窗：持仓与轮次共用同一张纸。
+/// 「复盘」写作面弹窗：本轮复盘（持仓 / 轮次）与每日复盘**共用同一张纸**。
+///
+/// 三处入口的差别只有标题与首行上下文（`ReviewTarget` 的 `title` / `context`）：
+/// 写哪条路径由 `scope` 决定，弹窗本身的几何、字数、快捷键与脏关闭二次确认完全一致 ——
+/// 这也是用户要的"每日复盘复用本轮复盘的编辑弹窗"。
 ///
 /// 为什么是弹窗，而不是原来那个"面板里的 3 行文本框"：
 ///
@@ -2200,8 +2394,8 @@ fn review_modal(
             title=move || {
                 target
                     .get()
-                    .map(|item| format!("本轮复盘 · {}", item.identity))
-                    .unwrap_or_else(|| "本轮复盘".to_string())
+                    .map(|item| item.title)
+                    .unwrap_or_else(|| "复盘".to_string())
             }
             size=ModalSize::Large
             ok_text=Signal::derive(move || {
@@ -3191,6 +3385,8 @@ fn history_view(sub: RwSignal<StockSub>, locate: RwSignal<Option<RoundLocate>>) 
     let detail_failed = Signal::derive(move || detail_q.failed.get());
     let collapsed_rounds = RwSignal::new(BTreeSet::<String>::new());
     let collapsed_reviews = RwSignal::new(BTreeSet::<String>::new());
+    // 每日复盘默认**收起**（只读列表），所以这里记的是"哪些轮次的每日复盘被展开过"
+    let expanded_day_reviews = RwSignal::new(BTreeSet::<String>::new());
     // 写作面与持仓侧共用同一个弹窗（见 `review_modal`）：`review_target` 非空 = 开着
     let review_target = RwSignal::new(None::<ReviewTarget>);
     let review_draft = RwSignal::new(String::new());
@@ -3245,6 +3441,7 @@ fn history_view(sub: RwSignal<StockSub>, locate: RwSignal<Option<RoundLocate>>) 
         review_draft.set(String::new());
         collapsed_rounds.set(BTreeSet::new());
         collapsed_reviews.set(BTreeSet::new());
+        expanded_day_reviews.set(BTreeSet::new());
         // 详情由取数 module 按 key（账本 + 选中代码）重拉
         code
     });
@@ -3533,6 +3730,7 @@ fn history_view(sub: RwSignal<StockSub>, locate: RwSignal<Option<RoundLocate>>) 
                                             review_template,
                                             collapsed_rounds,
                                             collapsed_reviews,
+                                            expanded_day_reviews,
                                             review_target,
                                             review_draft,
                                             tag_saving,
@@ -3661,6 +3859,8 @@ fn round_card(
     template: Signal<String>,
     collapsed_rounds: RwSignal<BTreeSet<String>>,
     collapsed_reviews: RwSignal<BTreeSet<String>>,
+    // 哪些轮次的「每日复盘」被展开过（默认收起，所以记的是展开集）
+    expanded_day_reviews: RwSignal<BTreeSet<String>>,
     review_target: RwSignal<Option<ReviewTarget>>,
     review_draft: RwSignal<String>,
     tag_saving: RwSignal<bool>,
@@ -3689,6 +3889,16 @@ fn round_card(
     ));
     let result_class = format::result_class(round.pnl);
     let pnl_class = format::pnl_class(round.pnl);
+    // 每日复盘（清仓后只读）：条数与内容在卡片构建时定下；展开态走 `expanded_day_reviews`。
+    // 归档后不再有写入口 —— 编辑只发生在持仓期间（见 `position_view` 的日历）。
+    let day_reviews = StoredValue::new(
+        round
+            .day_reviews
+            .iter()
+            .map(|row| (row.date.clone(), row.review.clone()))
+            .collect::<Vec<_>>(),
+    );
+    let day_count = day_reviews.get_value().len();
 
     view! {
         <div
@@ -3808,6 +4018,57 @@ fn round_card(
                     </table>
                 </div>
 
+                <Show when=move || (day_count > 0)>
+                    <div class="stock-review stock-day-review">
+                        <div class="stock-review__head">
+                            <button
+                                type="button"
+                                class="stock-review__toggle"
+                                aria-expanded=move || {
+                                    expanded_day_reviews.get().contains(&id.get_value())
+                                }
+                                on:click=move |_| {
+                                    let key = id.get_value();
+                                    expanded_day_reviews.update(|set| {
+                                        if !set.remove(&key) {
+                                            set.insert(key.clone());
+                                        }
+                                    });
+                                }
+                            >
+                                <span
+                                    class="diary-tree__caret"
+                                    class:is-open=move || {
+                                        expanded_day_reviews.get().contains(&id.get_value())
+                                    }
+                                >
+                                    {icons::icon(Icon::CaretRight)}
+                                </span>
+                                <span class="stock-review__title">"每日复盘"</span>
+                                <span class="stock-review__summary">
+                                    {format!("{day_count} 篇")}
+                                </span>
+                            </button>
+                        </div>
+                        <Show when=move || expanded_day_reviews.get().contains(&id.get_value())>
+                            <div class="stock-day-review__list">
+                                {day_reviews
+                                    .get_value()
+                                    .into_iter()
+                                    .map(|(date, text)| {
+                                        view! {
+                                            <div class="stock-day-review__entry">
+                                                <span class="stock-day-review__date">{date}</span>
+                                                <p class="stock-day-review__text">{text}</p>
+                                            </div>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </div>
+                        </Show>
+                    </div>
+                </Show>
+
                 <div class="stock-review">
                     <div class="stock-review__head">
                         <button
@@ -3848,7 +4109,7 @@ fn round_card(
                                 });
                                 review_target.set(Some(ReviewTarget {
                                     scope: ReviewScope::Round(key),
-                                    identity: identity.get_value(),
+                                    title: format!("本轮复盘 · {}", identity.get_value()),
                                     context: context.get_value(),
                                 }));
                             }

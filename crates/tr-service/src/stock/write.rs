@@ -646,6 +646,10 @@ fn close_round(
     db(StockDao::attach_unattached_trades(
         conn, ledger_id, stock_code, &round.id,
     ))?;
+    // 持仓期间写的「每日复盘」同样归档到这一轮（此后只读，见 `update_day_review`）
+    db(StockDao::attach_unattached_day_reviews(
+        conn, ledger_id, stock_code, &round.id,
+    ))?;
     Ok(round.id)
 }
 
@@ -809,6 +813,11 @@ fn round_meta_index(
         .into_iter()
         .map(|history| (history.stock_code, history.stock_name))
         .collect();
+    // 每轮的每日复盘条数：轮次不再成立时它们也会一起删，影响预演要说得出这件事。
+    let day_counts: HashMap<String, i64> =
+        db(StockDao::count_day_reviews_by_rounds(conn, ledger_id))?
+            .into_iter()
+            .collect();
 
     let mut index = BTreeMap::new();
     for round in rounds {
@@ -822,6 +831,7 @@ fn round_meta_index(
             round_no: round.round_no,
             tag: round.tag.clone(),
             has_review: !round.review.trim().is_empty(),
+            day_review_count: day_counts.get(&round.id).copied().unwrap_or(0),
         };
         index.insert(round_meta_key(&round.stock_code, round.round_no), meta);
     }
@@ -958,6 +968,10 @@ struct ReplayOrder {
 ///
 /// 费用沿用各笔已存的值（被编辑的委托已在调用前重算），因此重放不会改写历史费用；
 /// 轮次标签/复盘按「股票 + 轮次序号」继承，持仓复盘草稿按股票继承。
+/// 每日复盘挂在轮次 id 上：轮次行复用则原样保留；轮次不再成立的，随轮次一起删
+/// （与轮次复盘同命，见下方 `delete_day_reviews_by_round`）。重放**不挂接**未挂接的每日复盘：
+/// `round_id = ''` 的行只属于"当前还没归档的那一轮"，而重放里被结束的轮次在当初清仓时
+/// 就已经挂接过了 —— 在这里再挂一次会把持仓期的复盘错挂到历史轮次上。
 ///
 /// 幂等性：轮次行按「股票 + 轮次序号」复用原 ID，重放结束后才删除不再成立的轮次，
 /// 因此连续两次重放（成交未变）结果完全一致。
@@ -1157,6 +1171,8 @@ fn rebuild_trades(conn: &rusqlite::Connection, ledger_id: &str) -> ServiceResult
             continue;
         }
         db(StockDao::delete_trade_round(conn, &round.id))?;
+        // 该轮的每日复盘与轮次同命：轮次没了，它们也没有可读的归属
+        db(StockDao::delete_day_reviews_by_round(conn, &round.id))?;
     }
 
     for position in positions.values_mut() {

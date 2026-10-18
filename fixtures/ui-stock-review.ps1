@@ -1,4 +1,5 @@
-# ui-stock-review.ps1 —— 「本轮复盘」写作面（弹窗）：两处入口 / 静止不裁剪 / 光标 / 字数上限 / 脏关闭 / 落库。
+# ui-stock-review.ps1 —— 「复盘」写作面（弹窗）：两处入口 / 不裁剪 / 光标 / 字数上限 / 脏关闭 / 落库，
+# 外加「每日复盘」的月历（区间夹紧 / 标记 / 同一个弹窗 / 清仓归档后只读）。
 #
 # 为什么需要它：复盘原来是一个内联的 3 行文本框（`rows=3` + `min-height: 72px`），
 # 连默认模板都装不下 —— 而 WebView2 是**覆盖式**滚动条、仓库又禁止自绘滚动条
@@ -13,7 +14,11 @@
 #     再看读回的文本长什么样）—— 焦点、光标、受控输入三件事一次验完。
 # 另外：字数上限（`maxlength=500` 截断且计数行如实显示）、脏关闭的两态底栏
 # （「继续编辑 / 放弃」，「继续编辑」不许丢草稿）、Ctrl+S 落库（断言落在**库**上，不落在"点到了没有"）、
-# 两处宿主（持仓 / 轮次）打开的是同一个弹窗。
+# 三处宿主（持仓 / 轮次 / 每日复盘）打开的是同一个弹窗。
+#
+# 6/6 的每日复盘判据：日历在本轮复盘**上方**、建仓当天时前后月箭头被夹住、点今天那格打开标题以
+# 「每日复盘 · 」开头的同一个弹窗；Ctrl+S 后 `tbl_billadm_stock_day_review` 落一行（`round_id` 为空）、
+# 格子变成「已写」；清仓后该行挂上真实轮次 id、记录页能读到正文（只读）。
 #
 # 用法（pwsh 7；需要 release 产物；本仓库不能有实例在跑）：
 #   pwsh -File fixtures/ui-stock-review.ps1 [-Exe <exe>] [-Workspace <ws>] [-OutDir <dir>] [-Appearance light|dark]
@@ -352,6 +357,9 @@ $positionText = ('持仓侧：回踩年线企稳后放量，先建一半仓位�
 $positionMarker = '持仓侧：回踩年线企稳后放量'
 $roundText = '轮次侧：减仓点位偏早，下次等回踩确认'
 $caretMarker = '光标落点'
+# 每日复盘（6/6）：写入的正文与前 11 个字当定位记号（清仓后在「记录」页按它找只读正文）
+$dayText = '每日复盘端到端：今天按计划低吸，尾盘没有追高，明天看放量'
+$dayMarker = '每日复盘端到端：'
 
 $process = $null
 try {
@@ -376,8 +384,8 @@ try {
     $scale = Get-WindowScale -Window $window
     Write-Host "[review] 窗口 DPI 缩放 $scale；主题 $Appearance" -ForegroundColor Cyan
 
-    # ================= 1/5 持仓侧：建仓造出进行中的一轮 =================
-    Write-Host "`n[review] 1/5 持仓侧：建仓 $stockCode × 1 手（种子的轮次都已归档，持仓侧需要一轮进行中）"
+    # ================= 1/6 持仓侧：建仓造出进行中的一轮 =================
+    Write-Host "`n[review] 1/6 持仓侧：建仓 $stockCode × 1 手（种子的轮次都已归档，持仓侧需要一轮进行中）"
     Assert-True (Invoke-Element (Wait-Element -Root $window -Name '股票' -TimeoutSec 15)) '打开「股票」页'
     Start-Sleep -Seconds 3
     Assert-True (Switch-StockSub -Window $window -Name '持仓') '切到「持仓」子功能'
@@ -387,8 +395,8 @@ try {
         Where-Object { $_.stock_code -eq $stockCode -and [int64]$_.quantity -gt 0 } |
         Select-Object -First 1).stock_name)
 
-    # ================= 2/5 写作面：不裁剪 / 打开即聚焦 / 光标落在第一行末 =================
-    Write-Host "`n[review] 2/5 写作面：几何（≥320 逻辑像素）+ 焦点 + 光标"
+    # ================= 2/6 写作面：不裁剪 / 打开即聚焦 / 光标落在第一行末 =================
+    Write-Host "`n[review] 2/6 写作面：几何（≥320 逻辑像素）+ 焦点 + 光标"
     $openButton = $null
     foreach ($candidate in @('写复盘', '编辑')) {
         $openButton = Wait-VisibleButton -Window $window -Name $candidate -TimeoutSec 5 -ClassPart 'ui-btn'
@@ -442,8 +450,8 @@ try {
         Save-Screenshot -Path (Join-Path $OutDir "review-$Appearance-editor.png")
     }
 
-    # ================= 3/5 字数上限 =================
-    Write-Host "`n[review] 3/5 字数上限：粘 600 字 → 截断到 500"
+    # ================= 3/6 字数上限 =================
+    Write-Host "`n[review] 3/6 字数上限：粘 600 字 → 截断到 500"
     $over = '测' * 600
     # 整段替换（Ctrl+A + Ctrl+V，带读回校验）；前台/焦点由 `Set-ReviewText` 自己确认
     if ($editor) {
@@ -458,8 +466,8 @@ try {
         Assert-True ($capCounter.Current.Name -eq '500 / 500 字') "字数行显示 500 / 500 字（实际 '$($capCounter.Current.Name)'）"
     }
 
-    # ================= 4/5 脏关闭：二次确认，且「继续编辑」不丢草稿 =================
-    Write-Host "`n[review] 4/5 脏关闭：有改动 → 二次确认 → 继续编辑 → 放弃"
+    # ================= 4/6 脏关闭：二次确认，且「继续编辑」不丢草稿 =================
+    Write-Host "`n[review] 4/6 脏关闭：有改动 → 二次确认 → 继续编辑 → 放弃"
     Assert-True (Close-ReviewModal -Window $window -ButtonName '取消') '点到了「取消」'
     $confirming = Wait-VisibleButton -Window $window -Name '继续编辑' -TimeoutSec 8 -ClassPart 'ui-btn'
     Assert-True ([bool]$confirming) '有改动时「取消」不直接关，底栏换成「继续编辑 / 放弃」'
@@ -485,8 +493,8 @@ try {
     Assert-True (($posReview.Count -ge 1) -and [string]::IsNullOrEmpty([string]$posReview[0].review)) `
         '「放弃」没有写库（持仓复盘的 review 仍是空）'
 
-    # ================= 5/5 落库：持仓侧走 Ctrl+S，轮次侧走弹窗的「保存」 =================
-    Write-Host "`n[review] 5/5 落库：持仓侧 Ctrl+S → 轮次侧「保存」按钮"
+    # ================= 5/6 落库：持仓侧走 Ctrl+S，轮次侧走弹窗的「保存」 =================
+    Write-Host "`n[review] 5/6 落库：持仓侧 Ctrl+S → 轮次侧「保存」按钮"
     $openButton = Wait-VisibleButton -Window $window -Name '写复盘' -TimeoutSec 10 -ClassPart 'ui-btn'
     if ($openButton) { Invoke-Element $openButton | Out-Null }
     Start-Sleep -Seconds 1
@@ -600,8 +608,161 @@ try {
         Where-Object { [string]$_.review -eq $roundText })
     Assert-True ($savedRound.Count -eq 1) "轮次侧「保存」落库（库里 review = '$roundText' 的轮次 $($savedRound.Count) 个）"
 
+    # ================= 6/6 每日复盘：月历 → 同一个写作面 → 落库 → 清仓归档（只读） =================
+    Write-Host "`n[review] 6/6 每日复盘：$stockCode 的月历 / 共用弹窗 / 清仓后只读"
+    Assert-True (Switch-StockSub -Window $window -Name '持仓') '切回「持仓」'
+    Start-Sleep -Seconds 3
+
+    # 标题按钮的可访问名可能带上摘要（「已写 N 篇」/「N 篇」），所以按包含匹配
+    $dayToggle = Wait-VisibleButton -Window $window -Name '每日复盘' -TimeoutSec 15 -Like
+    Assert-True ([bool]$dayToggle) '详情区找到「每日复盘」'
+    $roundToggle = Wait-VisibleButton -Window $window -Name '本轮复盘' -TimeoutSec 10 -Like
+    if ($dayToggle -and $roundToggle) {
+        Assert-True ($dayToggle.Current.BoundingRectangle.Top -lt $roundToggle.Current.BoundingRectangle.Top) `
+            '「每日复盘」排在本轮复盘的**上方**'
+    }
+    if ($dayToggle) {
+        Assert-True (Bring-AppToFront -Window $window) '展开日历前把应用窗口提回前台'
+        $rect = $dayToggle.Current.BoundingRectangle
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2)) | Out-Null
+    }
+    Start-Sleep -Seconds 1
+
+    $today = (Get-Date).ToString('yyyy-MM-dd')
+    $dayCell = $null
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $dayCell = @(Get-Elements $window | Where-Object {
+                -not $_.Current.IsOffscreen -and
+                ([string]$_.Current.ClassName).Contains('ui-date-picker__cell') -and
+                ([string]$_.Current.Name) -eq $today
+            }) | Select-Object -First 1
+        if (-not $dayCell) { Start-Sleep -Milliseconds 300 }
+    } while (-not $dayCell -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$dayCell) "展开后看到今天那一格（$today）"
+    Assert-True ($dayCell -and $dayCell.Current.IsEnabled) '今天那格可点（建仓日 = 今天，区间只有这一天）'
+
+    # 建仓当天：日历区间 = [今天, 今天] → 前后两个月的箭头都夹住（禁用）
+    $prevMonth = Wait-VisibleButton -Window $window -Name '上一月' -TimeoutSec 3
+    $nextMonth = Wait-VisibleButton -Window $window -Name '下一月' -TimeoutSec 3
+    Assert-True ($prevMonth -and -not $prevMonth.Current.IsEnabled) '建仓当天时「上一月」被夹住（区间外没有可写的日子）'
+    Assert-True ($nextMonth -and -not $nextMonth.Current.IsEnabled) '「下一月」同样被夹住（终点是今天）'
+
+    # 点今天 → 同一个写作面（标题换成「每日复盘 · …」）
+    if ($dayCell) {
+        Assert-True (Bring-AppToFront -Window $window) '点日历格前把应用窗口提回前台'
+        $rect = $dayCell.Current.BoundingRectangle
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2)) | Out-Null
+    }
+    Start-Sleep -Seconds 1
+    $dayTitle = $null
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $dayTitle = Find-Like -Root $window -Pattern '每日复盘 · '
+        if (-not $dayTitle) { Start-Sleep -Milliseconds 300 }
+    } while (-not $dayTitle -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$dayTitle) '打开的是**同一个**复盘弹窗（标题以「每日复盘 · 」开头）'
+    $dayEditor = Get-ReviewEditor -Window $window
+    Assert-True ([bool]$dayEditor) '每日复盘复用的写作面就是那个大文本框'
+    if ($dayEditor) {
+        Assert-True (Set-ReviewText -Window $window -Element $dayEditor -Text $dayText) '每日复盘写入目标文本（读回一致）'
+    }
+    Save-ReviewNow -Window $window
+    Start-Sleep -Seconds 1
+    $savedDay = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_day_review' -OutDir $OutDir |
+        Where-Object { [string]$_.stock_code -eq $stockCode -and [string]$_.review_date -eq $today })
+    Assert-True ($savedDay.Count -eq 1) "每日复盘落库（$today 一行，实际 $($savedDay.Count)）"
+    if ($savedDay.Count -eq 1) {
+        Assert-True ([string]::IsNullOrEmpty([string]$savedDay[0].round_id)) `
+            '持仓期间属于当前轮（round_id 为空，清仓时才归档）'
+        Assert-True ([string]$savedDay[0].review -eq $dayText) '落库正文与写入一致'
+    }
+    # 保存后那一格变成「… · 已写」
+    $markedCell = $null
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $markedCell = @(Get-Elements $window | Where-Object {
+                -not $_.Current.IsOffscreen -and
+                ([string]$_.Current.ClassName).Contains('ui-date-picker__cell') -and
+                ([string]$_.Current.Name).StartsWith($today) -and
+                ([string]$_.Current.Name).Contains('已写')
+            }) | Select-Object -First 1
+        if (-not $markedCell) { Start-Sleep -Milliseconds 300 }
+    } while (-not $markedCell -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$markedCell) '保存后日历上今天那格标成「已写」'
+    Save-Screenshot -Path (Join-Path $OutDir "review-$Appearance-day-calendar.png")
+
+    # ---- 清仓：每日复盘随轮次归档，历史里只读可看 ----
+    $closeButton = Wait-VisibleButton -Window $window -Name '清仓' -TimeoutSec 15
+    Assert-True ([bool]$closeButton) '详情区还有「清仓」'
+    if ($closeButton) {
+        Assert-True (Bring-AppToFront -Window $window) '点清仓前把应用窗口提回前台'
+        $rect = $closeButton.Current.BoundingRectangle
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2)) | Out-Null
+    }
+    Start-Sleep -Seconds 1
+    Assert-True ([bool](Wait-Element -Root $window -Name '委托清仓' -TimeoutSec 10)) '清仓弹窗已打开'
+    Assert-True (Set-Value (Wait-Element -Root $window -Name '成交价（元/股）' -TimeoutSec 8) '120') '填入清仓价'
+    Start-Sleep -Milliseconds 500
+    $confirmClose = Wait-VisibleButton -Window $window -Name '清仓' -TimeoutSec 10 -Last -ClassPart 'ui-btn'
+    Assert-True ([bool]$confirmClose) '找到弹窗里的「清仓」确认键'
+    if ($confirmClose) {
+        $rect = $confirmClose.Current.BoundingRectangle
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2)) | Out-Null
+    }
+    Start-Sleep -Seconds 3
+
+    $dayRows = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_day_review' -OutDir $OutDir |
+        Where-Object { [string]$_.stock_code -eq $stockCode })
+    Assert-True ($dayRows.Count -eq 1) '清仓后每日复盘还在（没有丢）'
+    if ($dayRows.Count -eq 1) {
+        Assert-True (-not [string]::IsNullOrEmpty([string]$dayRows[0].round_id)) `
+            '清仓时挂到了轮次上（round_id 不再为空）'
+        $roundIds = @(Read-Table -Repo $repo -Workspace $ws -Table 'tbl_billadm_stock_trade_round' -OutDir $OutDir |
+            Where-Object { [string]$_.stock_code -eq $stockCode } | ForEach-Object { [string]$_.id })
+        Assert-True ($roundIds -contains [string]$dayRows[0].round_id) '挂的轮次 id 真实存在于该股轮次里'
+    }
+    Assert-True (-not [bool](Find-Like -Root $window -Pattern '写今日')) '清仓后「写今日」入口随持仓消失'
+
+    Assert-True (Switch-StockSub -Window $window -Name '记录') '切到「记录」'
+    Start-Sleep -Seconds 3
+    $card = $null
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        foreach ($element in @(Get-Elements $window)) {
+            if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+            if ($element.Current.IsOffscreen) { continue }
+            $name = [string]$element.Current.Name
+            if ($name -and $name.Contains($stockCode) -and $name.Contains('轮')) { $card = $element; break }
+        }
+        if (-not $card) { Start-Sleep -Milliseconds 400 }
+    } while (-not $card -and (Get-Date) -lt $deadline)
+    Assert-True ([bool]$card) "记录页找到 $stockCode 的卡片"
+    if ($card) { Invoke-Element $card | Out-Null }
+    Start-Sleep -Seconds 3
+
+    # 详情是从「记录」页按股票拉的（带行情），给足加载时间；按钮名里带摘要时用包含匹配，
+    # 再兜底按文字节点找（两者都在同一个 toggle 里，点哪儿都一样）。
+    $dayHeading = Wait-VisibleButton -Window $window -Name '每日复盘' -TimeoutSec 30 -Like
+    if (-not $dayHeading) { $dayHeading = Wait-Like -Root $window -Pattern '每日复盘' -TimeoutSec 10 }
+    Assert-True ([bool]$dayHeading) '轮次卡片里有「每日复盘」'
+    if ($dayHeading) {
+        Assert-True (Bring-AppToFront -Window $window) '展开只读列表前把应用窗口提回前台'
+        $rect = $dayHeading.Current.BoundingRectangle
+        [TrUia]::Click([int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2)) | Out-Null
+    }
+    Start-Sleep -Seconds 1
+    $foundDayText = $false
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $foundDayText = [bool](Find-Like -Root $window -Pattern $dayMarker)
+        if (-not $foundDayText) { Start-Sleep -Milliseconds 400 }
+    } while (-not $foundDayText -and (Get-Date) -lt $deadline)
+    Assert-True $foundDayText '历史里能看到每日复盘的正文（只读）'
+    Save-Screenshot -Path (Join-Path $OutDir "review-$Appearance-day-history.png")
+
     Write-Host "[review] 截图目录：$OutDir" -ForegroundColor Cyan
 }
 finally { Stop-TrApp -Process $process -Failures $failures -OutDir $OutDir }
 
-Show-TrSummary -Failures $failures -Tag 'review' -SuccessMessage "[review] 全部通过：写作面（两处入口 / 不裁剪 / 光标 / 上限 / 脏关闭 / 落库）"
+Show-TrSummary -Failures $failures -Tag 'review' -SuccessMessage "[review] 全部通过：写作面（三处入口 / 不裁剪 / 光标 / 上限 / 脏关闭 / 落库）+ 每日复盘（月历区间夹紧 / 同一个弹窗 / 清仓归档后只读）"

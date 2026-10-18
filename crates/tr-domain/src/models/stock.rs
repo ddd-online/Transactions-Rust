@@ -303,6 +303,37 @@ pub struct StockTradeRound {
     pub created_at: i64,
 }
 
+/// 每日复盘：一轮里**某一天**的一篇复盘（每轮每天至多一条）。
+/// 表 `tbl_billadm_stock_day_review`。
+///
+/// 与成交同一套归属 idiom：`round_id` 为空串 = **当前还没归档的那一轮**（持仓期间先写在
+/// `round_id = ''` 上），清仓归档时挂到刚建（或重放复用）的轮次 id 上；此后只读。
+/// 唯一键是 `(ledger_id, stock_code, round_id, review_date)` —— 同一只票的两轮即使落在同一天
+/// 也各有各的一条，不会互相覆盖。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockDayReview {
+    #[serde(rename = "id")]
+    pub id: String,
+    #[serde(rename = "ledgerId")]
+    pub ledger_id: String,
+    #[serde(rename = "stockCode")]
+    pub stock_code: String,
+    /// 所属轮次 id；空串 = 当前进行中的那一轮（清仓时归档）
+    #[serde(rename = "roundId")]
+    pub round_id: String,
+    /// 复盘日期（`YYYY-MM-DD`，本地日）
+    #[serde(rename = "reviewDate")]
+    pub review_date: String,
+    /// 正文（500 字以内；空串 = 不保留这一条，见服务层的 `update_day_review`）
+    #[serde(rename = "review")]
+    pub review: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+}
+
 /// 股票交易标签设置（每个账本一份）。`tags` 是可用标签的有序 JSON 数组，
 /// 不参与序列化（对外只通过 DTO 暴露）。
 /// 表 `tbl_billadm_stock_trade_tag_setting`。
@@ -451,5 +482,24 @@ mod tests {
         })
         .unwrap();
         assert!(value.get("tags").is_none());
+    }
+
+    /// 每日复盘与其它股票模型同口径：camelCase 的线上名。
+    #[test]
+    fn day_review_json_names_are_camel_case() {
+        let value = serde_json::to_value(StockDayReview {
+            ledger_id: "l1".into(),
+            stock_code: "600000".into(),
+            round_id: "r1".into(),
+            review_date: "2026-10-16".into(),
+            review: "正文".into(),
+            ..StockDayReview::default()
+        })
+        .unwrap();
+        assert_eq!(value["ledgerId"], "l1");
+        assert_eq!(value["stockCode"], "600000");
+        assert_eq!(value["roundId"], "r1");
+        assert_eq!(value["reviewDate"], "2026-10-16");
+        assert_eq!(value["review"], "正文");
     }
 }

@@ -31,17 +31,18 @@
 
 use tr_domain::commands;
 use tr_domain::dto::{
-    StockFundRecordPage, StockNameDto, StockOperationDto, StockOperationRollbackDto,
-    StockOperationRollbackPreviewDto, StockOverviewDto, StockPositionDto, StockReviewSettingDto,
-    StockStatisticsDto, StockTradeDto, StockTradeHistoryDetailDto, StockTradeHistoryDto,
-    StockTradeHistorySummaryDto, StockTradeImpactDto, StockTradeTagSettingDto,
+    StockDayReviewDto, StockFundRecordPage, StockNameDto, StockOperationDto,
+    StockOperationRollbackDto, StockOperationRollbackPreviewDto, StockOverviewDto,
+    StockPositionDto, StockReviewSettingDto, StockStatisticsDto, StockTradeDto,
+    StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
+    StockTradeImpactDto, StockTradeTagSettingDto,
 };
 use tr_domain::models::StockFeeSetting;
 use tr_domain::wire::{
-    LedgerIdRequest, StockAmountDateRequest, StockArchiveRequest, StockFeeSettingsRequest,
-    StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest, StockPositionTagRequest,
-    StockReviewTemplateRequest, StockRoundReviewRequest, StockRoundTagRequest,
-    StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    LedgerIdRequest, StockAmountDateRequest, StockArchiveRequest, StockDayReviewRequest,
+    StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest, StockPositionReviewRequest,
+    StockPositionTagRequest, StockReviewTemplateRequest, StockRoundReviewRequest,
+    StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
     StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
     StockTradesRequest,
 };
@@ -268,6 +269,25 @@ pub async fn position_review(
         StockPositionReviewRequest {
             ledger_id: ledger_id.to_string(),
             code: code.to_string(),
+            review: review.to_string(),
+        },
+    )
+    .await
+}
+
+/// 保存当前轮某一天的「每日复盘」（500 字以内；空串 = 删掉这一天），返回当前轮的复盘列表。
+pub async fn day_review(
+    ledger_id: &str,
+    code: &str,
+    date: &str,
+    review: &str,
+) -> Result<Vec<StockDayReviewDto>, IpcError> {
+    ipc::call(
+        commands::STOCK_DAY_REVIEW,
+        StockDayReviewRequest {
+            ledger_id: ledger_id.to_string(),
+            code: code.to_string(),
+            date: date.to_string(),
             review: review.to_string(),
         },
     )

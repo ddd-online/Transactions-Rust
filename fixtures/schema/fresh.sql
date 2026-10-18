@@ -51,6 +51,8 @@ CREATE TABLE `tbl_billadm_stock_operation` (`id` text,`ledger_id` varchar(36) DE
 CREATE INDEX `idx_tbl_billadm_stock_operation_ledger` ON `tbl_billadm_stock_operation`(`ledger_id`,`created_at`);
 CREATE TABLE `tbl_billadm_stock_review_setting` (`id` text,`ledger_id` varchar(36) DEFAULT "",`template` text NOT NULL DEFAULT "",`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
 CREATE UNIQUE INDEX `idx_tbl_billadm_stock_review_setting_ledger_id` ON `tbl_billadm_stock_review_setting`(`ledger_id`);
+CREATE TABLE `tbl_billadm_stock_day_review` (`id` text,`ledger_id` varchar(36) DEFAULT "",`stock_code` varchar(16) NOT NULL,`round_id` varchar(36) NOT NULL DEFAULT "",`review_date` varchar(10) NOT NULL,`review` varchar(2000) NOT NULL DEFAULT "",`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
+CREATE UNIQUE INDEX `idx_stock_day_review_round_date` ON `tbl_billadm_stock_day_review`(`ledger_id`,`stock_code`,`round_id`,`review_date`);
 CREATE TABLE `tbl_billadm_todo_card` (`id` text,`ledger_id` varchar(36) DEFAULT "",`title` varchar(200) NOT NULL DEFAULT "",`created_at` integer NOT NULL,`updated_at` integer NOT NULL, sort_order integer NOT NULL DEFAULT 0,PRIMARY KEY (`id`));
 CREATE INDEX `idx_tbl_billadm_todo_card_ledger` ON `tbl_billadm_todo_card`(`ledger_id`,`created_at`);
 CREATE TABLE `tbl_billadm_todo_item` (`id` text,`ledger_id` varchar(36) DEFAULT "",`card_id` varchar(36) DEFAULT "",`title` varchar(500) NOT NULL DEFAULT "",`start_date` varchar(10) NOT NULL DEFAULT "",`due_date` varchar(10) NOT NULL DEFAULT "",`urgency` integer NOT NULL DEFAULT 0,`importance` integer NOT NULL DEFAULT 0,`status` varchar(16) NOT NULL DEFAULT "doing",`completed_at` integer NOT NULL DEFAULT 0,`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));
@@ -60,7 +62,7 @@ CREATE TABLE `tbl_billadm_todo_progress` (`id` text,`ledger_id` varchar(36) DEFA
 CREATE INDEX `idx_tbl_billadm_todo_progress_item` ON `tbl_billadm_todo_progress`(`ledger_id`,`item_id`,`created_at`);
 CREATE TABLE `tbl_billadm_schema_migration` (`id` text,`applied_at` integer,PRIMARY KEY (`id`));
 
--- 以下 14 条记录是迁移登记（这些迁移对**空库**都是空操作）。
+-- 以下 15 条记录是迁移登记（这些迁移对**空库**都是空操作）。
 -- 本仓库只复刻建库后的最终状态；迁移的执行逻辑在 `tr-store` 的 `migrations` 模块里
 -- （打开既有工作空间时按登记表逐个应用），新建库与升级后的库结构一致。
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20260101_key_event_ledger_date_composite_unique', CAST(strftime('%s','now') AS INTEGER));
@@ -77,3 +79,4 @@ INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261015_stoc
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261015_stock_position_tag', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261018_category_fixed_flag', CAST(strftime('%s','now') AS INTEGER));
 INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261019_category_drop_fixed_flag', CAST(strftime('%s','now') AS INTEGER));
+INSERT INTO tbl_billadm_schema_migration (id, applied_at) VALUES ('20261018_stock_day_review', CAST(strftime('%s','now') AS INTEGER));

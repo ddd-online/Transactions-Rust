@@ -725,6 +725,60 @@
   color: var(--transactions-color-text-secondary);
 }
 
+/* 持仓详情：头部固定、以下内容自己滚。
+ *
+ * 面板本身是 `overflow: hidden`，而展开「每日复盘」的日历后内容必然超过面板高度 ——
+ * 不加这一层，日历与成交表会被裁掉且滚不到（覆盖式滚动条静止时也看不见，读起来就是"内容丢了"）。 */
+.stock-detail__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 每日复盘：持仓期间是日历，清仓后是只读列表（两者共用这一块的标题/摘要语言） */
+.stock-day-review__calendar {
+  margin-top: var(--transactions-space-sm);
+}
+
+.stock-day-review__hint {
+  margin: var(--transactions-space-sm) 0 0;
+  font-size: var(--transactions-size-text-caption);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-day-review__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-sm);
+}
+
+.stock-day-review__entry {
+  display: grid;
+  gap: var(--transactions-space-2xs);
+}
+
+.stock-day-review__entry + .stock-day-review__entry {
+  border-top: 1px solid var(--transactions-color-divider);
+  padding-top: var(--transactions-space-sm);
+}
+
+.stock-day-review__date {
+  font-family: var(--transactions-font-mono);
+  font-size: var(--transactions-size-text-caption);
+  letter-spacing: var(--transactions-tracking-amount);
+  color: var(--transactions-color-text-secondary);
+}
+
+.stock-day-review__text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: var(--transactions-height-relaxed);
+  font-size: var(--transactions-size-text-body-sm);
+  color: var(--transactions-color-text-major);
+}
+
 /* ============================================
  * 复盘写作面（弹窗）—— 静止时**永不裁剪**
  *

@@ -142,6 +142,7 @@ app_commands! {
     tr_ipc::commands::stock_fund_records,
     tr_ipc::commands::stock_positions,
     tr_ipc::commands::stock_position_review,
+    tr_ipc::commands::stock_day_review,
     tr_ipc::commands::stock_position_tag,
     tr_ipc::commands::stock_trades,
     tr_ipc::commands::stock_trade_create,

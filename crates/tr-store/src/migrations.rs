@@ -110,6 +110,10 @@ pub const MIGRATIONS: &[Migration] = &[
         id: "20261019_category_drop_fixed_flag",
         apply: category_drop_fixed_flag,
     },
+    Migration {
+        id: "20261018_stock_day_review",
+        apply: stock_day_review,
+    },
 ];
 
 /// 已是当前格式（无需迁移）。
@@ -514,6 +518,31 @@ fn stock_review_setting(conn: &Connection) -> MigrateResult {
     if !index_exists(conn, "idx_tbl_billadm_stock_review_setting_ledger_id").map_err(stringify)? {
         conn.execute_batch(
             "CREATE UNIQUE INDEX `idx_tbl_billadm_stock_review_setting_ledger_id` ON `tbl_billadm_stock_review_setting`(`ledger_id`);",
+        )
+        .map_err(stringify)?;
+    }
+    Ok(())
+}
+
+/// `20261018_stock_day_review` —— 新增「每日复盘」表（一轮里每天一篇，清仓后随轮次只读）。
+///
+/// 与「本轮复盘模板」「股票操作记录」同一种形状：**纯新增**，不碰任何既有表、不回填数据。
+/// 归属口径照成交的 idiom：`round_id = ''` = 当前还没归档的那一轮，清仓归档时挂到轮次 id 上；
+/// 唯一键 `(ledger_id, stock_code, round_id, review_date)` 保证"每轮每天至多一条"，
+/// 且同一只票的两轮落在同一天也各有各的一条。
+///
+/// ⚠ 这里的 DDL 必须与 `fixtures/schema/fresh.sql` 里那两条**逐字节相同**：
+/// 升级出来的库与新建的库在 `.schema` 层面要完全一致，否则两条建库路径会分叉。
+fn stock_day_review(conn: &Connection) -> MigrateResult {
+    if !table_exists(conn, "tbl_billadm_stock_day_review").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE TABLE `tbl_billadm_stock_day_review` (`id` text,`ledger_id` varchar(36) DEFAULT \"\",`stock_code` varchar(16) NOT NULL,`round_id` varchar(36) NOT NULL DEFAULT \"\",`review_date` varchar(10) NOT NULL,`review` varchar(2000) NOT NULL DEFAULT \"\",`created_at` integer NOT NULL,`updated_at` integer NOT NULL,PRIMARY KEY (`id`));",
+        )
+        .map_err(stringify)?;
+    }
+    if !index_exists(conn, "idx_stock_day_review_round_date").map_err(stringify)? {
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX `idx_stock_day_review_round_date` ON `tbl_billadm_stock_day_review`(`ledger_id`,`stock_code`,`round_id`,`review_date`);",
         )
         .map_err(stringify)?;
     }
@@ -1592,6 +1621,74 @@ mod tests {
         assert_eq!(
             migrated, fresh,
             "分类表的建表 SQL 与基线不一致\n迁移: {migrated}\n基线: {fresh}"
+        );
+
+        assert!(pending(&conn).unwrap().is_empty());
+        assert!(apply_all(&mut conn, &dir).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `20261018_stock_day_review`：新增「每日复盘」表。
+    ///
+    /// 起点造的是升级前的形态（表与索引都不在、登记行也没有），判据：
+    /// 表与唯一索引被建出来；同一账本既有数据一字不差；升级库与新建库的建表 SQL
+    /// **逐字节一致**；再跑一遍无事可做，且校验器认这个库。
+    #[test]
+    fn stock_day_review_migration_creates_table_without_touching_data() {
+        let dir = temp_dir("stock-day-review");
+        let mut conn = fresh_conn();
+        insert_ledger(&conn, "l1", "账本", 1);
+        conn.execute_batch(
+            "DROP TABLE tbl_billadm_stock_day_review;
+             DELETE FROM tbl_billadm_schema_migration
+              WHERE id = '20261018_stock_day_review';",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tbl_billadm_stock_position \
+             (id, ledger_id, stock_code, stock_name, quantity, total_cost, realized_pnl, review, \
+              created_at, updated_at, tag) \
+             VALUES ('p1', 'l1', '600519', '贵州茅台', 100, 10000, 0, '老复盘', 1, 1, '分析')",
+            [],
+        )
+        .unwrap();
+
+        let applied = apply_all(&mut conn, &dir).unwrap();
+        assert_eq!(applied, vec!["20261018_stock_day_review".to_string()]);
+        assert!(table_exists(&conn, "tbl_billadm_stock_day_review").unwrap());
+        assert!(index_exists(&conn, "idx_stock_day_review_round_date").unwrap());
+        crate::schema::validate_current(&conn).unwrap();
+
+        let (quantity, review): (i64, String) = conn
+            .query_row(
+                "SELECT quantity, review FROM tbl_billadm_stock_position WHERE id = 'p1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(quantity, 100, "同一行的既有数据不许被碰");
+        assert_eq!(review, "老复盘");
+
+        // 升级库与新建库不允许分叉：建表 SQL 逐字节一致
+        let migrated: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' \
+                 AND name = 'tbl_billadm_stock_day_review'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let fresh: String = fresh_conn()
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' \
+                 AND name = 'tbl_billadm_stock_day_review'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            migrated, fresh,
+            "每日复盘表的建表 SQL 与基线不一致\n迁移: {migrated}\n基线: {fresh}"
         );
 
         assert!(pending(&conn).unwrap().is_empty());

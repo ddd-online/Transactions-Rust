@@ -437,6 +437,19 @@ pub struct StockPositionReviewRequest {
     pub review: String,
 }
 
+/// 保存持仓期间的「每日复盘」：`date` 是 `YYYY-MM-DD`，正文空串 = 删掉这一天。
+/// 只能写当前轮（建仓日 → 今天）内的日期，越界由服务层拒绝。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StockDayReviewRequest {
+    pub ledger_id: String,
+    /// 股票代码
+    pub code: String,
+    /// 复盘日期（`YYYY-MM-DD`）
+    pub date: String,
+    pub review: String,
+}
+
 /// 保存持仓中的「本轮交易标签」（必须是本账本可用标签之一；空串 = 回到默认「分析」）。
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]

@@ -1,4 +1,4 @@
-//! 日期选择 —— 单个日期 + 日期区间，**周一起始**，弹层沿用 `ui-select` 的浮层手法。
+//! 日期选择 —— 单个日期 + 日期区间 + 内联月历（每日复盘），**周一起始**，弹层沿用 `ui-select` 的浮层手法。
 //!
 //! 值一律是 `YYYY-MM-DD` 字符串（与后端 `transactionAt` 的日期表示一致），
 //! 不做时区换算——只有 `time::ymd_to_seconds` 才把日期串变成 Unix 秒。
@@ -193,6 +193,158 @@ fn month_of(value: &str) -> (i32, u32) {
             let now = today();
             (now.year, now.month)
         }
+    }
+}
+
+// ---------------------------------------------------------------- 内联月历（每日复盘）
+
+/// 内联月历：一张只负责"点一天"的月历，**不套触发器/浮层**。
+///
+/// 与日期选择器的 `CalendarPanel` 同一副骨架（同一份 `month_grid`、同一套
+/// `.ui-date-picker__*` 样式），只多三条：
+/// * `from` / `to` 之间（含端点）的日子才可点 —— 区间外与邻月格子 `disabled`，不跳月；
+/// * `marked` 里的日子带一个圆点（`has-review`），让"哪天写了、哪天没写"一眼可见；
+/// * 翻月夹在 `[from 所在月, to 所在月]` 之间：越过区间只会看到一片禁用格子，没有意义。
+///
+/// `visible` 由调用方持有：调用它的页面视图会被反复重建，月视图不能活在组件自己身上
+/// （重建即丢，翻了两下就跳回本月）。当前用在股票的「每日复盘」。
+#[component]
+pub fn DayCalendar(
+    /// 当前展示的 (年, 月)
+    visible: RwSignal<(i32, u32)>,
+    /// 可选区间的起点（含；空串 = 该端不设限）
+    #[prop(into)]
+    from: Signal<String>,
+    /// 可选区间的终点（含；空串 = 该端不设限）
+    #[prop(into)]
+    to: Signal<String>,
+    /// 有内容的日子（`YYYY-MM-DD`）
+    #[prop(into)]
+    marked: Signal<Vec<String>>,
+    /// 选中回调（传回 `YYYY-MM-DD`）
+    #[prop(into)]
+    on_pick: UnsyncCallback<String>,
+) -> impl IntoView {
+    let today_for_class = today().padded();
+
+    let title = move || {
+        let (year, month) = visible.get();
+        format!("{year}年{month}月")
+    };
+
+    // 边的月份：解析不了就当这一端没有边界（调用方保证 `from <= to` 时才渲染日历）
+    let month_bound =
+        |key: &str| -> Option<(i32, u32)> { parse_ymd(&key).map(|date| (date.year, date.month)) };
+    // `delta` 方向翻过去还在区间内吗（`(year, month)` 的字典序与时间先后一致）
+    let can_shift = move |delta: i32| -> bool {
+        let (year, month) = visible.get();
+        let next = add_months(year, month, delta);
+        if delta < 0 {
+            if let Some(bound) = month_bound(&from.get()) {
+                if next < bound {
+                    return false;
+                }
+            }
+        } else if let Some(bound) = month_bound(&to.get()) {
+            if next > bound {
+                return false;
+            }
+        }
+        true
+    };
+    let shift = move |delta: i32| {
+        if !can_shift(delta) {
+            return;
+        }
+        visible.update(|(year, month)| {
+            let (next_year, next_month) = add_months(*year, *month, delta);
+            *year = next_year;
+            *month = next_month;
+        });
+    };
+
+    view! {
+        <div class="ui-day-calendar">
+            <div class="ui-date-picker__header">
+                <button
+                    type="button"
+                    class="ui-date-picker__nav"
+                    title="上一月"
+                    aria-label="上一月"
+                    disabled=move || !can_shift(-1)
+                    on:click=move |_| shift(-1)
+                >
+                    {icons::icon(Icon::Left)}
+                </button>
+                <button
+                    type="button"
+                    class="ui-date-picker__title"
+                    title="回到今天"
+                    on:click=move |_| {
+                        let now = today();
+                        visible.set((now.year, now.month));
+                    }
+                >
+                    {title}
+                </button>
+                <button
+                    type="button"
+                    class="ui-date-picker__nav"
+                    title="下一月"
+                    aria-label="下一月"
+                    disabled=move || !can_shift(1)
+                    on:click=move |_| shift(1)
+                >
+                    {icons::icon(Icon::Right)}
+                </button>
+            </div>
+
+            <div class="ui-date-picker__weekdays">
+                {WEEKDAYS.iter().map(|name| view! { <span>{*name}</span> }).collect_view()}
+            </div>
+
+            <div class="ui-date-picker__grid">
+                {move || {
+                    let (year, month) = visible.get();
+                    let from_value = from.get();
+                    let to_value = to.get();
+                    let marked_values = marked.get();
+                    let today_value = today_for_class.clone();
+                    month_grid(year, month)
+                        .into_iter()
+                        .map(|cell| {
+                            let value = cell.date.padded();
+                            let enabled = !cell.outside
+                                && (from_value.is_empty() || value >= from_value)
+                                && (to_value.is_empty() || value <= to_value);
+                            let has_review = marked_values.iter().any(|day| day == &value);
+                            let is_today = value == today_value;
+                            let label = if has_review {
+                                format!("{value} · 已写")
+                            } else {
+                                value.clone()
+                            };
+                            let click_value = value.clone();
+                            view! {
+                                <button
+                                    type="button"
+                                    class="ui-date-picker__cell"
+                                    class:is-outside=cell.outside
+                                    class:is-today=is_today
+                                    class:has-review=has_review
+                                    disabled=!enabled
+                                    aria-label=label.clone()
+                                    title=label
+                                    on:click=move |_| on_pick.run(click_value.clone())
+                                >
+                                    {cell.date.day}
+                                </button>
+                            }
+                        })
+                        .collect_view()
+                }}
+            </div>
+        </div>
     }
 }
 

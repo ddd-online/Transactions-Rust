@@ -28,9 +28,9 @@
 //!
 //! ## 覆盖范围
 //!
-//! **应用里每一条 IPC 命令都在这儿**（共 116 条）：21 条外壳命令（`src-tauri/src/commands.rs`）、
-//! 5 条更新命令（`src-tauri/src/updater.rs`）、90 条业务命令（`tr-ipc`）。
-//! 清单按模块分成三组（[`SHELL_COMMANDS`] 21 / [`UPDATE_COMMANDS`] 5 / [`BUSINESS_COMMANDS`] 90），
+//! **应用里每一条 IPC 命令都在这儿**（共 117 条）：21 条外壳命令（`src-tauri/src/commands.rs`）、
+//! 5 条更新命令（`src-tauri/src/updater.rs`）、91 条业务命令（`tr-ipc`）。
+//! 清单按模块分成三组（[`SHELL_COMMANDS`] 21 / [`UPDATE_COMMANDS`] 5 / [`BUSINESS_COMMANDS`] 91），
 //! 于是"注册表里的这一段 == 清单里的这一组"可以逐组比对 —— 注册表的路径前缀与分组一一对应，
 //! 不需要什么人去记"哪条命令归谁"（`src-tauri/src/registry.rs` 的 `SEGMENTS` 就是这张对应表）。
 
@@ -40,9 +40,9 @@ use crate::dto::{
     AccountingOverviewDto, AccountingOverviewRequest, CategoryDto, ChartDto, ChartQueryRequest,
     ChartQueryResponse, CreateCategoryRequest, CreateChartRequest, CreateTagRequest,
     DiaryExportRequest, DiaryExportResult, DiaryScanResponse, DiaryUpsertRequest,
-    InitializeCategoriesResponse, LedgerDto, StockFundRecordPage, StockNameDto, StockOperationDto,
-    StockOperationRollbackDto, StockOperationRollbackPreviewDto, StockOverviewDto,
-    StockPositionDto, StockReviewSettingDto, StockStatisticsDto, StockTradeDto,
+    InitializeCategoriesResponse, LedgerDto, StockDayReviewDto, StockFundRecordPage, StockNameDto,
+    StockOperationDto, StockOperationRollbackDto, StockOperationRollbackPreviewDto,
+    StockOverviewDto, StockPositionDto, StockReviewSettingDto, StockStatisticsDto, StockTradeDto,
     StockTradeHistoryDetailDto, StockTradeHistoryDto, StockTradeHistorySummaryDto,
     StockTradeImpactDto, StockTradeTagSettingDto, TagDto, TodoCardDto, TodoHistoryDto, TodoItemDto,
     TodoProgressDto, TrQueryCondition, TrQueryResult, TransactionRecordDto, TransactionTemplateDto,
@@ -60,16 +60,16 @@ use crate::wire::{
     KeyEventUpsertRequest, LedgerIdRequest, LedgerListRequest, LinkRequest, LinkedByDateRequest,
     ProxyDetectResponse, SetAppearanceRequest, SetCloseBehaviorRequest, SetFeatureRequest,
     SetKeyEventLinkedOpenRequest, SetSidebarCollapsedRequest, StockAmountDateRequest,
-    StockArchiveRequest, StockFeeSettingsRequest, StockFundRecordsRequest, StockNameRequest,
-    StockPositionReviewRequest, StockPositionTagRequest, StockReviewTemplateRequest,
-    StockRoundReviewRequest, StockRoundTagRequest, StockStatisticsRequest, StockTagSettingsRequest,
-    StockTradeCreateRequest, StockTradeImpactRequest, StockTradeOrderDeleteRequest,
-    StockTradeUpdateRequest, StockTradesRequest, TagDeleteRequest, TagListRequest,
-    TemplateIdRequest, TemplateListRequest, TemplateSortRequest, TodoCardCreateRequest,
-    TodoCardSortRequest, TodoItemCreateRequest, TodoItemStatusRequest, TodoItemUpdateRequest,
-    TodoProgressCreateRequest, TodoProgressDoneRequest, UnlinkRequest, UpdateDownloadRequest,
-    UpdateLedgerRequest, UpdateResponse, WindowControlRequest, WorkspaceDirRequest,
-    WorkspaceIconRequest, YearRequest,
+    StockArchiveRequest, StockDayReviewRequest, StockFeeSettingsRequest, StockFundRecordsRequest,
+    StockNameRequest, StockPositionReviewRequest, StockPositionTagRequest,
+    StockReviewTemplateRequest, StockRoundReviewRequest, StockRoundTagRequest,
+    StockStatisticsRequest, StockTagSettingsRequest, StockTradeCreateRequest,
+    StockTradeImpactRequest, StockTradeOrderDeleteRequest, StockTradeUpdateRequest,
+    StockTradesRequest, TagDeleteRequest, TagListRequest, TemplateIdRequest, TemplateListRequest,
+    TemplateSortRequest, TodoCardCreateRequest, TodoCardSortRequest, TodoItemCreateRequest,
+    TodoItemStatusRequest, TodoItemUpdateRequest, TodoProgressCreateRequest,
+    TodoProgressDoneRequest, UnlinkRequest, UpdateDownloadRequest, UpdateLedgerRequest,
+    UpdateResponse, WindowControlRequest, WorkspaceDirRequest, WorkspaceIconRequest, YearRequest,
 };
 
 /// 一条 IPC 命令的声明：**名字 + 请求类型 + 响应类型**（没有任何逻辑）。
@@ -251,6 +251,7 @@ command_catalog! {
     STOCK_FUND_RECORDS = "stock_fund_records": StockFundRecordsRequest => StockFundRecordPage,
     STOCK_POSITIONS = "stock_positions": LedgerIdRequest => Vec<StockPositionDto>,
     STOCK_POSITION_REVIEW = "stock_position_review": StockPositionReviewRequest => StockPositionDto,
+    STOCK_DAY_REVIEW = "stock_day_review": StockDayReviewRequest => Vec<StockDayReviewDto>,
     STOCK_POSITION_TAG = "stock_position_tag": StockPositionTagRequest => StockPositionDto,
     STOCK_TRADES = "stock_trades": StockTradesRequest => Vec<StockTradeDto>,
     STOCK_TRADE_CREATE = "stock_trade_create": StockTradeCreateRequest => Vec<StockTradeDto>,
@@ -357,7 +358,7 @@ mod tests {
         }
     }
 
-    /// 分组与数量的口径：外壳 21 + 更新 5 在应用外壳 crate 里，业务 90 条在 `tr-ipc` 里。
+    /// 分组与数量的口径：外壳 21 + 更新 5 在应用外壳 crate 里，业务 91 条在 `tr-ipc` 里。
     ///
     /// 数量变了就顺手核一遍调用点：这里对不上说明清单被改过，而注册表 / 界面的
     /// 一致性守卫会紧接着告诉你哪里对不上。
@@ -365,14 +366,14 @@ mod tests {
     fn the_table_covers_every_command() {
         assert_eq!(SHELL_COMMANDS.len(), 21);
         assert_eq!(UPDATE_COMMANDS.len(), 5);
-        assert_eq!(BUSINESS_COMMANDS.len(), 90);
+        assert_eq!(BUSINESS_COMMANDS.len(), 91);
         assert_eq!(COMMAND_GROUPS.len(), 3);
         assert_eq!(
             COMMAND_GROUPS
                 .iter()
                 .map(|group| group.len())
                 .sum::<usize>(),
-            116
+            117
         );
     }
 

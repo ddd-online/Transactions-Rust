@@ -19,9 +19,9 @@ use rusqlite::Connection;
 
 use crate::workspace::WorkspaceError;
 
-/// 当前空库 DDL：23 张表 + 25 个索引 + 8 条迁移登记记录。
+/// 当前空库 DDL：24 张数据表 + 迁移登记表 + 28 个索引 + 15 条迁移登记记录。
 ///
-/// 末尾 6 条 INSERT 是迁移登记记录（那些迁移对空库都是空操作）：新建库直接就是当前格式，
+/// 末尾那批 INSERT 是迁移登记记录（那些迁移对空库都是空操作）：新建库直接就是当前格式，
 /// 不需要再跑迁移；保留这些登记行是为了让新建库与"升级到当前格式的库"在数据层面也一致
 /// （迁移引擎正是按这张表判断"还差哪几条"）。
 pub const FRESH_SCHEMA_SQL: &str = include_str!("../../../fixtures/schema/fresh.sql");
@@ -256,6 +256,19 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
         &["id", "ledger_id", "template", "created_at", "updated_at"],
     ),
     (
+        "tbl_billadm_stock_day_review",
+        &[
+            "id",
+            "ledger_id",
+            "stock_code",
+            "round_id",
+            "review_date",
+            "review",
+            "created_at",
+            "updated_at",
+        ],
+    ),
+    (
         "tbl_billadm_stock_operation",
         &[
             "id",
@@ -382,7 +395,7 @@ mod tests {
     #[test]
     fn fresh_database_has_current_schema() {
         let conn = fresh_conn();
-        // 24 张表（23 张数据表 + 迁移登记表）
+        // 25 张表（24 张数据表 + 迁移登记表）
         let tables: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
@@ -390,8 +403,8 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(tables, 24);
-        // 27 个索引
+        assert_eq!(tables, 25);
+        // 28 个索引
         let indexes: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL",
@@ -399,7 +412,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(indexes, 27);
+        assert_eq!(indexes, 28);
         validate_current(&conn).unwrap();
     }
 

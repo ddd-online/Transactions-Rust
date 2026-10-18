@@ -117,7 +117,7 @@ pub use checkbox::{Checkbox, CheckboxGroup, CheckboxOption};
 pub(crate) use modal::is_mask_self_click;
 // 日期算术（月长 / 加减月 / 周几 / 区间对齐）住在 tr-draw（native 上可测）；
 // 只有"今天"这件事要宿主时区，留在 `date_picker::today`。
-pub use date_picker::{DatePicker, DateRangePicker};
+pub use date_picker::{DatePicker, DateRangePicker, DayCalendar};
 pub use divider::Divider;
 pub use drag_sort::{DragSortItem, DragSortState};
 pub use drawer::Drawer;
