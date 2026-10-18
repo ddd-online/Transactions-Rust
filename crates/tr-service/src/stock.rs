@@ -940,7 +940,7 @@ pub fn list_positions(
             let mut item = StockPositionDto::from(position);
             let flow = flow_of(&flows, position);
             item.round_cash_flow = flow.cash_flow;
-            // 本轮建仓日 = 本轮首笔成交的本地日期（每日复盘日历的起点）
+            // 本轮建仓日 = 本轮首笔成交的本地日期（每日复盘可写区间的下界，也是「写今日」的可用判断）
             item.round_opened_date = round_opened_on(&by_code, &position.stock_code);
             item.day_reviews = day_reviews
                 .get(&position.stock_code)
@@ -1012,14 +1012,14 @@ pub fn update_position_review(
 ///
 /// 口径：
 /// * 只能写**当前轮**（最近一次清仓之后；减仓减到 0 手但还没点清仓也算），清仓归档后一律只读；
-/// * 日期必须落在 `[本轮建仓日, 今天]`：建仓日 = 本轮**首笔成交**的本地日期（与界面上日历的
-///   起点同一个口径），不是持仓行的 `created_at`；
+/// * 日期必须落在 `[本轮建仓日, 今天]`：建仓日 = 本轮**首笔成交**的本地日期（与界面上
+///   「写今日」能不能点同一个口径），不是持仓行的 `created_at`；
 /// * 每轮每天最多一条（表上有唯一键），再写就是覆盖；空正文删行，不留空记录；
 /// * 归属沿用成交的 idiom：持仓期间 `round_id = ''`，清仓归档时由 `close_round` 挂到轮次上；
 ///   重放只负责保留（轮次行复用）与删除（轮次不再成立），**不挂接**未挂接的行 ——
 ///   那种行永远属于"当前还没归档的那一轮"（见 `stock/write.rs` 的 `rebuild_trades`）。
 ///
-/// 返回该股当前轮的每日复盘（按日期升序），界面据此就地刷新日历上的标记。
+/// 返回该股当前轮的每日复盘（**按日期倒序，最新在前**），界面据此就地刷新那一块列表。
 pub fn update_day_review(
     workspace: &Workspace,
     ledger_id: &str,
@@ -1312,7 +1312,7 @@ fn stock_has_open_round(
 
 /// 本轮建仓日（本地 `YYYY-MM-DD`）：本轮**首笔成交**的日期。没有未归档的轮次时为空串。
 ///
-/// 与每日复盘日历的起点同一个口径（服务层的 `update_day_review` 也用它做下界判断）：
+/// 与每日复盘可写区间的下界同一个口径（服务层的 `update_day_review` 也用它做下界判断）：
 /// 不用持仓行的 `created_at`（它是"第一次建仓这个代码"的时间；减仓到 0 再买、甚至清仓后再建仓
 /// 都不会重置它）。
 fn round_opened_on(by_code: &HashMap<String, Vec<StockTrade>>, stock_code: &str) -> String {
@@ -8293,15 +8293,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].date, opened_on, "按日期升序");
-        assert_eq!(rows[1].date, today);
-        assert_eq!(rows[1].review, "今天的观察", "首尾空白被去掉");
+        assert_eq!(rows[0].date, today, "按日期倒序（最新在前）");
+        assert_eq!(rows[1].date, opened_on);
+        assert_eq!(rows[0].review, "今天的观察", "首尾空白被去掉");
 
         // 同一天再写 = 覆盖（不是新增）
         let rows =
             update_day_review(&workspace, TEST_LEDGER_ID, TEST_CODE, &today, "改过的观察").unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[1].review, "改过的观察");
+        assert_eq!(rows[0].review, "改过的观察");
 
         // 建仓日之前不合法
         let before = day_offset(&opened_on, -1);
@@ -8345,7 +8345,7 @@ mod tests {
         )
         .unwrap();
 
-        // 持仓 DTO：建仓日 + 当前轮的复盘（按日期升序）
+        // 持仓 DTO：建仓日 + 当前轮的复盘（按日期倒序）
         let positions = list_positions(&workspace, TEST_LEDGER_ID, &no_quotes()).unwrap();
         let position = positions
             .iter()
@@ -8353,7 +8353,7 @@ mod tests {
             .expect("还在持仓");
         assert_eq!(position.round_opened_date, opened_on);
         assert_eq!(position.day_reviews.len(), 2);
-        assert_eq!(position.day_reviews[1].date, today);
+        assert_eq!(position.day_reviews[0].date, today);
 
         // 空正文 = 删掉这一天（不留空行）
         let rows =
@@ -8407,15 +8407,16 @@ mod tests {
             "{error}"
         );
 
-        // 历史详情：两篇挂在那一轮上
+        // 历史详情：两篇挂在那一轮上（倒序，最新在前）
         let detail = get_trade_history_detail(&workspace, TEST_LEDGER_ID, TEST_CODE).unwrap();
         assert_eq!(detail.rounds.len(), 1);
         let round = &detail.rounds[0];
         assert_eq!(round.day_reviews.len(), 2);
-        assert_eq!(round.day_reviews[0].date, opened_on);
-        assert_eq!(round.day_reviews[1].review, "清仓前");
+        assert_eq!(round.day_reviews[0].date, today);
+        assert_eq!(round.day_reviews[0].review, "清仓前");
+        assert_eq!(round.day_reviews[1].date, opened_on);
 
-        // 再建仓 = 新一轮：日历从新起点开始，旧轮的复盘不跟过来。
+        // 再建仓 = 新一轮：列表从空开始，旧轮的复盘不跟过来。
         // 隔一秒再写：成交排序是 (trade_time → created_at → …)，同一天的两笔 trade_time 相同
         // （界面只选到日、落本地 00:00），同一秒里建的话顺序会落到随机 id 上。
         std::thread::sleep(std::time::Duration::from_millis(1100));
@@ -8437,7 +8438,7 @@ mod tests {
             .iter()
             .find(|item| item.stock_code == TEST_CODE)
             .expect("新一轮还在持仓");
-        assert!(position.day_reviews.is_empty(), "新一轮从空日历开始");
+        assert!(position.day_reviews.is_empty(), "新一轮从空列表开始");
         assert_eq!(position.round_opened_date, today);
 
         std::fs::remove_dir_all(&dir).ok();

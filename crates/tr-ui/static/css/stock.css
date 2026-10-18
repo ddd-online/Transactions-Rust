@@ -693,6 +693,13 @@
   cursor: default;
 }
 
+/* 折叠头是**裸按钮**（无边框/无底色），默认轮廓在深色主题里几乎看不见 —— 补系统统一的焦点环 */
+.stock-review__toggle:focus-visible {
+  outline: 2px solid var(--transactions-color-primary);
+  outline-offset: 2px;
+  border-radius: var(--transactions-radius-sm);
+}
+
 .stock-review__title {
   font-size: var(--transactions-size-text-body-sm);
   font-weight: var(--transactions-weight-medium);
@@ -702,6 +709,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 条数会变（1 篇 → 2 篇），等宽数字让它在标题后面不左右抖 */
+  font-variant-numeric: tabular-nums;
   font-size: var(--transactions-size-text-caption);
   color: var(--transactions-color-text-secondary);
 }
@@ -727,19 +736,18 @@
 
 /* 持仓详情：头部固定、以下内容自己滚。
  *
- * 面板本身是 `overflow: hidden`，而展开「每日复盘」的日历后内容必然超过面板高度 ——
- * 不加这一层，日历与成交表会被裁掉且滚不到（覆盖式滚动条静止时也看不见，读起来就是"内容丢了"）。 */
+ * 面板本身是 `overflow: hidden`，而展开「每日复盘」（或本轮复盘的长文）后内容会超过面板高度 ——
+ * 不加这一层，下面的内容会被裁掉且滚不到（覆盖式滚动条静止时也看不见，读起来就是"内容丢了"）。 */
 .stock-detail__body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 
-/* 每日复盘：持仓期间是日历，清仓后是只读列表（两者共用这一块的标题/摘要语言） */
-.stock-day-review__calendar {
-  margin-top: var(--transactions-space-sm);
-}
-
+/* 每日复盘：持仓期与清仓后渲染同一份只读列表（倒序，最新在前）。
+ *
+ * 一行 = 一天：日期占固定一列，正文从第二列起 —— 与上方成交表的行语言一致（8px 行距 +
+ * 发丝线分隔），多天并排时日期自然对齐成一列，扫一眼就能看出哪几天断了。 */
 .stock-day-review__hint {
   margin: var(--transactions-space-sm) 0 0;
   font-size: var(--transactions-size-text-caption);
@@ -747,26 +755,27 @@
 }
 
 .stock-day-review__list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--transactions-space-sm);
-  margin-top: var(--transactions-space-sm);
+  margin-top: var(--transactions-space-xs);
 }
 
 .stock-day-review__entry {
   display: grid;
-  gap: var(--transactions-space-2xs);
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--transactions-space-md);
+  align-items: baseline;
+  padding: var(--transactions-space-sm) 0;
 }
 
 .stock-day-review__entry + .stock-day-review__entry {
   border-top: 1px solid var(--transactions-color-divider);
-  padding-top: var(--transactions-space-sm);
 }
 
 .stock-day-review__date {
   font-family: var(--transactions-font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: var(--transactions-size-text-caption);
   letter-spacing: var(--transactions-tracking-amount);
+  white-space: nowrap;
   color: var(--transactions-color-text-secondary);
 }
 

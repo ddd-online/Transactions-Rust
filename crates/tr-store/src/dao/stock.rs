@@ -1142,7 +1142,7 @@ impl StockDao {
         Ok(())
     }
 
-    /// 删某一天的每日复盘（正文清空时用它：不留空行，日历上的标记也跟着消失）。
+    /// 删某一天的每日复盘（正文清空时用它：不留空行，界面上的那一条也跟着消失）。
     pub fn delete_day_review(
         conn: &Connection,
         ledger_id: &str,
@@ -1158,16 +1158,17 @@ impl StockDao {
         Ok(())
     }
 
-    /// 某账本**当前轮**（`round_id = ''`）的全部每日复盘：`stock_code`, `review_date` 升序。
+    /// 某账本**当前轮**（`round_id = ''`）的全部每日复盘：`stock_code`, `review_date` 倒序。
     ///
     /// 持仓列表一次取全账本，避免逐股查库；调用方按 `stock_code` 分组。
+    /// 倒序是界面的口径（最新在前）—— 排序只在这里写一处，界面不再自己 reverse。
     pub fn list_unattached_day_reviews(
         conn: &Connection,
         ledger_id: &str,
     ) -> rusqlite::Result<Vec<StockDayReview>> {
         let mut statement = conn.prepare(&format!(
             "SELECT {DAY_REVIEW_COLUMNS} FROM tbl_billadm_stock_day_review \
-             WHERE ledger_id = ?1 AND round_id = '' ORDER BY stock_code ASC, review_date ASC"
+             WHERE ledger_id = ?1 AND round_id = '' ORDER BY stock_code ASC, review_date DESC"
         ))?;
         let rows = statement
             .query_map([ledger_id], day_review_from_row)?
@@ -1175,7 +1176,7 @@ impl StockDao {
         Ok(rows)
     }
 
-    /// 某股当前轮的每日复盘：`review_date` 升序。
+    /// 某股当前轮的每日复盘：`review_date` 倒序（最新在前）。
     pub fn list_unattached_day_reviews_by_stock(
         conn: &Connection,
         ledger_id: &str,
@@ -1183,7 +1184,7 @@ impl StockDao {
     ) -> rusqlite::Result<Vec<StockDayReview>> {
         let mut statement = conn.prepare(&format!(
             "SELECT {DAY_REVIEW_COLUMNS} FROM tbl_billadm_stock_day_review \
-             WHERE ledger_id = ?1 AND stock_code = ?2 AND round_id = '' ORDER BY review_date ASC"
+             WHERE ledger_id = ?1 AND stock_code = ?2 AND round_id = '' ORDER BY review_date DESC"
         ))?;
         let rows = statement
             .query_map(params![ledger_id, stock_code], day_review_from_row)?
@@ -1192,7 +1193,7 @@ impl StockDao {
     }
 
     /// 某股**全部轮次**的每日复盘（历史详情按 `round_id` 分组用）：
-    /// `round_id`, `review_date` 升序。当前轮的行（`round_id = ''`）也在结果里，
+    /// `round_id` 升序、`review_date` 倒序。当前轮的行（`round_id = ''`）也在结果里，
     /// 调用方按轮次 id 取用时会自然忽略它们。
     pub fn list_day_reviews_by_stock(
         conn: &Connection,
@@ -1201,7 +1202,7 @@ impl StockDao {
     ) -> rusqlite::Result<Vec<StockDayReview>> {
         let mut statement = conn.prepare(&format!(
             "SELECT {DAY_REVIEW_COLUMNS} FROM tbl_billadm_stock_day_review \
-             WHERE ledger_id = ?1 AND stock_code = ?2 ORDER BY round_id ASC, review_date ASC"
+             WHERE ledger_id = ?1 AND stock_code = ?2 ORDER BY round_id ASC, review_date DESC"
         ))?;
         let rows = statement
             .query_map(params![ledger_id, stock_code], day_review_from_row)?
@@ -2182,13 +2183,13 @@ mod tests {
         StockDao::create_day_review(&conn, &row("d1", "2026-10-14", "建仓当天")).unwrap();
         StockDao::create_day_review(&conn, &row("d2", "2026-10-15", "第二天")).unwrap();
 
-        // 唯一键覆盖：同一天再写不是新增
+        // 唯一键覆盖：同一天再写不是新增；列表按日期**倒序**（最新在前）
         StockDao::update_day_review(&conn, "l1", "600000", "", "2026-10-14", "改过的正文").unwrap();
         let rows = StockDao::list_unattached_day_reviews_by_stock(&conn, "l1", "600000").unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].review_date, "2026-10-14");
-        assert_eq!(rows[0].review, "改过的正文");
-        assert_eq!(rows[1].review_date, "2026-10-15");
+        assert_eq!(rows[0].review_date, "2026-10-15");
+        assert_eq!(rows[1].review_date, "2026-10-14");
+        assert_eq!(rows[1].review, "改过的正文");
         assert!(rows[0].created_at > 0 && rows[0].updated_at > 0);
 
         // 归档挂接：本轮的行挂到轮次 id 上，逐轮读得到

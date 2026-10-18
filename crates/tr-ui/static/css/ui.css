@@ -1835,43 +1835,6 @@
   outline-offset: 1px;
 }
 
-/* 内联月历（每日复盘）：与日期选择器同一副骨架 —— 只多"已写圆点"与禁用态。
- * 禁用的是区间外 / 邻月 / 翻月越界：禁用格仍然渲染（日历的结构不能缺角），只是不可点。 */
-.ui-day-calendar {
-  width: 252px;
-}
-
-.ui-date-picker__nav:disabled,
-.ui-date-picker__nav:disabled:hover {
-  background: none;
-  color: var(--transactions-color-text-disabled);
-  cursor: default;
-}
-
-.ui-date-picker__cell:disabled,
-.ui-date-picker__cell:disabled:hover {
-  background: none;
-  color: var(--transactions-color-text-disabled);
-  cursor: default;
-}
-
-/* 写过复盘的那一天：数字下面一个小圆点（颜色走主色令牌，两套主题都不用另写） */
-.ui-date-picker__cell.has-review {
-  position: relative;
-}
-
-.ui-date-picker__cell.has-review::after {
-  content: "";
-  position: absolute;
-  bottom: 3px;
-  left: 50%;
-  width: 3px;
-  height: 3px;
-  margin-left: -1.5px;
-  border-radius: 50%;
-  background-color: var(--transactions-color-primary);
-}
-
 .ui-date-picker__footer {
   display: flex;
   align-items: center;

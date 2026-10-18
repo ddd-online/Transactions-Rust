@@ -173,12 +173,13 @@ pub struct StockPositionDto {
     ///
     /// 服务层回填的是**生效值**：库里存空串（没设过）时给默认标签「分析」。
     pub tag: String,
-    /// 本轮建仓日（本地 `YYYY-MM-DD`；空串 = 没有进行中的轮次）—— 每日复盘日历的起点。
+    /// 本轮建仓日（本地 `YYYY-MM-DD`；空串 = 没有进行中的轮次）—— 每日复盘可写区间的下界。
     ///
-    /// 由服务层按**本轮首笔成交**的 `trade_time` 算出来，不是持仓行的 `created_at`。
+    /// 由服务层按**本轮首笔成交**的 `trade_time` 算出来，不是持仓行的 `created_at`；
+    /// 界面只拿它判断「写今日」能不能点（日期范围本身由服务层把关）。
     #[serde(rename = "roundOpenedDate")]
     pub round_opened_date: String,
-    /// 当前轮已写的每日复盘（按日期升序；清仓后为空 —— 那时它们挂在轮次上）
+    /// 当前轮已写的每日复盘（**按日期倒序，最新在前**；清仓后为空 —— 那时它们挂在轮次上）
     #[serde(rename = "dayReviews")]
     pub day_reviews: Vec<StockDayReviewDto>,
     /// **本轮**的费用设置（建仓时定下、本轮内不可改）；省略 = 沿用账本系统配置（老数据 / 空仓）
@@ -406,7 +407,7 @@ pub struct StockTradeRoundDto {
     pub pnl_rate: f64,
     #[serde(rename = "tradeCount")]
     pub trade_count: i64,
-    /// 该轮归档的每日复盘（按日期升序）。清仓后只读 —— 界面在「记录」页按轮展示。
+    /// 该轮归档的每日复盘（**按日期倒序，最新在前**）。清仓后只读 —— 界面在「记录」页按轮展示。
     #[serde(rename = "dayReviews")]
     pub day_reviews: Vec<StockDayReviewDto>,
     pub trades: Vec<StockTradeDto>,
@@ -698,7 +699,7 @@ mod tests {
     }
 
     /// 每日复盘的线上形状：DTO 只有 `date` / `review`；持仓与轮次都带 `dayReviews`，
-    /// 持仓还带日历起点 `roundOpenedDate`；影响预演带 `dayReviewCount`。
+    /// 持仓还带可写区间下界 `roundOpenedDate`；影响预演带 `dayReviewCount`。
     #[test]
     fn day_review_keys_are_camel_case_on_every_carrier() {
         let review = serde_json::to_value(StockDayReviewDto {

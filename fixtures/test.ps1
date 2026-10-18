@@ -120,7 +120,7 @@ $Steps = [ordered]@{
     'ui-stock'          = @{ Title='股票全生命周期（含真实行情）';                  Kind='pwsh';  Script='fixtures\ui-stock.ps1'; Needs='exe'; Network=$true }
     # 复盘写作面（弹窗）：UIA 看不见"被裁掉"，所以几何（≥320 逻辑像素）+ 光标 + 落库三条一起判。
     # 它同时是 `components/ui/textarea.rs` 两个新可选项（`node_ref` / `auto_grow`）的第一处消费者。
-    'ui-stock-review'   = @{ Title='股票·复盘写作面（本轮 / 每日共用一个弹窗；不裁剪 / 光标 / 上限 / 脏关闭 / 落库 / 每日复盘月历与清仓归档）'; Kind='pwsh'; Script='fixtures\ui-stock-review.ps1'; Needs='exe' }
+    'ui-stock-review'   = @{ Title='股票·复盘写作面（本轮 / 每日共用一个弹窗；不裁剪 / 光标 / 上限 / 脏关闭 / 落库 / 每日复盘倒序列表与清仓归档）'; Kind='pwsh'; Script='fixtures\ui-stock-review.ps1'; Needs='exe' }
     'ui-todo'           = @{ Title='待办：建卡片 → 加事项 → 记进度 → 四象限图（最外档位那颗点整颗可见）→ 完成进历史 → 删卡片'; Kind='pwsh'; Script='fixtures\ui-todo.ps1'; Needs='exe' }
     'ui-update-restore' = @{ Title='更新下载状态跨页面恢复（依赖 GitHub API）';     Kind='pwsh';  Script='fixtures\ui-update-restore.ps1'; Needs='exe'; Network=$true }
 }
